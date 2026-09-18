@@ -282,6 +282,7 @@ export function InputBar({
           ref={textareaRef}
           className="inputbar__textarea"
           rows={1}
+          disabled={disabled}
           placeholder="Message ConexyAI…"
           value={value}
           onChange={(e) => {

@@ -46,13 +46,24 @@ function storeAuth(token: string, expiresAtUtc: string): void {
   }
 }
 
+/** True when the dev-token request failed with 404 (endpoint disabled outside Development). */
+function isNotFoundError(e: unknown): boolean {
+  const err = e as { response?: { status?: number } } | null;
+  return err?.response?.status === 404;
+}
+
 /**
- * Silent auto-auth: on mount, reuse a valid stored token (or fetch a development
- * token in the background) and keep refreshing it before it expires. No user action.
+ * Silent auto-auth: on mount, reuse a valid stored token (or fetch a development token in
+ * the background) and keep refreshing it before it expires. No user action.
+ *
+ * When the dev-token endpoint returns 404 (e.g. Production, where the endpoint is disabled),
+ * that is treated as a normal "not authenticated" state (`authUnavailable`) rather than an
+ * error — there is no real registration/login flow yet.
  */
 export function useAuth() {
   const [token, setToken] = useState<string | null>(readStoredToken);
   const [error, setError] = useState<string | null>(null);
+  const [authUnavailable, setAuthUnavailable] = useState(false);
   const refreshTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -64,9 +75,17 @@ export function useAuth() {
         if (cancelled) return;
         storeAuth(res.token, res.expiresAtUtc);
         setToken(res.token);
+        setAuthUnavailable(false);
+        setError(null);
         scheduleRefresh(new Date(res.expiresAtUtc).getTime());
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (cancelled) return;
+        if (isNotFoundError(e)) {
+          setAuthUnavailable(true);
+          setError(null);
+        } else {
+          setError(e instanceof Error ? e.message : String(e));
+        }
       }
     };
 
@@ -90,5 +109,5 @@ export function useAuth() {
     };
   }, []);
 
-  return { token, error };
+  return { token, error, authUnavailable };
 }

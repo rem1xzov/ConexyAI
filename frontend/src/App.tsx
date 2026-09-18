@@ -101,7 +101,7 @@ function defaultTitle(kind: ChatSessionKind): string {
 }
 
 export default function App() {
-  const { token, error: authError } = useAuth();
+  const { token, error: authError, authUnavailable } = useAuth();
 
   const [activeTab, setActiveTab] = useState<ChatSessionKind>('chat');
   const [model, setModel] = useState<ConexyModel>('ConexyV1-flash');
@@ -744,12 +744,21 @@ export default function App() {
                 <UsageIndicator usage={usage} />
               </div>
             )}
-            <ChatFeed
-              session={activeSession}
-              onRegenerate={handleRegenerate}
-              onResend={handleResend}
-              onEditMessage={handleEditMessage}
-            />
+            {authUnavailable ? (
+              <div className="feed feed--empty">
+                <div className="hero">
+                  <h1 className="hero__title">Регистрация и вход скоро будут доступны</h1>
+                  <p className="hero__subtitle">Чат и агент временно недоступны — авторизация в разработке.</p>
+                </div>
+              </div>
+            ) : (
+              <ChatFeed
+                session={activeSession}
+                onRegenerate={handleRegenerate}
+                onResend={handleResend}
+                onEditMessage={handleEditMessage}
+              />
+            )}
             <InputBar
               model={model}
               onModelChange={handleModelChange}
