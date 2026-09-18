@@ -128,7 +128,9 @@ services:
     networks:
       - frontend
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      # Send X-Forwarded-Proto: https so the HTTP->HTTPS redirect in nginx.conf does not fire
+      # for the probe; nginx then serves the SPA with 200.
+      test: ["CMD-SHELL", "wget -q -O /dev/null --header='X-Forwarded-Proto: https' http://127.0.0.1/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5

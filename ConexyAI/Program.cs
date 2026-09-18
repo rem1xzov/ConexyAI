@@ -16,14 +16,28 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSignalR();
 
-// CORS for the separate frontend dev server (credentials required for SignalR).
+// CORS: the production frontend is served from https://conexyai.ru (and www) by nginx and
+// calls the API same-origin via the /api + /hubs proxy, so CORS mainly matters for the local
+// Vite dev server. We intentionally avoid AllowAnyOrigin() + AllowCredentials() (insecure).
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
-        policy.WithOrigins("http://localhost:5173", "http://localhost:3000")
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials());
+    {
+        policy.SetIsOriginAllowed(origin =>
+        {
+            // Production origins.
+            if (origin == "https://conexyai.ru" || origin == "https://www.conexyai.ru")
+                return true;
+
+            // Local development only: allow any localhost/127.0.0.1 origin (Vite dev server).
+            return builder.Environment.IsDevelopment()
+                && (origin.StartsWith("http://localhost:", StringComparison.OrdinalIgnoreCase)
+                    || origin.StartsWith("http://127.0.0.1:", StringComparison.OrdinalIgnoreCase));
+        })
+        .AllowAnyHeader()
+        .AllowAnyMethod()
+        .AllowCredentials();
+    });
 });
 
 // Swagger (OpenAPI) with JWT bearer support for interactive testing.
