@@ -1,0 +1,6 @@
+**/bin
+**/obj
+**/conexy_workspaces
+**/*.user
+**/.vs
+**/.idea

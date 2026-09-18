@@ -1,0 +1,28 @@
+﻿namespace ConexyAI.Contract;
+
+public record ConexyRequest(
+    string Model,
+    string Prompt,
+    string? GitHubToken = null,
+    string? GitHubRepo = null,
+    List<TaskAttachment>? Attachments = null,
+    bool Thinking = false,
+    string? ReasoningEffort = "high",
+    bool StudentsMode = false,
+    // Accepted for forward compatibility; the agent resolves these from tool calls today.
+    string? WorkingDirectory = null,
+    // Legacy task/session id (used for entity reuse/dedup). Kept for backward compatibility.
+    string? SessionId = null,
+    // Stable conversation id. This is the key for the on-disk workspace: one chat = one workspace.
+    string? ChatId = null,
+    // When true (flash/pro only), the web_search tool is passed to the model for this
+    // message. conexy-coder always has web_search and ignores this flag.
+    bool SmartSearch = false
+);
+
+/// <summary>An uploaded file/image attachment from the user.</summary>
+public record TaskAttachment(
+    string FileName,
+    string ContentBase64,
+    string ContentType // e.g. "image/png", "text/plain", "application/json"
+);

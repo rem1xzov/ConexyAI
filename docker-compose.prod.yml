@@ -1,0 +1,142 @@
+# Production deployment for the ConexyAI stack.
+#
+#   cp .env.example .env          # then fill in real secrets
+#   docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+#
+# The backend launches sandbox containers through the docker-socket-proxy service
+# (never a raw /var/run/docker.sock mount). The conexy-sandbox:latest image must already
+# exist on the Docker host — build/push it separately, see DEPLOY.md.
+#
+# Two networks isolate the security-sensitive surfaces (PostgreSQL and the Docker socket
+# proxy) from the public-facing nginx frontend.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: conexy_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ConexyAI}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - conexy_pgdata:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-ConexyAI}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # Deny-by-default proxy in front of the Docker daemon. The backend can only create,
+  # start, wait on, log, inspect, kill and remove its sandbox containers. exec, image
+  # enumeration/pull, build, volumes, networks and system endpoints are all denied.
+  # NOTE: this tecnativa image uses section-level ACLs (not per-verb): POST=1 enables all
+  # non-GET methods, CONTAINERS=1 opens the whole /containers/* subtree, and EXEC=0 keeps
+  # /exec/* (exec start) denied. See DEPLOY.md for the rationale.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: conexy_docker_socket_proxy
+    restart: unless-stopped
+    environment:
+      # Method gate: GET is always allowed; POST=1 allows the non-GET methods the sandbox
+      # runner needs (create/start/wait/attach/logs via POST, and rm via DELETE).
+      POST: "1"
+      # /containers/* — create/start/wait/attach/logs/inspect/kill/rm (and exec-create, but
+      # exec cannot run because EXEC=0 blocks /exec/{id}/start).
+      CONTAINERS: "1"
+      VERSION: "1"   # GET /version
+      PING: "1"      # HEAD/GET /_ping
+      # Deny everything else.
+      EXEC: "0"
+      IMAGES: "0"
+      BUILD: "0"
+      VOLUMES: "0"
+      NETWORKS: "0"
+      SYSTEM: "0"
+      INFO: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./ConexyAI
+    image: conexy-backend:latest
+    container_name: conexy_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-ConexyAI};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres}"
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:?JWT_SIGNING_KEY is required}
+      Jwt__Issuer: ${JWT_ISSUER:-ConexyAI}
+      Jwt__Audience: ${JWT_AUDIENCE:-ConexyAI-Clients}
+      AiUpstream__DeepSeek__ApiKey: ${DEEPSEEK_API_KEY:?DEEPSEEK_API_KEY is required}
+      AiUpstream__DeepSeek__BaseUrl: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+      AiUpstream__DeepSeek__FlashModel: ${DEEPSEEK_FLASH_MODEL:-deepseek-flash}
+      AiUpstream__DeepSeek__ProAgentModel: ${DEEPSEEK_PRO_AGENT_MODEL:-deepseek-v4-pro}
+      GitHub__PersonalAccessToken: ${GITHUB_PAT:-}
+      WebSearch__JsonSeoApiKey: ${JSONSEO_API_KEY:-}
+      WebSearch__JsonSeoEndpoint: ${JSONSEO_ENDPOINT:-https://jsonseo.ru/api/yandex}
+      SpeechKit__ApiKey: ${SPEECHKIT_API_KEY:-}
+      SpeechKit__FolderId: ${SPEECHKIT_FOLDER_ID:-}
+      Workspace__RootPath: ${WORKSPACE_HOST_PATH:-/srv/conexyai/workspaces}
+      Rag__DocumentsDirectory: ${RAG_DOCUMENTS_PATH:-/srv/conexyai/documents}
+      Sandbox__Image: ${SANDBOX_IMAGE:-conexy-sandbox:latest}
+      # The backend talks to the host Docker daemon ONLY through the socket proxy.
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+    volumes:
+      # Same-path bind mounts: the host path the backend passes to `docker run -v` must
+      # resolve to the same directory on the Docker host (see DEPLOY.md).
+      - ${WORKSPACE_HOST_PATH:-/srv/conexyai/workspaces}:${WORKSPACE_HOST_PATH:-/srv/conexyai/workspaces}
+      - ${RAG_DOCUMENTS_PATH:-/srv/conexyai/documents}:${RAG_DOCUMENTS_PATH:-/srv/conexyai/documents}
+    networks:
+      - frontend
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+    image: conexy-frontend:latest
+    container_name: conexy_frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    networks:
+      - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  frontend:
+  backend:
+
+volumes:
+  conexy_pgdata:

@@ -1,0 +1,6 @@
+@ConexyAI_HostAddress = http://localhost:5039
+
+GET {{ConexyAI_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

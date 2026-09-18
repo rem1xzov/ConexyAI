@@ -1,0 +1,22 @@
+# Agent Sandboxes
+**/conexy_workspaces/
+workspaces/
+
+# Local deployment secrets (keep .env.example tracked as the template)
+.env
+
+# .NET build artifacts
+**/bin/
+**/obj/
+
+# IDE / editor
+.idea/
+.vs/
+*.user
+
+# Node / frontend build output
+node_modules/
+dist/
+dist-ssr/
+*.local
+.DS_Store
