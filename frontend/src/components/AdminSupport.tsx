@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   closeSupportTicket,
   getAdminSupportTicket,
@@ -28,6 +29,7 @@ function formatDateTime(iso: string): string {
 // SUPPORT: добавлено 2026-09-19
 /** Admin-side support section: ticket list on the left, selected conversation on the right. */
 export function AdminSupport({ onToast }: AdminSupportProps) {
+  const { t } = useTranslation();
   const [tickets, setTickets] = useState<AdminSupportTicket[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selected, setSelected] = useState<SupportTicket | null>(null);
@@ -42,7 +44,7 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
       const list = await getAdminSupportTickets(status || undefined, search || undefined);
       setTickets(list);
     } catch {
-      onToast('Не удалось загрузить обращения');
+      onToast(t('support.loadError'));
     }
   }
 
@@ -73,7 +75,7 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
       setSelected(t);
       await signalrService.joinSupportTicket(id);
     } catch {
-      onToast('Не удалось открыть обращение');
+      onToast(t('support.openTicketError'));
     }
   }
 
@@ -89,7 +91,7 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
     try {
       await sendSupportMessage(selected.id, content);
     } catch {
-      onToast('Не удалось отправить ответ');
+      onToast(t('support.sendError'));
     } finally {
       setSending(false);
     }
@@ -99,17 +101,17 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
     if (!selected) return;
     try {
       await closeSupportTicket(selected.id);
-      onToast('Обращение закрыто');
+      onToast(t('support.closedToast'));
       setSelected(null);
       setSelectedId(null);
       void loadTickets();
     } catch {
-      onToast('Не удалось закрыть обращение');
+      onToast(t('support.closeError'));
     }
   }
 
   const selectedMeta = tickets.find((t) => t.id === selectedId);
-  const selectedUserName = selectedMeta?.userGitHubUsername ?? selectedMeta?.userEmail ?? 'Пользователь';
+  const selectedUserName = selectedMeta?.userGitHubUsername ?? selectedMeta?.userEmail ?? t('support.user');
 
   return (
     <div className="admin-support">
@@ -118,7 +120,7 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
           <input
             className="dialog-input"
             value={search}
-            placeholder="Поиск по email/юзернейму"
+            placeholder={t('support.searchPlaceholder')}
             onChange={(e) => setSearch(e.target.value)}
           />
           <select
@@ -126,25 +128,25 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
             value={status}
             onChange={(e) => setStatus(e.target.value as 'Open' | '')}
           >
-            <option value="Open">Открытые</option>
-            <option value="">Все</option>
+            <option value="Open">{t('support.openFilter')}</option>
+            <option value="">{t('support.allFilter')}</option>
           </select>
         </div>
 
         <div className="admin-support__tickets">
           {tickets.length === 0 ? (
-            <p className="muted">Нет обращений</p>
+            <p className="muted">{t('support.noTickets')}</p>
           ) : (
-            tickets.map((t) => (
+            tickets.map((ticket) => (
               <button
-                key={t.id}
-                className={`admin-support__ticket ${t.id === selectedId ? 'admin-support__ticket--active' : ''}`}
-                onClick={() => void openTicket(t.id)}
+                key={ticket.id}
+                className={`admin-support__ticket ${ticket.id === selectedId ? 'admin-support__ticket--active' : ''}`}
+                onClick={() => void openTicket(ticket.id)}
                 type="button"
               >
-                <div className="admin-support__ticket-name">{t.userGitHubUsername ?? t.userEmail ?? 'Пользователь'}</div>
-                <div className="admin-support__ticket-preview">{t.lastMessagePreview ?? '—'}</div>
-                <div className="admin-support__ticket-time">{formatDateTime(t.lastMessageAt)}</div>
+                <div className="admin-support__ticket-name">{ticket.userGitHubUsername ?? ticket.userEmail ?? t('support.user')}</div>
+                <div className="admin-support__ticket-preview">{ticket.lastMessagePreview ?? '—'}</div>
+                <div className="admin-support__ticket-time">{formatDateTime(ticket.lastMessageAt)}</div>
               </button>
             ))
           )}
@@ -153,7 +155,7 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
 
       <div className="admin-support__chat">
         {!selected ? (
-          <p className="muted admin-support__empty">Выберите обращение слева</p>
+          <p className="muted admin-support__empty">{t('support.selectTicket')}</p>
         ) : (
           <>
             <div className="admin-support__chat-head">
@@ -161,11 +163,11 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
               <span
                 className={`admin-support__chat-status ${selected.status === 'Open' ? 'admin-support__chat-status--open' : ''}`}
               >
-                {selected.status === 'Open' ? 'Открыт' : 'Закрыт'}
+                {selected.status === 'Open' ? t('support.open') : t('support.closed')}
               </span>
               {selected.status === 'Open' && (
                 <button className="admin-btn" onClick={() => void handleClose()} type="button">
-                  Закрыть
+                  {t('support.close')}
                 </button>
               )}
             </div>
@@ -183,7 +185,7 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
               <input
                 className="dialog-input"
                 value={draft}
-                placeholder="Ответ…"
+                placeholder={t('support.replyPlaceholder')}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') void handleSend();
@@ -194,7 +196,7 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
                 className="icon-btn"
                 onClick={() => void handleSend()}
                 disabled={!draft.trim() || sending || selected.status !== 'Open'}
-                aria-label="Отправить"
+                aria-label={t('common.send')}
                 type="button"
               >
                 <SendIcon size={18} />

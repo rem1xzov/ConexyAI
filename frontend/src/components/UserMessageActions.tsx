@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CheckIcon, CopyIcon, EditIcon, RefreshIcon } from './Icons';
 
 interface UserMessageActionsProps {
@@ -13,6 +14,7 @@ interface UserMessageActionsProps {
  * no like/dislike controls here.
  */
 export function UserMessageActions({ content, onResend, onEdit }: UserMessageActionsProps) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -27,13 +29,13 @@ export function UserMessageActions({ content, onResend, onEdit }: UserMessageAct
 
   return (
     <div className="message-actions">
-      <button className="message-actions__btn" onClick={onResend} title="Resend" aria-label="Resend">
+      <button className="message-actions__btn" onClick={onResend} title={t('message.resend')} aria-label={t('message.resend')}>
         <RefreshIcon size={15} />
       </button>
-      <button className="message-actions__btn" onClick={onEdit} title="Edit" aria-label="Edit">
+      <button className="message-actions__btn" onClick={onEdit} title={t('message.edit')} aria-label={t('message.edit')}>
         <EditIcon size={15} />
       </button>
-      <button className="message-actions__btn" onClick={() => void copy()} title="Copy" aria-label="Copy">
+      <button className="message-actions__btn" onClick={() => void copy()} title={t('message.copy')} aria-label={t('message.copy')}>
         {copied ? <CheckIcon size={15} /> : <CopyIcon size={15} />}
       </button>
     </div>

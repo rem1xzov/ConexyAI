@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
 function DialogShell({ onCancel, children }: { onCancel: () => void; children: ReactNode }) {
   useEffect(() => {
@@ -31,26 +32,29 @@ export interface ConfirmDialogProps {
 export function ConfirmDialog({
   title,
   message,
-  confirmLabel = 'Подтвердить',
-  cancelLabel = 'Отмена',
+  confirmLabel,
+  cancelLabel,
   danger,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const { t } = useTranslation();
+  const confirmText = confirmLabel ?? t('common.confirm');
+  const cancelText = cancelLabel ?? t('common.cancel');
   return (
     <DialogShell onCancel={onCancel}>
       <div className="dialog-title">{title}</div>
       {message && <div className="dialog-message">{message}</div>}
       <div className="dialog-actions">
         <button className="dialog-btn" onClick={onCancel} type="button">
-          {cancelLabel}
+          {cancelText}
         </button>
         <button
           className={`dialog-btn dialog-btn--primary ${danger ? 'dialog-btn--danger' : ''}`}
           onClick={onConfirm}
           type="button"
         >
-          {confirmLabel}
+          {confirmText}
         </button>
       </div>
     </DialogShell>
@@ -73,11 +77,14 @@ export function PromptDialog({
   message,
   placeholder,
   initialValue = '',
-  confirmLabel = 'OK',
-  cancelLabel = 'Отмена',
+  confirmLabel,
+  cancelLabel,
   onSubmit,
   onCancel,
 }: PromptDialogProps) {
+  const { t } = useTranslation();
+  const confirmText = confirmLabel ?? t('common.ok');
+  const cancelText = cancelLabel ?? t('common.cancel');
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -107,10 +114,10 @@ export function PromptDialog({
       />
       <div className="dialog-actions">
         <button className="dialog-btn" onClick={onCancel} type="button">
-          {cancelLabel}
+          {cancelText}
         </button>
         <button className="dialog-btn dialog-btn--primary" onClick={submit} disabled={!value.trim()} type="button">
-          {confirmLabel}
+          {confirmText}
         </button>
       </div>
     </DialogShell>

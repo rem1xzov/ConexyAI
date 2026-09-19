@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   createIdeFile,
   deleteWorkspaceFile,
@@ -179,6 +180,7 @@ export function WorkspacePanel({
   onCursorChange,
   onRunInSeparateWindow,
 }: WorkspacePanelProps) {
+  const { t } = useTranslation();
   const [listing, setListing] = useState<WorkspaceListing | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -308,7 +310,7 @@ export function WorkspacePanel({
   function promptCreateFile() {
     setDialog({
       kind: 'prompt',
-      title: 'Новый файл',
+      title: t('workspace.newFile'),
       placeholder: 'src/app.cs',
       onSubmit: (value) => void doCreateFile(value),
     });
@@ -348,9 +350,9 @@ export function WorkspacePanel({
     if (tab && tab.content !== tab.savedContent) {
       setDialog({
         kind: 'confirm',
-        title: 'Несохранённые изменения',
-        message: 'Есть несохранённые изменения. Закрыть без сохранения?',
-        confirmLabel: 'Закрыть без сохранения',
+        title: t('workspace.unsavedChanges'),
+        message: t('workspace.unsavedChangesMsg'),
+        confirmLabel: t('workspace.closeWithoutSave'),
         danger: true,
         onConfirm: () => removeTab(path),
       });
@@ -385,19 +387,19 @@ export function WorkspacePanel({
 
   async function handleZipUpload(file: File) {
     if (file.size > 50 * 1024 * 1024) {
-      notify('Файл слишком большой (максимум 50MB)');
+      notify(t('workspace.fileTooLarge'));
       return;
     }
     const id = onEnsureWorkspace?.() ?? sessionId;
     if (!id) return;
-    notify('Загружаю проект…');
+    notify(t('workspace.uploading'));
     try {
       await uploadWorkspaceZip(id, file);
-      notify('Проект загружен');
+      notify(t('workspace.uploaded'));
       await loadFiles();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      notify(`Ошибка загрузки: ${message}`);
+      notify(t('workspace.uploadError', { message }));
       setError(message);
     }
   }
@@ -420,8 +422,8 @@ export function WorkspacePanel({
       if (res.needsManualConfig) {
         setDialog({
           kind: 'prompt',
-          title: 'Команда запуска',
-          message: 'Не удалось определить команду запуска. Введите команду вручную:',
+          title: t('workspace.runCommandTitle'),
+          message: t('workspace.runCommandMsg'),
           placeholder: 'dotnet run',
           onSubmit: (cmd) => {
             void (async () => {
@@ -527,22 +529,22 @@ export function WorkspacePanel({
 
   const menus: Menu[] = [
     {
-      label: 'File',
+      label: t('workspace.menuFile'),
       items: [
         {
-          label: 'New File',
+          label: t('workspace.menuNewFile'),
           action: () => promptCreateFile(),
         },
         {
-          label: 'Open Project (ZIP)',
+          label: t('workspace.menuOpenZip'),
           action: () => zipInputRef.current?.click(),
         },
         {
-          label: 'Save',
+          label: t('workspace.menuSave'),
           shortcut: 'Ctrl+S',
           action: () => {
             if (!activePath) {
-              notify('Нет открытого файла для сохранения');
+              notify(t('workspace.noFileToSave'));
               return;
             }
             void saveTab(activePath);
@@ -550,10 +552,10 @@ export function WorkspacePanel({
         },
         { separator: true },
         {
-          label: 'Download ZIP',
+          label: t('workspace.menuDownloadZip'),
           action: () => {
             if (!hasFiles) {
-              notify('Workspace пуст — нечего скачивать');
+              notify(t('workspace.emptyDownload'));
               return;
             }
             void downloadZip();
@@ -562,9 +564,9 @@ export function WorkspacePanel({
       ],
     },
     {
-      label: 'View',
+      label: t('workspace.menuView'),
       items: [
-        { label: 'Toggle File Explorer', action: () => setExplorerVisible((v) => !v) },
+        { label: t('workspace.menuToggleExplorer'), action: () => setExplorerVisible((v) => !v) },
       ],
     },
   ];
@@ -585,7 +587,7 @@ export function WorkspacePanel({
       />
       <header className="workspace__header">
         <div className="workspace__title">
-          <span>Workspace</span>
+          <span>{t('workspace.title')}</span>
           {sessionId && <span className="workspace__id">{sessionId.slice(0, 8)}…</span>}
         </div>
         <div className="workspace__actions">
@@ -593,32 +595,32 @@ export function WorkspacePanel({
             className="workspace__run-btn"
             onClick={() => void handleRun()}
             disabled={!sessionId || runBusy}
-            title="Run project (Ctrl+F5)"
-            aria-label="Run project"
+            title={t('workspace.runTitle')}
+            aria-label={t('workspace.runAria')}
           >
             <PlayIcon size={15} />
-            {runBusy ? 'Running…' : 'Run'}
+            {runBusy ? t('workspace.running') : t('workspace.run')}
           </button>
           {runError && <span className="workspace__run-error">{runError}</span>}
           {activeTab && (
             <span className={`workspace__save-status workspace__save-status--${saveStatus}`}>
-              {saveStatus === 'saving' && 'Сохранение…'}
-              {saveStatus === 'saved' && 'Сохранено'}
-              {saveStatus === 'error' && 'Ошибка сохранения'}
-              {saveStatus === 'idle' && (activeTab.content !== activeTab.savedContent ? 'Не сохранено' : '')}
+              {saveStatus === 'saving' && t('workspace.saving')}
+              {saveStatus === 'saved' && t('workspace.saved')}
+              {saveStatus === 'error' && t('workspace.saveError')}
+              {saveStatus === 'idle' && (activeTab.content !== activeTab.savedContent ? t('workspace.notSaved') : '')}
             </span>
           )}
-          <button className="icon-btn" onClick={() => void loadFiles()} title="Refresh files" aria-label="Refresh files">
+          <button className="icon-btn" onClick={() => void loadFiles()} title={t('workspace.refreshFiles')} aria-label={t('workspace.refreshFiles')}>
             <RefreshIcon size={16} />
           </button>
           <button
             className="workspace__zip-btn"
             onClick={() => void downloadZip()}
             disabled={!sessionId || !hasFiles || zipping}
-            title="Download project as ZIP"
+            title={t('workspace.downloadZipTitle')}
           >
             <DownloadIcon size={15} />
-            {zipping ? 'Packaging…' : 'Download ZIP'}
+            {zipping ? t('workspace.packaging') : t('workspace.downloadZip')}
           </button>
         </div>
       </header>
@@ -626,11 +628,11 @@ export function WorkspacePanel({
       <div className="workspace__body">
         {explorerVisible && (
         <aside className="workspace__explorer">
-          <div className="workspace__explorer-label">File Explorer</div>
-          {!sessionId && <div className="workspace__hint">Run a task to generate files.</div>}
-          {loading && !listing && <div className="workspace__hint">Loading…</div>}
+          <div className="workspace__explorer-label">{t('workspace.fileExplorer')}</div>
+          {!sessionId && <div className="workspace__hint">{t('workspace.runTaskHint')}</div>}
+          {loading && !listing && <div className="workspace__hint">{t('common.loading')}</div>}
           {error && <div className="workspace__hint workspace__hint--error">{error}</div>}
-          {!loading && !error && listing && !hasFiles && <div className="workspace__hint">No files created yet.</div>}
+          {!loading && !error && listing && !hasFiles && <div className="workspace__hint">{t('workspace.noFiles')}</div>}
           {listing && hasFiles && (
             <div className="file-tree">
               {listing.tree.map((node) => (
@@ -667,14 +669,14 @@ export function WorkspacePanel({
                     e.stopPropagation();
                     closeTab(tab.path);
                   }}
-                  title="Close tab"
-                  aria-label={`Close ${tab.name}`}
+                  title={t('workspace.closeTab')}
+                  aria-label={t('workspace.closeTabAria', { name: tab.name })}
                 >
                   <CloseIcon size={12} />
                 </button>
               </div>
             ))}
-            {tabs.length === 0 && <div className="workspace__tabs-empty">No open files</div>}
+            {tabs.length === 0 && <div className="workspace__tabs-empty">{t('workspace.noOpenFiles')}</div>}
           </div>
 
           {activeTab && !activeTab.isBinary && (
@@ -683,12 +685,12 @@ export function WorkspacePanel({
 
           {conflict && (
             <div className="workspace__conflict">
-              <span className="workspace__conflict-text">Файл изменён агентом. Обновить?</span>
+              <span className="workspace__conflict-text">{t('workspace.fileChanged')}</span>
               <button className="workspace__conflict-btn" onClick={applyConflict}>
-                Обновить
+                {t('workspace.update')}
               </button>
               <button className="workspace__conflict-btn workspace__conflict-btn--secondary" onClick={() => setConflict(null)}>
-                Оставить мою версию
+                {t('workspace.keepMine')}
               </button>
             </div>
           )}
@@ -696,7 +698,7 @@ export function WorkspacePanel({
           <div className="workspace__editor-body">
             {activeTab ? (
               activeTab.isBinary ? (
-                <div className="workspace__hint workspace__hint--center">Binary file — cannot preview in the editor.</div>
+                <div className="workspace__hint workspace__hint--center">{t('workspace.binaryFile')}</div>
               ) : (
                 <CodeEditor
                   path={activeTab.path}
@@ -708,29 +710,28 @@ export function WorkspacePanel({
                 />
               )
             ) : hasFiles ? (
-              <EditorEmptyState title="Select a file to edit" text="Choose a file from the explorer to start editing." />
+              <EditorEmptyState title={t('workspace.selectFileTitle')} text={t('workspace.selectFileText')} />
             ) : sessionId ? (
               <div className="workspace__empty">
                 <div className="workspace__empty-icon">📂</div>
-                <div className="workspace__empty-title">Здесь пока пусто</div>
+                <div className="workspace__empty-title">{t('workspace.emptyTitle')}</div>
                 <div className="workspace__empty-text">
-                  Опишите задачу агенту — он создаст файлы, и здесь появятся редактор, дерево
-                  проекта и статус правок. Или создайте файл вручную.
+                  {t('workspace.emptyText')}
                 </div>
                 <button className="workspace__empty-btn" onClick={promptCreateFile}>
-                  Создать файл
+                  {t('workspace.createFile')}
                 </button>
                 <div className="workspace__empty-hints">
                   <span>
-                    <kbd className="workspace__empty-kbd">Ctrl K</kbd> команды
+                    <kbd className="workspace__empty-kbd">Ctrl K</kbd> {t('workspace.commands')}
                   </span>
                   <span>
-                    <kbd className="workspace__empty-kbd">Ctrl F5</kbd> запуск
+                    <kbd className="workspace__empty-kbd">Ctrl F5</kbd> {t('workspace.launch')}
                   </span>
                 </div>
               </div>
             ) : (
-              <EditorEmptyState title="Run a task to generate files" text="Send a request to the agent to create your project." />
+              <EditorEmptyState title={t('workspace.generateTitle')} text={t('workspace.generateText')} />
             )}
           </div>
         </section>
@@ -742,25 +743,25 @@ export function WorkspacePanel({
             className={`workspace__bottom-tab ${bottomTab === 'terminal' ? 'workspace__bottom-tab--active' : ''}`}
             onClick={() => setBottomTab('terminal')}
           >
-            <TerminalIcon size={14} /> Terminal
+            <TerminalIcon size={14} /> {t('workspace.terminal')}
           </button>
           <button
             className={`workspace__bottom-tab ${bottomTab === 'status' ? 'workspace__bottom-tab--active' : ''}`}
             onClick={() => setBottomTab('status')}
           >
-            <CodeIcon size={14} /> Status
+            <CodeIcon size={14} /> {t('workspace.status')}
           </button>
           <button
             className={`workspace__bottom-tab ${bottomTab === 'todo' ? 'workspace__bottom-tab--active' : ''}`}
             onClick={() => setBottomTab('todo')}
           >
-            <CheckIcon size={14} /> Todo
+            <CheckIcon size={14} /> {t('workspace.todo')}
           </button>
           <button
             className={`workspace__bottom-tab ${bottomTab === 'problems' ? 'workspace__bottom-tab--active' : ''}`}
             onClick={() => setBottomTab('problems')}
           >
-            <span className="problems__tab-icon">⚠</span> Problems
+            <span className="problems__tab-icon">⚠</span> {t('workspace.problems')}
             {problems.length > 0 && <span className="problems__count">{problems.length}</span>}
           </button>
         </div>
@@ -770,8 +771,7 @@ export function WorkspacePanel({
               isWindows ? (
                 <div className="workspace__empty workspace__empty--panel">
                   <div className="workspace__empty-text">
-                    Интерактивный терминал недоступен в Windows-версии дева — будет доступен на
-                    Linux-проде. Используйте кнопку Run для запуска проекта.
+                    {t('workspace.windowsTerminal')}
                   </div>
                 </div>
               ) : (
@@ -779,7 +779,7 @@ export function WorkspacePanel({
               )
             ) : (
               <div className="workspace__empty workspace__empty--panel">
-                <div className="workspace__empty-text">Терминал пуст. Введите команду или нажмите Run.</div>
+                <div className="workspace__empty-text">{t('workspace.terminalEmpty')}</div>
               </div>
             ))}
           {bottomTab === 'status' &&
@@ -787,7 +787,7 @@ export function WorkspacePanel({
               <ToolActionFeed actions={toolActions} />
             ) : (
               <div className="workspace__empty workspace__empty--panel">
-                <div className="workspace__empty-text">Здесь появятся действия агента, когда он начнёт работу.</div>
+                <div className="workspace__empty-text">{t('workspace.statusEmpty')}</div>
               </div>
             ))}
           {bottomTab === 'todo' &&
@@ -795,7 +795,7 @@ export function WorkspacePanel({
               <TodoPanel todos={todos} />
             ) : (
               <div className="workspace__empty workspace__empty--panel">
-                <div className="workspace__empty-text">План появится, когда агент начнёт многошаговую задачу.</div>
+                <div className="workspace__empty-text">{t('workspace.todoEmpty')}</div>
               </div>
             ))}
           {bottomTab === 'problems' &&
@@ -819,7 +819,7 @@ export function WorkspacePanel({
               </div>
             ) : (
               <div className="workspace__empty workspace__empty--panel">
-                <div className="workspace__empty-text">No problems have been detected in the workspace.</div>
+                <div className="workspace__empty-text">{t('workspace.noProblems')}</div>
               </div>
             ))}
         </div>

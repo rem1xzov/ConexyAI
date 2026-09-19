@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { ChatSession, ChatSessionKind } from '../types/chat';
 import type { UserProfile } from '../types/api';
 import { AccountWidget } from './AccountWidget';
@@ -36,16 +37,17 @@ interface SidebarProps {
   onUpgrade: () => void;
   onOpenAdmin: () => void;
   onOpenSupport: () => void;
-  onToast: (message: string) => void;
+  onOpenSettings: () => void;
 }
 
-const TABS: { key: ChatSessionKind; label: string }[] = [
-  { key: 'chat', label: 'Chat' },
-  { key: 'projects', label: 'Agent' },
-  { key: 'students', label: 'Students' },
+const TABS: { key: ChatSessionKind; labelKey: string }[] = [
+  { key: 'chat', labelKey: 'sidebar.tabs.chat' },
+  { key: 'projects', labelKey: 'sidebar.tabs.agent' },
+  { key: 'students', labelKey: 'sidebar.tabs.students' },
 ];
 
 export function Sidebar(props: SidebarProps) {
+  const { t } = useTranslation();
   const {
     open,
     activeTab,
@@ -68,7 +70,7 @@ export function Sidebar(props: SidebarProps) {
     onUpgrade,
     onOpenAdmin,
     onOpenSupport,
-    onToast,
+    onOpenSettings,
   } = props;
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -93,10 +95,21 @@ export function Sidebar(props: SidebarProps) {
     .filter((s) => !search.trim() || s.title.toLowerCase().includes(search.trim().toLowerCase()))
     .sort((a, b) => Number(b.isPinned ?? false) - Number(a.isPinned ?? false));
 
-  const newLabel =
-    activeTab === 'students' ? 'New Student Session' : activeTab === 'projects' ? 'New Agent Task' : 'New Chat';
+  const newLabel = t(
+    activeTab === 'students'
+      ? 'sidebar.newStudentSession'
+      : activeTab === 'projects'
+        ? 'sidebar.newAgentTask'
+        : 'sidebar.newChat',
+  );
 
-  const listLabel = activeTab === 'projects' ? 'Agent' : activeTab === 'students' ? 'Students' : 'Chats and tasks';
+  const listLabel = t(
+    activeTab === 'projects'
+      ? 'sidebar.listLabelAgent'
+      : activeTab === 'students'
+        ? 'sidebar.listLabelStudents'
+        : 'sidebar.listLabelChat',
+  );
 
   function startRename(s: ChatSession) {
     setEditingId(s.id);
@@ -128,18 +141,18 @@ export function Sidebar(props: SidebarProps) {
             <input
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Search chats"
+              placeholder={t('sidebar.search')}
             />
           </div>
 
           <div className="tabs">
-            {TABS.map((t) => (
+            {TABS.map((tab) => (
               <button
-                key={t.key}
-                className={`tabs__btn ${activeTab === t.key ? 'tabs__btn--active' : ''}`}
-                onClick={() => onTabChange(t.key)}
+                key={tab.key}
+                className={`tabs__btn ${activeTab === tab.key ? 'tabs__btn--active' : ''}`}
+                onClick={() => onTabChange(tab.key)}
               >
-                {t.label}
+                {t(tab.labelKey)}
               </button>
             ))}
           </div>
@@ -151,7 +164,7 @@ export function Sidebar(props: SidebarProps) {
           <div className="chats">
             <div className="chats__label">{listLabel}</div>
             {filtered.length === 0 ? (
-              <p className="muted chats__empty">No sessions yet</p>
+              <p className="muted chats__empty">{t('sidebar.noSessions')}</p>
             ) : (
               <ul className="chats__list">
                 {filtered.map((s) => (
@@ -203,7 +216,7 @@ export function Sidebar(props: SidebarProps) {
                             setOpenMenuId(null);
                           }}
                         >
-                          <ShareIcon size={16} className="chats__menu-icon" /> Share conversation
+                          <ShareIcon size={16} className="chats__menu-icon" /> {t('sidebar.share')}
                         </button>
                         <button
                           className="chats__menu-item"
@@ -212,10 +225,10 @@ export function Sidebar(props: SidebarProps) {
                             setOpenMenuId(null);
                           }}
                         >
-                          <PinIcon size={16} className="chats__menu-icon" /> {s.isPinned ? 'Unpin' : 'Pin'}
+                          <PinIcon size={16} className="chats__menu-icon" /> {s.isPinned ? t('sidebar.unpin') : t('sidebar.pin')}
                         </button>
                         <button className="chats__menu-item" onClick={() => startRename(s)}>
-                          <EditIcon size={16} className="chats__menu-icon" /> Rename
+                          <EditIcon size={16} className="chats__menu-icon" /> {t('sidebar.rename')}
                         </button>
                         <button
                           className="chats__menu-item chats__menu-item--danger"
@@ -224,7 +237,7 @@ export function Sidebar(props: SidebarProps) {
                             setOpenMenuId(null);
                           }}
                         >
-                          <TrashIcon size={16} className="chats__menu-icon" /> Delete
+                          <TrashIcon size={16} className="chats__menu-icon" /> {t('sidebar.delete')}
                         </button>
                       </div>
                     )}
@@ -243,19 +256,19 @@ export function Sidebar(props: SidebarProps) {
                 onUpgrade={onUpgrade}
                 onOpenAdmin={onOpenAdmin}
                 onOpenSupport={onOpenSupport}
-                onToast={onToast}
+                onOpenSettings={onOpenSettings}
               />
             ) : (
               <div className="sidebar__auth">
                 <button className="sidebar__auth-btn" onClick={onLogin} type="button">
-                  Войти
+                  {t('sidebar.login')}
                 </button>
                 <button
                   className="sidebar__auth-btn sidebar__auth-btn--primary"
                   onClick={onRegister}
                   type="button"
                 >
-                  Регистрация
+                  {t('sidebar.register')}
                 </button>
               </div>
             )}

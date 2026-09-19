@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { deleteUser, getAdminUsers, makeAdmin, revokeAdmin } from '../api/conexyApi';
 import type { AdminUser } from '../types/api';
 import { ConfirmDialog } from './Dialog';
@@ -12,16 +13,14 @@ interface AdminPanelProps {
 
 const PAGE_SIZE = 20;
 
-function formatDate(iso: string): string {
+function formatDate(iso: string, lang: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
-}
-
-function roleLabel(u: AdminUser): string {
-  if (u.isSuperAdmin) return 'Суперадмин';
-  if (u.isAdmin) return 'Админ';
-  return 'Пользователь';
+  return d.toLocaleDateString(lang === 'en' ? 'en-US' : 'ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
 }
 
 function roleClass(u: AdminUser): string {
@@ -33,6 +32,7 @@ function roleClass(u: AdminUser): string {
 // ADMIN_PANEL: добавлено 2026-09-19
 /** Full-page admin panel: paginated user list with promote/demote/delete actions. */
 export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
+  const { t, i18n } = useTranslation();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -43,6 +43,12 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
   // SUPPORT: добавлено 2026-09-19
   const [tab, setTab] = useState<'users' | 'support'>('users');
 
+  function roleLabel(u: AdminUser): string {
+    if (u.isSuperAdmin) return t('admin.roles.super');
+    if (u.isAdmin) return t('admin.roles.admin');
+    return t('admin.roles.user');
+  }
+
   async function load(p: number) {
     setLoading(true);
     setError(null);
@@ -52,7 +58,7 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
       setTotal(res.totalCount);
       setPage(res.page);
     } catch {
-      setError('Не удалось загрузить пользователей');
+      setError(t('admin.loadError'));
     } finally {
       setLoading(false);
     }
@@ -68,9 +74,9 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
     try {
       await makeAdmin(u.id);
       await load(page);
-      onToast('Пользователь назначен админом');
+      onToast(t('admin.toastMadeAdmin'));
     } catch {
-      onToast('Не удалось назначить админом');
+      onToast(t('admin.toastFailed'));
     } finally {
       setBusyId(null);
     }
@@ -81,9 +87,9 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
     try {
       await revokeAdmin(u.id);
       await load(page);
-      onToast('Права администратора отозваны');
+      onToast(t('admin.toastRevokedAdmin'));
     } catch {
-      onToast('Не удалось отозвать права');
+      onToast(t('admin.toastFailed'));
     } finally {
       setBusyId(null);
     }
@@ -94,9 +100,9 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
     try {
       await deleteUser(u.id);
       await load(page);
-      onToast('Пользователь удалён');
+      onToast(t('admin.toastDeleted'));
     } catch {
-      onToast('Не удалось удалить пользователя');
+      onToast(t('admin.toastFailed'));
     } finally {
       setBusyId(null);
       setConfirmDeleteId(null);
@@ -109,26 +115,28 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
     <div className="admin">
       <div className="admin__topbar">
         <button className="admin-btn" onClick={onBack} type="button">
-          ← Назад
+          {t('common.back')}
         </button>
-        <h1 className="admin__title">Админ-панель</h1>
+        <h1 className="admin__title">{t('admin.title')}</h1>
         <div className="admin__tabs">
           <button
             className={`admin-tab ${tab === 'users' ? 'admin-tab--active' : ''}`}
             onClick={() => setTab('users')}
             type="button"
           >
-            Пользователи
+            {t('admin.usersTab')}
           </button>
           <button
             className={`admin-tab ${tab === 'support' ? 'admin-tab--active' : ''}`}
             onClick={() => setTab('support')}
             type="button"
           >
-            Обращения в поддержку
+            {t('admin.supportTab')}
           </button>
         </div>
-        <span className="admin__count">{tab === 'users' ? `${total} пользователей` : ''}</span>
+        <span className="admin__count">
+          {tab === 'users' ? t('admin.userCount', { count: total }) : ''}
+        </span>
       </div>
 
       {tab === 'support' ? (
@@ -136,7 +144,7 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
       ) : (
         <>
       {loading ? (
-        <p className="muted admin__empty">Загрузка…</p>
+        <p className="muted admin__empty">{t('common.loading')}</p>
       ) : error ? (
         <p className="admin__error">{error}</p>
       ) : (
@@ -144,27 +152,27 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
           {users.map((u) => (
             <div key={u.id} className="admin-user">
               <div className="admin-user__info">
-                <div className="admin-user__name">{u.gitHubUsername ?? u.email ?? 'Пользователь'}</div>
+                <div className="admin-user__name">{u.gitHubUsername ?? u.email ?? t('account.user')}</div>
                 <div className="admin-user__meta">
                   <span className="admin-user__tier">{u.tier}</span>
                   <span className={`admin-user__role ${roleClass(u)}`}>{roleLabel(u)}</span>
-                  <span className="admin-user__date">с {formatDate(u.createdAt)}</span>
+                  <span className="admin-user__date">{t('admin.since', { date: formatDate(u.createdAt, i18n.language) })}</span>
                 </div>
               </div>
 
               {u.isSuperAdmin ? (
-                <span className="admin-user__protected" title="Суперадмин защищён от изменений">
-                  <ShieldIcon size={16} /> Защищён
+                <span className="admin-user__protected" title={t('admin.protected')}>
+                  <ShieldIcon size={16} /> {t('admin.protected')}
                 </span>
               ) : (
                 <div className="admin-user__actions">
                   {u.isAdmin ? (
                     <button className="admin-btn" onClick={() => void handleRevokeAdmin(u)} disabled={busyId === u.id} type="button">
-                      Забрать права
+                      {t('admin.revokeAdmin')}
                     </button>
                   ) : (
                     <button className="admin-btn" onClick={() => void handleMakeAdmin(u)} disabled={busyId === u.id} type="button">
-                      Сделать админом
+                      {t('admin.makeAdmin')}
                     </button>
                   )}
                   <button
@@ -173,7 +181,7 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
                     disabled={busyId === u.id}
                     type="button"
                   >
-                    Полностью удалить
+                    {t('admin.delete')}
                   </button>
                 </div>
               )}
@@ -184,7 +192,7 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
 
       <div className="admin__pagination">
         <button className="admin-btn" disabled={page <= 1 || loading} onClick={() => void load(page - 1)} type="button">
-          Назад
+          {t('admin.prev')}
         </button>
         <span className="admin__page">
           {page} / {totalPages}
@@ -195,7 +203,7 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
           onClick={() => void load(page + 1)}
           type="button"
         >
-          Вперёд
+          {t('admin.next')}
         </button>
       </div>
         </>
@@ -203,9 +211,9 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
 
       {confirmDeleteId && (
         <ConfirmDialog
-          title="Удалить пользователя?"
-          message="Будут безвозвратно удалены все его чаты, документы и данные. Это действие нельзя отменить."
-          confirmLabel="Удалить"
+          title={t('admin.deleteConfirmTitle')}
+          message={t('admin.deleteConfirmMessage')}
+          confirmLabel={t('admin.confirmDelete')}
           danger
           onConfirm={() => {
             const u = users.find((x) => x.id === confirmDeleteId);

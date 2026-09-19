@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { FileTypeIcon } from './FileTypeIcon';
 import { PlayIcon, TerminalIcon, CheckIcon, CodeIcon } from './Icons';
@@ -75,6 +76,7 @@ export function CommandPalette({
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const { t } = useTranslation();
 
   useEffect(() => {
     if (open) {
@@ -86,10 +88,10 @@ export function CommandPalette({
 
   const items = useMemo<Item[]>(() => {
     const commands: Item[] = [
-      { key: 'cmd:run', kind: 'command', label: 'Запустить проект', action: onRun },
-      { key: 'cmd:terminal', kind: 'command', label: 'Открыть терминал', action: onOpenTerminal },
-      { key: 'cmd:todo', kind: 'command', label: 'Переключить todo-панель', action: onToggleTodo },
-      { key: 'cmd:save', kind: 'command', label: 'Сохранить файл', action: onSave },
+      { key: 'cmd:run', kind: 'command', label: t('palette.runProject'), action: onRun },
+      { key: 'cmd:terminal', kind: 'command', label: t('palette.openTerminal'), action: onOpenTerminal },
+      { key: 'cmd:todo', kind: 'command', label: t('palette.toggleTodo'), action: onToggleTodo },
+      { key: 'cmd:save', kind: 'command', label: t('palette.saveFile'), action: onSave },
     ];
 
     const q = query.trim();
@@ -117,7 +119,7 @@ export function CommandPalette({
     }));
 
     return [...matchedCommands, ...fileItems];
-  }, [query, files, onRun, onOpenTerminal, onToggleTodo, onSave, onOpenFile]);
+  }, [query, files, onRun, onOpenTerminal, onToggleTodo, onSave, onOpenFile, t]);
 
   useEffect(() => {
     setSelected(0);
@@ -153,13 +155,13 @@ export function CommandPalette({
         <input
           ref={inputRef}
           className="palette__input"
-          placeholder="Поиск файлов и команд…"
+          placeholder={t('palette.placeholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
         />
         <div className="palette__list" ref={listRef}>
-          {items.length === 0 && <div className="palette__empty">Ничего не найдено</div>}
+          {items.length === 0 && <div className="palette__empty">{t('palette.empty')}</div>}
           {items.map((item, i) => {
             const indices = item.kind === 'file' ? (fuzzyMatch(query, item.label) ?? []) : (fuzzyMatch(query, item.label) ?? []);
             return (
@@ -185,7 +187,7 @@ export function CommandPalette({
                 <span className="palette__label">
                   <Highlight text={item.label} indices={indices} />
                 </span>
-                <span className="palette__kind">{item.kind === 'command' ? 'command' : 'file'}</span>
+                <span className="palette__kind">{item.kind === 'command' ? t('palette.command') : t('palette.file')}</span>
               </button>
             );
           })}

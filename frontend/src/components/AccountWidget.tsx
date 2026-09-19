@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { UserProfile } from '../types/api';
 import { LogoutIcon, ShieldIcon } from './Icons';
 
@@ -8,12 +9,13 @@ interface AccountWidgetProps {
   onUpgrade: () => void;
   onOpenAdmin: () => void;
   onOpenSupport: () => void;
-  onToast: (message: string) => void;
+  onOpenSettings: () => void;
 }
 
 // EMAIL_AUTH: добавлено 2026-09-19
 /** Compact account widget (avatar initial + display name + tier) with a dropdown menu. */
-export function AccountWidget({ user, onLogout, onUpgrade, onOpenAdmin, onOpenSupport, onToast }: AccountWidgetProps) {
+export function AccountWidget({ user, onLogout, onUpgrade, onOpenAdmin, onOpenSupport, onOpenSettings }: AccountWidgetProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -27,20 +29,15 @@ export function AccountWidget({ user, onLogout, onUpgrade, onOpenAdmin, onOpenSu
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, []);
 
-  const displayName = user.displayName || user.email || 'Пользователь';
+  const displayName = user.displayName || user.email || t('account.user');
   const initial = displayName.charAt(0).toUpperCase();
-
-  function stub(label: string) {
-    setOpen(false);
-    onToast(`${label} скоро появится`);
-  }
 
   return (
     <div className="account-widget" ref={ref}>
       <button
         className="account-widget__trigger"
         onClick={() => setOpen((o) => !o)}
-        aria-label="Аккаунт"
+        aria-label={t('account.settings')}
         type="button"
       >
         <span className="account-widget__avatar">{initial}</span>
@@ -52,14 +49,14 @@ export function AccountWidget({ user, onLogout, onUpgrade, onOpenAdmin, onOpenSu
 
       {open && (
         <div className="account-widget__menu">
-          <button className="account-widget__item" onClick={() => stub('Настройки')} type="button">
-            Настройки
+          <button className="account-widget__item" onClick={() => { setOpen(false); onOpenSettings(); }} type="button">
+            {t('account.settings')}
           </button>
           <button className="account-widget__item" onClick={() => { setOpen(false); onUpgrade(); }} type="button">
-            Улучшить план
+            {t('account.upgrade')}
           </button>
           <button className="account-widget__item" onClick={() => { setOpen(false); onOpenSupport(); }} type="button">
-            Поддержка
+            {t('account.support')}
           </button>
           {user.isAdmin && (
             <button
@@ -67,7 +64,7 @@ export function AccountWidget({ user, onLogout, onUpgrade, onOpenAdmin, onOpenSu
               onClick={() => { setOpen(false); onOpenAdmin(); }}
               type="button"
             >
-              <ShieldIcon size={15} /> Админ-панель
+              <ShieldIcon size={15} /> {t('account.adminPanel')}
             </button>
           )}
           <button
@@ -75,7 +72,7 @@ export function AccountWidget({ user, onLogout, onUpgrade, onOpenAdmin, onOpenSu
             onClick={onLogout}
             type="button"
           >
-            <LogoutIcon size={15} /> Выйти
+            <LogoutIcon size={15} /> {t('account.logout')}
           </button>
         </div>
       )}

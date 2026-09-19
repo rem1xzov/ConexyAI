@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CheckIcon, CopyIcon, RefreshIcon, ThumbsDownIcon, ThumbsUpIcon } from './Icons';
 
 interface MessageActionsProps {
@@ -13,6 +14,7 @@ type Feedback = 'like' | 'dislike' | null;
  * like/dislike (local UI state for now), and regenerate the last prompt.
  */
 export function MessageActions({ content, onRegenerate }: MessageActionsProps) {
+  const { t } = useTranslation();
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [copied, setCopied] = useState(false);
 
@@ -32,27 +34,27 @@ export function MessageActions({ content, onRegenerate }: MessageActionsProps) {
 
   return (
     <div className="message-actions">
-      <button className="message-actions__btn" onClick={() => void copy()} title="Copy" aria-label="Copy">
+      <button className="message-actions__btn" onClick={() => void copy()} title={t('message.copy')} aria-label={t('message.copy')}>
         {copied ? <CheckIcon size={15} /> : <CopyIcon size={15} />}
       </button>
       <button
         className={`message-actions__btn ${feedback === 'like' ? 'message-actions__btn--active message-actions__btn--like' : ''}`}
         onClick={() => toggle('like')}
-        title="Good response"
-        aria-label="Good response"
+        title={t('message.goodResponse')}
+        aria-label={t('message.goodResponse')}
       >
         <ThumbsUpIcon size={15} />
       </button>
       <button
         className={`message-actions__btn ${feedback === 'dislike' ? 'message-actions__btn--active message-actions__btn--dislike' : ''}`}
         onClick={() => toggle('dislike')}
-        title="Bad response"
-        aria-label="Bad response"
+        title={t('message.badResponse')}
+        aria-label={t('message.badResponse')}
       >
         <ThumbsDownIcon size={15} />
       </button>
       {onRegenerate && (
-        <button className="message-actions__btn" onClick={onRegenerate} title="Regenerate" aria-label="Regenerate">
+        <button className="message-actions__btn" onClick={onRegenerate} title={t('message.regenerate')} aria-label={t('message.regenerate')}>
           <RefreshIcon size={15} />
         </button>
       )}

@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CloseIcon, GitHubIcon } from './Icons';
 
 export type AuthMode = 'login' | 'register';
@@ -16,6 +17,7 @@ interface AuthModalProps {
  * backend ({ code, message }) are surfaced inline, not just logged to the console.
  */
 export function AuthModal({ mode, onSubmit, onSwitchMode, onClose }: AuthModalProps) {
+  const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -29,7 +31,7 @@ export function AuthModal({ mode, onSubmit, onSwitchMode, onClose }: AuthModalPr
     setError(null);
 
     if (isRegister && password !== confirm) {
-      setError('Пароли не совпадают');
+      setError(t('auth.passwordsMismatch'));
       return;
     }
 
@@ -38,7 +40,7 @@ export function AuthModal({ mode, onSubmit, onSwitchMode, onClose }: AuthModalPr
       await onSubmit(email, password);
       // On success the parent closes the modal.
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка авторизации');
+      setError(err instanceof Error ? err.message : t('errors.default'));
     } finally {
       setLoading(false);
     }
@@ -48,8 +50,8 @@ export function AuthModal({ mode, onSubmit, onSwitchMode, onClose }: AuthModalPr
     <div className="dialog-overlay" onMouseDown={onClose}>
       <div className="dialog-card auth-modal" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
         <div className="auth-modal__head">
-          <div className="dialog-title">{isRegister ? 'Регистрация' : 'Вход'}</div>
-          <button className="icon-btn" onClick={onClose} aria-label="Закрыть" type="button">
+          <div className="dialog-title">{isRegister ? t('auth.registerTitle') : t('auth.loginTitle')}</div>
+          <button className="icon-btn" onClick={onClose} aria-label={t('common.close')} type="button">
             <CloseIcon size={18} />
           </button>
         </div>
@@ -58,7 +60,7 @@ export function AuthModal({ mode, onSubmit, onSwitchMode, onClose }: AuthModalPr
           <input
             className="dialog-input"
             type="email"
-            placeholder="Email"
+            placeholder={t('auth.email')}
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             autoFocus
@@ -67,7 +69,7 @@ export function AuthModal({ mode, onSubmit, onSwitchMode, onClose }: AuthModalPr
           <input
             className="dialog-input"
             type="password"
-            placeholder="Пароль"
+            placeholder={t('auth.password')}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete={isRegister ? 'new-password' : 'current-password'}
@@ -76,7 +78,7 @@ export function AuthModal({ mode, onSubmit, onSwitchMode, onClose }: AuthModalPr
             <input
               className="dialog-input"
               type="password"
-              placeholder="Подтвердите пароль"
+              placeholder={t('auth.confirmPassword')}
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
               autoComplete="new-password"
@@ -90,20 +92,20 @@ export function AuthModal({ mode, onSubmit, onSwitchMode, onClose }: AuthModalPr
             type="submit"
             disabled={loading || !email.trim() || !password}
           >
-            {loading ? 'Подождите…' : isRegister ? 'Зарегистрироваться' : 'Войти'}
+            {loading ? t('auth.waiting') : isRegister ? t('auth.registerButton') : t('auth.loginButton')}
           </button>
         </form>
 
         <div className="auth-modal__divider">
-          <span>или</span>
+          <span>{t('auth.or')}</span>
         </div>
 
         <a className="auth-modal__github" href="/api/auth/github/login">
-          <GitHubIcon size={18} /> Войти через GitHub
+          <GitHubIcon size={18} /> {t('auth.loginWithGithub')}
         </a>
 
         <button className="auth-modal__switch" onClick={onSwitchMode} type="button">
-          {isRegister ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Зарегистрироваться'}
+          {isRegister ? t('auth.switchToLogin') : t('auth.switchToRegister')}
         </button>
       </div>
     </div>

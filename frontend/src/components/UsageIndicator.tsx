@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { SubscriptionUsage } from '../types/api';
 
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
@@ -8,10 +9,10 @@ function formatCount(n: number): string {
   return String(n);
 }
 
-function formatDate(iso: string): string {
+function formatDate(iso: string, lang: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return d.toLocaleDateString(lang === 'en' ? 'en-US' : 'ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
 function clampPct(n: number): number {
@@ -27,6 +28,7 @@ interface UsageIndicatorProps {
  * (e.g. "27% · 268k/1M"). Clicking toggles a breakdown of all tier limits with reset dates.
  */
 export function UsageIndicator({ usage }: UsageIndicatorProps) {
+  const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
 
   if (!usage) return null;
@@ -36,8 +38,8 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
   if (usage.tier === 'Admin') {
     return (
       <div className="usage-indicator">
-        <span className="usage-indicator__admin" title="Администратор — безлимит">
-          ∞ Admin
+        <span className="usage-indicator__admin" title={t('usage.adminTitle')}>
+          {t('usage.admin')}
         </span>
       </div>
     );
@@ -59,8 +61,8 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
       <button
         className="usage-indicator__donut"
         onClick={() => setOpen((o) => !o)}
-        title={`${formatCount(usage.agentUsed)} / ${formatCount(usage.agentLimit)} токенов`}
-        aria-label="Использование лимитов"
+        title={t('usage.tokens', { used: formatCount(usage.agentUsed), limit: formatCount(usage.agentLimit) })}
+        aria-label={t('usage.aria')}
         type="button"
       >
         <svg width="36" height="36" viewBox="0 0 36 36">
@@ -83,7 +85,7 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
 
       {open && (
         <div className="usage-indicator__popover">
-          <div className="usage-indicator__tier">Тариф: {usage.tier}</div>
+          <div className="usage-indicator__tier">{t('usage.tier', { tier: usage.tier })}</div>
           {rows.map((r) => {
             const rpct = clampPct(r.limit > 0 ? (r.used / r.limit) * 100 : 0);
             return (
@@ -97,7 +99,7 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
                 <div className="usage-indicator__bar">
                   <div className="usage-indicator__bar-fill" style={{ width: `${rpct}%` }} />
                 </div>
-                <div className="usage-indicator__reset">Сброс: {formatDate(r.resetsAt)}</div>
+                <div className="usage-indicator__reset">{t('usage.reset', { date: formatDate(r.resetsAt, i18n.language) })}</div>
               </div>
             );
           })}

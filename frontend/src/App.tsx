@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
 import { getSubscriptionUsage, runTask } from './api/conexyApi';
 import { signalrService } from './services/signalrService';
@@ -23,6 +24,9 @@ import { SupportChat } from './components/SupportChat';
 // EMAIL_AUTH: добавлено 2026-09-19
 import { AuthModal } from './components/AuthModal';
 import type { AuthMode } from './components/AuthModal';
+import { SettingsModal } from './components/SettingsModal';
+import { getStoredTheme, setTheme, type Theme } from './theme';
+import { setLanguage } from './i18n';
 import type { ConexyModel, LimitExceededInfo, ReasoningEffort, SubscriptionUsage, TaskAttachment } from './types/api';
 import type { ChatMessage, ChatSession, ChatSessionKind } from './types/chat';
 import type { PendingActionPayload } from './types/signalr';
@@ -101,15 +105,17 @@ function updateSession(
   return sessions.map((s) => (s.id !== sessionId ? s : updater(s)));
 }
 
-function defaultTitle(kind: ChatSessionKind): string {
-  if (kind === 'students') return 'New student session';
-  if (kind === 'projects') return 'New agent task';
-  return 'New chat';
+function defaultTitle(kind: ChatSessionKind, t: (key: string) => string): string {
+  if (kind === 'students') return t('sidebar.newStudentSession');
+  if (kind === 'projects') return t('sidebar.newAgentTask');
+  return t('sidebar.newChat');
 }
 
 export default function App() {
   // EMAIL_AUTH: добавлено 2026-09-19
   const { token, user, initializing, error: authError, login, register, logout } = useAuth();
+  // SETTINGS: добавлено 2026-09-19
+  const { t, i18n } = useTranslation();
 
   const [activeTab, setActiveTab] = useState<ChatSessionKind>('chat');
   const [model, setModel] = useState<ConexyModel>('ConexyV1-flash');
@@ -141,6 +147,10 @@ export default function App() {
   const [route, setRoute] = useState(window.location.hash);
   // SUPPORT: добавлено 2026-09-19
   const [supportOpen, setSupportOpen] = useState(false);
+  // SETTINGS: добавлено 2026-09-19
+  const [theme, setThemeState] = useState<Theme>(getStoredTheme);
+  const [language, setLanguageState] = useState<string>(i18n.language);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
   // const [isLiveOpen, setIsLiveOpen] = useState(false);
 
@@ -185,7 +195,18 @@ export default function App() {
   }
 
   function handleUpgradeBuy(planName: string) {
-    showToast(`${planName}: оплата скоро будет доступна`);
+    showToast(t('upgrade.soon', { plan: planName }));
+  }
+
+  // SETTINGS: добавлено 2026-09-19 — theme/language changes apply immediately and persist.
+  function handleThemeChange(next: Theme) {
+    setThemeState(next);
+    setTheme(next);
+  }
+
+  function handleLanguageChange(lang: string) {
+    setLanguageState(lang);
+    setLanguage(lang);
   }
 
   // ADMIN_PANEL: добавлено 2026-09-19 — hash-based routing for the admin page.
@@ -362,14 +383,14 @@ export default function App() {
       },
       onRunProjectError: (payload) => {
         if (disposed) return;
-        showToast(`Ошибка запуска: ${payload.message}`);
+        showToast(t('toast.runError', { message: payload.message }));
       },
       onSearchStatus: (payload) => {
         if (disposed) return;
         const ctx = streamingRef.current;
         if (ctx) {
           const action = payload.status === 'searching'
-            ? { stage: 'searching', label: payload.query ? `Ищу в интернете: ${payload.query}` : 'Ищу в интернете…' }
+            ? { stage: 'searching', label: payload.query ? t('agent.searching', { query: payload.query }) : t('agent.searchingShort') }
             : null;
           setSessions((prev) =>
             updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => ({ ...m, currentAction: action })),
@@ -488,7 +509,7 @@ export default function App() {
     const id = !current ? (activeId ?? uid()) : uid();
     const session: ChatSession = {
       id,
-      title: defaultTitle(kind),
+      title: defaultTitle(kind, t),
       status: 'Idle',
       model,
       kind,
@@ -510,7 +531,7 @@ export default function App() {
     const id = activeId ?? uid();
     const session: ChatSession = {
       id,
-      title: defaultTitle('projects'),
+      title: defaultTitle('projects', t),
       status: 'Idle',
       model: 'conexy-coder',
       kind: 'projects',
@@ -591,7 +612,7 @@ export default function App() {
     setSessions((prev) =>
       updateSession(prev, sessionId, (s) => ({
         ...s,
-        title: s.title === defaultTitle(kind) ? prompt.slice(0, 40) : s.title,
+        title: s.title === defaultTitle(kind, t) ? prompt.slice(0, 40) : s.title,
         status: 'Running',
         model,
         messages: appendUserMessage ? [...s.messages, userMsg, assistantMsg] : [...s.messages, assistantMsg],
@@ -625,7 +646,7 @@ export default function App() {
             ...s,
             status: 'Failed',
             messages: s.messages.map((m) =>
-              m.id === assistantMsg.id ? { ...m, status: 'error', error: 'Лимит исчерпан' } : m,
+              m.id === assistantMsg.id ? { ...m, status: 'error', error: t('agent.limitExceeded') } : m,
             ),
           })),
         );
@@ -732,7 +753,7 @@ export default function App() {
     setSessions((prev) =>
       updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => {
         if (m.status === 'stopped') return m;
-        const note = '⏹ Генерация остановлена.';
+        const note = t('agent.generationStopped');
         return {
           ...m,
           status: 'stopped',
@@ -764,7 +785,7 @@ export default function App() {
       await signalrService.confirmAction(actionId, approved);
     } catch (err) {
       console.error('[DangerousCommand] ConfirmAction failed:', err);
-      showToast('Не удалось отправить решение по команде');
+      showToast(t('toast.confirmFailed'));
     }
   }
 
@@ -797,7 +818,7 @@ export default function App() {
         onUpgrade={handleUpgrade}
         onOpenAdmin={handleOpenAdmin}
         onOpenSupport={handleOpenSupport}
-        onToast={showToast}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <main className="main" ref={mainRef}>
@@ -811,8 +832,8 @@ export default function App() {
                 <button
                   className="icon-btn"
                   onClick={() => setIdeCollapsed((c) => !c)}
-                  title={ideCollapsed ? 'Show Workspace IDE' : 'Hide Workspace IDE'}
-                  aria-label={ideCollapsed ? 'Show Workspace IDE' : 'Hide Workspace IDE'}
+                  title={ideCollapsed ? t('workspace.showIde') : t('workspace.hideIde')}
+                  aria-label={ideCollapsed ? t('workspace.showIde') : t('workspace.hideIde')}
                 >
                   {ideCollapsed ? <PanelRightOpenIcon size={18} /> : <PanelRightCloseIcon size={18} />}
                 </button>
@@ -829,13 +850,13 @@ export default function App() {
               />
             ) : initializing ? (
               <div className="feed feed--empty">
-                <p className="muted">Загрузка…</p>
+                <p className="muted">{t('common.loading')}</p>
               </div>
             ) : (
               <div className="feed feed--empty">
                 <div className="hero">
-                  <h1 className="hero__title">Войдите, чтобы продолжить</h1>
-                  <p className="hero__subtitle">Чат и агент доступны после входа.</p>
+                  <h1 className="hero__title">{t('hero.title')}</h1>
+                  <p className="hero__subtitle">{t('hero.subtitle')}</p>
                 </div>
               </div>
             )}
@@ -873,7 +894,7 @@ export default function App() {
                 todos={latestTodos}
                 problems={latestProblems}
                 onCursorChange={setCursorInfo}
-                onRunInSeparateWindow={() => showToast('Проект запускается в отдельном консольном окне')}
+                onRunInSeparateWindow={() => showToast(t('toast.runProject'))}
                 style={{ flex: `0 0 ${workspaceWidth}%` }}
               />
             </>
@@ -927,6 +948,17 @@ export default function App() {
 
       {/* SUPPORT: добавлено 2026-09-19 */}
       {supportOpen && <SupportChat onClose={() => setSupportOpen(false)} onToast={showToast} />}
+
+      {/* SETTINGS: добавлено 2026-09-19 */}
+      {settingsOpen && (
+        <SettingsModal
+          theme={theme}
+          language={language}
+          onThemeChange={handleThemeChange}
+          onLanguageChange={handleLanguageChange}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
     </div>
   );
 }

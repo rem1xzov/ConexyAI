@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import type { TodoItem } from '../types/signalr';
 
 function statusMark(status: TodoItem['status']): JSX.Element {
@@ -18,11 +19,12 @@ interface TodoPanelProps {
 }
 
 export function TodoPanel({ todos }: TodoPanelProps) {
+  const { t } = useTranslation();
   if (todos.length === 0) return null;
 
   return (
     <div className="my-3 rounded-lg bg-zinc-900/50 border border-zinc-800 p-3 text-xs">
-      <div className="text-zinc-400 font-medium mb-2">Task Plan</div>
+      <div className="text-zinc-400 font-medium mb-2">{t('todo.plan')}</div>
       <ul className="space-y-1.5">
         {todos.map((t) => (
           <li key={t.id} className="flex items-start gap-2 text-zinc-300">

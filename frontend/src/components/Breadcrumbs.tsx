@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { FileTypeIcon } from './FileTypeIcon';
 
 interface BreadcrumbsProps {
@@ -37,6 +38,7 @@ function parentDir(dir: string): string {
 }
 
 export function Breadcrumbs({ path, files, onOpenFile }: BreadcrumbsProps) {
+  const { t } = useTranslation();
   const segments = path.split('/');
   const fileName = segments[segments.length - 1];
   const folderSegments = segments.slice(0, -1);
@@ -72,9 +74,9 @@ export function Breadcrumbs({ path, files, onOpenFile }: BreadcrumbsProps) {
     return (
       <div className="breadcrumbs__menu">
         <div className="breadcrumbs__menu-header">
-          <span className="breadcrumbs__menu-path">{isRoot ? 'Workspace' : dir}</span>
+          <span className="breadcrumbs__menu-path">{isRoot ? t('breadcrumbs.workspace') : dir}</span>
           {!isRoot && (
-            <button className="breadcrumbs__menu-up" onClick={() => setOpenDir(parentDir(dir))} title="Up one level">
+            <button className="breadcrumbs__menu-up" onClick={() => setOpenDir(parentDir(dir))} title={t('breadcrumbs.upOneLevel')}>
               ↑
             </button>
           )}
@@ -100,7 +102,7 @@ export function Breadcrumbs({ path, files, onOpenFile }: BreadcrumbsProps) {
             </button>
           ))}
           {children.dirs.length === 0 && children.files.length === 0 && (
-            <div className="breadcrumbs__menu-empty">No files</div>
+            <div className="breadcrumbs__menu-empty">{t('breadcrumbs.noFiles')}</div>
           )}
         </div>
       </div>
@@ -111,7 +113,7 @@ export function Breadcrumbs({ path, files, onOpenFile }: BreadcrumbsProps) {
     <div className="breadcrumbs" ref={rootRef}>
       <button className="breadcrumbs__crumb" onClick={() => setOpenDir(openDir === '' ? null : '')}>
         <FileTypeIcon path="" isFolder size={13} />
-        <span>Workspace</span>
+        <span>{t('breadcrumbs.workspace')}</span>
       </button>
 
       {folderSegments.map((seg, i) => {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   getDevToken,
   getMe,
@@ -68,10 +69,21 @@ function isNotFoundError(e: unknown): boolean {
 }
 
 // EMAIL_AUTH: добавлено 2026-09-19
-/** Extracts the backend's structured { code, message } error into a plain Error. */
-function extractAuthError(e: unknown): Error {
-  const err = e as { response?: { data?: { message?: string } } } | null;
-  return new Error(err?.response?.data?.message || 'Ошибка авторизации');
+/** Extracts the backend's structured error code ({ code, message }) so the UI can translate it. */
+function extractAuthErrorCode(e: unknown): string | null {
+  const err = e as { response?: { data?: { code?: string } } } | null;
+  return err?.response?.data?.code ?? null;
+}
+
+/** Maps a backend error code to a localized message via the i18n <c>errors.*</c> namespace. */
+function authErrorMessage(e: unknown, t: (key: string) => string): string {
+  const code = extractAuthErrorCode(e);
+  if (code) {
+    const key = `errors.${code}`;
+    // i18next returns the key unchanged when a translation is missing.
+    if (t(key) !== key) return t(key);
+  }
+  return t('errors.default');
 }
 
 /**
@@ -81,6 +93,7 @@ function extractAuthError(e: unknown): Error {
  * <c>logout</c> for the auth UI, plus the current <c>user</c> profile.
  */
 export function useAuth() {
+  const { t } = useTranslation();
   const [token, setToken] = useState<string | null>(readStoredToken);
   const [user, setUser] = useState<UserProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -123,7 +136,7 @@ export function useAuth() {
     // here with ?auth=error&message=...) and strip the query string from the address bar.
     const query = new URLSearchParams(window.location.search);
     if (query.get('auth') === 'error') {
-      setError(query.get('message') ?? 'Ошибка авторизации через GitHub');
+      setError(t('errors.github_auth'));
       window.history.replaceState(null, '', window.location.pathname);
     }
 
@@ -198,10 +211,10 @@ export function useAuth() {
       try {
         applyToken(await apiLogin(email, password));
       } catch (e) {
-        throw extractAuthError(e);
+        throw new Error(authErrorMessage(e, t));
       }
     },
-    [applyToken],
+    [applyToken, t],
   );
 
   const register = useCallback(
@@ -209,10 +222,10 @@ export function useAuth() {
       try {
         applyToken(await apiRegister(email, password));
       } catch (e) {
-        throw extractAuthError(e);
+        throw new Error(authErrorMessage(e, t));
       }
     },
-    [applyToken],
+    [applyToken, t],
   );
 
   const logout = useCallback(async () => {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { ConexyModel, ReasoningEffort, TaskAttachment } from '../types/api';
 import { fileToAttachment, isAllowedMime, pastedImageFile } from '../utils/attachments';
 import { ModelPicker } from './ModelPicker';
@@ -43,6 +44,7 @@ export function InputBar({
   // onOpenLive,
   onSend,
 }: InputBarProps) {
+  const { t } = useTranslation();
   const [value, setValue] = useState('');
   const [attachments, setAttachments] = useState<TaskAttachment[]>([]);
   const [isRecording, setIsRecording] = useState(false);
@@ -134,7 +136,7 @@ export function InputBar({
   function handleMicClick() {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert('Ваш браузер не поддерживает голосовой ввод. Используйте Chrome или Яндекс Браузер.');
+      alert(t('input.micUnsupported'));
       return;
     }
 
@@ -193,7 +195,7 @@ export function InputBar({
               <button
                 className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-zinc-700 hover:bg-red-500 text-white text-xs flex items-center justify-center"
                 onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                aria-label={`Remove ${a.fileName}`}
+                aria-label={t('input.removeFile', { name: a.fileName })}
               >
                 <CloseIcon size={10} />
               </button>
@@ -202,7 +204,7 @@ export function InputBar({
         </div>
       )}
       {limitHint && (
-        <div className="inputbar-limit">Максимум 10 файлов за сообщение</div>
+        <div className="inputbar-limit">{t('input.maxFiles')}</div>
       )}
 
       <div className="inputbar">
@@ -210,8 +212,8 @@ export function InputBar({
           <button
             className="icon-btn attach-btn"
             onClick={() => setMenuOpen((o) => !o)}
-            title="Add files"
-            aria-label="Add files"
+            title={t('input.addFiles')}
+            aria-label={t('input.addFiles')}
           >
             <PlusIcon size={20} />
           </button>
@@ -219,16 +221,16 @@ export function InputBar({
           {menuOpen && (
             <div className="attach-menu">
               <button className="attach-menu__item" onClick={() => fileRef.current?.click()}>
-                <UploadIcon size={17} /> Upload files
+                <UploadIcon size={17} /> {t('input.uploadFiles')}
               </button>
               <button className="attach-menu__item" onClick={() => photoRef.current?.click()}>
-                <PhotoIcon size={17} /> Photos
+                <PhotoIcon size={17} /> {t('input.photos')}
               </button>
               <button className="attach-menu__item" onClick={() => cameraRef.current?.click()}>
-                <CameraIcon size={17} /> Take photo
+                <CameraIcon size={17} /> {t('input.takePhoto')}
               </button>
               <button className="attach-menu__item" onClick={() => codeRef.current?.click()}>
-                <CodeIcon size={17} /> Import code
+                <CodeIcon size={17} /> {t('input.importCode')}
               </button>
             </div>
           )}
@@ -283,7 +285,7 @@ export function InputBar({
           className="inputbar__textarea"
           rows={1}
           disabled={disabled}
-          placeholder="Message ConexyAI…"
+          placeholder={t('input.placeholder')}
           value={value}
           onChange={(e) => {
             setValue(e.target.value);
@@ -309,8 +311,8 @@ export function InputBar({
         <button
           className={`mic-btn ${isRecording ? 'mic-btn--active' : ''}`}
           onClick={handleMicClick}
-          title={isRecording ? 'Остановить запись' : 'Голосовой ввод'}
-          aria-label={isRecording ? 'Остановить запись' : 'Голосовой ввод'}
+          title={isRecording ? t('input.stopRecording') : t('input.voiceInput')}
+          aria-label={isRecording ? t('input.stopRecording') : t('input.voiceInput')}
           disabled={disabled}
         >
           <MicIcon size={19} />
@@ -320,8 +322,8 @@ export function InputBar({
           <button
             className="send-btn send-btn--stop"
             onClick={onStop}
-            title="Остановить генерацию"
-            aria-label="Остановить генерацию"
+            title={t('input.stopGeneration')}
+            aria-label={t('input.stopGeneration')}
           >
             <StopIcon size={18} />
           </button>
@@ -329,8 +331,8 @@ export function InputBar({
           <button
             type="submit"
             onClick={submit}
-            title="Отправить"
-            aria-label="Отправить"
+            title={t('common.send')}
+            aria-label={t('common.send')}
             className="send-btn"
             disabled={disabled || !hasInputText}
           >

@@ -1,29 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { ConexyModel, ReasoningEffort } from '../types/api';
 import { CheckIcon } from './Icons';
 
 interface ModelOption {
   value: ConexyModel;
   label: string;
-  desc: string;
+  descKey: string;
 }
 
 const FLASH_MODEL: ModelOption = {
   value: 'ConexyV1-flash',
   label: 'ConexyV1-flash',
-  desc: 'Быстрый чат, ответы на вопросы, базовая помощь.',
+  descKey: 'model.flashDesc',
 };
 
 const PRO_MODEL: ModelOption = {
   value: 'ConexyV1-pro',
   label: 'ConexyV1-pro',
-  desc: 'Продвинутое рассуждение, сложный анализ, рефакторинг.',
+  descKey: 'model.proDesc',
 };
 
 const CODER_MODEL: ModelOption = {
   value: 'conexy-coder',
   label: 'conexy-coder',
-  desc: 'Автономный кодинг: терминал, файлы, Playwright, GitHub.',
+  descKey: 'model.coderDesc',
 };
 
 const ALL_MODELS: ModelOption[] = [FLASH_MODEL, PRO_MODEL, CODER_MODEL];
@@ -56,6 +57,7 @@ export function ModelPicker({
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const { t } = useTranslation();
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -102,7 +104,7 @@ export function ModelPicker({
                   </span>
                 )}
               </span>
-              <span className="modelpicker__desc">{m.desc}</span>
+              <span className="modelpicker__desc">{t(m.descKey)}</span>
             </button>
           ))}
 
@@ -118,8 +120,8 @@ export function ModelPicker({
                   {thinking ? <CheckIcon size={12} /> : ''}
                 </span>
                 <span className="modelpicker__thinking-label">
-                  <span className="modelpicker__thinking-title">Размышления</span>
-                  <span className="modelpicker__thinking-desc">Показывать цепочку рассуждений</span>
+                  <span className="modelpicker__thinking-title">{t('model.thinking')}</span>
+                  <span className="modelpicker__thinking-desc">{t('model.thinkingDesc')}</span>
                 </span>
               </button>
             </>
@@ -137,8 +139,8 @@ export function ModelPicker({
                   {smartSearch ? <CheckIcon size={12} /> : ''}
                 </span>
                 <span className="modelpicker__thinking-label">
-                  <span className="modelpicker__thinking-title">Умный поиск</span>
-                  <span className="modelpicker__thinking-desc">Искать актуальную информацию в интернете</span>
+                  <span className="modelpicker__thinking-title">{t('model.smartSearch')}</span>
+                  <span className="modelpicker__thinking-desc">{t('model.smartSearchDesc')}</span>
                 </span>
               </button>
             </>
@@ -148,7 +150,7 @@ export function ModelPicker({
             <>
               <div className="modelpicker__divider" />
               <div className="modelpicker__reasoning">
-                <span className="modelpicker__thinking-title">Глубина мышления</span>
+                <span className="modelpicker__thinking-title">{t('model.reasoningDepth')}</span>
                 <div className="modelpicker__reasoning-options">
                   {REASONING_LEVELS.map((level) => (
                     <button

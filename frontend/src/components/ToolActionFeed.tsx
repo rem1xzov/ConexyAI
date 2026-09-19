@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { ToolActionEvent } from '../types/signalr';
 
 const MAX_VISIBLE = 20;
@@ -40,6 +41,7 @@ interface DangerousCommandCardProps {
 
 function DangerousCommandCard({ events }: DangerousCommandCardProps) {
   const [open, setOpen] = useState(false);
+  const { t } = useTranslation();
 
   const first = events[0];
   const completed = events.find((e) => e.status === 'completed' || e.status === 'failed');
@@ -53,12 +55,12 @@ function DangerousCommandCard({ events }: DangerousCommandCardProps) {
 
   const label =
     status === 'completed'
-      ? 'Выполнено'
+      ? t('toolAction.completed')
       : status === 'failed'
-        ? 'Ошибка'
+        ? t('toolAction.failed')
         : status === 'rejected'
-          ? 'Отклонено пользователем'
-          : 'Ожидает подтверждения';
+          ? t('toolAction.rejected')
+          : t('toolAction.pending');
 
   const output = completed?.output ?? '';
 
@@ -83,7 +85,7 @@ function DangerousCommandCard({ events }: DangerousCommandCardProps) {
             onClick={() => setOpen((o) => !o)}
             type="button"
           >
-            {open ? '▾ Скрыть вывод' : '▸ Показать вывод'}
+            {open ? t('toolAction.hideOutput') : t('toolAction.showOutput')}
           </button>
           {open && <pre className="danger-cmd-feed-pre">{output}</pre>}
         </div>
@@ -97,6 +99,7 @@ interface ToolActionFeedProps {
 }
 
 export function ToolActionFeed({ actions }: ToolActionFeedProps) {
+  const { t } = useTranslation();
   const tail = actions.slice(-MAX_VISIBLE);
   if (tail.length === 0) return null;
 
@@ -121,7 +124,7 @@ export function ToolActionFeed({ actions }: ToolActionFeedProps) {
     <div className="my-3 space-y-3">
       {ordinary.length > 0 && (
         <div className="rounded-lg bg-zinc-900/50 border border-zinc-800 p-3 text-xs">
-          <div className="text-zinc-400 font-medium mb-2">Live Action Status</div>
+          <div className="text-zinc-400 font-medium mb-2">{t('toolAction.liveStatus')}</div>
           <ul className="space-y-1.5">
             {ordinary.map((a, i) => (
               <li key={`${a.toolName}-${a.command}-${i}`} className="tool-action flex items-center gap-2 text-zinc-300">

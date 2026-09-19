@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import type { LimitExceededInfo } from '../types/api';
 import { CheckIcon, CloseIcon } from './Icons';
 
@@ -5,8 +6,8 @@ interface Plan {
   id: string;
   name: string;
   price: string;
-  cta: string | null;
-  features: string[];
+  ctaKey: string | null;
+  featureKeys: string[];
   highlight?: boolean;
 }
 
@@ -15,35 +16,23 @@ const PLANS: Plan[] = [
     id: 'Free',
     name: 'Free',
     price: '0 ₽',
-    cta: null,
-    features: [
-      '100 запросов Flash/неделя',
-      '20 запросов Pro/неделя',
-      '200 000 токенов агента/месяц',
-    ],
+    ctaKey: null,
+    featureKeys: ['upgrade.features.free1', 'upgrade.features.free2', 'upgrade.features.free3'],
   },
   {
     id: 'Pro',
     name: 'Pro',
     price: '990 ₽/мес',
-    cta: 'Купить Pro',
+    ctaKey: 'upgrade.buyPro',
     highlight: true,
-    features: [
-      '250 запросов Flash/неделя',
-      '150 запросов Pro/неделя',
-      '5 000 000 токенов агента/неделя',
-    ],
+    featureKeys: ['upgrade.features.pro1', 'upgrade.features.pro2', 'upgrade.features.pro3'],
   },
   {
     id: 'ProMax',
     name: 'ProMax',
     price: '1 590 ₽/мес',
-    cta: 'Купить ProMax',
-    features: [
-      '300 запросов Flash/неделя',
-      '200 запросов Pro/неделя',
-      '10 000 000 токенов агента/неделя',
-    ],
+    ctaKey: 'upgrade.buyProMax',
+    featureKeys: ['upgrade.features.proMax1', 'upgrade.features.proMax2', 'upgrade.features.proMax3'],
   },
 ];
 
@@ -60,21 +49,19 @@ interface UpgradeModalProps {
  * stubs until real payment is wired up.
  */
 export function UpgradeModal({ limitInfo, onClose, onBuy }: UpgradeModalProps) {
+  const { t } = useTranslation();
+
   return (
     <div className="dialog-overlay" role="dialog" aria-modal="true" onMouseDown={onClose}>
       <div className="dialog-card upgrade-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="upgrade-modal__head">
-          <div className="dialog-title">Улучшите тариф</div>
-          <button className="icon-btn" onClick={onClose} aria-label="Закрыть" type="button">
+          <div className="dialog-title">{t('upgrade.title')}</div>
+          <button className="icon-btn" onClick={onClose} aria-label={t('common.close')} type="button">
             <CloseIcon size={18} />
           </button>
         </div>
 
-        {limitInfo && (
-          <div className="upgrade-modal__banner">
-            Вы достигли лимита. Улучшите тариф, чтобы продолжить.
-          </div>
-        )}
+        {limitInfo && <div className="upgrade-modal__banner">{t('upgrade.limitExceeded')}</div>}
 
         <div className="upgrade-modal__plans">
           {PLANS.map((plan) => (
@@ -82,18 +69,22 @@ export function UpgradeModal({ limitInfo, onClose, onBuy }: UpgradeModalProps) {
               <div className="upgrade-plan__name">{plan.name}</div>
               <div className="upgrade-plan__price">{plan.price}</div>
               <ul className="upgrade-plan__features">
-                {plan.features.map((f) => (
-                  <li key={f} className="upgrade-plan__feature">
-                    <CheckIcon size={14} /> {f}
+                {plan.featureKeys.map((key) => (
+                  <li key={key} className="upgrade-plan__feature">
+                    <CheckIcon size={14} /> {t(key)}
                   </li>
                 ))}
               </ul>
-              {plan.cta ? (
-                <button className="dialog-btn dialog-btn--primary upgrade-plan__cta" onClick={() => onBuy(plan.name)} type="button">
-                  {plan.cta}
+              {plan.ctaKey ? (
+                <button
+                  className="dialog-btn dialog-btn--primary upgrade-plan__cta"
+                  onClick={() => onBuy(plan.name)}
+                  type="button"
+                >
+                  {t(plan.ctaKey)}
                 </button>
               ) : (
-                <div className="upgrade-plan__current">Текущий план</div>
+                <div className="upgrade-plan__current">{t('upgrade.currentPlan')}</div>
               )}
             </div>
           ))}

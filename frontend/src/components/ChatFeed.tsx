@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { ChatSession } from '../types/chat';
 import { MessageBubble } from './MessageBubble';
 
@@ -10,6 +11,7 @@ interface ChatFeedProps {
 }
 
 export function ChatFeed({ session, onRegenerate, onResend, onEditMessage }: ChatFeedProps) {
+  const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -56,8 +58,8 @@ export function ChatFeed({ session, onRegenerate, onResend, onEditMessage }: Cha
     return (
       <div className="feed feed--empty">
         <div className="hero">
-          <h1 className="hero__title">Your move, Commander</h1>
-          <p className="hero__subtitle">What can I build for you today?</p>
+          <h1 className="hero__title">{t('chat.heroTitle')}</h1>
+          <p className="hero__subtitle">{t('chat.heroSubtitle')}</p>
         </div>
       </div>
     );

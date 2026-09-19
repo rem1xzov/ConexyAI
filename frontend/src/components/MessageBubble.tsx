@@ -1,4 +1,5 @@
 import { useState, type KeyboardEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { ChatMessage } from '../types/chat';
 import { VisionGallery } from './VisionGallery';
 import { ToolActionFeed } from './ToolActionFeed';
@@ -15,6 +16,7 @@ interface MessageBubbleProps {
 }
 
 export function MessageBubble({ message, onRegenerate, onResend, onEditMessage }: MessageBubbleProps) {
+  const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
@@ -74,7 +76,7 @@ export function MessageBubble({ message, onRegenerate, onResend, onEditMessage }
     return (
       <div className="w-full max-w-3xl mx-auto my-4 flex flex-col items-end px-2">
         <div className="w-fit max-w-[85%] bg-zinc-800/90 border border-zinc-700/40 text-zinc-100 rounded-2xl px-5 py-3.5 shadow-sm">
-          <div className="font-semibold text-xs text-zinc-400 mb-1">Вы</div>
+          <div className="font-semibold text-xs text-zinc-400 mb-1">{t('message.you')}</div>
           {editing ? (
             <div className="min-w-[320px]">
               <textarea
@@ -90,14 +92,14 @@ export function MessageBubble({ message, onRegenerate, onResend, onEditMessage }
                   className="px-2.5 py-1 rounded-md text-xs bg-zinc-700/70 hover:bg-zinc-600 text-zinc-200"
                   onClick={cancelEdit}
                 >
-                  Отмена
+                  {t('common.cancel')}
                 </button>
                 <button
                   className="px-2.5 py-1 rounded-md text-xs bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40"
                   onClick={commitEdit}
                   disabled={!draft.trim()}
                 >
-                  Отправить
+                  {t('common.send')}
                 </button>
               </div>
             </div>
@@ -122,13 +124,13 @@ export function MessageBubble({ message, onRegenerate, onResend, onEditMessage }
       {showThinkingBadge && (
         <div className="thinking-live">
           <span className="thinking-live__dot" />
-          <span>Думаю…</span>
+          <span>{t('message.thinking')}</span>
         </div>
       )}
 
       {showThinkingDetails && (
         <details className="thinking-details">
-          <summary className="thinking-details__summary">🧠 Show thinking process</summary>
+          <summary className="thinking-details__summary">{t('message.showThinking')}</summary>
           <div className="thinking-details__body">{thinking}</div>
         </details>
       )}

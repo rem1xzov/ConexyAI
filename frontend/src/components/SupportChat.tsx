@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { createSupportTicket, sendSupportMessage } from '../api/conexyApi';
 import { signalrService } from '../services/signalrService';
 import type { SupportMessage, SupportTicket } from '../types/api';
@@ -18,6 +19,7 @@ function formatTime(iso: string): string {
 // SUPPORT: добавлено 2026-09-19
 /** User-facing messenger-style support chat. */
 export function SupportChat({ onClose, onToast }: SupportChatProps) {
+  const { t } = useTranslation();
   const [ticket, setTicket] = useState<SupportTicket | null>(null);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -39,7 +41,7 @@ export function SupportChat({ onClose, onToast }: SupportChatProps) {
         setTicket(t);
         await signalrService.joinSupportTicket(t.id);
       } catch {
-        if (!cancelled) onToast('Не удалось открыть поддержку');
+        if (!cancelled) onToast(t('support.openError'));
       }
     }
     void init();
@@ -64,7 +66,7 @@ export function SupportChat({ onClose, onToast }: SupportChatProps) {
     try {
       await sendSupportMessage(ticket.id, content);
     } catch {
-      onToast('Не удалось отправить сообщение');
+      onToast(t('support.sendError'));
     } finally {
       setSending(false);
     }
@@ -74,17 +76,17 @@ export function SupportChat({ onClose, onToast }: SupportChatProps) {
     <div className="dialog-overlay" onMouseDown={onClose}>
       <div className="dialog-card support-chat" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
         <div className="support-chat__head">
-          <div className="dialog-title">Поддержка</div>
-          <button className="icon-btn" onClick={onClose} aria-label="Закрыть" type="button">
+          <div className="dialog-title">{t('support.title')}</div>
+          <button className="icon-btn" onClick={onClose} aria-label={t('common.close')} type="button">
             <CloseIcon size={18} />
           </button>
         </div>
 
         <div className="support-chat__messages" ref={scrollRef}>
           {!ticket ? (
-            <p className="muted">Загрузка…</p>
+            <p className="muted">{t('common.loading')}</p>
           ) : ticket.messages.length === 0 ? (
-            <p className="muted support-chat__hint">Опишите вашу проблему — администратор ответит здесь.</p>
+            <p className="muted support-chat__hint">{t('support.hint')}</p>
           ) : (
             ticket.messages.map((m: SupportMessage) => (
               <div key={m.id} className={`support-msg ${m.isFromAdmin ? 'support-msg--other' : 'support-msg--own'}`}>
@@ -99,13 +101,13 @@ export function SupportChat({ onClose, onToast }: SupportChatProps) {
           <input
             className="dialog-input"
             value={draft}
-            placeholder="Сообщение…"
+            placeholder={t('support.messagePlaceholder')}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') void handleSend();
             }}
           />
-          <button className="icon-btn" onClick={() => void handleSend()} disabled={!draft.trim() || sending} aria-label="Отправить" type="button">
+          <button className="icon-btn" onClick={() => void handleSend()} disabled={!draft.trim() || sending} aria-label={t('common.send')} type="button">
             <SendIcon size={18} />
           </button>
         </div>

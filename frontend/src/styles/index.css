@@ -15,6 +15,33 @@
   --ok: #4ade80;
   --warn: #fbbf24;
   --cherry: #e64980;
+  --bg-body: linear-gradient(180deg, #24111e 0%, #140811 40%, #060205 100%);
+  --bg-sidebar: rgba(0, 0, 0, 0.3);
+  --bg-main: rgba(0, 0, 0, 0.2);
+  --bg-overlay: rgba(0, 0, 0, 0.6);
+  --bg-input: rgba(255, 255, 255, 0.04);
+  --bg-hover: rgba(255, 255, 255, 0.06);
+}
+
+html[data-theme="light"] {
+  --surface: rgba(255, 255, 255, 0.7);
+  --surface-solid: #ffffff;
+  --surface-2: #f2f0f4;
+  --border: rgba(0, 0, 0, 0.1);
+  --text: #1a1c23;
+  --muted: #6b6470;
+  --accent: #9b4fb8;
+  --accent-soft: rgba(155, 79, 184, 0.12);
+  --danger: #e5484d;
+  --ok: #22a55b;
+  --warn: #b7791f;
+  --cherry: #c2255c;
+  --bg-body: linear-gradient(180deg, #fdf6fd 0%, #f7eef9 40%, #f0e6f3 100%);
+  --bg-sidebar: rgba(0, 0, 0, 0.03);
+  --bg-main: rgba(255, 255, 255, 0.4);
+  --bg-overlay: rgba(0, 0, 0, 0.4);
+  --bg-input: rgba(0, 0, 0, 0.04);
+  --bg-hover: rgba(0, 0, 0, 0.05);
 }
 
 * {
@@ -56,7 +83,7 @@ body,
 
 body {
   margin: 0;
-  background: linear-gradient(180deg, #24111e 0%, #140811 40%, #060205 100%);
+  background: var(--bg-body);
   background-attachment: fixed;
   min-height: 100vh;
   color: var(--text);
@@ -79,7 +106,7 @@ body {
 .sidebar {
   width: 272px;
   min-width: 272px;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--bg-sidebar);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-right: 1px solid var(--border);
@@ -301,7 +328,7 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--bg-main);
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
 }
@@ -2695,7 +2722,7 @@ body {
 .dialog-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--bg-overlay);
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
   display: flex;
@@ -2731,7 +2758,7 @@ body {
 
 .dialog-input {
   width: 100%;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text);
