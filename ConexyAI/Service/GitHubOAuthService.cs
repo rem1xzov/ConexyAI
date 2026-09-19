@@ -5,6 +5,7 @@ using ConexyAI.Entity;
 using ConexyAI.Model;
 using ConexyAI.Repository;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace ConexyAI.Service;
@@ -32,15 +33,18 @@ public class GitHubOAuthService : IGitHubOAuthService
     private readonly GitHubOAuthOptions _options;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IUserRepository _userRepository;
+    private readonly ILogger<GitHubOAuthService> _logger;
 
     public GitHubOAuthService(
         IOptions<GitHubOAuthOptions> options,
         IHttpClientFactory httpClientFactory,
-        IUserRepository userRepository)
+        IUserRepository userRepository,
+        ILogger<GitHubOAuthService> logger)
     {
         _options = options.Value;
         _httpClientFactory = httpClientFactory;
         _userRepository = userRepository;
+        _logger = logger;
     }
 
     public string BuildLoginUrl(string state)
@@ -56,8 +60,16 @@ public class GitHubOAuthService : IGitHubOAuthService
 
     public async Task<GitHubOAuthResult> HandleCallbackAsync(string code, CancellationToken ct = default)
     {
+        // GITHUB_OAUTH: добавлено 2026-09-19 — debug logging (code prefix only, never the full code).
+        _logger.LogInformation("GitHub OAuth callback: code prefix '{CodePrefix}'. Exchanging code...", CodePrefix(code));
+
         var accessToken = await ExchangeCodeAsync(code, ct);
+        _logger.LogInformation("GitHub OAuth callback: code exchanged successfully (access token length {TokenLength}).", accessToken.Length);
+
         var userInfo = await LoadUserAsync(accessToken, ct);
+        _logger.LogInformation(
+            "GitHub OAuth callback: loaded GitHub user id={GitHubId}, login={Login}, hasEmail={HasEmail}.",
+            userInfo.GitHubId, userInfo.Username, userInfo.Email is not null);
 
         var now = DateTime.UtcNow;
         var existing = await _userRepository.GetByGitHubIdAsync(userInfo.GitHubId, ct);
@@ -76,6 +88,7 @@ public class GitHubOAuthService : IGitHubOAuthService
             };
 
             await _userRepository.AddAsync(user, ct);
+            _logger.LogInformation("GitHub OAuth callback: created new user {UserId}.", user.Id);
             return new GitHubOAuthResult(user.Id, IsNewUser: true);
         }
 
@@ -85,6 +98,7 @@ public class GitHubOAuthService : IGitHubOAuthService
         existing.GitHubUsername = userInfo.Username;
         existing.LastLoginAt = now;
         await _userRepository.UpdateAsync(existing, ct);
+        _logger.LogInformation("GitHub OAuth callback: updated existing user {UserId} last login.", existing.Id);
 
         return new GitHubOAuthResult(existing.Id, IsNewUser: false);
     }
@@ -107,6 +121,9 @@ public class GitHubOAuthService : IGitHubOAuthService
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct);
+            _logger.LogError(
+                "GitHub token exchange failed with HTTP {StatusCode}: {Body}",
+                response.StatusCode, body);
             throw new InvalidOperationException(
                 $"GitHub token exchange failed ({response.StatusCode}): {body}");
         }
@@ -207,4 +224,8 @@ public class GitHubOAuthService : IGitHubOAuthService
         public bool Primary { get; set; }
         public bool Verified { get; set; }
     }
+
+    /// <summary>First 8 characters of the code (or a marker), for debug logging only.</summary>
+    private static string CodePrefix(string? code) =>
+        string.IsNullOrWhiteSpace(code) ? "<empty>" : code[..Math.Min(8, code.Length)];
 }

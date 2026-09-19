@@ -10,4 +10,12 @@ public interface ITokenService
     /// authenticated user id.
     /// </summary>
     TokenResponse CreateToken(Guid userId);
+
+    // GITHUB_OAUTH: добавлено 2026-09-19
+    /// <summary>
+    /// Validates a JWT (signature, issuer, audience, lifetime) and returns a
+    /// <see cref="TokenResponse"/> carrying its expiry when valid; otherwise <c>null</c>.
+    /// Used by <c>/api/auth/session</c> to hand the frontend a fresh, verified token.
+    /// </summary>
+    TokenResponse? ValidateToken(string token);
 }

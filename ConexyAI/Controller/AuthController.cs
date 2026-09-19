@@ -5,6 +5,7 @@ using ConexyAI.Repository;
 using ConexyAI.Service;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace ConexyAI.Controller;
@@ -15,6 +16,8 @@ namespace ConexyAI.Controller;
 public class AuthController : ControllerBase
 {
     private const string StateCookieName = "github_oauth_state";
+    // GITHUB_OAUTH: добавлено 2026-09-19
+    private const string AuthCookieName = "conexy_auth";
 
     private readonly ITokenService _tokenService;
     private readonly IWebHostEnvironment _environment;
@@ -22,19 +25,22 @@ public class AuthController : ControllerBase
     private readonly IGitHubOAuthService _gitHubOAuthService;
     private readonly GitHubOAuthOptions _gitHubOAuthOptions;
     private readonly IUserRepository _userRepository;
+    private readonly ILogger<AuthController> _logger;
 
     public AuthController(
         ITokenService tokenService,
         IWebHostEnvironment environment,
         IGitHubOAuthService gitHubOAuthService,
         IOptions<GitHubOAuthOptions> gitHubOAuthOptions,
-        IUserRepository userRepository)
+        IUserRepository userRepository,
+        ILogger<AuthController> logger)
     {
         _tokenService = tokenService;
         _environment = environment;
         _gitHubOAuthService = gitHubOAuthService;
         _gitHubOAuthOptions = gitHubOAuthOptions.Value;
         _userRepository = userRepository;
+        _logger = logger;
     }
 
     /// <summary>
@@ -85,7 +91,8 @@ public class AuthController : ControllerBase
     // GITHUB_OAUTH: добавлено 2026-09-19
     /// <summary>
     /// Handles the GitHub OAuth callback: validates state, exchanges the code, upserts the
-    /// user, issues a real JWT and redirects the SPA with the token in the URL fragment.
+    /// user, issues a real JWT, stores it in an httpOnly cookie and redirects the SPA to a
+    /// clean URL (no fragment). The SPA then fetches the JWT via <c>GET /api/auth/session</c>.
     /// </summary>
     [HttpGet("github/callback")]
     public async Task<IActionResult> GitHubCallback(
@@ -95,13 +102,20 @@ public class AuthController : ControllerBase
     {
         var frontendBase = FrontendBaseUrl();
 
+        // GITHUB_OAUTH: добавлено 2026-09-19 — debug logging.
+        _logger.LogInformation(
+            "GitHub callback hit: code prefix '{CodePrefix}', state present {StatePresent}, cookie present {CookiePresent}.",
+            CodePrefix(code), !string.IsNullOrWhiteSpace(state), !string.IsNullOrWhiteSpace(Request.Cookies[StateCookieName]));
+
         if (string.IsNullOrWhiteSpace(code))
         {
+            _logger.LogWarning("GitHub callback: missing code, redirecting to error.");
             return RedirectToFrontendError(frontendBase, "missing_code");
         }
 
         if (!ValidateState(state))
         {
+            _logger.LogWarning("GitHub callback: state mismatch/absent, redirecting to error.");
             return RedirectToFrontendError(frontendBase, "state_mismatch");
         }
 
@@ -110,15 +124,54 @@ public class AuthController : ControllerBase
             var result = await _gitHubOAuthService.HandleCallbackAsync(code, ct);
             var token = _tokenService.CreateToken(result.UserId);
 
-            // Deliver via the URL fragment (never sent to the server / access logs, and not
-            // leaked through Referer). The SPA reads it, stores it in localStorage (same place
-            // the dev-token used) and strips the fragment from the address bar.
-            return Redirect($"{frontendBase}/#token={Uri.EscapeDataString(token.Token)}&expiresAtUtc={Uri.EscapeDataString(token.ExpiresAtUtc.ToString("o"))}");
+            // GITHUB_OAUTH: добавлено 2026-09-19 — deliver the JWT via an httpOnly cookie
+            // (not a URL fragment), so a repeated callback can no longer clobber it. The SPA
+            // reads it back through GET /api/auth/session and stores it in localStorage.
+            Response.Cookies.Append(AuthCookieName, token.Token, new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = !_environment.IsDevelopment(),
+                SameSite = SameSiteMode.Lax,
+                IsEssential = true,
+                Expires = token.ExpiresAtUtc
+            });
+
+            var redirectUrl = $"{frontendBase}/";
+            _logger.LogInformation("GitHub callback success: set httpOnly cookie and redirecting to '{RedirectUrl}'.", redirectUrl);
+            return Redirect(redirectUrl);
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "GitHub callback failed for code prefix '{CodePrefix}'.", CodePrefix(code));
             return RedirectToFrontendError(frontendBase, ex.Message);
         }
+    }
+
+    // GITHUB_OAUTH: добавлено 2026-09-19
+    /// <summary>
+    /// Returns the JWT stored in the httpOnly <c>conexy_auth</c> cookie (set by the OAuth
+    /// callback) after re-validating its signature and lifetime. The SPA calls this on mount
+    /// and persists the token to localStorage for <c>Authorization: Bearer</c> + SignalR.
+    /// Returns 401 when there is no (valid) session.
+    /// </summary>
+    [HttpGet("session")]
+    public ActionResult<TokenResponse> GetSession()
+    {
+        var token = Request.Cookies[AuthCookieName];
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return Unauthorized();
+        }
+
+        var validated = _tokenService.ValidateToken(token);
+        if (validated is null)
+        {
+            // Expired/invalid: drop the stale cookie so the client cleanly re-authenticates.
+            Response.Cookies.Delete(AuthCookieName);
+            return Unauthorized();
+        }
+
+        return Ok(validated);
     }
 
     private static string GenerateState()
@@ -128,6 +181,10 @@ public class AuthController : ControllerBase
             .Replace('+', '-')
             .Replace('/', '_');
     }
+
+    /// <summary>First 8 characters of the code (or a marker), for debug logging only.</summary>
+    private static string CodePrefix(string? code) =>
+        string.IsNullOrWhiteSpace(code) ? "<empty>" : code[..Math.Min(8, code.Length)];
 
     private bool ValidateState(string? state)
     {
@@ -152,6 +209,6 @@ public class AuthController : ControllerBase
 
     private RedirectResult RedirectToFrontendError(string frontendBase, string message)
     {
-        return Redirect($"{frontendBase}/#auth=error&message={Uri.EscapeDataString(message)}");
+        return Redirect($"{frontendBase}/?auth=error&message={Uri.EscapeDataString(message)}");
     }
 }

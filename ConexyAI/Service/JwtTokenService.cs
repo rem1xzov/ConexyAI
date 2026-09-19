@@ -44,4 +44,36 @@ public class JwtTokenService : ITokenService
             expiresAt,
             _options.AccessTokenLifetimeMinutes);
     }
+
+    // GITHUB_OAUTH: добавлено 2026-09-19
+    public TokenResponse? ValidateToken(string token)
+    {
+        try
+        {
+            var handler = new JwtSecurityTokenHandler();
+            var validationParams = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                ValidIssuer = _options.Issuer,
+                ValidAudience = _options.Audience,
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SigningKey))
+            };
+
+            handler.ValidateToken(token, validationParams, out var validatedToken);
+            var expiresAt = (validatedToken as JwtSecurityToken)?.ValidTo;
+            if (expiresAt is null)
+            {
+                return null;
+            }
+
+            return new TokenResponse(token, expiresAt.Value, _options.AccessTokenLifetimeMinutes);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }

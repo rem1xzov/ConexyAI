@@ -1,4 +1,5 @@
 import http from './client';
+import axios from 'axios';
 import type {
   ConexyRequest,
   ConexyResponse,
@@ -15,6 +16,17 @@ export async function getDevToken(userId?: string): Promise<DevTokenResponse> {
   const { data } = await http.post<DevTokenResponse>('/auth/dev-token', null, {
     params: userId ? { userId } : undefined,
   });
+  return data;
+}
+
+// GITHUB_OAUTH: добавлено 2026-09-19
+/**
+ * Returns the JWT stored in the httpOnly session cookie (set by the GitHub OAuth callback).
+ * Uses a plain axios call (not the `http` instance) so the 401-retry interceptor does not
+ * fire — a missing session is a normal "not authenticated" state, not a token-expiry event.
+ */
+export async function getSession(): Promise<DevTokenResponse> {
+  const { data } = await axios.get<DevTokenResponse>('/api/auth/session');
   return data;
 }
 
