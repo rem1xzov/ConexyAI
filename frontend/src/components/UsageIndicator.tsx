@@ -31,6 +31,18 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
 
   if (!usage) return null;
 
+  // ADMIN_UNLIMITED: добавлено 2026-09-19 — admins have no limits; show a badge instead of
+  // a percentage.
+  if (usage.tier === 'Admin') {
+    return (
+      <div className="usage-indicator">
+        <span className="usage-indicator__admin" title="Администратор — безлимит">
+          ∞ Admin
+        </span>
+      </div>
+    );
+  }
+
   const pct = clampPct(usage.agentLimit > 0 ? (usage.agentUsed / usage.agentLimit) * 100 : 0);
   const radius = 15;
   const circumference = 2 * Math.PI * radius;

@@ -105,7 +105,7 @@ function defaultTitle(kind: ChatSessionKind): string {
 
 export default function App() {
   // EMAIL_AUTH: добавлено 2026-09-19
-  const { token, user, error: authError, login, register, logout } = useAuth();
+  const { token, user, initializing, error: authError, login, register, logout } = useAuth();
 
   const [activeTab, setActiveTab] = useState<ChatSessionKind>('chat');
   const [model, setModel] = useState<ConexyModel>('ConexyV1-flash');
@@ -769,20 +769,24 @@ export default function App() {
                 <UsageIndicator usage={usage} />
               </div>
             )}
-            {!token ? (
-              <div className="feed feed--empty">
-                <div className="hero">
-                  <h1 className="hero__title">Войдите, чтобы продолжить</h1>
-                  <p className="hero__subtitle">Чат и агент доступны после входа.</p>
-                </div>
-              </div>
-            ) : (
+            {token ? (
               <ChatFeed
                 session={activeSession}
                 onRegenerate={handleRegenerate}
                 onResend={handleResend}
                 onEditMessage={handleEditMessage}
               />
+            ) : initializing ? (
+              <div className="feed feed--empty">
+                <p className="muted">Загрузка…</p>
+              </div>
+            ) : (
+              <div className="feed feed--empty">
+                <div className="hero">
+                  <h1 className="hero__title">Войдите, чтобы продолжить</h1>
+                  <p className="hero__subtitle">Чат и агент доступны после входа.</p>
+                </div>
+              </div>
             )}
             <InputBar
               model={model}

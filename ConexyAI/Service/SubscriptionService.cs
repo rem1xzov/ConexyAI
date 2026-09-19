@@ -24,16 +24,24 @@ public interface ISubscriptionService
 public class SubscriptionService : ISubscriptionService
 {
     private readonly IUsageRepository _repository;
+    // ADMIN_UNLIMITED: добавлено 2026-09-19
+    private readonly IUserRepository _userRepository;
     private readonly IOptions<SubscriptionLimitsOptions> _options;
 
-    public SubscriptionService(IUsageRepository repository, IOptions<SubscriptionLimitsOptions> options)
+    public SubscriptionService(IUsageRepository repository, IUserRepository userRepository, IOptions<SubscriptionLimitsOptions> options)
     {
         _repository = repository;
+        _userRepository = userRepository;
         _options = options;
     }
 
     public async Task<SubscriptionUsageDto> GetUsageAsync(Guid userId, CancellationToken ct = default)
     {
+        // ADMIN_UNLIMITED: добавлено 2026-09-19 — admins have no limits and never create a
+        // UserUsageCounter row, so return a synthetic "Admin" snapshot without touching the DB.
+        if (await IsAdminAsync(userId, ct))
+            return AdminUsage();
+
         var counter = await GetOrCreateAsync(userId, ct);
         var limits = GetTierLimits(counter.Tier);
         return new SubscriptionUsageDto(
@@ -45,6 +53,11 @@ public class SubscriptionService : ISubscriptionService
 
     public async Task<UsageDecision> CheckBeforeRunAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default)
     {
+        // ADMIN_UNLIMITED: добавлено 2026-09-19 — admins bypass every limit and never read or
+        // increment the UserUsageCounter.
+        if (await IsAdminAsync(userId, ct))
+            return new UsageDecision(UsageDecisionKind.Allowed);
+
         var counter = await GetOrCreateAsync(userId, ct);
         var limits = GetTierLimits(counter.Tier);
 
@@ -77,6 +90,10 @@ public class SubscriptionService : ISubscriptionService
 
     public async Task RecordRequestAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default)
     {
+        // ADMIN_UNLIMITED: добавлено 2026-09-19 — admins never accrue usage.
+        if (await IsAdminAsync(userId, ct))
+            return;
+
         var counter = await GetOrCreateAsync(userId, ct);
         if (modelType == ConexyModelType.ConexyV1Pro)
             counter.ProRequestsUsed++;
@@ -88,6 +105,11 @@ public class SubscriptionService : ISubscriptionService
     public async Task RecordAgentTokensAsync(Guid userId, long tokens, CancellationToken ct = default)
     {
         if (tokens <= 0) return;
+
+        // ADMIN_UNLIMITED: добавлено 2026-09-19 — admins never accrue usage.
+        if (await IsAdminAsync(userId, ct))
+            return;
+
         var counter = await GetOrCreateAsync(userId, ct);
         counter.AgentTokensUsed += tokens;
         await _repository.UpsertAsync(counter, ct);
@@ -155,4 +177,17 @@ public class SubscriptionService : ISubscriptionService
         SubscriptionTier.ProMax => _options.Value.ProMax,
         _ => _options.Value.Free
     };
+
+    // ADMIN_UNLIMITED: добавлено 2026-09-19
+    private async Task<bool> IsAdminAsync(Guid userId, CancellationToken ct)
+    {
+        var user = await _userRepository.GetByIdAsync(userId, ct);
+        return user?.IsAdmin == true;
+    }
+
+    private static SubscriptionUsageDto AdminUsage() =>
+        new("Admin",
+            0, long.MaxValue, DateTime.MaxValue,
+            0, long.MaxValue, DateTime.MaxValue,
+            0, long.MaxValue, DateTime.MaxValue);
 }

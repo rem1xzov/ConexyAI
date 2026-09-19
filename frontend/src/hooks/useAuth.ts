@@ -85,6 +85,9 @@ export function useAuth() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [authUnavailable, setAuthUnavailable] = useState(false);
+  // EMAIL_AUTH: добавлено 2026-09-19 — true until the initial /api/auth/session probe
+  // concludes, so the UI does not flash an "not authenticated" state prematurely.
+  const [initializing, setInitializing] = useState(true);
   const refreshTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -125,26 +128,34 @@ export function useAuth() {
     }
 
     const init = async () => {
+      let hasSession = false;
+
       // GITHUB_OAUTH: добавлено 2026-09-19 — prefer the httpOnly session cookie.
       try {
         const session = await getSession();
         if (cancelled) return;
+        hasSession = true;
         storeAuth(session.token, session.expiresAtUtc);
         setToken(session.token);
         setAuthUnavailable(false);
         setError(null);
-        return;
       } catch (e) {
         console.log('[useAuth] no session cookie (falling back):', e);
       }
 
-      // Fallback: reuse a valid stored token, or fetch a dev token (development only).
-      const expiry = readStoredExpiry();
-      if (expiry !== null && expiry > Date.now()) {
-        scheduleRefresh(expiry);
-      } else {
-        void refresh();
+      if (cancelled) return;
+
+      if (!hasSession) {
+        // Fallback: reuse a valid stored token, or fetch a dev token (development only).
+        const expiry = readStoredExpiry();
+        if (expiry !== null && expiry > Date.now()) {
+          scheduleRefresh(expiry);
+        } else {
+          void refresh();
+        }
       }
+
+      setInitializing(false);
     };
 
     void init();
@@ -217,5 +228,5 @@ export function useAuth() {
     setError(null);
   }, []);
 
-  return { token, user, error, authUnavailable, login, register, logout };
+  return { token, user, error, authUnavailable, initializing, login, register, logout };
 }

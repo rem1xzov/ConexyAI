@@ -244,6 +244,9 @@ public class AuthController : ControllerBase
 
     private void SetAuthCookie(TokenResponse token)
     {
+        // EMAIL_AUTH: добавлено 2026-09-19 — Expires is set explicitly so the browser treats
+        // the cookie as persistent (not a session cookie). It lives exactly as long as the JWT
+        // (30 days), enabling "remember me" across browser restarts.
         Response.Cookies.Append(AuthCookieName, token.Token, new CookieOptions
         {
             HttpOnly = true,
