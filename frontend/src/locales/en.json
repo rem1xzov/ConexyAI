@@ -44,6 +44,7 @@
   "sidebar": {
     "login": "Log in",
     "register": "Sign up",
+    "menu": "Menu",
     "search": "Search chats",
     "newChat": "New chat",
     "newAgentTask": "New agent task",
@@ -156,7 +157,10 @@
     "searching": "Searching the web: {{query}}",
     "searchingShort": "Searching the web…",
     "limitExceeded": "Limit exceeded",
-    "generationStopped": "⏹ Generation stopped."
+    "generationStopped": "⏹ Generation stopped.",
+    "chatTab": "Chat",
+    "filesTab": "Files",
+    "editorTab": "Editor"
   },
   "model": {
     "flashDesc": "Fast chat, quick answers, basic help.",

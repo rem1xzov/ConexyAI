@@ -6,24 +6,28 @@ import { CheckIcon } from './Icons';
 interface ModelOption {
   value: ConexyModel;
   label: string;
+  shortLabel: string;
   descKey: string;
 }
 
 const FLASH_MODEL: ModelOption = {
   value: 'ConexyV1-flash',
   label: 'ConexyV1-flash',
+  shortLabel: 'Flash',
   descKey: 'model.flashDesc',
 };
 
 const PRO_MODEL: ModelOption = {
   value: 'ConexyV1-pro',
   label: 'ConexyV1-pro',
+  shortLabel: 'Pro',
   descKey: 'model.proDesc',
 };
 
 const CODER_MODEL: ModelOption = {
   value: 'conexy-coder',
   label: 'conexy-coder',
+  shortLabel: 'Coder',
   descKey: 'model.coderDesc',
 };
 
@@ -88,7 +92,8 @@ export function ModelPicker({
         disabled={locked}
         type="button"
       >
-        {current.label}
+        <span className="modelpicker__label-full">{current.label}</span>
+        <span className="modelpicker__label-short">{current.shortLabel}</span>
         <span className="chevron">▾</span>
       </button>
 

@@ -44,6 +44,7 @@
   "sidebar": {
     "login": "Войти",
     "register": "Регистрация",
+    "menu": "Меню",
     "search": "Поиск чатов",
     "newChat": "Новый чат",
     "newAgentTask": "Новая задача агента",
@@ -156,7 +157,10 @@
     "searching": "Ищу в интернете: {{query}}",
     "searchingShort": "Ищу в интернете…",
     "limitExceeded": "Лимит исчерпан",
-    "generationStopped": "⏹ Генерация остановлена."
+    "generationStopped": "⏹ Генерация остановлена.",
+    "chatTab": "Чат",
+    "filesTab": "Файлы",
+    "editorTab": "Редактор"
   },
   "model": {
     "flashDesc": "Быстрый чат, ответы на вопросы, базовая помощь.",

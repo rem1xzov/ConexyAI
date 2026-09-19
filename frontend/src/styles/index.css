@@ -4078,3 +4078,148 @@ body {
   margin: auto;
   text-align: center;
 }
+
+/* ---------- MOBILE RESPONSIVE: добавлено 2026-09-19 ---------- */
+
+.modelpicker__label-short {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  /* Sidebar -> full-screen overlay opened via hamburger */
+  .sidebar,
+  .sidebar--collapsed {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    min-width: 0;
+    z-index: 200;
+    background: var(--surface-solid);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    border-right: none;
+  }
+  .sidebar:not(.sidebar--collapsed) {
+    transform: translateX(0);
+  }
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: var(--bg-overlay);
+    z-index: 150;
+  }
+  .mobile-menu-btn {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: var(--surface-solid);
+    border: 1px solid var(--border);
+    color: var(--text);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+  }
+
+  /* Agent tab -> switchable panels (Chat / Files / Editor) */
+  .agent-mobile-tabs {
+    display: flex;
+    flex-shrink: 0;
+    gap: 4px;
+    padding: 8px 10px 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-soft);
+  }
+  .agent-mobile-tab {
+    flex: 1;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 8px 8px 0 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .agent-mobile-tab--active {
+    background: var(--surface-2);
+    color: var(--text);
+    font-weight: 600;
+  }
+  .main__body--ide {
+    flex-direction: column;
+  }
+  .ide-divider {
+    display: none;
+  }
+  .main__body--ide.agent-tab-files .ide-chat,
+  .main__body--ide.agent-tab-files .ide-chat--single,
+  .main__body--ide.agent-tab-editor .ide-chat,
+  .main__body--ide.agent-tab-editor .ide-chat--single {
+    display: none;
+  }
+  .main__body--ide.agent-tab-chat .workspace {
+    display: none;
+  }
+  .main__body--ide.agent-tab-files .workspace__viewer,
+  .main__body--ide.agent-tab-files .workspace__bottom,
+  .main__body--ide.agent-tab-files .workspace__header,
+  .main__body--ide.agent-tab-files .menubar {
+    display: none;
+  }
+  .main__body--ide.agent-tab-editor .workspace__explorer {
+    display: none;
+  }
+  .main__body--ide.agent-tab-files .workspace__explorer {
+    flex: 1;
+    max-width: 100%;
+    border-right: none;
+  }
+
+  /* Input bar -> compact */
+  .inputbar-wrap {
+    padding: 0 12px 12px;
+  }
+  .inputbar {
+    padding: 6px 8px;
+    gap: 4px;
+    border-radius: 20px;
+  }
+  .inputbar__textarea {
+    min-width: 0;
+  }
+  .modelpicker__label-full {
+    display: none;
+  }
+  .modelpicker__label-short {
+    display: inline;
+  }
+
+  /* Modals -> bottom sheet */
+  .dialog-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .dialog-card {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 16px 16px 0 0;
+    max-height: 90vh;
+    overflow-y: auto;
+    border-bottom: none;
+  }
+
+  /* Hero greeting -> smaller font */
+  .hero__title {
+    font-size: 24px;
+  }
+  .hero__subtitle {
+    font-size: 14px;
+  }
+}

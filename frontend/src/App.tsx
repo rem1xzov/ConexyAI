@@ -4,6 +4,7 @@ import { setAuthToken } from './api/client';
 import { getSubscriptionUsage, runTask } from './api/conexyApi';
 import { signalrService } from './services/signalrService';
 import { useAuth } from './hooks/useAuth';
+import { useIsMobile } from './hooks/useMediaQuery';
 import { Sidebar } from './components/Sidebar';
 import { ChatFeed } from './components/ChatFeed';
 import { InputBar } from './components/InputBar';
@@ -11,7 +12,7 @@ import { WorkspacePanel } from './components/WorkspacePanel';
 import { StatusBar } from './components/StatusBar';
 // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
 // import { LiveVoiceModal } from './components/LiveVoiceModal';
-import { PanelRightCloseIcon, PanelRightOpenIcon } from './components/Icons';
+import { MenuIcon, PanelRightCloseIcon, PanelRightOpenIcon } from './components/Icons';
 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
 import { DangerCommandModal } from './components/DangerCommandModal';
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
@@ -116,6 +117,8 @@ export default function App() {
   const { token, user, initializing, error: authError, login, register, logout } = useAuth();
   // SETTINGS: добавлено 2026-09-19
   const { t, i18n } = useTranslation();
+  // MOBILE: добавлено 2026-09-19 — drives the responsive layout (sidebar overlay, agent tabs).
+  const isMobile = useIsMobile();
 
   const [activeTab, setActiveTab] = useState<ChatSessionKind>('chat');
   const [model, setModel] = useState<ConexyModel>('ConexyV1-flash');
@@ -123,9 +126,11 @@ export default function App() {
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('high');
   const [smartSearch, setSmartSearch] = useState(false);
   const [search, setSearch] = useState('');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => !isMobile);
   const [workspaceWidth, setWorkspaceWidth] = useState(55); // % width of the IDE pane
   const [ideCollapsed, setIdeCollapsed] = useState(false);
+  // MOBILE: добавлено 2026-09-19 — which agent panel is active on narrow screens.
+  const [agentMobileTab, setAgentMobileTab] = useState<'chat' | 'files' | 'editor'>('chat');
 
   const [sessions, setSessions] = useState<ChatSession[]>(loadSessions);
   const [activeId, setActiveId] = useState<string | null>(() => loadSessions()[0]?.id ?? null);
@@ -803,9 +808,18 @@ export default function App() {
         sessions={sessions}
         activeId={activeId}
         onToggle={() => setSidebarOpen((o) => !o)}
-        onTabChange={handleTabChange}
-        onNewSession={handleNewSession}
-        onSelectSession={setActiveId}
+        onTabChange={(tab) => {
+          handleTabChange(tab);
+          if (isMobile) setSidebarOpen(false);
+        }}
+        onNewSession={(kind) => {
+          handleNewSession(kind);
+          if (isMobile) setSidebarOpen(false);
+        }}
+        onSelectSession={(id) => {
+          setActiveId(id);
+          if (isMobile) setSidebarOpen(false);
+        }}
         onSearchChange={setSearch}
         onShareSession={handleShareSession}
         onPinSession={handlePinSession}
@@ -821,22 +835,65 @@ export default function App() {
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
+      {/* MOBILE: добавлено 2026-09-19 — floating hamburger + backdrop for the overlay sidebar. */}
+      {isMobile && (
+        <button
+          className="mobile-menu-btn"
+          onClick={() => setSidebarOpen(true)}
+          aria-label={t('sidebar.menu')}
+          type="button"
+        >
+          <MenuIcon size={20} />
+        </button>
+      )}
+      {isMobile && sidebarOpen && (
+        <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
+      )}
+
       <main className="main" ref={mainRef}>
-        <div className={isAgent ? 'main__body main__body--ide' : 'main__body'}>
+        <div className={`${isAgent ? 'main__body main__body--ide' : 'main__body'}${isAgent && isMobile ? ` agent-tab-${agentMobileTab}` : ''}`}>
+          {isAgent && isMobile && (
+            <div className="agent-mobile-tabs">
+              <button
+                className={agentMobileTab === 'chat' ? 'agent-mobile-tab agent-mobile-tab--active' : 'agent-mobile-tab'}
+                onClick={() => setAgentMobileTab('chat')}
+                type="button"
+              >
+                {t('agent.chatTab')}
+              </button>
+              <button
+                className={agentMobileTab === 'files' ? 'agent-mobile-tab agent-mobile-tab--active' : 'agent-mobile-tab'}
+                onClick={() => setAgentMobileTab('files')}
+                type="button"
+              >
+                {t('agent.filesTab')}
+              </button>
+              <button
+                className={agentMobileTab === 'editor' ? 'agent-mobile-tab agent-mobile-tab--active' : 'agent-mobile-tab'}
+                onClick={() => setAgentMobileTab('editor')}
+                type="button"
+              >
+                {t('agent.editorTab')}
+              </button>
+            </div>
+          )}
+
           <div
-            className={isAgent && !ideCollapsed ? 'ide-chat' : 'ide-chat--single'}
-            style={isAgent && !ideCollapsed ? { flex: `0 0 ${100 - workspaceWidth}%` } : undefined}
+            className={isAgent && !ideCollapsed && !isMobile ? 'ide-chat' : 'ide-chat--single'}
+            style={isAgent && !ideCollapsed && !isMobile ? { flex: `0 0 ${100 - workspaceWidth}%` } : undefined}
           >
             {isAgent && (
               <div className="ide-toolbar">
-                <button
-                  className="icon-btn"
-                  onClick={() => setIdeCollapsed((c) => !c)}
-                  title={ideCollapsed ? t('workspace.showIde') : t('workspace.hideIde')}
-                  aria-label={ideCollapsed ? t('workspace.showIde') : t('workspace.hideIde')}
-                >
-                  {ideCollapsed ? <PanelRightOpenIcon size={18} /> : <PanelRightCloseIcon size={18} />}
-                </button>
+                {!isMobile && (
+                  <button
+                    className="icon-btn"
+                    onClick={() => setIdeCollapsed((c) => !c)}
+                    title={ideCollapsed ? t('workspace.showIde') : t('workspace.hideIde')}
+                    aria-label={ideCollapsed ? t('workspace.showIde') : t('workspace.hideIde')}
+                  >
+                    {ideCollapsed ? <PanelRightOpenIcon size={18} /> : <PanelRightCloseIcon size={18} />}
+                  </button>
+                )}
                 {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
                 <UsageIndicator usage={usage} />
               </div>
@@ -881,7 +938,7 @@ export default function App() {
             />
           </div>
 
-          {isAgent && !ideCollapsed && (
+          {isAgent && (isMobile || !ideCollapsed) && (
             <>
               <div className="ide-divider" onMouseDown={handleDividerMouseDown} />
               <WorkspacePanel
@@ -896,7 +953,7 @@ export default function App() {
                 problems={latestProblems}
                 onCursorChange={setCursorInfo}
                 onRunInSeparateWindow={() => showToast(t('toast.runProject'))}
-                style={{ flex: `0 0 ${workspaceWidth}%` }}
+                style={isMobile ? undefined : { flex: `0 0 ${workspaceWidth}%` }}
               />
             </>
           )}
