@@ -2792,6 +2792,226 @@ body {
   filter: brightness(1.1);
 }
 
+/* ---------- EMAIL_AUTH: добавлено 2026-09-19 ---------- */
+.sidebar__footer {
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.sidebar__auth {
+  display: flex;
+  gap: 8px;
+}
+
+.sidebar__auth-btn {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.sidebar__auth-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.sidebar__auth-btn--primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+
+.sidebar__auth-btn--primary:hover {
+  background: var(--accent);
+  filter: brightness(1.1);
+}
+
+.account-widget {
+  position: relative;
+}
+
+.account-widget__trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: none;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text);
+  text-align: left;
+}
+
+.account-widget__trigger:hover {
+  background: var(--surface-2);
+}
+
+.account-widget__avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.account-widget__meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.account-widget__name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-widget__tier {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.account-widget__menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  z-index: 30;
+}
+
+.account-widget__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 7px;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.account-widget__item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.account-widget__item--admin {
+  color: var(--accent);
+}
+
+.account-widget__item--danger {
+  color: var(--danger);
+}
+
+.auth-modal {
+  gap: 14px;
+}
+
+.auth-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.auth-modal__form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-modal__error {
+  font-size: 12.5px;
+  color: var(--danger);
+  background: rgba(255, 107, 122, 0.1);
+  border: 1px solid rgba(255, 107, 122, 0.3);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.auth-modal__submit {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 14px;
+}
+
+.auth-modal__divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.auth-modal__divider::before,
+.auth-modal__divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.auth-modal__github {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.auth-modal__github:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.auth-modal__switch {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 0;
+  text-align: center;
+}
+
+.auth-modal__switch:hover {
+  text-decoration: underline;
+}
+
 /* ---------- DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17 ---------- */
 .danger-cmd-overlay {
   position: fixed;

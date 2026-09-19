@@ -6,6 +6,11 @@ namespace ConexyAI.Repository;
 public interface IUserRepository
 {
     Task<User?> GetByGitHubIdAsync(string gitHubId, CancellationToken ct = default);
+
+    // EMAIL_AUTH: добавлено 2026-09-19
+    Task<User?> GetByEmailAsync(string email, CancellationToken ct = default);
+    Task<User?> GetByIdAsync(Guid id, CancellationToken ct = default);
+
     Task AddAsync(User user, CancellationToken ct = default);
     Task UpdateAsync(User user, CancellationToken ct = default);
 

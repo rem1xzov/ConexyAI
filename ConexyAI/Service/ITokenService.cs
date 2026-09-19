@@ -9,7 +9,7 @@ public interface ITokenService
     /// <see cref="System.Security.Claims.ClaimTypes.NameIdentifier"/>) carries the
     /// authenticated user id.
     /// </summary>
-    TokenResponse CreateToken(Guid userId);
+    TokenResponse CreateToken(Guid userId, bool isAdmin = false);
 
     // GITHUB_OAUTH: добавлено 2026-09-19
     /// <summary>

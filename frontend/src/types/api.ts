@@ -58,6 +58,14 @@ export interface DevTokenResponse {
   lifetimeMinutes: number;
 }
 
+// EMAIL_AUTH: добавлено 2026-09-19
+export interface UserProfile {
+  email: string;
+  displayName: string;
+  tier: string;
+  isAdmin: boolean;
+}
+
 export interface WorkspaceFileEntry {
   name: string;
   path: string;

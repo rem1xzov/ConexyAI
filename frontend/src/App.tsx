@@ -16,6 +16,9 @@ import { DangerCommandModal } from './components/DangerCommandModal';
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 import { UsageIndicator } from './components/UsageIndicator';
 import { LimitExceededModal } from './components/LimitExceededModal';
+// EMAIL_AUTH: добавлено 2026-09-19
+import { AuthModal } from './components/AuthModal';
+import type { AuthMode } from './components/AuthModal';
 import type { ConexyModel, LimitExceededInfo, ReasoningEffort, SubscriptionUsage, TaskAttachment } from './types/api';
 import type { ChatMessage, ChatSession, ChatSessionKind } from './types/chat';
 import type { PendingActionPayload } from './types/signalr';
@@ -101,7 +104,8 @@ function defaultTitle(kind: ChatSessionKind): string {
 }
 
 export default function App() {
-  const { token, error: authError, authUnavailable } = useAuth();
+  // EMAIL_AUTH: добавлено 2026-09-19
+  const { token, user, error: authError, login, register, logout } = useAuth();
 
   const [activeTab, setActiveTab] = useState<ChatSessionKind>('chat');
   const [model, setModel] = useState<ConexyModel>('ConexyV1-flash');
@@ -126,6 +130,8 @@ export default function App() {
   // SUBSCRIPTION_TIERS: добавлено 2026-09-17
   const [usage, setUsage] = useState<SubscriptionUsage | null>(null);
   const [limitExceeded, setLimitExceeded] = useState<LimitExceededInfo | null>(null);
+  // EMAIL_AUTH: добавлено 2026-09-19
+  const [authModal, setAuthModal] = useState<AuthMode | null>(null);
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
   // const [isLiveOpen, setIsLiveOpen] = useState(false);
 
@@ -140,6 +146,20 @@ export default function App() {
     setToast(message);
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 2200);
+  }
+
+  // EMAIL_AUTH: добавлено 2026-09-19
+  async function handleAuthSubmit(email: string, password: string) {
+    if (authModal === 'register') {
+      await register(email, password);
+    } else {
+      await login(email, password);
+    }
+    setAuthModal(null);
+  }
+
+  function handleLogout() {
+    void logout();
   }
 
   useEffect(() => {
@@ -722,6 +742,11 @@ export default function App() {
         onPinSession={handlePinSession}
         onRenameSession={handleRenameSession}
         onDeleteSession={handleDeleteSession}
+        user={user}
+        onLogin={() => setAuthModal('login')}
+        onRegister={() => setAuthModal('register')}
+        onLogout={handleLogout}
+        onToast={showToast}
       />
 
       <main className="main" ref={mainRef}>
@@ -744,15 +769,11 @@ export default function App() {
                 <UsageIndicator usage={usage} />
               </div>
             )}
-            {authUnavailable ? (
+            {!token ? (
               <div className="feed feed--empty">
                 <div className="hero">
                   <h1 className="hero__title">Войдите, чтобы продолжить</h1>
-                  <p className="hero__subtitle">Чат и агент доступны после входа через GitHub.</p>
-                  {/* GITHUB_OAUTH: добавлено 2026-09-19 — ведёт на /api/auth/github/login (302 на GitHub). */}
-                  <a className="hero__github-btn" href="/api/auth/github/login">
-                    Войти через GitHub
-                  </a>
+                  <p className="hero__subtitle">Чат и агент доступны после входа.</p>
                 </div>
               </div>
             ) : (
@@ -830,6 +851,16 @@ export default function App() {
       {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
       {limitExceeded && (
         <LimitExceededModal info={limitExceeded} onClose={() => setLimitExceeded(null)} />
+      )}
+
+      {/* EMAIL_AUTH: добавлено 2026-09-19 */}
+      {authModal && (
+        <AuthModal
+          mode={authModal}
+          onSubmit={handleAuthSubmit}
+          onSwitchMode={() => setAuthModal(authModal === 'login' ? 'register' : 'login')}
+          onClose={() => setAuthModal(null)}
+        />
       )}
     </div>
   );

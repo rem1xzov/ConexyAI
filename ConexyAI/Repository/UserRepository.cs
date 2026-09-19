@@ -21,6 +21,21 @@ public class UserRepository : IUserRepository
             .FirstOrDefaultAsync(u => u.GitHubId == gitHubId, ct);
     }
 
+    // EMAIL_AUTH: добавлено 2026-09-19
+    public async Task<User?> GetByEmailAsync(string email, CancellationToken ct = default)
+    {
+        return await _context.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Email == email, ct);
+    }
+
+    public async Task<User?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        return await _context.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Id == id, ct);
+    }
+
     public async Task AddAsync(User user, CancellationToken ct = default)
     {
         await _context.Users.AddAsync(user, ct);

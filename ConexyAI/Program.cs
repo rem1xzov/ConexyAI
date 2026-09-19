@@ -104,6 +104,16 @@ builder.Services.Configure<MemoryOptions>(builder.Configuration.GetSection(Memor
 builder.Services.Configure<RagOptions>(builder.Configuration.GetSection(RagOptions.SectionName));
 // SANDBOX: добавлено 2026-09-17
 builder.Services.Configure<SandboxOptions>(builder.Configuration.GetSection(SandboxOptions.SectionName));
+// EMAIL_AUTH: добавлено 2026-09-19
+builder.Services.Configure<AdminAccountsOptions>(options =>
+{
+    var raw = builder.Configuration[AdminAccountsOptions.EnvVar];
+    if (string.IsNullOrWhiteSpace(raw)) return;
+    foreach (var item in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        options.Accounts.Add(item);
+    }
+});
 
 // JWT Bearer authentication. The user id is always taken from the token claims.
 var jwtSection = builder.Configuration.GetSection(JwtOptions.SectionName);
@@ -148,6 +158,8 @@ builder.Services.AddScoped<IChatHistoryRepository, ChatHistoryRepository>();
 // GITHUB_OAUTH: добавлено 2026-09-19
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IGitHubOAuthService, GitHubOAuthService>();
+// EMAIL_AUTH: добавлено 2026-09-19
+builder.Services.AddScoped<IEmailAuthService, EmailAuthService>();
 builder.Services.AddScoped<IConexyService, ConexyService>();
 builder.Services.AddScoped<IConexyAgentRunner, ConexyAgentRunner>();
 builder.Services.AddScoped<IConexyEditorService, ConexyEditorService>();

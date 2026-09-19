@@ -7,6 +7,7 @@ import type {
   IdeFileContent,
   SaveFileDto,
   SubscriptionUsage,
+  UserProfile,
   WorkspaceFileContent,
   WorkspaceListing,
 } from '../types/api';
@@ -27,6 +28,33 @@ export async function getDevToken(userId?: string): Promise<DevTokenResponse> {
  */
 export async function getSession(): Promise<DevTokenResponse> {
   const { data } = await axios.get<DevTokenResponse>('/api/auth/session');
+  return data;
+}
+
+// EMAIL_AUTH: добавлено 2026-09-19
+/** Registers a new email/password account and returns its session token. */
+export async function register(email: string, password: string): Promise<DevTokenResponse> {
+  const { data } = await axios.post<DevTokenResponse>('/api/auth/register', { email, password });
+  return data;
+}
+
+// EMAIL_AUTH: добавлено 2026-09-19
+/** Logs in with an email/password account and returns its session token. */
+export async function login(email: string, password: string): Promise<DevTokenResponse> {
+  const { data } = await axios.post<DevTokenResponse>('/api/auth/login', { email, password });
+  return data;
+}
+
+// EMAIL_AUTH: добавлено 2026-09-19
+/** Clears the session cookie on the backend (logout). */
+export async function logout(): Promise<void> {
+  await axios.post('/api/auth/logout');
+}
+
+// EMAIL_AUTH: добавлено 2026-09-19
+/** Returns the authenticated user's profile (name, tier, admin flag). */
+export async function getMe(): Promise<UserProfile> {
+  const { data } = await http.get<UserProfile>('/auth/me');
   return data;
 }
 

@@ -92,6 +92,7 @@ services:
       GitHub__PersonalAccessToken: ${GITHUB_PAT:-}
       GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
       GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      ADMIN_ACCOUNTS: ${ADMIN_ACCOUNTS:-}
       WebSearch__JsonSeoApiKey: ${JSONSEO_API_KEY:-}
       WebSearch__JsonSeoEndpoint: ${JSONSEO_ENDPOINT:-https://jsonseo.ru/api/yandex}
       SpeechKit__ApiKey: ${SPEECHKIT_API_KEY:-}

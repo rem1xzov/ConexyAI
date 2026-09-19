@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
-import { getDevToken, getSession } from '../api/conexyApi';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  getDevToken,
+  getMe,
+  getSession,
+  login as apiLogin,
+  logout as apiLogout,
+  register as apiRegister,
+} from '../api/conexyApi';
+import type { UserProfile } from '../types/api';
 
 const STORAGE_KEY = 'conexy_auth';
 
@@ -39,10 +47,17 @@ function readStoredExpiry(): number | null {
 
 function storeAuth(token: string, expiresAtUtc: string): void {
   try {
-    const value: StoredAuth = { token, expiresAtUtc };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ token, expiresAtUtc }));
   } catch {
     // localStorage unavailable — ignore, token remains in memory.
+  }
+}
+
+function clearStoredAuth(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // ignore
   }
 }
 
@@ -52,14 +67,22 @@ function isNotFoundError(e: unknown): boolean {
   return err?.response?.status === 404;
 }
 
+// EMAIL_AUTH: добавлено 2026-09-19
+/** Extracts the backend's structured { code, message } error into a plain Error. */
+function extractAuthError(e: unknown): Error {
+  const err = e as { response?: { data?: { message?: string } } } | null;
+  return new Error(err?.response?.data?.message || 'Ошибка авторизации');
+}
+
 /**
- * Silent auto-auth. On mount it first tries the httpOnly session cookie (set by the GitHub
- * OAuth callback) via <c>GET /api/auth/session</c>; if found, the JWT is persisted to
- * localStorage (same place the dev-token used) for the <c>Authorization: Bearer</c> header
- * and SignalR. Otherwise it falls back to a stored token or a development token.
+ * Authentication hook. On mount it first tries the httpOnly session cookie (GitHub OAuth or
+ * email login) via <c>GET /api/auth/session</c>; the JWT is persisted to localStorage for the
+ * <c>Authorization: Bearer</c> header and SignalR. Exposes <c>login</c>, <c>register</c> and
+ * <c>logout</c> for the auth UI, plus the current <c>user</c> profile.
  */
 export function useAuth() {
   const [token, setToken] = useState<string | null>(readStoredToken);
+  const [user, setUser] = useState<UserProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [authUnavailable, setAuthUnavailable] = useState(false);
   const refreshTimerRef = useRef<number | null>(null);
@@ -106,7 +129,6 @@ export function useAuth() {
       try {
         const session = await getSession();
         if (cancelled) return;
-        console.log('[useAuth] session cookie present, token obtained');
         storeAuth(session.token, session.expiresAtUtc);
         setToken(session.token);
         setAuthUnavailable(false);
@@ -119,7 +141,6 @@ export function useAuth() {
       // Fallback: reuse a valid stored token, or fetch a dev token (development only).
       const expiry = readStoredExpiry();
       if (expiry !== null && expiry > Date.now()) {
-        // A valid token already exists; refresh it just before it expires.
         scheduleRefresh(expiry);
       } else {
         void refresh();
@@ -134,5 +155,67 @@ export function useAuth() {
     };
   }, []);
 
-  return { token, error, authUnavailable };
+  // EMAIL_AUTH: добавлено 2026-09-19 — load the user profile whenever we have a token.
+  useEffect(() => {
+    if (!token) {
+      setUser(null);
+      return;
+    }
+
+    let cancelled = false;
+    getMe()
+      .then((profile) => {
+        if (!cancelled) setUser(profile);
+      })
+      .catch(() => {
+        // Best-effort; the account widget simply stays hidden until a profile loads.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const applyToken = useCallback((res: { token: string; expiresAtUtc: string }) => {
+    storeAuth(res.token, res.expiresAtUtc);
+    setToken(res.token);
+    setAuthUnavailable(false);
+    setError(null);
+  }, []);
+
+  const login = useCallback(
+    async (email: string, password: string) => {
+      try {
+        applyToken(await apiLogin(email, password));
+      } catch (e) {
+        throw extractAuthError(e);
+      }
+    },
+    [applyToken],
+  );
+
+  const register = useCallback(
+    async (email: string, password: string) => {
+      try {
+        applyToken(await apiRegister(email, password));
+      } catch (e) {
+        throw extractAuthError(e);
+      }
+    },
+    [applyToken],
+  );
+
+  const logout = useCallback(async () => {
+    try {
+      await apiLogout();
+    } catch {
+      // The cookie might already be gone; still clear local state.
+    }
+    clearStoredAuth();
+    setToken(null);
+    setUser(null);
+    setAuthUnavailable(false);
+    setError(null);
+  }, []);
+
+  return { token, user, error, authUnavailable, login, register, logout };
 }

@@ -25,6 +25,10 @@ public class User
 
     public SubscriptionTier SubscriptionTier { get; set; } = SubscriptionTier.Free;
 
+    // EMAIL_AUTH: добавлено 2026-09-19
+    /// <summary>Whether the user is an administrator (granted via AdminAccounts on login).</summary>
+    public bool IsAdmin { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public DateTime LastLoginAt { get; set; } = DateTime.UtcNow;

@@ -25,7 +25,7 @@ public interface IGitHubOAuthService
     Task<GitHubOAuthResult> HandleCallbackAsync(string code, CancellationToken ct = default);
 }
 
-public sealed record GitHubOAuthResult(Guid UserId, bool IsNewUser);
+public sealed record GitHubOAuthResult(Guid UserId, bool IsNewUser, bool IsAdmin);
 
 public class GitHubOAuthService : IGitHubOAuthService
 {
@@ -35,17 +35,21 @@ public class GitHubOAuthService : IGitHubOAuthService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IUserRepository _userRepository;
     private readonly ILogger<GitHubOAuthService> _logger;
+    // EMAIL_AUTH: добавлено 2026-09-19
+    private readonly IOptions<AdminAccountsOptions> _adminOptions;
 
     public GitHubOAuthService(
         IOptions<GitHubOAuthOptions> options,
         IHttpClientFactory httpClientFactory,
         IUserRepository userRepository,
-        ILogger<GitHubOAuthService> logger)
+        ILogger<GitHubOAuthService> logger,
+        IOptions<AdminAccountsOptions> adminOptions)
     {
         _options = options.Value;
         _httpClientFactory = httpClientFactory;
         _userRepository = userRepository;
         _logger = logger;
+        _adminOptions = adminOptions;
     }
 
     public string BuildLoginUrl(string state)
@@ -84,24 +88,28 @@ public class GitHubOAuthService : IGitHubOAuthService
                 GitHubId = userInfo.GitHubId,
                 GitHubUsername = userInfo.Username,
                 SubscriptionTier = SubscriptionTier.Free,
+                // EMAIL_AUTH: добавлено 2026-09-19
+                IsAdmin = _adminOptions.Value.Matches(userInfo.Email, userInfo.Username),
                 CreatedAt = now,
                 LastLoginAt = now
             };
 
             await _userRepository.AddAsync(user, ct);
             _logger.LogInformation("GitHub OAuth callback: created new user {UserId}.", user.Id);
-            return new GitHubOAuthResult(user.Id, IsNewUser: true);
+            return new GitHubOAuthResult(user.Id, IsNewUser: true, IsAdmin: user.IsAdmin);
         }
 
         // Refresh the mutable profile bits and bump the last-login timestamp on every login.
         existing.Email = userInfo.Email ?? existing.Email;
         existing.EmailConfirmed = existing.EmailConfirmed || userInfo.EmailConfirmed;
         existing.GitHubUsername = userInfo.Username;
+        // EMAIL_AUTH: добавлено 2026-09-19 — re-evaluate admin status on every login.
+        existing.IsAdmin = _adminOptions.Value.Matches(existing.Email, existing.GitHubUsername);
         existing.LastLoginAt = now;
         await _userRepository.UpdateAsync(existing, ct);
         _logger.LogInformation("GitHub OAuth callback: updated existing user {UserId} last login.", existing.Id);
 
-        return new GitHubOAuthResult(existing.Id, IsNewUser: false);
+        return new GitHubOAuthResult(existing.Id, IsNewUser: false, IsAdmin: existing.IsAdmin);
     }
 
     private async Task<string> ExchangeCodeAsync(string code, CancellationToken ct)

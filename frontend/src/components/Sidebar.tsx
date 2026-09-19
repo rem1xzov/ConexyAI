@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChatSession, ChatSessionKind } from '../types/chat';
+import type { UserProfile } from '../types/api';
+import { AccountWidget } from './AccountWidget';
 import {
   MenuIcon,
   SearchIcon,
@@ -26,6 +28,12 @@ interface SidebarProps {
   onPinSession: (id: string) => void;
   onRenameSession: (id: string, title: string) => void;
   onDeleteSession: (id: string) => void;
+  // EMAIL_AUTH: добавлено 2026-09-19
+  user: UserProfile | null;
+  onLogin: () => void;
+  onRegister: () => void;
+  onLogout: () => void;
+  onToast: (message: string) => void;
 }
 
 const TABS: { key: ChatSessionKind; label: string }[] = [
@@ -50,6 +58,11 @@ export function Sidebar(props: SidebarProps) {
     onPinSession,
     onRenameSession,
     onDeleteSession,
+    user,
+    onLogin,
+    onRegister,
+    onLogout,
+    onToast,
   } = props;
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -212,6 +225,26 @@ export function Sidebar(props: SidebarProps) {
                   </li>
                 ))}
               </ul>
+            )}
+          </div>
+
+          {/* EMAIL_AUTH: добавлено 2026-09-19 */}
+          <div className="sidebar__footer">
+            {user ? (
+              <AccountWidget user={user} onLogout={onLogout} onToast={onToast} />
+            ) : (
+              <div className="sidebar__auth">
+                <button className="sidebar__auth-btn" onClick={onLogin} type="button">
+                  Войти
+                </button>
+                <button
+                  className="sidebar__auth-btn sidebar__auth-btn--primary"
+                  onClick={onRegister}
+                  type="button"
+                >
+                  Регистрация
+                </button>
+              </div>
             )}
           </div>
         </>

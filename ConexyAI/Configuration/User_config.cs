@@ -22,6 +22,8 @@ public class User_config : IEntityTypeConfiguration<User>
             .HasConversion<string>()
             .HasMaxLength(20)
             .IsRequired();
+        // EMAIL_AUTH: добавлено 2026-09-19
+        builder.Property(x => x.IsAdmin).IsRequired();
         builder.Property(x => x.CreatedAt).IsRequired();
         builder.Property(x => x.LastLoginAt).IsRequired();
 

@@ -17,7 +17,7 @@ public class JwtTokenService : ITokenService
         _options = options.Value;
     }
 
-    public TokenResponse CreateToken(Guid userId)
+    public TokenResponse CreateToken(Guid userId, bool isAdmin = false)
     {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SigningKey));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
@@ -28,7 +28,9 @@ public class JwtTokenService : ITokenService
         {
             new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
             new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+            // EMAIL_AUTH: добавлено 2026-09-19
+            new Claim("isAdmin", isAdmin ? "true" : "false", ClaimValueTypes.Boolean)
         };
 
         var token = new JwtSecurityToken(

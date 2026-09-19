@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using ConexyAI.Configuration;
 using ConexyAI.Contract;
+using ConexyAI.Entity;
+using ConexyAI.Extensions;
 using ConexyAI.Repository;
 using ConexyAI.Service;
 using Microsoft.AspNetCore.Authorization;
@@ -12,7 +14,6 @@ namespace ConexyAI.Controller;
 
 [ApiController]
 [Route("api/auth")]
-[AllowAnonymous]
 public class AuthController : ControllerBase
 {
     private const string StateCookieName = "github_oauth_state";
@@ -26,6 +27,8 @@ public class AuthController : ControllerBase
     private readonly GitHubOAuthOptions _gitHubOAuthOptions;
     private readonly IUserRepository _userRepository;
     private readonly ILogger<AuthController> _logger;
+    // EMAIL_AUTH: добавлено 2026-09-19
+    private readonly IEmailAuthService _emailAuthService;
 
     public AuthController(
         ITokenService tokenService,
@@ -33,7 +36,8 @@ public class AuthController : ControllerBase
         IGitHubOAuthService gitHubOAuthService,
         IOptions<GitHubOAuthOptions> gitHubOAuthOptions,
         IUserRepository userRepository,
-        ILogger<AuthController> logger)
+        ILogger<AuthController> logger,
+        IEmailAuthService emailAuthService)
     {
         _tokenService = tokenService;
         _environment = environment;
@@ -41,6 +45,7 @@ public class AuthController : ControllerBase
         _gitHubOAuthOptions = gitHubOAuthOptions.Value;
         _userRepository = userRepository;
         _logger = logger;
+        _emailAuthService = emailAuthService;
     }
 
     /// <summary>
@@ -122,19 +127,12 @@ public class AuthController : ControllerBase
         try
         {
             var result = await _gitHubOAuthService.HandleCallbackAsync(code, ct);
-            var token = _tokenService.CreateToken(result.UserId);
+            var token = _tokenService.CreateToken(result.UserId, result.IsAdmin);
 
             // GITHUB_OAUTH: добавлено 2026-09-19 — deliver the JWT via an httpOnly cookie
             // (not a URL fragment), so a repeated callback can no longer clobber it. The SPA
             // reads it back through GET /api/auth/session and stores it in localStorage.
-            Response.Cookies.Append(AuthCookieName, token.Token, new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = !_environment.IsDevelopment(),
-                SameSite = SameSiteMode.Lax,
-                IsEssential = true,
-                Expires = token.ExpiresAtUtc
-            });
+            SetAuthCookie(token);
 
             var redirectUrl = $"{frontendBase}/";
             _logger.LogInformation("GitHub callback success: set httpOnly cookie and redirecting to '{RedirectUrl}'.", redirectUrl);
@@ -172,6 +170,88 @@ public class AuthController : ControllerBase
         }
 
         return Ok(validated);
+    }
+
+    // EMAIL_AUTH: добавлено 2026-09-19
+    /// <summary>Creates a new email/password account and logs the user in immediately.</summary>
+    [HttpPost("register")]
+    public async Task<IActionResult> Register([FromBody] EmailPasswordRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var user = await _emailAuthService.RegisterAsync(request.Email, request.Password, ct);
+            return Ok(IssueSession(user));
+        }
+        catch (AuthException ex)
+        {
+            return StatusCode(ex.StatusCode, new { code = ex.Code, message = ex.Message });
+        }
+    }
+
+    // EMAIL_AUTH: добавлено 2026-09-19
+    /// <summary>Logs in with an email/password account.</summary>
+    [HttpPost("login")]
+    public async Task<IActionResult> Login([FromBody] EmailPasswordRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var user = await _emailAuthService.LoginAsync(request.Email, request.Password, ct);
+            return Ok(IssueSession(user));
+        }
+        catch (AuthException ex)
+        {
+            return StatusCode(ex.StatusCode, new { code = ex.Code, message = ex.Message });
+        }
+    }
+
+    // EMAIL_AUTH: добавлено 2026-09-19
+    /// <summary>Clears the session cookie (logout).</summary>
+    [HttpPost("logout")]
+    public IActionResult Logout()
+    {
+        Response.Cookies.Delete(AuthCookieName);
+        return Ok(new { success = true });
+    }
+
+    // EMAIL_AUTH: добавлено 2026-09-19
+    /// <summary>Returns the authenticated user's profile for the account widget.</summary>
+    [HttpGet("me")]
+    [Authorize]
+    public async Task<ActionResult<UserProfileDto>> GetMe(CancellationToken ct)
+    {
+        if (!User.TryGetUserId(out var userId))
+            return Unauthorized();
+
+        var user = await _userRepository.GetByIdAsync(userId, ct);
+        if (user is null)
+            return Unauthorized();
+
+        var displayName = user.GitHubUsername ?? user.Email ?? "Пользователь";
+        return Ok(new UserProfileDto(
+            user.Email ?? string.Empty,
+            displayName,
+            user.SubscriptionTier.ToString(),
+            user.IsAdmin));
+    }
+
+    // EMAIL_AUTH: добавлено 2026-09-19
+    private TokenResponse IssueSession(User user)
+    {
+        var token = _tokenService.CreateToken(user.Id, user.IsAdmin);
+        SetAuthCookie(token);
+        return token;
+    }
+
+    private void SetAuthCookie(TokenResponse token)
+    {
+        Response.Cookies.Append(AuthCookieName, token.Token, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = !_environment.IsDevelopment(),
+            SameSite = SameSiteMode.Lax,
+            IsEssential = true,
+            Expires = token.ExpiresAtUtc
+        });
     }
 
     private static string GenerateState()
