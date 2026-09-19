@@ -18,6 +18,8 @@ import { UsageIndicator } from './components/UsageIndicator';
 import { UpgradeModal } from './components/UpgradeModal';
 // ADMIN_PANEL: добавлено 2026-09-19
 import { AdminPanel } from './components/AdminPanel';
+// SUPPORT: добавлено 2026-09-19
+import { SupportChat } from './components/SupportChat';
 // EMAIL_AUTH: добавлено 2026-09-19
 import { AuthModal } from './components/AuthModal';
 import type { AuthMode } from './components/AuthModal';
@@ -137,6 +139,8 @@ export default function App() {
   // ADMIN_PANEL: добавлено 2026-09-19
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [route, setRoute] = useState(window.location.hash);
+  // SUPPORT: добавлено 2026-09-19
+  const [supportOpen, setSupportOpen] = useState(false);
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
   // const [isLiveOpen, setIsLiveOpen] = useState(false);
 
@@ -174,6 +178,10 @@ export default function App() {
 
   function handleUpgrade() {
     setUpgradeOpen(true);
+  }
+
+  function handleOpenSupport() {
+    setSupportOpen(true);
   }
 
   function handleUpgradeBuy(planName: string) {
@@ -788,6 +796,7 @@ export default function App() {
         onLogout={handleLogout}
         onUpgrade={handleUpgrade}
         onOpenAdmin={handleOpenAdmin}
+        onOpenSupport={handleOpenSupport}
         onToast={showToast}
       />
 
@@ -915,6 +924,9 @@ export default function App() {
           onClose={() => setAuthModal(null)}
         />
       )}
+
+      {/* SUPPORT: добавлено 2026-09-19 */}
+      {supportOpen && <SupportChat onClose={() => setSupportOpen(false)} onToast={showToast} />}
     </div>
   );
 }

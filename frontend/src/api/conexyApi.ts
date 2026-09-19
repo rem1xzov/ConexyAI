@@ -1,6 +1,7 @@
 import http from './client';
 import axios from 'axios';
 import type {
+  AdminSupportTicket,
   AdminUsersResponse,
   ConexyRequest,
   ConexyResponse,
@@ -8,6 +9,8 @@ import type {
   IdeFileContent,
   SaveFileDto,
   SubscriptionUsage,
+  SupportMessage,
+  SupportTicket,
   UserProfile,
   WorkspaceFileContent,
   WorkspaceListing,
@@ -77,6 +80,43 @@ export async function revokeAdmin(id: string): Promise<void> {
 
 export async function deleteUser(id: string): Promise<void> {
   await http.delete(`/admin/users/${id}`);
+}
+
+// SUPPORT: добавлено 2026-09-19
+export async function createSupportTicket(): Promise<SupportTicket> {
+  const { data } = await http.post<SupportTicket>('/support/tickets');
+  return data;
+}
+
+export async function getMySupportTicket(): Promise<SupportTicket | null> {
+  try {
+    const { data } = await http.get<SupportTicket>('/support/tickets/mine');
+    return data;
+  } catch (e) {
+    if ((e as { response?: { status?: number } }).response?.status === 404) return null;
+    throw e;
+  }
+}
+
+export async function sendSupportMessage(ticketId: string, content: string): Promise<SupportMessage> {
+  const { data } = await http.post<SupportMessage>(`/support/tickets/${ticketId}/messages`, { content });
+  return data;
+}
+
+export async function getAdminSupportTickets(status?: string, search?: string): Promise<AdminSupportTicket[]> {
+  const { data } = await http.get<AdminSupportTicket[]>('/admin/support/tickets', {
+    params: { status, search },
+  });
+  return data;
+}
+
+export async function getAdminSupportTicket(id: string): Promise<SupportTicket> {
+  const { data } = await http.get<SupportTicket>(`/admin/support/tickets/${id}`);
+  return data;
+}
+
+export async function closeSupportTicket(id: string): Promise<void> {
+  await http.post(`/admin/support/tickets/${id}/close`);
 }
 
 /** Submits a task; the backend returns 202 Accepted with the created entity. */

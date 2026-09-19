@@ -3,6 +3,7 @@ import { deleteUser, getAdminUsers, makeAdmin, revokeAdmin } from '../api/conexy
 import type { AdminUser } from '../types/api';
 import { ConfirmDialog } from './Dialog';
 import { ShieldIcon } from './Icons';
+import { AdminSupport } from './AdminSupport';
 
 interface AdminPanelProps {
   onBack: () => void;
@@ -39,6 +40,8 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // SUPPORT: добавлено 2026-09-19
+  const [tab, setTab] = useState<'users' | 'support'>('users');
 
   async function load(p: number) {
     setLoading(true);
@@ -109,9 +112,29 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
           ← Назад
         </button>
         <h1 className="admin__title">Админ-панель</h1>
-        <span className="admin__count">{total} пользователей</span>
+        <div className="admin__tabs">
+          <button
+            className={`admin-tab ${tab === 'users' ? 'admin-tab--active' : ''}`}
+            onClick={() => setTab('users')}
+            type="button"
+          >
+            Пользователи
+          </button>
+          <button
+            className={`admin-tab ${tab === 'support' ? 'admin-tab--active' : ''}`}
+            onClick={() => setTab('support')}
+            type="button"
+          >
+            Обращения в поддержку
+          </button>
+        </div>
+        <span className="admin__count">{tab === 'users' ? `${total} пользователей` : ''}</span>
       </div>
 
+      {tab === 'support' ? (
+        <AdminSupport onToast={onToast} />
+      ) : (
+        <>
       {loading ? (
         <p className="muted admin__empty">Загрузка…</p>
       ) : error ? (
@@ -175,6 +198,8 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
           Вперёд
         </button>
       </div>
+        </>
+      )}
 
       {confirmDeleteId && (
         <ConfirmDialog

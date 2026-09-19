@@ -7,14 +7,13 @@ interface AccountWidgetProps {
   onLogout: () => void;
   onUpgrade: () => void;
   onOpenAdmin: () => void;
+  onOpenSupport: () => void;
   onToast: (message: string) => void;
 }
 
 // EMAIL_AUTH: добавлено 2026-09-19
-/**
- * Compact account widget (avatar initial + display name + tier) with a dropdown menu.
- */
-export function AccountWidget({ user, onLogout, onUpgrade, onOpenAdmin, onToast }: AccountWidgetProps) {
+/** Compact account widget (avatar initial + display name + tier) with a dropdown menu. */
+export function AccountWidget({ user, onLogout, onUpgrade, onOpenAdmin, onOpenSupport, onToast }: AccountWidgetProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -58,6 +57,9 @@ export function AccountWidget({ user, onLogout, onUpgrade, onOpenAdmin, onToast 
           </button>
           <button className="account-widget__item" onClick={() => { setOpen(false); onUpgrade(); }} type="button">
             Улучшить план
+          </button>
+          <button className="account-widget__item" onClick={() => { setOpen(false); onOpenSupport(); }} type="button">
+            Поддержка
           </button>
           {user.isAdmin && (
             <button

@@ -84,6 +84,36 @@ export interface AdminUsersResponse {
   users: AdminUser[];
 }
 
+// SUPPORT: добавлено 2026-09-19
+export interface SupportMessage {
+  id: string;
+  ticketId: string;
+  senderId: string;
+  content: string;
+  createdAt: string;
+  isFromAdmin: boolean;
+}
+
+export interface SupportTicket {
+  id: string;
+  userId: string;
+  status: string;
+  createdAt: string;
+  lastMessageAt: string;
+  messages: SupportMessage[];
+}
+
+export interface AdminSupportTicket {
+  id: string;
+  userId: string;
+  userEmail: string | null;
+  userGitHubUsername: string | null;
+  status: string;
+  createdAt: string;
+  lastMessageAt: string;
+  lastMessagePreview: string | null;
+}
+
 export interface WorkspaceFileEntry {
   name: string;
   path: string;

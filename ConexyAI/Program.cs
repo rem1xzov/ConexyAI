@@ -179,6 +179,9 @@ builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 // SANDBOX: добавлено 2026-09-17
 builder.Services.AddSingleton<IDockerSandboxRunner, DockerSandboxRunner>();
+// SUPPORT: добавлено 2026-09-19
+builder.Services.AddScoped<ISupportRepository, SupportRepository>();
+builder.Services.AddScoped<ISupportService, SupportService>();
 
 builder.Services.AddSingleton<IConexyWorkspaceService, ConexyWorkspaceService>();
 builder.Services.AddSingleton<IWorkspacePathValidator, WorkspacePathValidator>();

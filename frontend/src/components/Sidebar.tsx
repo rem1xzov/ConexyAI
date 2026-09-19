@@ -35,6 +35,7 @@ interface SidebarProps {
   onLogout: () => void;
   onUpgrade: () => void;
   onOpenAdmin: () => void;
+  onOpenSupport: () => void;
   onToast: (message: string) => void;
 }
 
@@ -66,6 +67,7 @@ export function Sidebar(props: SidebarProps) {
     onLogout,
     onUpgrade,
     onOpenAdmin,
+    onOpenSupport,
     onToast,
   } = props;
 
@@ -240,6 +242,7 @@ export function Sidebar(props: SidebarProps) {
                 onLogout={onLogout}
                 onUpgrade={onUpgrade}
                 onOpenAdmin={onOpenAdmin}
+                onOpenSupport={onOpenSupport}
                 onToast={onToast}
               />
             ) : (

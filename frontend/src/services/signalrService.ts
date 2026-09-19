@@ -1,5 +1,5 @@
 import * as signalR from '@microsoft/signalr';
-import type { BuildProblemsPayload, PendingActionPayload, RunProjectErrorPayload, RunProjectResult, SearchStatusPayload, SignalrCallbacks, TerminalOutputPayload } from '../types/signalr';
+import type { BuildProblemsPayload, PendingActionPayload, RunProjectErrorPayload, RunProjectResult, SearchStatusPayload, SignalrCallbacks, SupportMessagePayload, TerminalOutputPayload } from '../types/signalr';
 
 export type ConnectionStatus = 'connected' | 'connecting' | 'reconnecting' | 'disconnecting' | 'disconnected';
 
@@ -32,6 +32,9 @@ class SignalrService {
   // stale/restarted connection never silently drops the stream (the connection id changes
   // on reconnect, but SignalR groups are per-connection and must be re-added).
   private joinedTaskIds = new Set<string>();
+  // SUPPORT: добавлено 2026-09-19 — live subscribers for support messages (the support chat
+  // opens/closes dynamically, so it subscribes/unsubscribes instead of using the static callbacks).
+  private supportHandlers = new Set<(payload: SupportMessagePayload) => void>();
 
   async connect(token: string, callbacks: SignalrCallbacks): Promise<void> {
     this.token = token;
@@ -130,6 +133,23 @@ class SignalrService {
     return await this.connection!.invoke<boolean>('ConfirmAction', actionId, approved);
   }
 
+  // SUPPORT: добавлено 2026-09-19
+  async joinSupportTicket(ticketId: string): Promise<void> {
+    await this.ensureConnected();
+    await this.connection!.invoke('JoinSupportTicket', ticketId);
+  }
+
+  async leaveSupportTicket(ticketId: string): Promise<void> {
+    if (!this.connection) return;
+    await this.connection.invoke('LeaveSupportTicket', ticketId);
+  }
+
+  /** Subscribes to live support messages; returns an unsubscribe function. */
+  onSupportMessage(cb: (payload: SupportMessagePayload) => void): () => void {
+    this.supportHandlers.add(cb);
+    return () => this.supportHandlers.delete(cb);
+  }
+
   // ---- Run project (Ctrl+F5) ----
 
   async runProject(sessionId: string): Promise<RunProjectResult> {
@@ -203,6 +223,11 @@ class SignalrService {
     this.connection.on('BuildProblems', (payload: BuildProblemsPayload) => this.callbacks.onProblems?.(payload));
     // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
     this.connection.on('OnPendingActionCreated', (payload: PendingActionPayload) => this.callbacks.onPendingActionCreated?.(payload));
+    // SUPPORT: добавлено 2026-09-19
+    this.connection.on('OnSupportMessageReceived', (payload: SupportMessagePayload) => {
+      this.callbacks.onSupportMessageReceived?.(payload);
+      this.supportHandlers.forEach((h) => h(payload));
+    });
     this.connection.on('TerminalOutput', (payload: TerminalOutputPayload) => {
       this.terminalOutputHandlers.get(payload.sessionId)?.(payload.data);
     });

@@ -104,6 +104,18 @@ export interface SignalrCallbacks {
   onProblems?: (payload: BuildProblemsPayload) => void;
   // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
   onPendingActionCreated?: (payload: PendingActionPayload) => void;
+  // SUPPORT: добавлено 2026-09-19
+  onSupportMessageReceived?: (payload: SupportMessagePayload) => void;
+}
+
+// SUPPORT: добавлено 2026-09-19
+export interface SupportMessagePayload {
+  id: string;
+  ticketId: string;
+  senderId: string;
+  content: string;
+  createdAt: string;
+  isFromAdmin: boolean;
 }
 
 export type TaskStatus = 'Idle' | 'Running' | 'Completed' | 'Failed' | 'Stopped';

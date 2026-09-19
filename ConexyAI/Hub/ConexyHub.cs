@@ -40,6 +40,19 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"task_{taskId}");
     }
 
+    // SUPPORT: добавлено 2026-09-19
+    /// <summary>Joins the real-time group for a support ticket (both user and admin sides).</summary>
+    public async Task JoinSupportTicket(Guid ticketId)
+    {
+        await Groups.AddToGroupAsync(Context.ConnectionId, $"support_{ticketId}");
+    }
+
+    /// <summary>Leaves a support ticket's real-time group.</summary>
+    public async Task LeaveSupportTicket(Guid ticketId)
+    {
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"support_{ticketId}");
+    }
+
     /// <summary>
     /// Cancels the in-flight generation for the given task id. The background worker's
     /// per-task <see cref="CancellationToken"/> is cancelled, which aborts the upstream
