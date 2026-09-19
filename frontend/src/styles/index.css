@@ -90,6 +90,7 @@ body {
   background: var(--bg-body);
   background-attachment: fixed;
   min-height: 100vh;
+  min-height: 100dvh;
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-size: 15px;
@@ -102,6 +103,7 @@ body {
 .app {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -647,6 +649,7 @@ body {
 
 .inputbar-wrap {
   padding: 0 24px 20px;
+  padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -3678,6 +3681,7 @@ body {
 
 .admin {
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   padding: 20px 24px;
@@ -4185,6 +4189,7 @@ body {
   /* Input bar -> compact */
   .inputbar-wrap {
     padding: 0 12px 12px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   }
   .inputbar {
     padding: 6px 8px;
@@ -4211,8 +4216,10 @@ body {
     max-width: 100%;
     border-radius: 16px 16px 0 0;
     max-height: 90vh;
+    max-height: 90dvh;
     overflow-y: auto;
     border-bottom: none;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
   }
 
   /* Hero greeting -> smaller font */
