@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ConexyAI.Configuration;
 using ConexyAI.Entity;
 using ConexyAI.Model;
@@ -107,6 +108,13 @@ public class GitHubOAuthService : IGitHubOAuthService
     {
         var client = _httpClientFactory.CreateClient();
 
+        // GITHUB_OAUTH: добавлено 2026-09-19 — log the outgoing client_id and redirect_uri
+        // (never the client_secret) so a redirect_uri mismatch can be spotted against the
+        // value registered on the GitHub OAuth App.
+        _logger.LogInformation(
+            "GitHub token exchange: client_id='{ClientId}', redirect_uri='{RedirectUri}', code prefix '{CodePrefix}'.",
+            _options.ClientId, _options.CallbackUrl, CodePrefix(code));
+
         using var request = new HttpRequestMessage(HttpMethod.Post, _options.TokenEndpoint);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
@@ -118,9 +126,10 @@ public class GitHubOAuthService : IGitHubOAuthService
         });
 
         using var response = await client.SendAsync(request, ct);
+        var body = await response.Content.ReadAsStringAsync(ct);
+
         if (!response.IsSuccessStatusCode)
         {
-            var body = await response.Content.ReadAsStringAsync(ct);
             _logger.LogError(
                 "GitHub token exchange failed with HTTP {StatusCode}: {Body}",
                 response.StatusCode, body);
@@ -128,12 +137,33 @@ public class GitHubOAuthService : IGitHubOAuthService
                 $"GitHub token exchange failed ({response.StatusCode}): {body}");
         }
 
-        var payload = await response.Content.ReadFromJsonAsync<GitHubTokenResponse>(
-            cancellationToken: ct);
+        // GITHUB_OAUTH: добавлено 2026-09-19 — GitHub returns HTTP 200 even for OAuth errors
+        // (incorrect_client_credentials, redirect_uri_mismatch, bad_verification_code, ...)
+        // with a JSON body {"error": "...", "error_description": "..."}. Parse the raw body
+        // so the error is surfaced instead of being swallowed by the access_token null-check.
+        GitHubTokenResponse? payload = null;
+        try
+        {
+            payload = JsonSerializer.Deserialize<GitHubTokenResponse>(body);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogError(ex, "GitHub token exchange returned non-JSON body: {Body}", body);
+        }
 
         if (payload is null || string.IsNullOrWhiteSpace(payload.AccessToken))
         {
-            throw new InvalidOperationException("GitHub token exchange returned no access_token.");
+            _logger.LogError(
+                "GitHub token exchange returned no access_token. Full response body: {Body}",
+                body);
+
+            var error = payload?.Error;
+            var errorDescription = payload?.ErrorDescription;
+            var detail = !string.IsNullOrWhiteSpace(error)
+                ? (string.IsNullOrWhiteSpace(errorDescription) ? error : $"{error}: {errorDescription}")
+                : body;
+            throw new InvalidOperationException(
+                $"GitHub token exchange returned no access_token ({detail}).");
         }
 
         return payload.AccessToken;
@@ -206,22 +236,43 @@ public class GitHubOAuthService : IGitHubOAuthService
 
     private sealed class GitHubTokenResponse
     {
+        [JsonPropertyName("access_token")]
         public string? AccessToken { get; set; }
+
+        [JsonPropertyName("token_type")]
         public string? TokenType { get; set; }
+
+        [JsonPropertyName("scope")]
         public string? Scope { get; set; }
+
+        [JsonPropertyName("error")]
+        public string? Error { get; set; }
+
+        [JsonPropertyName("error_description")]
+        public string? ErrorDescription { get; set; }
     }
 
     private sealed class GitHubProfileResponse
     {
+        [JsonPropertyName("id")]
         public long Id { get; set; }
+
+        [JsonPropertyName("login")]
         public string Login { get; set; } = string.Empty;
+
+        [JsonPropertyName("email")]
         public string? Email { get; set; }
     }
 
     private sealed class GitHubEmailResponse
     {
+        [JsonPropertyName("email")]
         public string? Email { get; set; }
+
+        [JsonPropertyName("primary")]
         public bool Primary { get; set; }
+
+        [JsonPropertyName("verified")]
         public bool Verified { get; set; }
     }
 
