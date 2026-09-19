@@ -9,7 +9,9 @@ export function getStoredTheme(): Theme {
   } catch {
     // ignore
   }
-  return 'system';
+  // Default to dark: the app was originally dark-only and the light theme is incomplete
+  // (some Tailwind colors are hardcoded), so avoid surprising light-mode-OS users.
+  return 'dark';
 }
 
 function effectiveTheme(theme: Theme): 'light' | 'dark' {

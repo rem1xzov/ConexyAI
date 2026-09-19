@@ -23,6 +23,9 @@ i18n.use(initReactI18next).init({
   lng: detectLanguage(),
   fallbackLng: 'ru',
   interpolation: { escapeValue: false },
+  // Never suspend on first render: the app has no <Suspense> boundary, so a suspended
+  // root would crash the whole tree. Resources are inline/synchronous anyway.
+  react: { useSuspense: false },
 });
 
 export function setLanguage(lang: string): void {
