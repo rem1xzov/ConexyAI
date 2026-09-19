@@ -80,6 +80,7 @@ public class GitHubOAuthService : IGitHubOAuthService
         var existing = await _userRepository.GetByGitHubIdAsync(userInfo.GitHubId, ct);
         if (existing is null)
         {
+            var isAdmin = _adminOptions.Value.Matches(userInfo.Email, userInfo.Username);
             var user = new User
             {
                 Id = Guid.NewGuid(),
@@ -87,9 +88,9 @@ public class GitHubOAuthService : IGitHubOAuthService
                 EmailConfirmed = userInfo.EmailConfirmed,
                 GitHubId = userInfo.GitHubId,
                 GitHubUsername = userInfo.Username,
-                SubscriptionTier = SubscriptionTier.Free,
+                SubscriptionTier = isAdmin ? SubscriptionTier.Admin : SubscriptionTier.Free,
                 // EMAIL_AUTH: добавлено 2026-09-19
-                IsAdmin = _adminOptions.Value.Matches(userInfo.Email, userInfo.Username),
+                IsAdmin = isAdmin,
                 CreatedAt = now,
                 LastLoginAt = now
             };
@@ -103,8 +104,13 @@ public class GitHubOAuthService : IGitHubOAuthService
         existing.Email = userInfo.Email ?? existing.Email;
         existing.EmailConfirmed = existing.EmailConfirmed || userInfo.EmailConfirmed;
         existing.GitHubUsername = userInfo.Username;
-        // EMAIL_AUTH: добавлено 2026-09-19 — re-evaluate admin status on every login.
-        existing.IsAdmin = _adminOptions.Value.Matches(existing.Email, existing.GitHubUsername);
+        // ADMIN_UNLIMITED: добавлено 2026-09-19 — promote ADMIN_ACCOUNTS superadmins on every
+        // login, but never demote a make-admin'd user (their IsAdmin lives in the DB).
+        if (_adminOptions.Value.Matches(existing.Email, existing.GitHubUsername))
+        {
+            existing.IsAdmin = true;
+            existing.SubscriptionTier = SubscriptionTier.Admin;
+        }
         existing.LastLoginAt = now;
         await _userRepository.UpdateAsync(existing, ct);
         _logger.LogInformation("GitHub OAuth callback: updated existing user {UserId} last login.", existing.Id);

@@ -231,7 +231,9 @@ public class AuthController : ControllerBase
             user.Email ?? string.Empty,
             displayName,
             user.SubscriptionTier.ToString(),
-            user.IsAdmin));
+            // ADMIN_PANEL: добавлено 2026-09-19 — use the JWT claim (not the DB value) so the
+            // frontend's isAdmin matches the backend's admin access check.
+            User.IsAdmin()));
     }
 
     // EMAIL_AUTH: добавлено 2026-09-19

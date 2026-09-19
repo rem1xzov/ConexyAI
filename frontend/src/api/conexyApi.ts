@@ -1,6 +1,7 @@
 import http from './client';
 import axios from 'axios';
 import type {
+  AdminUsersResponse,
   ConexyRequest,
   ConexyResponse,
   DevTokenResponse,
@@ -56,6 +57,26 @@ export async function logout(): Promise<void> {
 export async function getMe(): Promise<UserProfile> {
   const { data } = await http.get<UserProfile>('/auth/me');
   return data;
+}
+
+// ADMIN_PANEL: добавлено 2026-09-19
+export async function getAdminUsers(page = 1, pageSize = 20): Promise<AdminUsersResponse> {
+  const { data } = await http.get<AdminUsersResponse>('/admin/users', {
+    params: { page, pageSize },
+  });
+  return data;
+}
+
+export async function makeAdmin(id: string): Promise<void> {
+  await http.post(`/admin/users/${id}/make-admin`);
+}
+
+export async function revokeAdmin(id: string): Promise<void> {
+  await http.post(`/admin/users/${id}/revoke-admin`);
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  await http.delete(`/admin/users/${id}`);
 }
 
 /** Submits a task; the backend returns 202 Accepted with the created entity. */

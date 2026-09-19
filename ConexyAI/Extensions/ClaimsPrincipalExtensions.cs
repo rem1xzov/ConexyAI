@@ -26,4 +26,11 @@ public static class ClaimsPrincipalExtensions
         var claim = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         return Guid.TryParse(claim, out userId);
     }
+
+    // ADMIN_UNLIMITED: добавлено 2026-09-19
+    /// <summary>True when the token's <c>isAdmin</c> claim is set to true.</summary>
+    public static bool IsAdmin(this ClaimsPrincipal principal)
+    {
+        return bool.TryParse(principal.FindFirst("isAdmin")?.Value, out var isAdmin) && isAdmin;
+    }
 }

@@ -15,7 +15,9 @@ import { PanelRightCloseIcon, PanelRightOpenIcon } from './components/Icons';
 import { DangerCommandModal } from './components/DangerCommandModal';
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 import { UsageIndicator } from './components/UsageIndicator';
-import { LimitExceededModal } from './components/LimitExceededModal';
+import { UpgradeModal } from './components/UpgradeModal';
+// ADMIN_PANEL: добавлено 2026-09-19
+import { AdminPanel } from './components/AdminPanel';
 // EMAIL_AUTH: добавлено 2026-09-19
 import { AuthModal } from './components/AuthModal';
 import type { AuthMode } from './components/AuthModal';
@@ -132,6 +134,9 @@ export default function App() {
   const [limitExceeded, setLimitExceeded] = useState<LimitExceededInfo | null>(null);
   // EMAIL_AUTH: добавлено 2026-09-19
   const [authModal, setAuthModal] = useState<AuthMode | null>(null);
+  // ADMIN_PANEL: добавлено 2026-09-19
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const [route, setRoute] = useState(window.location.hash);
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
   // const [isLiveOpen, setIsLiveOpen] = useState(false);
 
@@ -161,6 +166,35 @@ export default function App() {
   function handleLogout() {
     void logout();
   }
+
+  // ADMIN_PANEL: добавлено 2026-09-19
+  function handleOpenAdmin() {
+    window.location.hash = '#/admin';
+  }
+
+  function handleUpgrade() {
+    setUpgradeOpen(true);
+  }
+
+  function handleUpgradeBuy(planName: string) {
+    showToast(`${planName}: оплата скоро будет доступна`);
+  }
+
+  // ADMIN_PANEL: добавлено 2026-09-19 — hash-based routing for the admin page.
+  useEffect(() => {
+    const onHash = () => setRoute(window.location.hash);
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  const isAdminRoute = route.startsWith('#/admin');
+
+  // Redirect non-admins away from the admin route.
+  useEffect(() => {
+    if (isAdminRoute && user && !user.isAdmin) {
+      window.location.hash = '';
+    }
+  }, [isAdminRoute, user]);
 
   useEffect(() => {
     saveSessions(sessions);
@@ -577,6 +611,7 @@ export default function App() {
       const data = (e as { response?: { data?: { error?: string; limit?: string; resetsAt?: string } } })?.response?.data;
       if (data?.error === 'LIMIT_EXCEEDED') {
         setLimitExceeded({ limit: data.limit ?? 'unknown', resetsAt: data.resetsAt ?? '' });
+        setUpgradeOpen(true);
         setSessions((prev) =>
           updateSession(prev, sessionId, (s) => ({
             ...s,
@@ -725,6 +760,11 @@ export default function App() {
     }
   }
 
+  // ADMIN_PANEL: добавлено 2026-09-19 — render the admin page as a full-screen view.
+  if (isAdminRoute && user?.isAdmin) {
+    return <AdminPanel onBack={() => { window.location.hash = ''; }} onToast={showToast} />;
+  }
+
   return (
     <div className="app">
       <Sidebar
@@ -746,6 +786,8 @@ export default function App() {
         onLogin={() => setAuthModal('login')}
         onRegister={() => setAuthModal('register')}
         onLogout={handleLogout}
+        onUpgrade={handleUpgrade}
+        onOpenAdmin={handleOpenAdmin}
         onToast={showToast}
       />
 
@@ -852,9 +894,16 @@ export default function App() {
         />
       )}
 
-      {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
-      {limitExceeded && (
-        <LimitExceededModal info={limitExceeded} onClose={() => setLimitExceeded(null)} />
+      {/* ADMIN_PANEL: добавлено 2026-09-19 */}
+      {upgradeOpen && (
+        <UpgradeModal
+          limitInfo={limitExceeded}
+          onClose={() => {
+            setUpgradeOpen(false);
+            setLimitExceeded(null);
+          }}
+          onBuy={handleUpgradeBuy}
+        />
       )}
 
       {/* EMAIL_AUTH: добавлено 2026-09-19 */}

@@ -66,6 +66,24 @@ export interface UserProfile {
   isAdmin: boolean;
 }
 
+// ADMIN_PANEL: добавлено 2026-09-19
+export interface AdminUser {
+  id: string;
+  email: string | null;
+  gitHubUsername: string | null;
+  createdAt: string;
+  tier: string;
+  isAdmin: boolean;
+  isSuperAdmin: boolean;
+}
+
+export interface AdminUsersResponse {
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  users: AdminUser[];
+}
+
 export interface WorkspaceFileEntry {
   name: string;
   path: string;

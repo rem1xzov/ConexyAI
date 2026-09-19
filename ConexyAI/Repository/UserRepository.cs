@@ -65,4 +65,28 @@ public class UserRepository : IUserRepository
         _context.Users.Add(new User { Id = userId });
         await _context.SaveChangesAsync(ct);
     }
+
+    // ADMIN_PANEL: добавлено 2026-09-19
+    public async Task<(IReadOnlyList<User> Items, int TotalCount)> GetUsersPaginatedAsync(
+        int page, int pageSize, CancellationToken ct = default)
+    {
+        var query = _context.Users.AsNoTracking();
+        var total = await query.CountAsync(ct);
+        var items = await query
+            .OrderBy(u => u.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(ct);
+        return (items, total);
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == id, ct);
+        if (user is null)
+            return;
+
+        _context.Users.Remove(user);
+        await _context.SaveChangesAsync(ct);
+    }
 }

@@ -54,14 +54,15 @@ public class EmailAuthService : IEmailAuthService
         }
 
         var now = DateTime.UtcNow;
+        var isAdmin = _adminOptions.Value.Matches(normalized, null);
         var user = new User
         {
             Id = Guid.NewGuid(),
             Email = normalized,
             EmailConfirmed = false,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
-            SubscriptionTier = SubscriptionTier.Free,
-            IsAdmin = _adminOptions.Value.Matches(normalized, null),
+            SubscriptionTier = isAdmin ? SubscriptionTier.Admin : SubscriptionTier.Free,
+            IsAdmin = isAdmin,
             CreatedAt = now,
             LastLoginAt = now
         };
@@ -94,9 +95,13 @@ public class EmailAuthService : IEmailAuthService
             throw new AuthException("invalid_credentials", "Неверный email или пароль.", 401);
         }
 
-        // Re-evaluate admin status on every login (not only at creation) so newly-promoted
-        // admins take effect without re-registering.
-        user.IsAdmin = _adminOptions.Value.Matches(user.Email, user.GitHubUsername);
+        // ADMIN_UNLIMITED: добавлено 2026-09-19 — promote ADMIN_ACCOUNTS superadmins on
+        // every login, but never demote a make-admin'd user (their IsAdmin lives in the DB).
+        if (_adminOptions.Value.Matches(user.Email, user.GitHubUsername))
+        {
+            user.IsAdmin = true;
+            user.SubscriptionTier = SubscriptionTier.Admin;
+        }
         user.LastLoginAt = DateTime.UtcNow;
         await _userRepository.UpdateAsync(user, ct);
 

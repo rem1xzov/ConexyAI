@@ -5,15 +5,16 @@ import { LogoutIcon, ShieldIcon } from './Icons';
 interface AccountWidgetProps {
   user: UserProfile;
   onLogout: () => void;
+  onUpgrade: () => void;
+  onOpenAdmin: () => void;
   onToast: (message: string) => void;
 }
 
 // EMAIL_AUTH: добавлено 2026-09-19
 /**
  * Compact account widget (avatar initial + display name + tier) with a dropdown menu.
- * "Settings", "Upgrade plan" and "Admin panel" are stubs for now.
  */
-export function AccountWidget({ user, onLogout, onToast }: AccountWidgetProps) {
+export function AccountWidget({ user, onLogout, onUpgrade, onOpenAdmin, onToast }: AccountWidgetProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -55,13 +56,13 @@ export function AccountWidget({ user, onLogout, onToast }: AccountWidgetProps) {
           <button className="account-widget__item" onClick={() => stub('Настройки')} type="button">
             Настройки
           </button>
-          <button className="account-widget__item" onClick={() => stub('Улучшение плана')} type="button">
+          <button className="account-widget__item" onClick={() => { setOpen(false); onUpgrade(); }} type="button">
             Улучшить план
           </button>
           {user.isAdmin && (
             <button
               className="account-widget__item account-widget__item--admin"
-              onClick={() => stub('Админ-панель')}
+              onClick={() => { setOpen(false); onOpenAdmin(); }}
               type="button"
             >
               <ShieldIcon size={15} /> Админ-панель

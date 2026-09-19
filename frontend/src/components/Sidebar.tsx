@@ -33,6 +33,8 @@ interface SidebarProps {
   onLogin: () => void;
   onRegister: () => void;
   onLogout: () => void;
+  onUpgrade: () => void;
+  onOpenAdmin: () => void;
   onToast: (message: string) => void;
 }
 
@@ -62,6 +64,8 @@ export function Sidebar(props: SidebarProps) {
     onLogin,
     onRegister,
     onLogout,
+    onUpgrade,
+    onOpenAdmin,
     onToast,
   } = props;
 
@@ -231,7 +235,13 @@ export function Sidebar(props: SidebarProps) {
           {/* EMAIL_AUTH: добавлено 2026-09-19 */}
           <div className="sidebar__footer">
             {user ? (
-              <AccountWidget user={user} onLogout={onLogout} onToast={onToast} />
+              <AccountWidget
+                user={user}
+                onLogout={onLogout}
+                onUpgrade={onUpgrade}
+                onOpenAdmin={onOpenAdmin}
+                onToast={onToast}
+              />
             ) : (
               <div className="sidebar__auth">
                 <button className="sidebar__auth-btn" onClick={onLogin} type="button">

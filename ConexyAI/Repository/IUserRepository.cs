@@ -14,6 +14,10 @@ public interface IUserRepository
     Task AddAsync(User user, CancellationToken ct = default);
     Task UpdateAsync(User user, CancellationToken ct = default);
 
+    // ADMIN_PANEL: добавлено 2026-09-19
+    Task<(IReadOnlyList<User> Items, int TotalCount)> GetUsersPaginatedAsync(int page, int pageSize, CancellationToken ct = default);
+    Task DeleteAsync(Guid id, CancellationToken ct = default);
+
     /// <summary>
     /// Inserts a bare placeholder user for <paramref name="userId"/> if none exists. Used by
     /// the development dev-token endpoint so the new FK constraints remain satisfiable.
