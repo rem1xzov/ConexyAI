@@ -1018,18 +1018,6 @@ body {
   }
 }
 
-@media (max-width: 720px) {
-  .sidebar {
-    position: absolute;
-    z-index: 10;
-    height: 100%;
-  }
-  .sidebar--collapsed {
-    width: 60px;
-    min-width: 60px;
-  }
-}
-
 /* ---------- Session context menu ---------- */
 
 .chats__row {
@@ -1898,18 +1886,6 @@ body {
   color: #a79bae;
 }
 
-@media (max-width: 860px) {
-  .main__body--ide {
-    flex-direction: column;
-  }
-  .ide-chat {
-    flex: 0 0 auto;
-    max-height: 55vh;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-}
-
 /* ---------- Polishing: diff highlight, breadcrumbs, palette, status bar, empty states ---------- */
 
 /* Agent edit line highlight (Monaco decoration class). */
@@ -2735,7 +2711,7 @@ body {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  z-index: 120;
+  z-index: 300;
 }
 
 .dialog-card {
@@ -3849,19 +3825,6 @@ body {
   color: var(--danger);
 }
 
-@media (max-width: 720px) {
-  .upgrade-modal__plans {
-    grid-template-columns: 1fr;
-  }
-  .admin-user {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .admin-user__actions {
-    justify-content: flex-end;
-  }
-}
-
 /* ---------- SUPPORT: добавлено 2026-09-19 ---------- */
 .support-chat {
   width: min(460px, 94vw);
@@ -4132,61 +4095,44 @@ body {
     cursor: pointer;
   }
 
-  /* Agent tab -> switchable panels (Chat / Files / Editor) */
-  .agent-mobile-tabs {
-    display: flex;
-    flex-shrink: 0;
-    gap: 4px;
-    padding: 8px 10px 0;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-soft);
+  /* Floating account widget (top-right) so modals are reachable without the sidebar */
+  .mobile-account {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 50;
   }
-  .agent-mobile-tab {
-    flex: 1;
-    padding: 8px 10px;
-    border: none;
-    border-radius: 8px 8px 0 0;
-    background: transparent;
-    color: var(--muted);
-    font-size: 13px;
-    cursor: pointer;
+  .mobile-account .account-widget__trigger {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface-solid);
   }
-  .agent-mobile-tab--active {
-    background: var(--surface-2);
-    color: var(--text);
-    font-weight: 600;
+  .mobile-account .account-widget__meta {
+    display: none;
   }
-  .main__body--ide {
-    flex-direction: column;
+  .mobile-account .account-widget__menu {
+    top: calc(100% + 6px);
+    bottom: auto;
+    left: auto;
+    right: 0;
+    min-width: 200px;
   }
+
+  /* Make room for the floating top buttons */
+  .main {
+    padding-top: 56px;
+  }
+
+  /* Agent -> chat only on mobile (workspace is not rendered) */
   .ide-divider {
     display: none;
   }
-  .main__body--ide.agent-tab-files .ide-chat,
-  .main__body--ide.agent-tab-files .ide-chat--single,
-  .main__body--ide.agent-tab-editor .ide-chat,
-  .main__body--ide.agent-tab-editor .ide-chat--single {
-    display: none;
-  }
-  .main__body--ide.agent-tab-chat .workspace {
-    display: none;
-  }
-  .main__body--ide.agent-tab-files .workspace__viewer,
-  .main__body--ide.agent-tab-files .workspace__bottom,
-  .main__body--ide.agent-tab-files .workspace__header,
-  .main__body--ide.agent-tab-files .menubar {
-    display: none;
-  }
-  .main__body--ide.agent-tab-editor .workspace__explorer {
-    display: none;
-  }
-  .main__body--ide.agent-tab-files .workspace__explorer {
-    flex: 1;
-    max-width: 100%;
-    border-right: none;
-  }
 
-  /* Input bar -> compact */
+  /* Input bar -> compact single line */
   .inputbar-wrap {
     padding: 0 12px 12px;
     padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
@@ -4199,11 +4145,31 @@ body {
   .inputbar__textarea {
     min-width: 0;
   }
+  .inputbar__textarea::placeholder {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .modelpicker__label-full {
     display: none;
   }
   .modelpicker__label-short {
     display: inline;
+  }
+
+  /* Model picker -> bottom sheet (full width, not clipped) */
+  .modelpicker__menu {
+    position: fixed;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    border-radius: 16px 16px 0 0;
+    max-height: 70dvh;
+    overflow-y: auto;
+    z-index: 300;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   /* Modals -> bottom sheet */
@@ -4228,5 +4194,36 @@ body {
   }
   .hero__subtitle {
     font-size: 14px;
+  }
+
+  /* Upgrade modal -> stacked plan cards */
+  .upgrade-modal__plans {
+    grid-template-columns: 1fr;
+  }
+
+  /* Admin -> prevent horizontal overflow */
+  .admin {
+    max-width: 100vw;
+    overflow-x: hidden;
+    padding: 16px 12px;
+  }
+  .admin__topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .admin__tabs {
+    flex-wrap: wrap;
+    margin-left: 0;
+    width: 100%;
+  }
+  .admin-user {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .admin-user__actions {
+    justify-content: flex-end;
+  }
+  .admin-support {
+    flex-direction: column;
   }
 }

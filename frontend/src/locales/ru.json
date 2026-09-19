@@ -157,10 +157,7 @@
     "searching": "Ищу в интернете: {{query}}",
     "searchingShort": "Ищу в интернете…",
     "limitExceeded": "Лимит исчерпан",
-    "generationStopped": "⏹ Генерация остановлена.",
-    "chatTab": "Чат",
-    "filesTab": "Файлы",
-    "editorTab": "Редактор"
+    "generationStopped": "⏹ Генерация остановлена."
   },
   "model": {
     "flashDesc": "Быстрый чат, ответы на вопросы, базовая помощь.",
@@ -183,7 +180,7 @@
     "photos": "Фото",
     "takePhoto": "Сделать фото",
     "importCode": "Импортировать код",
-    "placeholder": "Сообщение ConexyAI…",
+    "placeholder": "Сообщение…",
     "removeFile": "Убрать {{name}}"
   },
   "palette": {

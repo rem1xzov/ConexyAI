@@ -6,6 +6,7 @@ import { signalrService } from './services/signalrService';
 import { useAuth } from './hooks/useAuth';
 import { useIsMobile } from './hooks/useMediaQuery';
 import { Sidebar } from './components/Sidebar';
+import { AccountWidget } from './components/AccountWidget';
 import { ChatFeed } from './components/ChatFeed';
 import { InputBar } from './components/InputBar';
 import { WorkspacePanel } from './components/WorkspacePanel';
@@ -129,8 +130,6 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => !isMobile);
   const [workspaceWidth, setWorkspaceWidth] = useState(55); // % width of the IDE pane
   const [ideCollapsed, setIdeCollapsed] = useState(false);
-  // MOBILE: добавлено 2026-09-19 — which agent panel is active on narrow screens.
-  const [agentMobileTab, setAgentMobileTab] = useState<'chat' | 'files' | 'editor'>('chat');
 
   const [sessions, setSessions] = useState<ChatSession[]>(loadSessions);
   const [activeId, setActiveId] = useState<string | null>(() => loadSessions()[0]?.id ?? null);
@@ -850,34 +849,22 @@ export default function App() {
         <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
       )}
 
-      <main className="main" ref={mainRef}>
-        <div className={`${isAgent ? 'main__body main__body--ide' : 'main__body'}${isAgent && isMobile ? ` agent-tab-${agentMobileTab}` : ''}`}>
-          {isAgent && isMobile && (
-            <div className="agent-mobile-tabs">
-              <button
-                className={agentMobileTab === 'chat' ? 'agent-mobile-tab agent-mobile-tab--active' : 'agent-mobile-tab'}
-                onClick={() => setAgentMobileTab('chat')}
-                type="button"
-              >
-                {t('agent.chatTab')}
-              </button>
-              <button
-                className={agentMobileTab === 'files' ? 'agent-mobile-tab agent-mobile-tab--active' : 'agent-mobile-tab'}
-                onClick={() => setAgentMobileTab('files')}
-                type="button"
-              >
-                {t('agent.filesTab')}
-              </button>
-              <button
-                className={agentMobileTab === 'editor' ? 'agent-mobile-tab agent-mobile-tab--active' : 'agent-mobile-tab'}
-                onClick={() => setAgentMobileTab('editor')}
-                type="button"
-              >
-                {t('agent.editorTab')}
-              </button>
-            </div>
-          )}
+      {/* MOBILE: добавлено 2026-09-19 — floating account widget so modals are reachable without opening the sidebar. */}
+      {isMobile && user && (
+        <div className="mobile-account">
+          <AccountWidget
+            user={user}
+            onLogout={handleLogout}
+            onUpgrade={handleUpgrade}
+            onOpenAdmin={handleOpenAdmin}
+            onOpenSupport={handleOpenSupport}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+        </div>
+      )}
 
+      <main className="main" ref={mainRef}>
+        <div className={isAgent ? 'main__body main__body--ide' : 'main__body'}>
           <div
             className={isAgent && !ideCollapsed && !isMobile ? 'ide-chat' : 'ide-chat--single'}
             style={isAgent && !ideCollapsed && !isMobile ? { flex: `0 0 ${100 - workspaceWidth}%` } : undefined}
@@ -938,7 +925,7 @@ export default function App() {
             />
           </div>
 
-          {isAgent && (isMobile || !ideCollapsed) && (
+          {isAgent && !isMobile && !ideCollapsed && (
             <>
               <div className="ide-divider" onMouseDown={handleDividerMouseDown} />
               <WorkspacePanel
@@ -953,7 +940,7 @@ export default function App() {
                 problems={latestProblems}
                 onCursorChange={setCursorInfo}
                 onRunInSeparateWindow={() => showToast(t('toast.runProject'))}
-                style={isMobile ? undefined : { flex: `0 0 ${workspaceWidth}%` }}
+                style={{ flex: `0 0 ${workspaceWidth}%` }}
               />
             </>
           )}
