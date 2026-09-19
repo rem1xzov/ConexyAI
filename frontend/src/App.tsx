@@ -6,7 +6,6 @@ import { signalrService } from './services/signalrService';
 import { useAuth } from './hooks/useAuth';
 import { useIsMobile } from './hooks/useMediaQuery';
 import { Sidebar } from './components/Sidebar';
-import { AccountWidget } from './components/AccountWidget';
 import { ChatFeed } from './components/ChatFeed';
 import { InputBar } from './components/InputBar';
 import { WorkspacePanel } from './components/WorkspacePanel';
@@ -847,20 +846,6 @@ export default function App() {
       )}
       {isMobile && sidebarOpen && (
         <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
-      )}
-
-      {/* MOBILE: добавлено 2026-09-19 — floating account widget so modals are reachable without opening the sidebar. */}
-      {isMobile && user && (
-        <div className="mobile-account">
-          <AccountWidget
-            user={user}
-            onLogout={handleLogout}
-            onUpgrade={handleUpgrade}
-            onOpenAdmin={handleOpenAdmin}
-            onOpenSupport={handleOpenSupport}
-            onOpenSettings={() => setSettingsOpen(true)}
-          />
-        </div>
       )}
 
       <main className="main" ref={mainRef}>

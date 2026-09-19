@@ -4095,34 +4095,7 @@ body {
     cursor: pointer;
   }
 
-  /* Floating account widget (top-right) so modals are reachable without the sidebar */
-  .mobile-account {
-    position: fixed;
-    top: 10px;
-    right: 10px;
-    z-index: 50;
-  }
-  .mobile-account .account-widget__trigger {
-    width: 40px;
-    height: 40px;
-    padding: 0;
-    justify-content: center;
-    border-radius: 50%;
-    border: 1px solid var(--border);
-    background: var(--surface-solid);
-  }
-  .mobile-account .account-widget__meta {
-    display: none;
-  }
-  .mobile-account .account-widget__menu {
-    top: calc(100% + 6px);
-    bottom: auto;
-    left: auto;
-    right: 0;
-    min-width: 200px;
-  }
-
-  /* Make room for the floating top buttons */
+  /* Make room for the floating menu button */
   .main {
     padding-top: 56px;
   }
@@ -4172,20 +4145,20 @@ body {
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
-  /* Modals -> bottom sheet */
+  /* Modals -> fullscreen overlay */
   .dialog-overlay {
-    align-items: flex-end;
+    align-items: stretch;
     padding: 0;
   }
   .dialog-card {
     width: 100%;
     max-width: 100%;
-    border-radius: 16px 16px 0 0;
-    max-height: 90vh;
-    max-height: 90dvh;
+    height: 100%;
+    border-radius: 0;
     overflow-y: auto;
-    border-bottom: none;
-    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    padding: 20px;
+    padding-top: calc(20px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
   }
 
   /* Hero greeting -> smaller font */
