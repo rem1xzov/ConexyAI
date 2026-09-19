@@ -2819,6 +2819,58 @@ body {
   filter: brightness(1.1);
 }
 
+/* ---------- SETTINGS: добавлено 2026-09-19 ---------- */
+.settings-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-modal__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-modal__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.settings-modal__segmented {
+  display: flex;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 3px;
+  gap: 3px;
+}
+
+.settings-seg {
+  flex: 1;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.settings-seg:hover {
+  color: var(--text);
+}
+
+.settings-seg--active {
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+
 /* ---------- EMAIL_AUTH: добавлено 2026-09-19 ---------- */
 .sidebar__footer {
   margin-top: auto;
