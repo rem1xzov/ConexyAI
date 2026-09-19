@@ -37,8 +37,9 @@
     "subtitle": "Chat and agent are available after login."
   },
   "chat": {
-    "heroTitle": "Your move, Commander",
-    "heroSubtitle": "What can I build for you today?"
+    "heroTitle": "Your move, {{name}}",
+    "heroSubtitle": "What can I build for you today?",
+    "defaultName": "Commander"
   },
   "sidebar": {
     "login": "Log in",

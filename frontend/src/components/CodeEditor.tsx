@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { detectLanguageFromExtension } from '../utils/fileTypes';
+import { useEffectiveTheme } from '../theme';
 
 type EditorInstance = Parameters<OnMount>[0];
 type MonacoApi = Parameters<OnMount>[1];
@@ -22,6 +23,7 @@ interface CodeEditorProps {
  */
 export function CodeEditor({ path, content, onChange, onSave, highlight, onCursorChange }: CodeEditorProps) {
   const language = detectLanguageFromExtension(path);
+  const effectiveTheme = useEffectiveTheme();
 
   const editorRef = useRef<EditorInstance | null>(null);
   const monacoRef = useRef<MonacoApi | null>(null);
@@ -113,7 +115,7 @@ export function CodeEditor({ path, content, onChange, onSave, highlight, onCurso
       height="100%"
       language={language}
       value={content}
-      theme="vs-dark"
+      theme={effectiveTheme === 'light' ? 'vs' : 'vs-dark'}
       onChange={(value) => onChange(value ?? '')}
       onMount={(editor, monaco) => {
         editorRef.current = editor;

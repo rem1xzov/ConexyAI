@@ -184,16 +184,16 @@ export function InputBar({
         <div className="inputbar-attachments">
           {attachments.map((a, i) => (
             <div key={`${a.fileName}-${i}`} className="relative shrink-0 w-[120px]">
-              <div className="h-[80px] w-full rounded-lg border border-zinc-700 bg-zinc-900 overflow-hidden">
+              <div className="h-[80px] w-full rounded-lg chat-surface overflow-hidden">
                 {a.contentType.startsWith('image/') ? (
                   <img src={`data:${a.contentType};base64,${a.contentBase64}`} alt={a.fileName} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-2xl">📄</div>
                 )}
               </div>
-              <div className="mt-1 truncate text-[11px] text-zinc-400" title={a.fileName}>{a.fileName}</div>
+              <div className="mt-1 truncate text-[11px] chat-muted" title={a.fileName}>{a.fileName}</div>
               <button
-                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-zinc-700 hover:bg-red-500 text-white text-xs flex items-center justify-center"
+                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full chat-btn-danger text-xs flex items-center justify-center"
                 onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
                 aria-label={t('input.removeFile', { name: a.fileName })}
               >

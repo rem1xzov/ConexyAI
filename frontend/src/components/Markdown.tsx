@@ -23,7 +23,7 @@ function renderInline(text: string): ReactNode[] {
       );
     } else if (token.startsWith('`')) {
       out.push(
-        <code key={i++} className="font-mono text-[0.9em] bg-zinc-800/80 px-1 py-0.5 rounded text-zinc-200">
+        <code key={i++} className="font-mono text-[0.9em] chat-code px-1 py-0.5 rounded">
           {token.slice(1, -1)}
         </code>,
       );
@@ -134,7 +134,7 @@ export function Markdown({ text }: { text: string }) {
       const level = heading[1].length;
       const Tag = level === 1 ? 'h2' : level === 2 ? 'h3' : 'h4';
       blocks.push(
-        <Tag key={key++} className="font-semibold text-zinc-100 mt-3 mb-1 first:mt-0">
+        <Tag key={key++} className="font-semibold chat-text mt-3 mb-1 first:mt-0">
           {renderInline(heading[2])}
         </Tag>,
       );

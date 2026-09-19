@@ -844,6 +844,7 @@ export default function App() {
             {token ? (
               <ChatFeed
                 session={activeSession}
+                nickname={user?.displayName ? user.displayName.split('@')[0] : null}
                 onRegenerate={handleRegenerate}
                 onResend={handleResend}
                 onEditMessage={handleEditMessage}

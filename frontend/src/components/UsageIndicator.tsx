@@ -66,7 +66,7 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
         type="button"
       >
         <svg width="36" height="36" viewBox="0 0 36 36">
-          <circle cx="18" cy="18" r={radius} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="4" />
+          <circle cx="18" cy="18" r={radius} fill="none" stroke="var(--border)" strokeWidth="4" />
           <circle
             cx="18"
             cy="18"

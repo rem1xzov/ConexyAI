@@ -5,12 +5,13 @@ import { MessageBubble } from './MessageBubble';
 
 interface ChatFeedProps {
   session: ChatSession | null;
+  nickname?: string | null;
   onRegenerate?: (assistantMessageId: string) => void;
   onResend?: (messageId: string) => void;
   onEditMessage?: (messageId: string, newContent: string) => void;
 }
 
-export function ChatFeed({ session, onRegenerate, onResend, onEditMessage }: ChatFeedProps) {
+export function ChatFeed({ session, nickname, onRegenerate, onResend, onEditMessage }: ChatFeedProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -58,7 +59,7 @@ export function ChatFeed({ session, onRegenerate, onResend, onEditMessage }: Cha
     return (
       <div className="feed feed--empty">
         <div className="hero">
-          <h1 className="hero__title">{t('chat.heroTitle')}</h1>
+          <h1 className="hero__title">{t('chat.heroTitle', { name: nickname ?? t('chat.defaultName') })}</h1>
           <p className="hero__subtitle">{t('chat.heroSubtitle')}</p>
         </div>
       </div>

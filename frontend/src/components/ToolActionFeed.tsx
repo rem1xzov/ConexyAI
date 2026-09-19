@@ -23,11 +23,11 @@ function toolIcon(event: ToolActionEvent): string {
 }
 
 function statusMark(status: ToolActionEvent['status']): JSX.Element {
-  if (status === 'completed') return <span className="text-emerald-400">✓</span>;
-  if (status === 'failed') return <span className="text-red-400">✕</span>;
-  if (status === 'rejected') return <span className="text-red-400">⊘</span>;
-  if (status === 'pending_confirmation') return <span className="text-amber-400 animate-pulse">⚠</span>;
-  return <span className="text-amber-400 animate-pulse">●</span>;
+  if (status === 'completed') return <span className="chat-ok">✓</span>;
+  if (status === 'failed') return <span className="chat-danger">✕</span>;
+  if (status === 'rejected') return <span className="chat-danger">⊘</span>;
+  if (status === 'pending_confirmation') return <span className="chat-warn animate-pulse">⚠</span>;
+  return <span className="chat-warn animate-pulse">●</span>;
 }
 
 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
@@ -123,11 +123,11 @@ export function ToolActionFeed({ actions }: ToolActionFeedProps) {
   return (
     <div className="my-3 space-y-3">
       {ordinary.length > 0 && (
-        <div className="rounded-lg bg-zinc-900/50 border border-zinc-800 p-3 text-xs">
-          <div className="text-zinc-400 font-medium mb-2">{t('toolAction.liveStatus')}</div>
+        <div className="rounded-lg chat-surface-soft p-3 text-xs">
+          <div className="chat-muted font-medium mb-2">{t('toolAction.liveStatus')}</div>
           <ul className="space-y-1.5">
             {ordinary.map((a, i) => (
-              <li key={`${a.toolName}-${a.command}-${i}`} className="tool-action flex items-center gap-2 text-zinc-300">
+              <li key={`${a.toolName}-${a.command}-${i}`} className="tool-action flex items-center gap-2 chat-text">
                 <span className="w-4 text-center shrink-0">{toolIcon(a)}</span>
                 <span className="flex-1 min-w-0 truncate font-mono" title={a.summary}>
                   {a.summary || `${a.toolName} ${a.command}`}
