@@ -15,6 +15,8 @@ public class PendingAction_config : IEntityTypeConfiguration<PendingActionEntity
 
         builder.Property(x => x.ChatId).IsRequired();
         builder.Property(x => x.TaskId).IsRequired();
+        // GITHUB_OAUTH: добавлено 2026-09-19 — owning user + real FK to users.
+        builder.Property(x => x.UserId).IsRequired();
         builder.Property(x => x.Command).IsRequired();
         builder.Property(x => x.WorkingDirectory).IsRequired();
         builder.Property(x => x.Status)
@@ -23,6 +25,12 @@ public class PendingAction_config : IEntityTypeConfiguration<PendingActionEntity
             .IsRequired();
         builder.Property(x => x.CreatedAt).IsRequired();
         builder.Property(x => x.ResolvedAt).IsRequired(false);
+
+        // GITHUB_OAUTH: добавлено 2026-09-19 — real FK to users.
+        builder.HasOne<User>()
+            .WithMany()
+            .HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         builder.HasIndex(x => new { x.ChatId, x.CreatedAt });
     }

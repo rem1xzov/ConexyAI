@@ -22,11 +22,12 @@ public class ChatHistoryRepository : IChatHistoryRepository
             .ToListAsync(ct);
     }
 
-    public async Task AppendAsync(Guid chatId, string role, string content, CancellationToken ct = default)
+    public async Task AppendAsync(Guid userId, Guid chatId, string role, string content, CancellationToken ct = default)
     {
         _context.ChatMessages.Add(new ConexyChatMessageEntity
         {
             ChatId = chatId,
+            UserId = userId,
             Role = role,
             Content = content
         });

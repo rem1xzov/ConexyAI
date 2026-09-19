@@ -300,10 +300,10 @@ public class ConexyBackgroundWorker : BackgroundService
 
         // Persist the completed turn so the next message in this chat includes it.
         // User text is stored as plain text; image attachments are not part of history.
-        await chatHistory.AppendAsync(job.ChatId, "user", job.Prompt, ct);
+        await chatHistory.AppendAsync(job.UserId, job.ChatId, "user", job.Prompt, ct);
         if (!string.IsNullOrWhiteSpace(result))
         {
-            await chatHistory.AppendAsync(job.ChatId, "assistant", result, ct);
+            await chatHistory.AppendAsync(job.UserId, job.ChatId, "assistant", result, ct);
         }
 
         // SUBSCRIPTION_TIERS: добавлено 2026-09-17

@@ -556,7 +556,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         try
         {
             approved = await _pendingActionService.WaitForDecisionAsync(
-                actionId, chatId, taskId, request.Command, workingDirectory, ct);
+                actionId, _job.UserId, chatId, taskId, request.Command, workingDirectory, ct);
         }
         catch (OperationCanceledException)
         {

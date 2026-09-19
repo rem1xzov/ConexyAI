@@ -22,6 +22,10 @@ public class PendingActionEntity
     /// <summary>Stable conversation id (frontend <c>ChatSession.id</c>).</summary>
     public Guid ChatId { get; set; }
 
+    // GITHUB_OAUTH: добавлено 2026-09-19 — owning user (FK to users).
+    /// <summary>Owning user. Every read MUST be scoped to this id to prevent cross-user access.</summary>
+    public Guid UserId { get; set; }
+
     /// <summary>Per-run task id (SignalR group).</summary>
     public Guid TaskId { get; set; }
 

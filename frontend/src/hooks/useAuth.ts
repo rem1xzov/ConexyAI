@@ -46,6 +46,29 @@ function storeAuth(token: string, expiresAtUtc: string): void {
   }
 }
 
+// GITHUB_OAUTH: добавлено 2026-09-19
+/**
+ * Reads a JWT delivered in the URL fragment after the GitHub OAuth callback
+ * (e.g. <c>/#token=...&expiresAtUtc=...</c>), strips the fragment from the address bar
+ * so the token never lingers in history, and returns the parsed auth (or null).
+ */
+function consumeOAuthRedirect(): StoredAuth | null {
+  try {
+    const hash = window.location.hash;
+    if (!hash || hash.length < 2) return null;
+
+    const params = new URLSearchParams(hash.slice(1));
+    const token = params.get('token');
+    const expiresAtUtc = params.get('expiresAtUtc');
+    if (!token || !expiresAtUtc) return null;
+
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    return { token, expiresAtUtc };
+  } catch {
+    return null;
+  }
+}
+
 /** True when the dev-token request failed with 404 (endpoint disabled outside Development). */
 function isNotFoundError(e: unknown): boolean {
   const err = e as { response?: { status?: number } } | null;
@@ -94,6 +117,21 @@ export function useAuth() {
       const delay = expiresAtMs - Date.now() - REFRESH_MARGIN_MS;
       refreshTimerRef.current = window.setTimeout(() => void refresh(), Math.max(delay, 0));
     };
+
+    // GITHUB_OAUTH: добавлено 2026-09-19 — a token handed back by the GitHub OAuth
+    // callback takes priority: store it (same place the dev-token used) and skip the
+    // dev-token refresh entirely, since production has no token-refresh endpoint.
+    const oauth = consumeOAuthRedirect();
+    if (oauth) {
+      storeAuth(oauth.token, oauth.expiresAtUtc);
+      setToken(oauth.token);
+      setAuthUnavailable(false);
+      setError(null);
+      return () => {
+        cancelled = true;
+        if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
+      };
+    }
 
     const expiry = readStoredExpiry();
     if (expiry !== null && expiry > Date.now()) {

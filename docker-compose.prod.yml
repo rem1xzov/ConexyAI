@@ -90,6 +90,8 @@ services:
       AiUpstream__DeepSeek__FlashModel: ${DEEPSEEK_FLASH_MODEL:-deepseek-flash}
       AiUpstream__DeepSeek__ProAgentModel: ${DEEPSEEK_PRO_AGENT_MODEL:-deepseek-v4-pro}
       GitHub__PersonalAccessToken: ${GITHUB_PAT:-}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
       WebSearch__JsonSeoApiKey: ${JSONSEO_API_KEY:-}
       WebSearch__JsonSeoEndpoint: ${JSONSEO_ENDPOINT:-https://jsonseo.ru/api/yandex}
       SpeechKit__ApiKey: ${SPEECHKIT_API_KEY:-}

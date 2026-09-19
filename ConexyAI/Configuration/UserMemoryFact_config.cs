@@ -18,6 +18,12 @@ public class UserMemoryFact_config : IEntityTypeConfiguration<UserMemoryFactEnti
         builder.Property(x => x.CreatedAt).IsRequired();
         builder.Property(x => x.UpdatedAt).IsRequired();
 
+        // GITHUB_OAUTH: добавлено 2026-09-19 — real FK to users.
+        builder.HasOne<User>()
+            .WithMany()
+            .HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+
         builder.HasIndex(x => x.UserId);
     }
 }

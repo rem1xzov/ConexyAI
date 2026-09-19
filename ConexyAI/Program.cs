@@ -83,6 +83,14 @@ builder.Services.AddDbContext<DbConexy>(options =>
 builder.Services.Configure<AiUpstreamOptions>(builder.Configuration.GetSection(AiUpstreamOptions.SectionName));
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 builder.Services.Configure<GitHubOptions>(builder.Configuration.GetSection(GitHubOptions.SectionName));
+// GITHUB_OAUTH: добавлено 2026-09-19
+builder.Services.Configure<GitHubOAuthOptions>(options =>
+{
+    builder.Configuration.GetSection(GitHubOAuthOptions.SectionName).Bind(options);
+    // Client credentials are injected via environment variables (never committed).
+    options.ClientId = builder.Configuration[GitHubOAuthOptions.ClientIdEnvVar] ?? options.ClientId;
+    options.ClientSecret = builder.Configuration[GitHubOAuthOptions.ClientSecretEnvVar] ?? options.ClientSecret;
+});
 builder.Services.Configure<WorkspaceOptions>(builder.Configuration.GetSection(WorkspaceOptions.SectionName));
 builder.Services.Configure<WebSearchOptions>(builder.Configuration.GetSection(WebSearchOptions.SectionName));
 builder.Services.Configure<AgentOptions>(builder.Configuration.GetSection(AgentOptions.SectionName));
@@ -137,6 +145,9 @@ builder.Services.AddAuthorization();
 // Application services.
 builder.Services.AddScoped<IConexyRepository, ConexyRepository>();
 builder.Services.AddScoped<IChatHistoryRepository, ChatHistoryRepository>();
+// GITHUB_OAUTH: добавлено 2026-09-19
+builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddScoped<IGitHubOAuthService, GitHubOAuthService>();
 builder.Services.AddScoped<IConexyService, ConexyService>();
 builder.Services.AddScoped<IConexyAgentRunner, ConexyAgentRunner>();
 builder.Services.AddScoped<IConexyEditorService, ConexyEditorService>();

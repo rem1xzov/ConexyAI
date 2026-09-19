@@ -747,8 +747,12 @@ export default function App() {
             {authUnavailable ? (
               <div className="feed feed--empty">
                 <div className="hero">
-                  <h1 className="hero__title">Регистрация и вход скоро будут доступны</h1>
-                  <p className="hero__subtitle">Чат и агент временно недоступны — авторизация в разработке.</p>
+                  <h1 className="hero__title">Войдите, чтобы продолжить</h1>
+                  <p className="hero__subtitle">Чат и агент доступны после входа через GitHub.</p>
+                  {/* GITHUB_OAUTH: добавлено 2026-09-19 — ведёт на /api/auth/github/login (302 на GitHub). */}
+                  <a className="hero__github-btn" href="/api/auth/github/login">
+                    Войти через GitHub
+                  </a>
                 </div>
               </div>
             ) : (

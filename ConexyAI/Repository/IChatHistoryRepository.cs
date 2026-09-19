@@ -12,7 +12,7 @@ public interface IChatHistoryRepository
     Task<IReadOnlyList<ConexyChatMessageEntity>> GetMessagesAsync(Guid chatId, CancellationToken ct = default);
 
     /// <summary>Appends a single user/assistant message to the chat history.</summary>
-    Task AppendAsync(Guid chatId, string role, string content, CancellationToken ct = default);
+    Task AppendAsync(Guid userId, Guid chatId, string role, string content, CancellationToken ct = default);
 
     // SUBSCRIPTION_TIERS: добавлено 2026-09-17
     /// <summary>Counts user messages in a chat (used for the memory extraction batching).</summary>

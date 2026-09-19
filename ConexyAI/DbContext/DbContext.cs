@@ -14,6 +14,9 @@ public class DbConexy : Microsoft.EntityFrameworkCore.DbContext
 
     public DbSet<ConexyChatMessageEntity> ChatMessages => Set<ConexyChatMessageEntity>();
 
+    // GITHUB_OAUTH: добавлено 2026-09-19
+    public DbSet<User> Users => Set<User>();
+
     // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
     public DbSet<PendingActionEntity> PendingActions => Set<PendingActionEntity>();
 

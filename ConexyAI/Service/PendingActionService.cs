@@ -25,6 +25,7 @@ public interface IPendingActionService
     /// </summary>
     Task<bool> WaitForDecisionAsync(
         Guid actionId,
+        Guid userId,
         Guid chatId,
         Guid taskId,
         string command,
@@ -58,6 +59,7 @@ public class PendingActionService : IPendingActionService
 
     public async Task<bool> WaitForDecisionAsync(
         Guid actionId,
+        Guid userId,
         Guid chatId,
         Guid taskId,
         string command,
@@ -72,6 +74,7 @@ public class PendingActionService : IPendingActionService
             Id = actionId,
             ChatId = chatId,
             TaskId = taskId,
+            UserId = userId,
             Command = command,
             WorkingDirectory = workingDirectory,
             Status = PendingActionStatus.Pending

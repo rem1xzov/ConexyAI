@@ -19,6 +19,12 @@ public class Document_config : IEntityTypeConfiguration<Document>
         builder.Property(x => x.CreatedAt).IsRequired();
         builder.Property(x => x.FilePath).IsRequired();
 
+        // GITHUB_OAUTH: добавлено 2026-09-19 — real FK to users.
+        builder.HasOne<User>()
+            .WithMany()
+            .HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+
         // RAG isolation: list + search are always filtered by owner.
         builder.HasIndex(x => new { x.UserId, x.CreatedAt });
     }

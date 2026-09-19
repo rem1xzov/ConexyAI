@@ -13,6 +13,12 @@ public class UserUsageCounter_config : IEntityTypeConfiguration<UserUsageCounter
 
         builder.HasKey(x => x.UserId);
 
+        // GITHUB_OAUTH: добавлено 2026-09-19 — real FK to users (UserId is also the PK).
+        builder.HasOne<User>()
+            .WithOne()
+            .HasForeignKey<UserUsageCounterEntity>(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+
         builder.Property(x => x.Tier)
             .HasConversion<string>()
             .HasMaxLength(20)
