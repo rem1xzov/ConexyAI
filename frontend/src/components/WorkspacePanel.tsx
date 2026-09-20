@@ -11,11 +11,10 @@ import {
   uploadWorkspaceZip,
 } from '../api/conexyApi';
 import type { WorkspaceFileEntry, WorkspaceListing } from '../types/api';
-import type { BuildProblem, TodoItem, ToolActionEvent } from '../types/signalr';
+import type { TodoItem, ToolActionEvent } from '../types/signalr';
 import { signalrService } from '../services/signalrService';
 import { changedLineNumbers } from '../utils/diff';
 import { CodeEditor } from './CodeEditor';
-import { TerminalPanel } from './TerminalPanel';
 import { ToolActionFeed } from './ToolActionFeed';
 import { TodoPanel } from './TodoPanel';
 import { FileTypeIcon } from './FileTypeIcon';
@@ -30,7 +29,6 @@ import {
   DownloadIcon,
   PlayIcon,
   RefreshIcon,
-  TerminalIcon,
   TrashIcon,
 } from './Icons';
 
@@ -44,7 +42,6 @@ interface WorkspacePanelProps {
   agentFileChange?: { path: string } | null;
   toolActions?: ToolActionEvent[];
   todos?: TodoItem[];
-  problems?: BuildProblem[];
   style?: CSSProperties;
   onCursorChange?: (pos: { line: number; column: number; language: string }) => void;
   onRunInSeparateWindow?: () => void;
@@ -59,7 +56,7 @@ interface OpenTab {
 }
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
-type BottomTab = 'terminal' | 'status' | 'todo' | 'problems';
+type BottomTab = 'status' | 'todo';
 
 interface PendingConflict {
   path: string;
@@ -175,7 +172,6 @@ export function WorkspacePanel({
   agentFileChange,
   toolActions = [],
   todos = [],
-  problems = [],
   style,
   onCursorChange,
   onRunInSeparateWindow,
@@ -286,11 +282,6 @@ export function WorkspacePanel({
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }
-
-  async function openFileAtLine(path: string, line: number) {
-    await openFile(path);
-    setHighlight({ lines: [line], nonce: Date.now() });
   }
 
   async function doCreateFile(path: string) {
@@ -409,10 +400,9 @@ export function WorkspacePanel({
     setRunBusy(true);
     setRunError(null);
     try {
-      // Linux needs the terminal subscribed before the command runs. On Windows the run
-      // opens a separate visible console window and does not touch the terminal panel.
+      // Subscribe to the task stream before running so its output/status events are
+      // received. On Windows the run opens a separate visible console window instead.
       if (!isWindows) {
-        setBottomTab('terminal');
         await new Promise((resolve) => setTimeout(resolve, 100));
         await signalrService.joinTask(sessionId);
       }
@@ -740,12 +730,6 @@ export function WorkspacePanel({
       <div className="workspace__bottom">
         <div className="workspace__bottom-tabs">
           <button
-            className={`workspace__bottom-tab ${bottomTab === 'terminal' ? 'workspace__bottom-tab--active' : ''}`}
-            onClick={() => setBottomTab('terminal')}
-          >
-            <TerminalIcon size={14} /> {t('workspace.terminal')}
-          </button>
-          <button
             className={`workspace__bottom-tab ${bottomTab === 'status' ? 'workspace__bottom-tab--active' : ''}`}
             onClick={() => setBottomTab('status')}
           >
@@ -757,31 +741,8 @@ export function WorkspacePanel({
           >
             <CheckIcon size={14} /> {t('workspace.todo')}
           </button>
-          <button
-            className={`workspace__bottom-tab ${bottomTab === 'problems' ? 'workspace__bottom-tab--active' : ''}`}
-            onClick={() => setBottomTab('problems')}
-          >
-            <span className="problems__tab-icon">⚠</span> {t('workspace.problems')}
-            {problems.length > 0 && <span className="problems__count">{problems.length}</span>}
-          </button>
         </div>
         <div className="workspace__bottom-body">
-          {bottomTab === 'terminal' &&
-            (sessionId ? (
-              isWindows ? (
-                <div className="workspace__empty workspace__empty--panel">
-                  <div className="workspace__empty-text">
-                    {t('workspace.windowsTerminal')}
-                  </div>
-                </div>
-              ) : (
-                <TerminalPanel sessionId={sessionId} />
-              )
-            ) : (
-              <div className="workspace__empty workspace__empty--panel">
-                <div className="workspace__empty-text">{t('workspace.terminalEmpty')}</div>
-              </div>
-            ))}
           {bottomTab === 'status' &&
             (toolActions.length > 0 ? (
               <ToolActionFeed actions={toolActions} />
@@ -798,30 +759,6 @@ export function WorkspacePanel({
                 <div className="workspace__empty-text">{t('workspace.todoEmpty')}</div>
               </div>
             ))}
-          {bottomTab === 'problems' &&
-            (problems.length > 0 ? (
-              <div className="problems">
-                {problems.map((p, i) => (
-                  <button
-                    key={`${p.file}-${p.line}-${p.column}-${i}`}
-                    className="problems__item"
-                    onClick={() => void openFileAtLine(p.file, p.line)}
-                    title={`${p.file}:${p.line}:${p.column} ${p.code}: ${p.message}`}
-                  >
-                    <span className={`problems__severity problems__severity--${p.severity}`}>
-                      {p.severity === 'error' ? '✕' : '⚠'}
-                    </span>
-                    <span className="problems__file">{p.file}</span>
-                    <span className="problems__line">Ln {p.line}, Col {p.column}</span>
-                    <span className="problems__message">{p.message}</span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="workspace__empty workspace__empty--panel">
-                <div className="workspace__empty-text">{t('workspace.noProblems')}</div>
-              </div>
-            ))}
         </div>
       </div>
 
@@ -831,7 +768,6 @@ export function WorkspacePanel({
         onClose={() => setPaletteOpen(false)}
         onOpenFile={(p) => void openFile(p)}
         onRun={() => void handleRun()}
-        onOpenTerminal={() => setBottomTab('terminal')}
         onToggleTodo={() => setBottomTab('todo')}
         onSave={() => activePath && void saveTab(activePath)}
       />

@@ -497,9 +497,12 @@ export function InputBar({
               <button className="attach-menu__item" onClick={() => photoRef.current?.click()}>
                 <PhotoIcon size={17} /> {t('input.photos')}
               </button>
-              <button className="attach-menu__item" onClick={() => cameraRef.current?.click()}>
-                <CameraIcon size={17} /> {t('input.takePhoto')}
-              </button>
+              {/* Camera capture only makes sense on devices with a camera. */}
+              {isMobile && (
+                <button className="attach-menu__item" onClick={() => cameraRef.current?.click()}>
+                  <CameraIcon size={17} /> {t('input.takePhoto')}
+                </button>
+              )}
               <button className="attach-menu__item" onClick={() => codeRef.current?.click()}>
                 <CodeIcon size={17} /> {t('input.importCode')}
               </button>
@@ -528,17 +531,19 @@ export function InputBar({
             e.target.value = '';
           }}
         />
-        <input
-          ref={cameraRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          hidden
-          onChange={(e) => {
-            if (e.target.files?.length) void addFiles(e.target.files);
-            e.target.value = '';
-          }}
-        />
+        {isMobile && (
+          <input
+            ref={cameraRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            hidden
+            onChange={(e) => {
+              if (e.target.files?.length) void addFiles(e.target.files);
+              e.target.value = '';
+            }}
+          />
+        )}
         <input
           ref={codeRef}
           type="file"

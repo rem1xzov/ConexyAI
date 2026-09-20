@@ -10,7 +10,6 @@ interface CommandPaletteProps {
   onClose: () => void;
   onOpenFile: (path: string) => void;
   onRun: () => void;
-  onOpenTerminal: () => void;
   onToggleTodo: () => void;
   onSave: () => void;
 }
@@ -68,7 +67,6 @@ export function CommandPalette({
   onClose,
   onOpenFile,
   onRun,
-  onOpenTerminal,
   onToggleTodo,
   onSave,
 }: CommandPaletteProps) {
@@ -89,7 +87,6 @@ export function CommandPalette({
   const items = useMemo<Item[]>(() => {
     const commands: Item[] = [
       { key: 'cmd:run', kind: 'command', label: t('palette.runProject'), action: onRun },
-      { key: 'cmd:terminal', kind: 'command', label: t('palette.openTerminal'), action: onOpenTerminal },
       { key: 'cmd:todo', kind: 'command', label: t('palette.toggleTodo'), action: onToggleTodo },
       { key: 'cmd:save', kind: 'command', label: t('palette.saveFile'), action: onSave },
     ];
@@ -119,7 +116,7 @@ export function CommandPalette({
     }));
 
     return [...matchedCommands, ...fileItems];
-  }, [query, files, onRun, onOpenTerminal, onToggleTodo, onSave, onOpenFile, t]);
+  }, [query, files, onRun, onToggleTodo, onSave, onOpenFile, t]);
 
   useEffect(() => {
     setSelected(0);

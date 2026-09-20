@@ -132,7 +132,9 @@ export default function App() {
   const [ideCollapsed, setIdeCollapsed] = useState(false);
 
   const [sessions, setSessions] = useState<ChatSession[]>(loadSessions);
-  const [activeId, setActiveId] = useState<string | null>(() => loadSessions()[0]?.id ?? null);
+  // Every visit starts on a fresh, empty chat with the default model instead of restoring
+  // the last opened session. Previous chats stay available from the sidebar.
+  const [activeId, setActiveId] = useState<string | null>(() => uid());
   const [toast, setToast] = useState<string | null>(null);
   const [fileCreatedEvent, setFileCreatedEvent] = useState<{ path: string; name: string } | null>(null);
   const [fileRefreshToken, setFileRefreshToken] = useState(0);
@@ -432,7 +434,6 @@ export default function App() {
   const lastAssistant = [...(activeSession?.messages ?? [])].reverse().find((m) => m.role === 'assistant') ?? null;
   const latestToolActions = lastAssistant?.toolActions ?? [];
   const latestTodos = lastAssistant?.todos ?? [];
-  const latestProblems = lastAssistant?.problems ?? [];
 
   // Reset the status bar and editor cursor info when switching sessions.
   useEffect(() => {
@@ -945,7 +946,6 @@ export default function App() {
                 agentFileChange={agentFileChange}
                 toolActions={latestToolActions}
                 todos={latestTodos}
-                problems={latestProblems}
                 onCursorChange={setCursorInfo}
                 onRunInSeparateWindow={() => showToast(t('toast.runProject'))}
                 style={{ flex: `0 0 ${workspaceWidth}%` }}
