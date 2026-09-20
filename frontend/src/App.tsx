@@ -855,37 +855,44 @@ export default function App() {
             className={isAgent && !ideCollapsed && !isMobile ? 'ide-chat' : 'ide-chat--single'}
             style={isAgent && !ideCollapsed && !isMobile ? { flex: `0 0 ${100 - workspaceWidth}%` } : undefined}
           >
-            <div className="chat-header">
-              {/* Model selection lives in the chat header (moved out of the composer). */}
-              <ModelPicker
-                model={model}
-                onModelChange={handleModelChange}
-                mode={mode}
-                thinking={thinking}
-                onThinkingChange={setThinking}
-                reasoningEffort={reasoningEffort}
-                onReasoningEffortChange={setReasoningEffort}
-                smartSearch={smartSearch}
-                onSmartSearchChange={setSmartSearch}
-                locked={students}
-              />
-              {isAgent && (
-                <div className="chat-header__actions">
-                  {!isMobile && (
-                    <button
-                      className="icon-btn"
-                      onClick={() => setIdeCollapsed((c) => !c)}
-                      title={ideCollapsed ? t('workspace.showIde') : t('workspace.hideIde')}
-                      aria-label={ideCollapsed ? t('workspace.showIde') : t('workspace.hideIde')}
-                    >
-                      {ideCollapsed ? <PanelRightOpenIcon size={18} /> : <PanelRightCloseIcon size={18} />}
-                    </button>
-                  )}
-                  {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
-                  <UsageIndicator usage={usage} />
-                </div>
-              )}
-            </div>
+            {/* Mobile: the model picker lives in the chat header. */}
+            {isMobile && (
+              <div className="chat-header">
+                <ModelPicker
+                  model={model}
+                  onModelChange={handleModelChange}
+                  mode={mode}
+                  thinking={thinking}
+                  onThinkingChange={setThinking}
+                  reasoningEffort={reasoningEffort}
+                  onReasoningEffortChange={setReasoningEffort}
+                  smartSearch={smartSearch}
+                  onSmartSearchChange={setSmartSearch}
+                  locked={students}
+                />
+                {isAgent && (
+                  <div className="chat-header__actions">
+                    {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
+                    <UsageIndicator usage={usage} />
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Desktop agent toolbar (the model picker stays in the composer). */}
+            {!isMobile && isAgent && (
+              <div className="ide-toolbar">
+                <button
+                  className="icon-btn"
+                  onClick={() => setIdeCollapsed((c) => !c)}
+                  title={ideCollapsed ? t('workspace.showIde') : t('workspace.hideIde')}
+                  aria-label={ideCollapsed ? t('workspace.showIde') : t('workspace.hideIde')}
+                >
+                  {ideCollapsed ? <PanelRightOpenIcon size={18} /> : <PanelRightCloseIcon size={18} />}
+                </button>
+                {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
+                <UsageIndicator usage={usage} />
+              </div>
+            )}
             {token ? (
               <ChatFeed
                 session={activeSession}
@@ -907,6 +914,16 @@ export default function App() {
               </div>
             )}
             <InputBar
+              model={model}
+              onModelChange={handleModelChange}
+              mode={mode}
+              thinking={thinking}
+              onThinkingChange={setThinking}
+              reasoningEffort={reasoningEffort}
+              onReasoningEffortChange={setReasoningEffort}
+              smartSearch={smartSearch}
+              onSmartSearchChange={setSmartSearch}
+              locked={students}
               disabled={!token}
               isGenerating={agentRunning}
               onStop={handleStop}

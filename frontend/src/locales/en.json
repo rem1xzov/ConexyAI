@@ -170,7 +170,14 @@
     "reasoningDepth": "Reasoning depth"
   },
   "input": {
-    "micUnsupported": "Your browser doesn't support voice input. Use Chrome or Yandex Browser.",
+    "micUnsupported": "Voice input isn't supported in this browser. Open the site in Chrome or Yandex Browser (not in an in-app messenger browser).",
+    "micInsecure": "Voice input only works over HTTPS.",
+    "micDenied": "Microphone access was denied. Allow microphone access in your browser settings and reload the page.",
+    "micNoDevice": "No microphone found. Make sure one is connected and enabled.",
+    "micBusy": "The microphone is in use by another app. Close it and try again.",
+    "micNetwork": "Couldn't reach the speech recognition service. Check your internet connection.",
+    "micNoSpeech": "Speech wasn't recognized. Please try again.",
+    "micFailed": "Couldn't start voice input.",
     "stopRecording": "Stop recording",
     "voiceInput": "Voice input",
     "stopGeneration": "Stop generation",

@@ -1,12 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { TaskAttachment } from '../types/api';
+import type { ConexyModel, ReasoningEffort, TaskAttachment } from '../types/api';
 import { fileToAttachment, isAllowedMime, pastedImageFile } from '../utils/attachments';
+import { useIsMobile } from '../hooks/useMediaQuery';
+import { ModelPicker } from './ModelPicker';
 import { VoiceWaveIcon, MicIcon, PlusIcon, SendIcon, StopIcon, UploadIcon, PhotoIcon, CameraIcon, CodeIcon, CloseIcon } from './Icons';
 
 const MAX_ATTACHMENTS = 10;
 
 interface InputBarProps {
+  model: ConexyModel;
+  onModelChange: (model: ConexyModel) => void;
+  mode: 'chat' | 'code';
+  thinking: boolean;
+  onThinkingChange: (value: boolean) => void;
+  reasoningEffort: ReasoningEffort;
+  onReasoningEffortChange: (value: ReasoningEffort) => void;
+  smartSearch: boolean;
+  onSmartSearchChange: (value: boolean) => void;
+  locked?: boolean;
   disabled?: boolean;
   isGenerating: boolean;
   onStop: () => void;
@@ -16,6 +28,16 @@ interface InputBarProps {
 }
 
 export function InputBar({
+  model,
+  onModelChange,
+  mode,
+  thinking,
+  onThinkingChange,
+  reasoningEffort,
+  onReasoningEffortChange,
+  smartSearch,
+  onSmartSearchChange,
+  locked,
   disabled,
   isGenerating,
   onStop,
@@ -24,11 +46,15 @@ export function InputBar({
   onSend,
 }: InputBarProps) {
   const { t } = useTranslation();
+  // The model picker lives in the chat header on mobile and inline here on desktop.
+  const isMobile = useIsMobile();
   const [value, setValue] = useState('');
   const [attachments, setAttachments] = useState<TaskAttachment[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [limitHint, setLimitHint] = useState(false);
+  // Visible reason why voice input could not start (permission, no device, unsupported…).
+  const [micError, setMicError] = useState<string | null>(null);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const photoRef = useRef<HTMLInputElement>(null);
@@ -50,6 +76,10 @@ export function InputBar({
   // Finalized text + the pending interim tail, so stopping never loses the last phrase.
   const liveTextRef = useRef('');
   const restartTimerRef = useRef<number | null>(null);
+  // Consecutive recognizer sessions that ended without a single result. Guards against
+  // an endless start/stop loop that would keep the button "active" while nothing records.
+  const emptySessionsRef = useRef(0);
+  const sessionHasResultRef = useRef(false);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -166,6 +196,47 @@ export function InputBar({
     liveTextRef.current = finalTextRef.current;
   }
 
+  function micErrorText(kind: string): string {
+    switch (kind) {
+      case 'unsupported':
+        return t('input.micUnsupported');
+      case 'insecure':
+        return t('input.micInsecure');
+      case 'denied':
+        return t('input.micDenied');
+      case 'no-device':
+        return t('input.micNoDevice');
+      case 'busy':
+        return t('input.micBusy');
+      case 'network':
+        return t('input.micNetwork');
+      case 'no-speech':
+        return t('input.micNoSpeech');
+      default:
+        return t('input.micFailed');
+    }
+  }
+
+  // Maps a DOMException from getUserMedia (or a SpeechRecognition error name) to a message
+  // the user can act on, and always logs the raw cause for diagnostics.
+  function reportMicError(cause: unknown, fallbackKind = 'failed') {
+    const name = String((cause as { name?: string })?.name ?? cause ?? '');
+    const kind =
+      name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError'
+        ? 'denied'
+        : name === 'NotFoundError' || name === 'DevicesNotFoundError'
+          ? 'no-device'
+          : name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError'
+            ? 'busy'
+            : name === 'network'
+              ? 'network'
+              : name === 'no-speech'
+                ? 'no-speech'
+                : fallbackKind;
+    console.error('[Voice] cannot start voice input:', name, cause);
+    setMicError(micErrorText(kind));
+  }
+
   function stopRecognition() {
     listeningRef.current = false;
     setIsRecording(false);
@@ -187,22 +258,60 @@ export function InputBar({
     applyTranscript();
   }
 
-  function handleMicClick() {
+  async function handleMicClick() {
+    setMicError(null);
+
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert(t('input.micUnsupported'));
+
+    // One-shot diagnostic block: reproduce the click and send this line to debug.
+    console.info('[Voice] mic click', {
+      secureContext: window.isSecureContext,
+      hasSpeechRecognition: Boolean(SpeechRecognition),
+      hasWebkitSpeechRecognition: Boolean((window as any).webkitSpeechRecognition),
+      hasGetUserMedia: Boolean(navigator.mediaDevices?.getUserMedia),
+      currentlyListening: listeningRef.current,
+      userAgent: navigator.userAgent,
+    });
+
+    if (listeningRef.current) {
+      console.info('[Voice] stopping on user request');
+      stopRecognition();
       return;
     }
 
-    if (listeningRef.current) {
-      stopRecognition();
+    // The Web Speech API only works in a secure context.
+    if (!window.isSecureContext) {
+      reportMicError('insecure-context', 'insecure');
       return;
+    }
+
+    if (!SpeechRecognition) {
+      reportMicError('no-speech-recognition-api', 'unsupported');
+      return;
+    }
+
+    // Ask for the microphone up front. SpeechRecognition swallows a missing permission —
+    // it just never fires onresult — so probing getUserMedia turns a silent no-op into a
+    // concrete, user-visible error (NotAllowedError / NotFoundError / NotReadableError).
+    if (navigator.mediaDevices?.getUserMedia) {
+      try {
+        const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+        probe.getTracks().forEach((track) => track.stop());
+        console.info('[Voice] microphone permission granted');
+      } catch (err) {
+        reportMicError(err);
+        return;
+      }
+    } else {
+      console.warn('[Voice] navigator.mediaDevices.getUserMedia unavailable; skipping permission probe');
     }
 
     baseTextRef.current = value.trim();
     finalTextRef.current = '';
     interimRef.current = '';
     liveTextRef.current = '';
+    emptySessionsRef.current = 0;
+    sessionHasResultRef.current = false;
     listeningRef.current = true;
 
     const recognition = new SpeechRecognition();
@@ -212,10 +321,20 @@ export function InputBar({
     // recording after roughly a second.
     recognition.continuous = true;
     recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
 
-    recognition.onstart = () => setIsRecording(true);
+    recognition.onstart = () => {
+      console.info('[Voice] recognition started');
+      setIsRecording(true);
+    };
+
+    recognition.onaudiostart = () => console.info('[Voice] audio capture started');
+    recognition.onspeechstart = () => console.info('[Voice] speech detected');
+    recognition.onspeechend = () => console.info('[Voice] speech ended');
 
     recognition.onresult = (event: any) => {
+      sessionHasResultRef.current = true;
+      emptySessionsRef.current = 0;
       let interim = '';
       let final = '';
       // Start from resultIndex: earlier results were already committed to finalTextRef.
@@ -228,33 +347,70 @@ export function InputBar({
       interimRef.current = interim;
       liveTextRef.current = joinTranscript(finalTextRef.current, interim);
       applyTranscript();
+      console.info('[Voice] result', { final, interim });
     };
 
     recognition.onerror = (event: any) => {
-      console.error('Speech recognition error', event.error);
-      // Permission / hardware failures are terminal; no-speech or network hiccups are not.
-      if (
-        event.error === 'not-allowed' ||
-        event.error === 'service-not-allowed' ||
-        event.error === 'audio-capture'
-      ) {
-        stopRecognition();
+      console.error('[Voice] recognition error:', event.error, event);
+      switch (event.error) {
+        case 'not-allowed':
+        case 'service-not-allowed':
+          stopRecognition();
+          reportMicError({ name: 'NotAllowedError' });
+          break;
+        case 'audio-capture':
+          stopRecognition();
+          reportMicError({ name: 'NotFoundError' });
+          break;
+        case 'network':
+          stopRecognition();
+          reportMicError({ name: 'network' });
+          break;
+        case 'aborted':
+          // Fired by our own stop(); nothing to report.
+          break;
+        case 'no-speech':
+          // Transient; the restart in onend keeps listening.
+          break;
+        default:
+          stopRecognition();
+          reportMicError(event.error);
+          break;
       }
     };
 
     // The browser may still end a continuous session on its own (long silence, network
     // hiccup). Restart it so listening lasts until the user taps the mic again.
     recognition.onend = () => {
+      console.info('[Voice] recognition ended', {
+        listening: listeningRef.current,
+        hadResult: sessionHasResultRef.current,
+      });
       if (!listeningRef.current) return;
+
       commitInterim();
+
+      // A session that produced nothing at all means the recognizer cannot actually work
+      // here (blocked service, dropped packets). Bail out instead of looping forever.
+      if (!sessionHasResultRef.current) {
+        emptySessionsRef.current += 1;
+        if (emptySessionsRef.current > 5) {
+          stopRecognition();
+          setMicError(micErrorText('failed'));
+          return;
+        }
+      }
+      sessionHasResultRef.current = false;
+
       restartTimerRef.current = window.setTimeout(() => {
         restartTimerRef.current = null;
         if (!listeningRef.current) return;
         try {
           recognition.start();
         } catch (err) {
-          console.error('Speech recognition restart failed', err);
+          console.error('[Voice] restart failed:', err);
           stopRecognition();
+          reportMicError(err);
         }
       }, 250);
     };
@@ -263,10 +419,15 @@ export function InputBar({
     try {
       recognition.start();
     } catch (err) {
-      console.error('Speech recognition start failed', err);
+      recognitionRef.current = null;
       listeningRef.current = false;
       setIsRecording(false);
+      reportMicError(err);
     }
+  }
+
+  function handleMicErrorDismiss() {
+    setMicError(null);
   }
 
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
@@ -302,6 +463,19 @@ export function InputBar({
       )}
       {limitHint && (
         <div className="inputbar-limit">{t('input.maxFiles')}</div>
+      )}
+      {micError && (
+        <div className="inputbar-error" role="alert">
+          <span className="inputbar-error__text">{micError}</span>
+          <button
+            className="inputbar-error__close"
+            onClick={handleMicErrorDismiss}
+            aria-label={t('common.close')}
+            type="button"
+          >
+            <CloseIcon size={12} />
+          </button>
+        </div>
       )}
 
       <div className="inputbar">
@@ -392,9 +566,26 @@ export function InputBar({
           onPaste={handlePaste}
         />
 
+        {/* Desktop only: on mobile the model picker lives in the chat header. */}
+        {!isMobile && (
+          <ModelPicker
+            model={model}
+            onModelChange={onModelChange}
+            mode={mode}
+            thinking={thinking}
+            onThinkingChange={onThinkingChange}
+            reasoningEffort={reasoningEffort}
+            onReasoningEffortChange={onReasoningEffortChange}
+            smartSearch={smartSearch}
+            onSmartSearchChange={onSmartSearchChange}
+            locked={locked}
+          />
+        )}
+
         <button
           className={`mic-btn ${isRecording ? 'mic-btn--active' : ''}`}
           onClick={handleMicClick}
+          type="button"
           title={isRecording ? t('input.stopRecording') : t('input.voiceInput')}
           aria-label={isRecording ? t('input.stopRecording') : t('input.voiceInput')}
           disabled={disabled}

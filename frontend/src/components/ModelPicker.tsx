@@ -91,9 +91,9 @@ export function ModelPicker({
         onClick={() => !locked && setOpen((o) => !o)}
         disabled={locked}
         type="button"
-        title={current.label}
       >
-        <span className="modelpicker__label">{current.shortLabel}</span>
+        <span className="modelpicker__label-full">{current.label}</span>
+        <span className="modelpicker__label-short">{current.shortLabel}</span>
         <span className="chevron">
           <ChevronDownIcon size={14} />
         </span>

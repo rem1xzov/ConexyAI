@@ -675,6 +675,43 @@ body {
   color: var(--warn);
 }
 
+/* Voice-input failure reasons (permission denied, no device, unsupported browser…). */
+.inputbar-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+  background: rgba(255, 107, 122, 0.12);
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+}
+
+.inputbar-error__text {
+  flex: 1;
+}
+
+.inputbar-error__close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.inputbar-error__close:hover {
+  color: var(--text);
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -812,21 +849,20 @@ body {
 .modelpicker__trigger {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  background: transparent;
-  border: none;
+  gap: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   color: var(--text);
   border-radius: 999px;
-  padding: 5px 8px;
-  margin-left: -8px;
+  padding: 7px 12px;
   cursor: pointer;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 12px;
   white-space: nowrap;
 }
 
-.modelpicker__trigger:hover:not(:disabled) {
-  background: var(--surface-2);
+/* The short label ("Flash" / "Pro" / "Coder") is only used by the mobile header. */
+.modelpicker__label-short {
+  display: none;
 }
 
 .modelpicker__trigger:disabled {
@@ -840,12 +876,11 @@ body {
   align-items: center;
 }
 
-/* Opens downward from the header trigger. */
+/* Desktop: opens upward from the composer. Mobile overrides this to drop down from the header. */
 .modelpicker__menu {
   position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  right: auto;
+  bottom: calc(100% + 8px);
+  right: 0;
   width: 290px;
   background: var(--surface-solid);
   backdrop-filter: blur(16px);
@@ -1326,15 +1361,26 @@ body {
   min-height: 0;
 }
 
-/* ---------- Chat header ---------- */
+/* ---------- Agent toolbar (desktop) / chat header (mobile) ---------- */
+
+.ide-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  min-height: 48px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-soft);
+}
 
 .chat-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 16px;
-  min-height: 48px;
+  height: 48px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-soft);
   position: relative;
@@ -4099,8 +4145,9 @@ body {
   }
   .mobile-menu-btn {
     position: fixed;
-    top: 10px;
-    left: 10px;
+    /* 40px button centred in the 48px header band: 4 + 20 == 48 / 2 */
+    top: 4px;
+    left: 4px;
     z-index: 50;
     display: flex;
     align-items: center;
@@ -4115,9 +4162,10 @@ body {
     cursor: pointer;
   }
 
-  /* The chat header sits beside the floating menu button, so reserve room on its left. */
+  /* Chat header is mobile-only; keep room for the floating menu button on its left so the
+     hamburger and the model picker sit on the same centre line. */
   .chat-header {
-    padding: 6px 12px 6px 56px;
+    padding-left: 56px;
   }
 
   /* Agent -> chat only on mobile (workspace is not rendered) */
@@ -4143,9 +4191,24 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* Don't let the trigger slide under the floating menu button. */
+  /* Model picker -> compact "Flash ▾" text trigger inside the chat header. */
+  .modelpicker__label-full {
+    display: none;
+  }
+  .modelpicker__label-short {
+    display: inline;
+  }
   .modelpicker__trigger {
-    margin-left: 0;
+    gap: 2px;
+    background: transparent;
+    border: none;
+    border-radius: 999px;
+    padding: 5px 8px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .modelpicker__trigger:hover:not(:disabled) {
+    background: var(--surface-2);
   }
 
   /* Model picker menu -> dropdown right below the header */
