@@ -3304,21 +3304,30 @@ body {
   cursor: pointer;
 }
 
-/* Auto-approve banner, shown while the task runs commands without asking. */
-.cmd-confirm--auto {
-  flex-direction: row;
+/* Auto-approve banner above the composer: single switch-off point while the task runs
+   agent commands without asking. */
+.agent-autoapprove {
+  display: flex;
   align-items: center;
   gap: 10px;
-  border-color: var(--accent);
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
   background: var(--accent-soft);
-}
-
-.cmd-confirm__auto-text {
+  font-size: 12px;
   color: var(--text);
 }
 
-.cmd-confirm__auto-off {
-  margin-left: auto;
+.agent-autoapprove__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-autoapprove__off {
+  flex-shrink: 0;
   background: none;
   border: none;
   color: var(--accent);
@@ -3328,7 +3337,7 @@ body {
   padding: 0;
 }
 
-.cmd-confirm__auto-off:hover {
+.agent-autoapprove__off:hover {
   text-decoration: underline;
 }
 

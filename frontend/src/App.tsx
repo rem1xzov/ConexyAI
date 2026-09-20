@@ -29,7 +29,7 @@ import { getStoredTheme, setTheme, type Theme } from './theme';
 import { setLanguage } from './i18n';
 import type { ConexyModel, LimitExceededInfo, ReasoningEffort, SubscriptionUsage, TaskAttachment } from './types/api';
 import type { ChatMessage, ChatSession, ChatSessionKind } from './types/chat';
-import type { CommandApproval, PendingActionPayload } from './types/signalr';
+import type { PendingActionPayload } from './types/signalr';
 
 const STORAGE_KEY = 'conexy_sessions';
 
@@ -820,17 +820,6 @@ export default function App() {
     return <AdminPanel onBack={() => { window.location.hash = ''; }} onToast={showToast} />;
   }
 
-  // COMMAND_CONFIRM: добавлено 2026-09-20
-  const commandApproval: CommandApproval = {
-    onDecision: (actionId, approved, allowAll) => {
-      void handleCommandDecision(actionId, approved, allowAll);
-    },
-    allowAllEnabled: allowAllTaskId != null,
-    onDisableAllowAll: () => {
-      void handleDisableAllowAll();
-    },
-  };
-
   return (
     <div className="app">
       <Sidebar
@@ -933,7 +922,7 @@ export default function App() {
                 onRegenerate={handleRegenerate}
                 onResend={handleResend}
                 onEditMessage={handleEditMessage}
-                commandApproval={commandApproval}
+                onCommandDecision={(id, approved, allowAll) => void handleCommandDecision(id, approved, allowAll)}
               />
             ) : initializing ? (
               <div className="feed feed--empty">
@@ -945,6 +934,20 @@ export default function App() {
                   <h1 className="hero__title">{t('hero.title')}</h1>
                   <p className="hero__subtitle">{t('hero.subtitle')}</p>
                 </div>
+              </div>
+            )}
+            {/* COMMAND_CONFIRM: добавлено 2026-09-20 — while auto-approve is on, agent commands
+                run without asking; this is the single place to switch it back off. */}
+            {allowAllTaskId && (
+              <div className="agent-autoapprove">
+                <span className="agent-autoapprove__text">{t('cmdConfirm.allowAllActive')}</span>
+                <button
+                  className="agent-autoapprove__off"
+                  onClick={() => void handleDisableAllowAll()}
+                  type="button"
+                >
+                  {t('cmdConfirm.disableAllowAll')}
+                </button>
               </div>
             )}
             <InputBar
@@ -979,7 +982,7 @@ export default function App() {
                 agentFileChange={agentFileChange}
                 toolActions={latestToolActions}
                 todos={latestTodos}
-                commandApproval={commandApproval}
+                onCommandDecision={(id, approved, allowAll) => void handleCommandDecision(id, approved, allowAll)}
                 onCursorChange={setCursorInfo}
                 onRunInSeparateWindow={() => showToast(t('toast.runProject'))}
                 style={{ flex: `0 0 ${workspaceWidth}%` }}

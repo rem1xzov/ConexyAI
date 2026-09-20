@@ -11,7 +11,7 @@ import {
   uploadWorkspaceZip,
 } from '../api/conexyApi';
 import type { WorkspaceFileEntry, WorkspaceListing } from '../types/api';
-import type { CommandApproval, TodoItem, ToolActionEvent } from '../types/signalr';
+import type { CommandDecisionHandler, TodoItem, ToolActionEvent } from '../types/signalr';
 import { signalrService } from '../services/signalrService';
 import { changedLineNumbers } from '../utils/diff';
 import { CodeEditor } from './CodeEditor';
@@ -46,7 +46,7 @@ interface WorkspacePanelProps {
   onCursorChange?: (pos: { line: number; column: number; language: string }) => void;
   onRunInSeparateWindow?: () => void;
   // COMMAND_CONFIRM: добавлено 2026-09-20
-  commandApproval?: CommandApproval;
+  onCommandDecision?: CommandDecisionHandler;
 }
 
 interface OpenTab {
@@ -177,7 +177,7 @@ export function WorkspacePanel({
   style,
   onCursorChange,
   onRunInSeparateWindow,
-  commandApproval,
+  onCommandDecision,
 }: WorkspacePanelProps) {
   const { t } = useTranslation();
   const [listing, setListing] = useState<WorkspaceListing | null>(null);
@@ -748,7 +748,7 @@ export function WorkspacePanel({
         <div className="workspace__bottom-body">
           {bottomTab === 'status' &&
             (toolActions.length > 0 ? (
-              <ToolActionFeed actions={toolActions} approval={commandApproval} />
+              <ToolActionFeed actions={toolActions} onCommandDecision={onCommandDecision} />
             ) : (
               <div className="workspace__empty workspace__empty--panel">
                 <div className="workspace__empty-text">{t('workspace.statusEmpty')}</div>

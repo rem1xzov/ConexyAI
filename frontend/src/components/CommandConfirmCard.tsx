@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { CommandApproval, ToolActionEvent } from '../types/signalr';
+import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
 import { CheckIcon, CloseIcon } from './Icons';
 
 // COMMAND_CONFIRM: добавлено 2026-09-20
@@ -14,10 +14,10 @@ import { CheckIcon, CloseIcon } from './Icons';
 interface CommandConfirmCardProps {
   /** Events sharing one pending-action id: the pending request and its eventual outcome. */
   events: ToolActionEvent[];
-  approval?: CommandApproval;
+  onDecision?: CommandDecisionHandler;
 }
 
-export function CommandConfirmCard({ events, approval }: CommandConfirmCardProps) {
+export function CommandConfirmCard({ events, onDecision }: CommandConfirmCardProps) {
   const { t } = useTranslation();
   const [allowAll, setAllowAll] = useState(false);
   const [showOutput, setShowOutput] = useState(false);
@@ -52,7 +52,7 @@ export function CommandConfirmCard({ events, approval }: CommandConfirmCardProps
       <span className="chat-warn animate-pulse">●</span>
     );
 
-  const canDecide = pending && Boolean(actionId) && Boolean(approval);
+  const canDecide = pending && Boolean(actionId) && Boolean(onDecision);
 
   return (
     <div
@@ -81,14 +81,14 @@ export function CommandConfirmCard({ events, approval }: CommandConfirmCardProps
         <div className="cmd-confirm__actions">
           <button
             className="cmd-confirm__btn cmd-confirm__btn--allow"
-            onClick={() => approval!.onDecision(actionId!, true, allowAll)}
+            onClick={() => onDecision!(actionId!, true, allowAll)}
             type="button"
           >
             <CheckIcon size={13} /> {t('cmdConfirm.allow')}
           </button>
           <button
             className="cmd-confirm__btn cmd-confirm__btn--deny"
-            onClick={() => approval!.onDecision(actionId!, false, false)}
+            onClick={() => onDecision!(actionId!, false, false)}
             type="button"
           >
             <CloseIcon size={13} /> {t('cmdConfirm.deny')}

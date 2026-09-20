@@ -1,7 +1,7 @@
 import { useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatMessage } from '../types/chat';
-import type { CommandApproval } from '../types/signalr';
+import type { CommandDecisionHandler } from '../types/signalr';
 import { VisionGallery } from './VisionGallery';
 import { ToolActionFeed } from './ToolActionFeed';
 import { TodoPanel } from './TodoPanel';
@@ -15,10 +15,10 @@ interface MessageBubbleProps {
   onResend?: (messageId: string) => void;
   onEditMessage?: (messageId: string, newContent: string) => void;
   // COMMAND_CONFIRM: добавлено 2026-09-20
-  commandApproval?: CommandApproval;
+  onCommandDecision?: CommandDecisionHandler;
 }
 
-export function MessageBubble({ message, onRegenerate, onResend, onEditMessage, commandApproval }: MessageBubbleProps) {
+export function MessageBubble({ message, onRegenerate, onResend, onEditMessage, onCommandDecision }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -151,7 +151,7 @@ export function MessageBubble({ message, onRegenerate, onResend, onEditMessage, 
         </div>
       )}
 
-      <ToolActionFeed actions={toolActions} approval={commandApproval} />
+      <ToolActionFeed actions={toolActions} onCommandDecision={onCommandDecision} />
 
       <TodoPanel todos={todos} />
 

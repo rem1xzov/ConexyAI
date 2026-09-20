@@ -94,18 +94,11 @@ export interface BuildProblemsPayload {
 
 // COMMAND_CONFIRM: добавлено 2026-09-20
 /**
- * Handlers for the inline command-confirmation cards. Command confirmation is rendered inside
- * ToolActionFeed instead of as a blocking modal, so the card needs a way back to the
- * App-level handlers; they are passed down as a single object.
+ * Resolves a pending agent command. Command confirmation is rendered inside ToolActionFeed
+ * instead of as a blocking modal, so the card needs a way back to the App-level handler;
+ * it is passed down as a single callback. `allowAll` also auto-approves the rest of this task.
  */
-export interface CommandApproval {
-  /** Resolves the pending command. `allowAll` also auto-approves the rest of this task. */
-  onDecision: (actionId: string, approved: boolean, allowAll: boolean) => void;
-  /** True while the current agent task runs commands without asking. */
-  allowAllEnabled: boolean;
-  /** Turns auto-approval off for the current task (the user asked to be asked again). */
-  onDisableAllowAll: () => void;
-}
+export type CommandDecisionHandler = (actionId: string, approved: boolean, allowAll: boolean) => void;
 
 export interface SignalrCallbacks {
   onContentToken?: (delta: string) => void;

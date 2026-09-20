@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import type { CommandApproval, ToolActionEvent } from '../types/signalr';
+import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
 import { CommandConfirmCard } from './CommandConfirmCard';
 
 const MAX_VISIBLE = 20;
@@ -39,14 +39,14 @@ function isConfirmableCommand(event: ToolActionEvent): boolean {
 
 interface ToolActionFeedProps {
   actions: ToolActionEvent[];
-  /** Inline command confirmation handlers; omit to render the feed read-only. */
-  approval?: CommandApproval;
+  /** Inline command confirmation handler; omit to render the feed read-only. */
+  onCommandDecision?: CommandDecisionHandler;
 }
 
-export function ToolActionFeed({ actions, approval }: ToolActionFeedProps) {
+export function ToolActionFeed({ actions, onCommandDecision }: ToolActionFeedProps) {
   const { t } = useTranslation();
   const tail = actions.slice(-MAX_VISIBLE);
-  if (tail.length === 0 && !approval?.allowAllEnabled) return null;
+  if (tail.length === 0) return null;
 
   // Confirmation cards are grouped by pending-action id. Grouping over the visible tail is
   // enough: the agent is blocked while a command awaits a decision, so the pending event is
@@ -65,16 +65,6 @@ export function ToolActionFeed({ actions, approval }: ToolActionFeedProps) {
 
   return (
     <div className="my-3 space-y-3">
-      {/* COMMAND_CONFIRM: the user chose to skip further prompts for this task. */}
-      {approval?.allowAllEnabled && (
-        <div className="cmd-confirm cmd-confirm--auto">
-          <span className="cmd-confirm__auto-text">{t('cmdConfirm.allowAllActive')}</span>
-          <button className="cmd-confirm__auto-off" onClick={approval.onDisableAllowAll} type="button">
-            {t('cmdConfirm.disableAllowAll')}
-          </button>
-        </div>
-      )}
-
       {ordinary.length > 0 && (
         <div className="rounded-lg chat-surface-soft p-3 text-xs">
           <div className="chat-muted font-medium mb-2">{t('toolAction.liveStatus')}</div>
@@ -98,7 +88,7 @@ export function ToolActionFeed({ actions, approval }: ToolActionFeedProps) {
       )}
 
       {Array.from(confirmCards.entries()).map(([key, events]) => (
-        <CommandConfirmCard key={`confirm-${key}`} events={events} approval={approval} />
+        <CommandConfirmCard key={`confirm-${key}`} events={events} onDecision={onCommandDecision} />
       ))}
     </div>
   );
