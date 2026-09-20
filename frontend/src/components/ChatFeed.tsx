@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatSession } from '../types/chat';
+import type { CommandApproval } from '../types/signalr';
 import { MessageBubble } from './MessageBubble';
 
 interface ChatFeedProps {
@@ -9,9 +10,11 @@ interface ChatFeedProps {
   onRegenerate?: (assistantMessageId: string) => void;
   onResend?: (messageId: string) => void;
   onEditMessage?: (messageId: string, newContent: string) => void;
+  // COMMAND_CONFIRM: добавлено 2026-09-20
+  commandApproval?: CommandApproval;
 }
 
-export function ChatFeed({ session, nickname, onRegenerate, onResend, onEditMessage }: ChatFeedProps) {
+export function ChatFeed({ session, nickname, onRegenerate, onResend, onEditMessage, commandApproval }: ChatFeedProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -75,6 +78,7 @@ export function ChatFeed({ session, nickname, onRegenerate, onResend, onEditMess
           onRegenerate={onRegenerate}
           onResend={onResend}
           onEditMessage={onEditMessage}
+          commandApproval={commandApproval}
         />
       ))}
       <div ref={messagesEndRef} className="h-4 w-full shrink-0" />

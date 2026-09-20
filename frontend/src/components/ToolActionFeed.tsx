@@ -1,6 +1,6 @@
-import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ToolActionEvent } from '../types/signalr';
+import type { CommandApproval, ToolActionEvent } from '../types/signalr';
+import { CommandConfirmCard } from './CommandConfirmCard';
 
 const MAX_VISIBLE = 20;
 
@@ -30,98 +30,51 @@ function statusMark(status: ToolActionEvent['status']): JSX.Element {
   return <span className="chat-warn animate-pulse">●</span>;
 }
 
-// DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
-function isDangerous(event: ToolActionEvent): boolean {
-  return event.toolName === 'bash' && (event.pendingActionId != null || event.status === 'rejected');
-}
-
-interface DangerousCommandCardProps {
-  events: ToolActionEvent[];
-}
-
-function DangerousCommandCard({ events }: DangerousCommandCardProps) {
-  const [open, setOpen] = useState(false);
-  const { t } = useTranslation();
-
-  const first = events[0];
-  const completed = events.find((e) => e.status === 'completed' || e.status === 'failed');
-  const rejected = events.find((e) => e.status === 'rejected');
-
-  const status: ToolActionEvent['status'] = rejected
-    ? 'rejected'
-    : completed
-      ? completed.status
-      : 'pending_confirmation';
-
-  const label =
-    status === 'completed'
-      ? t('toolAction.completed')
-      : status === 'failed'
-        ? t('toolAction.failed')
-        : status === 'rejected'
-          ? t('toolAction.rejected')
-          : t('toolAction.pending');
-
-  const output = completed?.output ?? '';
-
-  return (
-    <div className={`danger-cmd-feed-card danger-cmd-feed-card--${status}`}>
-      <div className="danger-cmd-feed-row">
-        <span className="danger-cmd-feed-status">{statusMark(status)}</span>
-        <code className="danger-cmd-feed-command">{first.command}</code>
-        <span className="danger-cmd-feed-label">{label}</span>
-      </div>
-
-      {first.workingDirectory && (
-        <div className="danger-cmd-feed-dir" title={first.workingDirectory}>
-          {first.workingDirectory}
-        </div>
-      )}
-
-      {output && (
-        <div className="danger-cmd-feed-output">
-          <button
-            className="danger-cmd-feed-toggle"
-            onClick={() => setOpen((o) => !o)}
-            type="button"
-          >
-            {open ? t('toolAction.hideOutput') : t('toolAction.showOutput')}
-          </button>
-          {open && <pre className="danger-cmd-feed-pre">{output}</pre>}
-        </div>
-      )}
-    </div>
-  );
+// COMMAND_CONFIRM: добавлено 2026-09-20
+// Every agent bash command is confirmed now, so the card is keyed on the pending-action id
+// rather than on "is this command dangerous". Dangerous commands only get the accent.
+function isConfirmableCommand(event: ToolActionEvent): boolean {
+  return event.toolName === 'bash' && event.pendingActionId != null;
 }
 
 interface ToolActionFeedProps {
   actions: ToolActionEvent[];
+  /** Inline command confirmation handlers; omit to render the feed read-only. */
+  approval?: CommandApproval;
 }
 
-export function ToolActionFeed({ actions }: ToolActionFeedProps) {
+export function ToolActionFeed({ actions, approval }: ToolActionFeedProps) {
   const { t } = useTranslation();
   const tail = actions.slice(-MAX_VISIBLE);
-  if (tail.length === 0) return null;
+  if (tail.length === 0 && !approval?.allowAllEnabled) return null;
 
-  // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
-  const dangerous = new Map<string, ToolActionEvent[]>();
-  const ordinary: ToolActionEvent[] = [];
-
+  // Confirmation cards are grouped by pending-action id. Grouping over the visible tail is
+  // enough: the agent is blocked while a command awaits a decision, so the pending event is
+  // always the most recent one. Older commands fall back to plain rows, which keeps a long
+  // autonomous run readable.
+  const confirmCards = new Map<string, ToolActionEvent[]>();
   for (const a of tail) {
-    if (isDangerous(a)) {
-      const key = a.pendingActionId ?? a.command;
-      const list = dangerous.get(key) ?? [];
-      list.push(a);
-      dangerous.set(key, list);
-    } else {
-      ordinary.push(a);
-    }
+    if (!isConfirmableCommand(a)) continue;
+    const key = a.pendingActionId!;
+    const list = confirmCards.get(key) ?? [];
+    list.push(a);
+    confirmCards.set(key, list);
   }
 
-  const dangerCards = Array.from(dangerous.values());
+  const ordinary = tail.filter((a) => !isConfirmableCommand(a));
 
   return (
     <div className="my-3 space-y-3">
+      {/* COMMAND_CONFIRM: the user chose to skip further prompts for this task. */}
+      {approval?.allowAllEnabled && (
+        <div className="cmd-confirm cmd-confirm--auto">
+          <span className="cmd-confirm__auto-text">{t('cmdConfirm.allowAllActive')}</span>
+          <button className="cmd-confirm__auto-off" onClick={approval.onDisableAllowAll} type="button">
+            {t('cmdConfirm.disableAllowAll')}
+          </button>
+        </div>
+      )}
+
       {ordinary.length > 0 && (
         <div className="rounded-lg chat-surface-soft p-3 text-xs">
           <div className="chat-muted font-medium mb-2">{t('toolAction.liveStatus')}</div>
@@ -132,6 +85,11 @@ export function ToolActionFeed({ actions }: ToolActionFeedProps) {
                 <span className="flex-1 min-w-0 truncate font-mono" title={a.summary}>
                   {a.summary || `${a.toolName} ${a.command}`}
                 </span>
+                {a.isDangerous && (
+                  <span className="cmd-confirm__row-badge" title={t('cmdConfirm.dangerous')}>
+                    ⚠
+                  </span>
+                )}
                 <span className="shrink-0 w-4 text-center">{statusMark(a.status)}</span>
               </li>
             ))}
@@ -139,8 +97,8 @@ export function ToolActionFeed({ actions }: ToolActionFeedProps) {
         </div>
       )}
 
-      {dangerCards.map((events, i) => (
-        <DangerousCommandCard key={`danger-${events[0].pendingActionId ?? i}`} events={events} />
+      {Array.from(confirmCards.entries()).map(([key, events]) => (
+        <CommandConfirmCard key={`confirm-${key}`} events={events} approval={approval} />
       ))}
     </div>
   );

@@ -453,17 +453,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     if (request is null || string.IsNullOrWhiteSpace(request.Command))
                         return new ConexyToolResult(toolCall.Id, "bash requires 'command'.", true);
 
-                    // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
-                    if (_dangerousCommandClassifier.IsDangerous(request.Command))
-                    {
-                        return await RunDangerousBashAsync(taskId, chatId, toolCall, request, ct);
-                    }
-
-                    var res = await _bashService.ExecuteAsync(chatId, request, ct: ct);
-                    var output = string.IsNullOrEmpty(res.Output)
-                        ? res.ErrorType ?? "command failed"
-                        : res.Output;
-                    return new ConexyToolResult(toolCall.Id, output, !res.Success);
+                    // COMMAND_CONFIRM: добавлено 2026-09-20 — раньше подтверждение требовалось
+                    // только для команд из DangerousCommandClassifier. Теперь через него идёт любая
+                    // bash-команда, а классификатор остался только для визуального акцента.
+                    var isDangerous = _dangerousCommandClassifier.IsDangerous(request.Command);
+                    return await RunBashWithConfirmationAsync(taskId, chatId, toolCall, request, isDangerous, ct);
                 }
 
                 case "todo_write":
@@ -524,20 +518,37 @@ public class ConexyAgentRunner : IConexyAgentRunner
         }
     }
 
-    // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
+    // COMMAND_CONFIRM: расширено 2026-09-20 — подтверждение требуется для любой bash-команды.
     /// <summary>
-    /// Runs a dangerous <c>bash</c> command only after the user approves it. Emits a
+    /// Runs a <c>bash</c> command after the user approves it. Emits a
     /// <c>pending_confirmation</c> tool action, blocks on the pending-action service, and
     /// then either executes normally or returns a <c>USER_REJECTED</c> result so the model
-    /// can propose an alternative without stopping the whole task.
+    /// can propose an alternative without stopping the whole task. When the task is
+    /// auto-approved ("allow all for this session") the wait is skipped entirely.
     /// </summary>
-    private async Task<ConexyToolResult> RunDangerousBashAsync(
+    private async Task<ConexyToolResult> RunBashWithConfirmationAsync(
         Guid taskId,
         Guid chatId,
         LlmToolCall toolCall,
         BashToolRequest request,
+        bool isDangerous,
         CancellationToken ct)
     {
+        // Propagated into every ToolAction the bash service emits, so the feed keeps the accent.
+        request.IsDangerous = isDangerous;
+
+        // "Allow all for this task": the user already approved everything for this run, so the
+        // command executes straight away and shows up as an ordinary action row.
+        if (_pendingActionService.IsTaskAutoApproved(taskId))
+        {
+            await SendAgentStatusAsync(taskId, "executing", $"Выполняю команду: {request.Command}...", ct: ct);
+            var auto = await _bashService.ExecuteAsync(chatId, request, emitStartEvent: true, ct: ct);
+            var autoOutput = string.IsNullOrEmpty(auto.Output)
+                ? auto.ErrorType ?? "command failed"
+                : auto.Output;
+            return new ConexyToolResult(toolCall.Id, autoOutput, !auto.Success);
+        }
+
         var actionId = Guid.NewGuid();
         var workingDirectory = _workspaceService.GetTaskWorkspacePath(chatId);
 
@@ -549,18 +560,19 @@ public class ConexyAgentRunner : IConexyAgentRunner
             Status = "pending_confirmation",
             Summary = $"Ожидает подтверждения: {request.Command}",
             WorkingDirectory = workingDirectory,
-            PendingActionId = actionId
+            PendingActionId = actionId,
+            IsDangerous = isDangerous
         }, ct);
 
         bool approved;
         try
         {
             approved = await _pendingActionService.WaitForDecisionAsync(
-                actionId, _job.UserId, chatId, taskId, request.Command, workingDirectory, ct);
+                actionId, _job.UserId, chatId, taskId, request.Command, workingDirectory, isDangerous, ct);
         }
         catch (OperationCanceledException)
         {
-            return new ConexyToolResult(toolCall.Id, "CANCELLED: подтверждение опасной команды отменено (таймаут/остановка).", true);
+            return new ConexyToolResult(toolCall.Id, "CANCELLED: подтверждение команды отменено (таймаут/остановка).", true);
         }
 
         if (!approved)
@@ -573,19 +585,19 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 Status = "rejected",
                 Summary = "Отклонено пользователем",
                 WorkingDirectory = workingDirectory,
-                PendingActionId = actionId
+                PendingActionId = actionId,
+                IsDangerous = isDangerous
             }, ct);
 
             return new ConexyToolResult(
                 toolCall.Id,
-                $"USER_REJECTED: команда '{request.Command}' отклонена пользователем. Предложи альтернативный, безопасный способ или продолжи без неё.",
+                $"USER_REJECTED: команда '{request.Command}' отклонена пользователем. Предложи альтернативный способ или продолжи без неё.",
                 false);
         }
 
-        // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
-        // Correlate the completion ToolAction with the pending card via the action id.
+        // Correlate the completion ToolAction with the confirmation card via the action id.
         request.PendingActionId = actionId;
-        var res = await _bashService.ExecuteAsync(chatId, request, emitStartEvent: false, ct);
+        var res = await _bashService.ExecuteAsync(chatId, request, emitStartEvent: false, ct: ct);
         var output = string.IsNullOrEmpty(res.Output)
             ? res.ErrorType ?? "command failed"
             : res.Output;

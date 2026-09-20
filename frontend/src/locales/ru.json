@@ -200,13 +200,14 @@
     "command": "command",
     "file": "file"
   },
-  "dangerCmd": {
-    "ariaLabel": "Подтверждение опасной команды",
-    "title": "Опасная команда требует подтверждения",
-    "command": "Команда",
-    "workingDirectory": "Рабочая директория",
-    "reject": "Отклонить",
-    "approve": "Выполнить"
+  "cmdConfirm": {
+    "runCommand": "Запуск команды",
+    "dangerous": "Опасная команда",
+    "allow": "Разрешить",
+    "deny": "Отклонить",
+    "allowAll": "Разрешить все на эту сессию",
+    "allowAllActive": "Автоподтверждение включено: команды выполняются без запроса",
+    "disableAllowAll": "Отключить"
   },
   "toolAction": {
     "completed": "Выполнено",

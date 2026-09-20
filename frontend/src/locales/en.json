@@ -200,13 +200,14 @@
     "command": "command",
     "file": "file"
   },
-  "dangerCmd": {
-    "ariaLabel": "Dangerous command confirmation",
-    "title": "Dangerous command requires confirmation",
-    "command": "Command",
-    "workingDirectory": "Working directory",
-    "reject": "Reject",
-    "approve": "Run"
+  "cmdConfirm": {
+    "runCommand": "Run Command",
+    "dangerous": "Dangerous command",
+    "allow": "Allow",
+    "deny": "Deny",
+    "allowAll": "Allow all for this session",
+    "allowAllActive": "Auto-approve is on: commands run without asking",
+    "disableAllowAll": "Disable"
   },
   "toolAction": {
     "completed": "Done",

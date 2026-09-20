@@ -14,8 +14,6 @@ import { StatusBar } from './components/StatusBar';
 // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
 // import { LiveVoiceModal } from './components/LiveVoiceModal';
 import { MenuIcon, PanelRightCloseIcon, PanelRightOpenIcon } from './components/Icons';
-// DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
-import { DangerCommandModal } from './components/DangerCommandModal';
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 import { UsageIndicator } from './components/UsageIndicator';
 import { UpgradeModal } from './components/UpgradeModal';
@@ -31,7 +29,7 @@ import { getStoredTheme, setTheme, type Theme } from './theme';
 import { setLanguage } from './i18n';
 import type { ConexyModel, LimitExceededInfo, ReasoningEffort, SubscriptionUsage, TaskAttachment } from './types/api';
 import type { ChatMessage, ChatSession, ChatSessionKind } from './types/chat';
-import type { PendingActionPayload } from './types/signalr';
+import type { CommandApproval, PendingActionPayload } from './types/signalr';
 
 const STORAGE_KEY = 'conexy_sessions';
 
@@ -141,8 +139,10 @@ export default function App() {
   const [agentFileChange, setAgentFileChange] = useState<{ path: string } | null>(null);
   const [agentStatus, setAgentStatus] = useState('Ready');
   const [cursorInfo, setCursorInfo] = useState<{ line: number; column: number; language: string } | null>(null);
-  // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
+  // COMMAND_CONFIRM: добавлено 2026-09-20
+  // The command awaiting a decision, and the task (if any) whose commands run without asking.
   const [pendingAction, setPendingAction] = useState<PendingActionPayload | null>(null);
+  const [allowAllTaskId, setAllowAllTaskId] = useState<string | null>(null);
   // SUBSCRIPTION_TIERS: добавлено 2026-09-17
   const [usage, setUsage] = useState<SubscriptionUsage | null>(null);
   const [limitExceeded, setLimitExceeded] = useState<LimitExceededInfo | null>(null);
@@ -340,6 +340,10 @@ export default function App() {
         );
       },
       onCompleted: (payload) => {
+        // COMMAND_CONFIRM: добавлено 2026-09-20 — a finished task never auto-approves, and the
+        // backend drops the flag in its own finally block.
+        setPendingAction(null);
+        setAllowAllTaskId(null);
         const ctx = streamingRef.current;
         if (!ctx || disposed) return;
         const { sessionId, messageId } = ctx;
@@ -361,6 +365,9 @@ export default function App() {
         void refreshUsage();
       },
       onError: (err) => {
+        // COMMAND_CONFIRM: добавлено 2026-09-20
+        setPendingAction(null);
+        setAllowAllTaskId(null);
         const ctx = streamingRef.current;
         if (!ctx || disposed) return;
         const { sessionId, messageId } = ctx;
@@ -378,6 +385,9 @@ export default function App() {
         void refreshUsage();
       },
       onStopped: () => {
+        // COMMAND_CONFIRM: добавлено 2026-09-20
+        setPendingAction(null);
+        setAllowAllTaskId(null);
         const ctx = streamingRef.current;
         if (!ctx || disposed) return;
         streamingRef.current = null;
@@ -780,17 +790,28 @@ export default function App() {
     finalizeStopped(ctx);
   }
 
-  // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
-  async function handleConfirmDangerousCommand(approved: boolean) {
-    if (!pendingAction) return;
-    const actionId = pendingAction.actionId;
-    // Close the blocking modal immediately; the agent loop resumes asynchronously.
+  // COMMAND_CONFIRM: добавлено 2026-09-20
+  async function handleCommandDecision(actionId: string, approved: boolean, allowAll: boolean) {
+    const taskId = pendingAction?.taskId ?? streamingRef.current?.taskId ?? activeSession?.taskId;
     setPendingAction(null);
+    if (approved && allowAll && taskId) setAllowAllTaskId(taskId);
     try {
-      await signalrService.confirmAction(actionId, approved);
+      await signalrService.confirmAction(actionId, approved, allowAll);
     } catch (err) {
-      console.error('[DangerousCommand] ConfirmAction failed:', err);
+      console.error('[CommandConfirm] ConfirmAction failed:', err);
       showToast(t('toast.confirmFailed'));
+    }
+  }
+
+  // COMMAND_CONFIRM: added 2026-09-20 — the user asked to be asked again for this task.
+  async function handleDisableAllowAll() {
+    const taskId = allowAllTaskId;
+    setAllowAllTaskId(null);
+    if (!taskId) return;
+    try {
+      await signalrService.setTaskAutoApproval(taskId, false);
+    } catch (err) {
+      console.error('[CommandConfirm] SetTaskAutoApproval failed:', err);
     }
   }
 
@@ -798,6 +819,17 @@ export default function App() {
   if (isAdminRoute && user?.isAdmin) {
     return <AdminPanel onBack={() => { window.location.hash = ''; }} onToast={showToast} />;
   }
+
+  // COMMAND_CONFIRM: добавлено 2026-09-20
+  const commandApproval: CommandApproval = {
+    onDecision: (actionId, approved, allowAll) => {
+      void handleCommandDecision(actionId, approved, allowAll);
+    },
+    allowAllEnabled: allowAllTaskId != null,
+    onDisableAllowAll: () => {
+      void handleDisableAllowAll();
+    },
+  };
 
   return (
     <div className="app">
@@ -901,6 +933,7 @@ export default function App() {
                 onRegenerate={handleRegenerate}
                 onResend={handleResend}
                 onEditMessage={handleEditMessage}
+                commandApproval={commandApproval}
               />
             ) : initializing ? (
               <div className="feed feed--empty">
@@ -946,6 +979,7 @@ export default function App() {
                 agentFileChange={agentFileChange}
                 toolActions={latestToolActions}
                 todos={latestTodos}
+                commandApproval={commandApproval}
                 onCursorChange={setCursorInfo}
                 onRunInSeparateWindow={() => showToast(t('toast.runProject'))}
                 style={{ flex: `0 0 ${workspaceWidth}%` }}
@@ -968,16 +1002,11 @@ export default function App() {
       )}
       */}
 
-      {/* DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17 */}
-      {pendingAction && (
-        <DangerCommandModal
-          action={pendingAction}
-          onApprove={() => void handleConfirmDangerousCommand(true)}
-          onReject={() => void handleConfirmDangerousCommand(false)}
-        />
-      )}
+      {/* COMMAND_CONFIRM: добавлено 2026-09-20
+          Confirmation is rendered inline in the action feed (CommandConfirmCard), so nothing
+          covers the chat while the agent waits for the user's decision. */}
 
-      {/* ADMIN_PANEL: добавлено 2026-09-19 */}
+      {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
       {upgradeOpen && (
         <UpgradeModal
           limitInfo={limitExceeded}

@@ -24,6 +24,9 @@ export interface ToolActionEvent {
   workingDirectory?: string;
   output?: string;
   pendingActionId?: string;
+  // COMMAND_CONFIRM: добавлено 2026-09-20
+  /** Flagged by the backend classifier — styled with an accent, still confirmed like any command. */
+  isDangerous?: boolean;
 }
 
 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
@@ -35,6 +38,8 @@ export interface PendingActionPayload {
   workingDirectory: string;
   status: string;
   createdAt: string;
+  // COMMAND_CONFIRM: добавлено 2026-09-20
+  isDangerous?: boolean;
 }
 
 export interface TodoItem {
@@ -85,6 +90,21 @@ export interface BuildProblem {
 
 export interface BuildProblemsPayload {
   problems: BuildProblem[];
+}
+
+// COMMAND_CONFIRM: добавлено 2026-09-20
+/**
+ * Handlers for the inline command-confirmation cards. Command confirmation is rendered inside
+ * ToolActionFeed instead of as a blocking modal, so the card needs a way back to the
+ * App-level handlers; they are passed down as a single object.
+ */
+export interface CommandApproval {
+  /** Resolves the pending command. `allowAll` also auto-approves the rest of this task. */
+  onDecision: (actionId: string, approved: boolean, allowAll: boolean) => void;
+  /** True while the current agent task runs commands without asking. */
+  allowAllEnabled: boolean;
+  /** Turns auto-approval off for the current task (the user asked to be asked again). */
+  onDisableAllowAll: () => void;
 }
 
 export interface SignalrCallbacks {

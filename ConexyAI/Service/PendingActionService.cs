@@ -8,13 +8,14 @@ using Microsoft.Extensions.Logging;
 
 namespace ConexyAI.Service;
 
-// DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
+// COMMAND_CONFIRM: расширено 2026-09-20 — подтверждение теперь требуется для любой bash-команды,
+// поэтому сервис больше не описывает только "опасные" команды.
 /// <summary>
-/// Coordinates the dangerous-command confirmation flow across scopes. The agent loop
-/// (scoped background worker) registers a pending action and awaits a
-/// <see cref="TaskCompletionSource{TResult}"/>; a later <c>ConfirmAction</c> hub call
-/// (separate SignalR scope) resolves it, waking the loop to either run or reject the
-/// command. Registered as a singleton so the waiter and the resolver share state.
+/// Coordinates the command-confirmation flow across scopes. The agent loop (scoped background
+/// worker) registers a pending action and awaits a <see cref="TaskCompletionSource{TResult}"/>;
+/// a later <c>ConfirmAction</c> hub call (separate SignalR scope) resolves it, waking the loop
+/// to either run or reject the command. Registered as a singleton so the waiter and the
+/// resolver share state.
 /// </summary>
 public interface IPendingActionService
 {
@@ -30,10 +31,27 @@ public interface IPendingActionService
         Guid taskId,
         string command,
         string workingDirectory,
+        bool isDangerous,
         CancellationToken ct);
 
-    /// <summary>Resolves the waiter for <paramref name="actionId"/> with the user's decision.</summary>
-    Task<bool> ConfirmActionAsync(Guid actionId, bool approved, CancellationToken ct);
+    /// <summary>
+    /// Resolves the waiter for <paramref name="actionId"/> with the user's decision. When
+    /// <paramref name="approveAll"/> is set on an approval, every later command of the same
+    /// task runs without asking again ("allow all for this session").
+    /// </summary>
+    Task<bool> ConfirmActionAsync(Guid actionId, bool approved, bool approveAll, CancellationToken ct);
+
+    /// <summary>
+    /// True when the user switched the task to "allow all" — the agent then skips the
+    /// confirmation round-trip and runs its commands immediately.
+    /// </summary>
+    bool IsTaskAutoApproved(Guid taskId);
+
+    /// <summary>
+    /// Turns "allow all" on/off for a task. Cleared when the task finishes so the next
+    /// agent run always starts by asking again.
+    /// </summary>
+    void SetTaskAutoApproval(Guid taskId, bool enabled);
 }
 
 public class PendingActionService : IPendingActionService
@@ -45,7 +63,12 @@ public class PendingActionService : IPendingActionService
     private readonly IHubContext<ConexyHub> _hubContext;
     private readonly ILogger<PendingActionService> _logger;
 
-    private readonly ConcurrentDictionary<Guid, TaskCompletionSource<bool>> _waiters = new();
+    private readonly ConcurrentDictionary<Guid, Waiter> _waiters = new();
+    // Tasks the user chose to auto-approve ("allow all for this session").
+    private readonly ConcurrentDictionary<Guid, byte> _autoApprovedTasks = new();
+
+    /// <summary>A blocking waiter plus the task it belongs to, so "allow all" can be scoped.</summary>
+    private sealed record Waiter(TaskCompletionSource<bool> Tcs, Guid TaskId);
 
     public PendingActionService(
         IServiceScopeFactory scopeFactory,
@@ -64,6 +87,7 @@ public class PendingActionService : IPendingActionService
         Guid taskId,
         string command,
         string workingDirectory,
+        bool isDangerous,
         CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
@@ -81,7 +105,7 @@ public class PendingActionService : IPendingActionService
         }, ct);
 
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_waiters.TryAdd(actionId, tcs))
+        if (!_waiters.TryAdd(actionId, new Waiter(tcs, taskId)))
         {
             // Duplicate action id: treat as approved so the loop can proceed rather than hang.
             return true;
@@ -99,7 +123,8 @@ public class PendingActionService : IPendingActionService
             Command = command,
             WorkingDirectory = workingDirectory,
             Status = "Pending",
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            IsDangerous = isDangerous
         }, waitToken);
 
         using var registration = waitToken.Register(() => tcs.TrySetCanceled(waitToken));
@@ -119,19 +144,41 @@ public class PendingActionService : IPendingActionService
         }
     }
 
-    public async Task<bool> ConfirmActionAsync(Guid actionId, bool approved, CancellationToken ct)
+    public async Task<bool> ConfirmActionAsync(Guid actionId, bool approved, bool approveAll, CancellationToken ct)
     {
-        if (_waiters.TryRemove(actionId, out var tcs))
+        if (_waiters.TryRemove(actionId, out var waiter))
         {
+            if (approved && approveAll)
+            {
+                _autoApprovedTasks[waiter.TaskId] = 1;
+            }
+
             var status = approved ? PendingActionStatus.Approved : PendingActionStatus.Rejected;
             await MarkResolvedAsync(actionId, status, ct);
-            tcs.TrySetResult(approved);
-            _logger.LogInformation("Dangerous command {ActionId} {Decision}.", actionId, approved ? "approved" : "rejected");
+            waiter.Tcs.TrySetResult(approved);
+            _logger.LogInformation(
+                "Command {ActionId} {Decision} (allowAll={AllowAll}).",
+                actionId,
+                approved ? "approved" : "rejected",
+                approveAll);
             return true;
         }
 
         _logger.LogWarning("ConfirmAction for unknown/expired action {ActionId}.", actionId);
         return false;
+    }
+
+    public bool IsTaskAutoApproved(Guid taskId) => _autoApprovedTasks.ContainsKey(taskId);
+
+    public void SetTaskAutoApproval(Guid taskId, bool enabled)
+    {
+        if (enabled)
+        {
+            _autoApprovedTasks[taskId] = 1;
+            return;
+        }
+
+        _autoApprovedTasks.TryRemove(taskId, out _);
     }
 
     private async Task MarkResolvedAsync(Guid actionId, PendingActionStatus status, CancellationToken ct)

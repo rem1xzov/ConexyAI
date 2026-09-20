@@ -64,15 +64,25 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
         return Task.CompletedTask;
     }
 
-    // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
+    // COMMAND_CONFIRM: расширено 2026-09-20 — подтверждение требуется для любой bash-команды.
     /// <summary>
-    /// Resolves a paused dangerous <c>bash</c> command. Called by the frontend after the
-    /// user approves or rejects the command shown in the confirmation modal.
+    /// Resolves a paused <c>bash</c> command. Pass <paramref name="approveAll"/> with an approval
+    /// to let every later command of the same task run without asking again.
     /// </summary>
-    public async Task<bool> ConfirmAction(Guid actionId, bool approved)
+    public async Task<bool> ConfirmAction(Guid actionId, bool approved, bool approveAll)
     {
-        _logger.LogInformation("ConfirmAction {ActionId} approved={Approved} by connection {ConnectionId}", actionId, approved, Context.ConnectionId);
-        return await _pendingActions.ConfirmActionAsync(actionId, approved, Context.ConnectionAborted);
+        _logger.LogInformation(
+            "ConfirmAction {ActionId} approved={Approved} approveAll={ApproveAll} by connection {ConnectionId}",
+            actionId, approved, approveAll, Context.ConnectionId);
+        return await _pendingActions.ConfirmActionAsync(actionId, approved, approveAll, Context.ConnectionAborted);
+    }
+
+    /// <summary>Turns "allow all commands for this task" on or off while the task is running.</summary>
+    public Task SetTaskAutoApproval(Guid taskId, bool enabled)
+    {
+        _logger.LogInformation("SetTaskAutoApproval task {TaskId} enabled={Enabled}", taskId, enabled);
+        _pendingActions.SetTaskAutoApproval(taskId, enabled);
+        return Task.CompletedTask;
     }
 
     // ---- Interactive terminal (pty) ----

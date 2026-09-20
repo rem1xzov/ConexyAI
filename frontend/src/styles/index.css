@@ -3161,132 +3161,86 @@ body {
   text-decoration: underline;
 }
 
-/* ---------- DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17 ---------- */
-.danger-cmd-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
-  background: rgba(0, 0, 0, 0.72);
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-
-.danger-cmd-card {
-  width: min(600px, 94vw);
-  background: #16131d;
-  border: 1px solid rgba(245, 158, 11, 0.55);
-  border-radius: 12px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
-  padding: 18px;
+/* ---------- COMMAND_CONFIRM: inline command confirmation (2026-09-20) ---------- */
+/* Compact, non-blocking replacement for the former full-screen confirmation modal. It sits
+   inside the action feed, so the rest of the UI stays readable while the agent waits. */
+.cmd-confirm {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-}
-
-.danger-cmd-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.danger-cmd-icon {
-  font-size: 20px;
-  line-height: 1;
-}
-
-.danger-cmd-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #fbbf24;
-}
-
-.danger-cmd-body {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.danger-cmd-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-}
-
-.danger-cmd-command,
-.danger-cmd-dir {
-  margin: 0;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--code-bg);
-  border: 1px solid var(--border);
-  color: #fca5a5;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.danger-cmd-dir {
-  color: var(--muted);
-}
-
-.danger-cmd-actions {
-  display: flex;
-  justify-content: flex-end;
   gap: 8px;
-}
-
-/* Command card in the message/status feed (post-confirmation). */
-.danger-cmd-feed-card {
-  border: 1px solid rgba(245, 158, 11, 0.35);
-  background: rgba(22, 19, 29, 0.6);
-  border-radius: 10px;
   padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
   font-size: 12px;
 }
 
-.danger-cmd-feed-card--rejected {
+/* Dangerous commands keep the amber accent; ordinary ones use the neutral surface. */
+.cmd-confirm--danger {
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.06);
+}
+
+.cmd-confirm--pending_confirmation {
+  border-color: var(--accent);
+}
+
+.cmd-confirm--rejected {
   border-color: rgba(239, 68, 68, 0.45);
 }
 
-.danger-cmd-feed-card--completed {
+.cmd-confirm--completed {
   border-color: rgba(52, 211, 153, 0.35);
 }
 
-.danger-cmd-feed-row {
+.cmd-confirm__head {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.danger-cmd-feed-status {
-  width: 16px;
-  text-align: center;
+.cmd-confirm__title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cmd-confirm__badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  color: #fbbf24;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cmd-confirm__status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
   flex-shrink: 0;
 }
 
-.danger-cmd-feed-command {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.cmd-confirm__command {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
   color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.danger-cmd-feed-label {
-  flex-shrink: 0;
-  color: var(--muted);
+.cmd-confirm--danger .cmd-confirm__command {
+  color: #fca5a5;
 }
 
-.danger-cmd-feed-dir {
-  margin-top: 6px;
+.cmd-confirm__dir {
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
@@ -3295,8 +3249,98 @@ body {
   white-space: nowrap;
 }
 
-.danger-cmd-feed-output {
-  margin-top: 8px;
+.cmd-confirm__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cmd-confirm__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.cmd-confirm__btn--allow {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.cmd-confirm__btn--allow:hover {
+  background: rgba(74, 222, 128, 0.14);
+}
+
+.cmd-confirm__btn--deny {
+  border-color: rgba(255, 107, 122, 0.5);
+  color: var(--danger);
+}
+
+.cmd-confirm__btn--deny:hover {
+  background: rgba(255, 107, 122, 0.14);
+}
+
+.cmd-confirm__allow-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.cmd-confirm__allow-all input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Auto-approve banner, shown while the task runs commands without asking. */
+.cmd-confirm--auto {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.cmd-confirm__auto-text {
+  color: var(--text);
+}
+
+.cmd-confirm__auto-off {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.cmd-confirm__auto-off:hover {
+  text-decoration: underline;
+}
+
+/* Marker on an ordinary action row whose command the classifier flagged. */
+.cmd-confirm__row-badge {
+  flex-shrink: 0;
+  color: #fbbf24;
+  font-size: 11px;
+}
+
+.cmd-confirm__output {
+  margin-top: 2px;
 }
 
 .danger-cmd-feed-toggle {
@@ -3312,7 +3356,7 @@ body {
   color: var(--text);
 }
 
-.danger-cmd-feed-pre {
+.cmd-confirm__pre {
   margin: 8px 0 0;
   padding: 10px 12px;
   border-radius: 8px;

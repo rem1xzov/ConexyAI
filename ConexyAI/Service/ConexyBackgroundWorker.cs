@@ -16,6 +16,8 @@ public class ConexyBackgroundWorker : BackgroundService
     private readonly IConexyQueueGuard _queueGuard;
     private readonly IConexyCancellationRegistry _cancellations;
     private readonly IConexyTodoService _todoService;
+    // COMMAND_CONFIRM: добавлено 2026-09-20
+    private readonly IPendingActionService _pendingActions;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHubContext<ConexyHub> _hubContext;
     private readonly IConexyWorkspaceService _workspaceService;
@@ -28,6 +30,7 @@ public class ConexyBackgroundWorker : BackgroundService
         IConexyQueueGuard queueGuard,
         IConexyCancellationRegistry cancellations,
         IConexyTodoService todoService,
+        IPendingActionService pendingActions,
         IServiceScopeFactory scopeFactory,
         IHubContext<ConexyHub> hubContext,
         IConexyWorkspaceService workspaceService,
@@ -38,6 +41,7 @@ public class ConexyBackgroundWorker : BackgroundService
         _queueGuard = queueGuard;
         _cancellations = cancellations;
         _todoService = todoService;
+        _pendingActions = pendingActions;
         _scopeFactory = scopeFactory;
         _hubContext = hubContext;
         _workspaceService = workspaceService;
@@ -195,6 +199,10 @@ public class ConexyBackgroundWorker : BackgroundService
             _queueGuard.MarkCompleted(job.TaskId);
             // Drop the transient todo state so it does not accumulate on the long-lived worker.
             _todoService.Clear(job.TaskId);
+            // COMMAND_CONFIRM: добавлено 2026-09-20
+            // "Allow all for this session" must not survive into the next agent task — a fresh
+            // run always starts by asking for confirmation again.
+            _pendingActions.SetTaskAutoApproval(job.TaskId, false);
         }
     }
 

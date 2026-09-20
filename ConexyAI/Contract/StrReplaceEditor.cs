@@ -52,6 +52,13 @@ public class ToolActionEvent
     /// <summary>Command output (populated on the completed event for dangerous commands).</summary>
     public string? Output { get; set; }
 
-    /// <summary>Correlates the dangerous-command card with its pending confirmation.</summary>
+    /// <summary>Correlates the command confirmation card with its pending confirmation.</summary>
     public Guid? PendingActionId { get; set; }
+
+    // COMMAND_CONFIRM: добавлено 2026-09-20
+    /// <summary>
+    /// True when <see cref="IDangerousCommandClassifier"/> flagged the command. Used only for
+    /// styling — both dangerous and ordinary commands now require confirmation.
+    /// </summary>
+    public bool IsDangerous { get; set; }
 }

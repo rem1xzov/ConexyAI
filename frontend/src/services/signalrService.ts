@@ -126,11 +126,20 @@ class SignalrService {
     await this.connection!.invoke('StopGeneration', taskId);
   }
 
-  // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
-  /** Resolves a paused dangerous bash command with the user's decision. */
-  async confirmAction(actionId: string, approved: boolean): Promise<boolean> {
+  // COMMAND_CONFIRM: расширено 2026-09-20 — подтверждение требуется для любой bash-команды.
+  /**
+   * Resolves a paused bash command with the user's decision. When `approveAll` is set on an
+   * approval, every later command of the same task runs without asking again.
+   */
+  async confirmAction(actionId: string, approved: boolean, approveAll = false): Promise<boolean> {
     await this.ensureConnected();
-    return await this.connection!.invoke<boolean>('ConfirmAction', actionId, approved);
+    return await this.connection!.invoke<boolean>('ConfirmAction', actionId, approved, approveAll);
+  }
+
+  /** Turns "allow all commands for this task" on or off while the agent task is running. */
+  async setTaskAutoApproval(taskId: string, enabled: boolean): Promise<void> {
+    await this.ensureConnected();
+    await this.connection!.invoke('SetTaskAutoApproval', taskId, enabled);
   }
 
   // SUPPORT: добавлено 2026-09-19

@@ -113,11 +113,12 @@ public class BuildProblemsEvent
     public required List<BuildProblem> Problems { get; set; }
 }
 
-// DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
+// COMMAND_CONFIRM: расширено 2026-09-20 — подтверждение теперь требуется для любой bash-команды,
+// поэтому сервис больше не описывает только "опасные" команды.
 /// <summary>
-/// Streamed to the client when the agent attempts a dangerous <c>bash</c> command and is
-/// paused awaiting user confirmation. The client shows a blocking modal and later calls
-/// <c>ConfirmAction</c> on the hub with the same <see cref="ActionId"/>.
+/// Streamed to the client when the agent attempts a <c>bash</c> command and is paused
+/// awaiting user confirmation. The client renders an inline confirmation card in the action
+/// feed and later calls <c>ConfirmAction</c> on the hub with the same <see cref="ActionId"/>.
 /// </summary>
 public class PendingActionEvent
 {
@@ -128,4 +129,7 @@ public class PendingActionEvent
     public required string WorkingDirectory { get; set; }
     public required string Status { get; set; } // "Pending"
     public DateTime CreatedAt { get; set; }
+
+    /// <summary>True when the command matched the dangerous-command classifier (accent styling).</summary>
+    public bool IsDangerous { get; set; }
 }

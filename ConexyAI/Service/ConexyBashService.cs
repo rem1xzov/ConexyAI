@@ -51,7 +51,7 @@ public class ConexyBashService : IConexyBashService
 
         if (emitStartEvent)
         {
-            await SendToolActionAsync(sessionId, command, "started", $"Выполняю: {TruncateSummary(command)}", ct: ct);
+            await SendToolActionAsync(sessionId, request, "started", $"Выполняю: {TruncateSummary(command)}", ct: ct);
         }
 
         BashToolResult result;
@@ -75,9 +75,9 @@ public class ConexyBashService : IConexyBashService
                 ? $"Exit code: {result.ExitCode}"
                 : result.ErrorType;
 
-        // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
-        // Include the (truncated) output so dangerous-command cards can show it collapsed.
-        await SendToolActionAsync(sessionId, command, result.Success ? "completed" : "failed", summary, result.Output, request.PendingActionId, ct);
+        // COMMAND_CONFIRM: добавлено 2026-09-20
+        // Include the (truncated) output so command cards can show it collapsed.
+        await SendToolActionAsync(sessionId, request, result.Success ? "completed" : "failed", summary, result.Output, ct);
 
         // Mirror the command and its output into the interactive terminal feed so the
         // user sees agent work in the same chronological timeline as their own commands.
@@ -191,20 +191,22 @@ public class ConexyBashService : IConexyBashService
     private static string NormalizeCrlf(string text) =>
         text.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", "\r\n");
 
-    private async Task SendToolActionAsync(Guid sessionId, string command, string status, string? summary, string? output = null, Guid? pendingActionId = null, CancellationToken ct = default)
+    // COMMAND_CONFIRM: добавлено 2026-09-20 — события несут IsDangerous/PendingActionId из запроса,
+    // чтобы лента сохраняла акцент и связь с карточкой подтверждения.
+    private async Task SendToolActionAsync(Guid sessionId, BashToolRequest request, string status, string? summary, string? output = null, CancellationToken ct = default)
     {
         var workspacePath = _workspaceService.GetTaskWorkspacePathIfExists(sessionId);
         var evt = new ToolActionEvent
         {
             ToolName = "bash",
-            Command = command,
+            Command = request.Command ?? string.Empty,
             Path = "",
             Status = status,
             Summary = summary,
-            // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
             WorkingDirectory = workspacePath,
             Output = output,
-            PendingActionId = pendingActionId
+            PendingActionId = request.PendingActionId,
+            IsDangerous = request.IsDangerous
         };
         await _hubContext.Clients.Group($"task_{sessionId}").SendAsync("ToolAction", evt, ct);
     }
