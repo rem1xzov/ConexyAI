@@ -812,15 +812,21 @@ body {
 .modelpicker__trigger {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  gap: 2px;
+  background: transparent;
+  border: none;
   color: var(--text);
   border-radius: 999px;
-  padding: 7px 12px;
+  padding: 5px 8px;
+  margin-left: -8px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 15px;
+  font-weight: 600;
   white-space: nowrap;
+}
+
+.modelpicker__trigger:hover:not(:disabled) {
+  background: var(--surface-2);
 }
 
 .modelpicker__trigger:disabled {
@@ -830,12 +836,16 @@ body {
 
 .chevron {
   color: var(--muted);
+  display: inline-flex;
+  align-items: center;
 }
 
+/* Opens downward from the header trigger. */
 .modelpicker__menu {
   position: absolute;
-  bottom: calc(100% + 8px);
-  right: 0;
+  top: calc(100% + 8px);
+  left: 0;
+  right: auto;
   width: 290px;
   background: var(--surface-solid);
   backdrop-filter: blur(16px);
@@ -1316,12 +1326,26 @@ body {
   min-height: 0;
 }
 
-.ide-toolbar {
+/* ---------- Chat header ---------- */
+
+.chat-header {
   display: flex;
-  justify-content: flex-end;
-  padding: 8px 12px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  min-height: 48px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-soft);
+  position: relative;
+  z-index: 20;
+}
+
+.chat-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .ide-divider {
@@ -4048,10 +4072,6 @@ body {
 
 /* ---------- MOBILE RESPONSIVE: добавлено 2026-09-19 ---------- */
 
-.modelpicker__label-short {
-  display: none;
-}
-
 @media (max-width: 768px) {
   /* Sidebar -> full-screen overlay opened via hamburger */
   .sidebar,
@@ -4095,9 +4115,9 @@ body {
     cursor: pointer;
   }
 
-  /* Make room for the floating menu button */
-  .main {
-    padding-top: 56px;
+  /* The chat header sits beside the floating menu button, so reserve room on its left. */
+  .chat-header {
+    padding: 6px 12px 6px 56px;
   }
 
   /* Agent -> chat only on mobile (workspace is not rendered) */
@@ -4123,26 +4143,23 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .modelpicker__label-full {
-    display: none;
-  }
-  .modelpicker__label-short {
-    display: inline;
+  /* Don't let the trigger slide under the floating menu button. */
+  .modelpicker__trigger {
+    margin-left: 0;
   }
 
-  /* Model picker -> bottom sheet (full width, not clipped) */
+  /* Model picker menu -> dropdown right below the header */
   .modelpicker__menu {
     position: fixed;
-    top: auto;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    width: 100%;
-    border-radius: 16px 16px 0 0;
+    top: 56px;
+    left: 8px;
+    right: 8px;
+    bottom: auto;
+    width: auto;
+    border-radius: 16px;
     max-height: 70dvh;
     overflow-y: auto;
     z-index: 300;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   /* Modals -> fullscreen overlay */

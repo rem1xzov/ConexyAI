@@ -1,23 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ConexyModel, ReasoningEffort, TaskAttachment } from '../types/api';
+import type { TaskAttachment } from '../types/api';
 import { fileToAttachment, isAllowedMime, pastedImageFile } from '../utils/attachments';
-import { ModelPicker } from './ModelPicker';
 import { VoiceWaveIcon, MicIcon, PlusIcon, SendIcon, StopIcon, UploadIcon, PhotoIcon, CameraIcon, CodeIcon, CloseIcon } from './Icons';
 
 const MAX_ATTACHMENTS = 10;
 
 interface InputBarProps {
-  model: ConexyModel;
-  onModelChange: (model: ConexyModel) => void;
-  mode: 'chat' | 'code';
-  thinking: boolean;
-  onThinkingChange: (value: boolean) => void;
-  reasoningEffort: ReasoningEffort;
-  onReasoningEffortChange: (value: ReasoningEffort) => void;
-  smartSearch: boolean;
-  onSmartSearchChange: (value: boolean) => void;
-  locked?: boolean;
   disabled?: boolean;
   isGenerating: boolean;
   onStop: () => void;
@@ -27,16 +16,6 @@ interface InputBarProps {
 }
 
 export function InputBar({
-  model,
-  onModelChange,
-  mode,
-  thinking,
-  onThinkingChange,
-  reasoningEffort,
-  onReasoningEffortChange,
-  smartSearch,
-  onSmartSearchChange,
-  locked,
   disabled,
   isGenerating,
   onStop,
@@ -59,6 +38,18 @@ export function InputBar({
   const menuRef = useRef<HTMLDivElement>(null);
 
   const recognitionRef = useRef<any>(null);
+  // True while the user wants the mic on. Drives the auto-restart in `onend` so a
+  // browser-side timeout never silently ends the session before the user taps stop.
+  const listeningRef = useRef(false);
+  // Text that was already in the textarea when recording started.
+  const baseTextRef = useRef('');
+  // Everything finalized by the recognizer during this session (survives restarts).
+  const finalTextRef = useRef('');
+  // Latest not-yet-finalized tail from the current recognizer session.
+  const interimRef = useRef('');
+  // Finalized text + the pending interim tail, so stopping never loses the last phrase.
+  const liveTextRef = useRef('');
+  const restartTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -73,7 +64,23 @@ export function InputBar({
   // Stop any in-progress recognition if the component unmounts.
   useEffect(
     () => () => {
-      recognitionRef.current?.stop();
+      listeningRef.current = false;
+      if (restartTimerRef.current !== null) {
+        window.clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = null;
+      }
+      const recognition = recognitionRef.current;
+      recognitionRef.current = null;
+      if (recognition) {
+        recognition.onend = null;
+        recognition.onresult = null;
+        recognition.onerror = null;
+        try {
+          recognition.stop();
+        } catch {
+          // already stopped
+        }
+      }
     },
     [],
   );
@@ -133,6 +140,53 @@ export function InputBar({
     setMenuOpen(false);
   }
 
+  function applyTranscript() {
+    const spoken = liveTextRef.current.trim();
+    const base = baseTextRef.current;
+    setValue(base ? (spoken ? `${base} ${spoken}` : base) : spoken);
+    resizeTextarea();
+  }
+
+  // Speech segments carry inconsistent whitespace, so join them with exactly one space.
+  function joinTranscript(left: string, right: string): string {
+    const a = left.trim();
+    const b = right.trim();
+    if (!a) return b;
+    if (!b) return a;
+    return `${a} ${b}`;
+  }
+
+  // A recognizer session is dropped on restart, and its pending interim result with it.
+  // Fold that tail into the finalized text so nothing the user said disappears.
+  function commitInterim() {
+    const interim = interimRef.current.trim();
+    interimRef.current = '';
+    if (!interim) return;
+    finalTextRef.current = joinTranscript(finalTextRef.current, interim);
+    liveTextRef.current = finalTextRef.current;
+  }
+
+  function stopRecognition() {
+    listeningRef.current = false;
+    setIsRecording(false);
+    if (restartTimerRef.current !== null) {
+      window.clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+    }
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+    if (recognition) {
+      // Detach first: onend would otherwise try to restart the session we're closing.
+      recognition.onend = null;
+      try {
+        recognition.stop();
+      } catch {
+        // already stopped
+      }
+    }
+    applyTranscript();
+  }
+
   function handleMicClick() {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -140,36 +194,79 @@ export function InputBar({
       return;
     }
 
-    if (isRecording) {
-      recognitionRef.current?.stop();
-      setIsRecording(false);
+    if (listeningRef.current) {
+      stopRecognition();
       return;
     }
 
+    baseTextRef.current = value.trim();
+    finalTextRef.current = '';
+    interimRef.current = '';
+    liveTextRef.current = '';
+    listeningRef.current = true;
+
     const recognition = new SpeechRecognition();
     recognition.lang = 'ru-RU';
-    recognition.continuous = false;
+    // Must stay `true`: with `false` the browser ends the session after the first
+    // pause in speech (or a short internal timeout), which is what used to stop the
+    // recording after roughly a second.
+    recognition.continuous = true;
     recognition.interimResults = true;
 
     recognition.onstart = () => setIsRecording(true);
 
     recognition.onresult = (event: any) => {
-      const transcript = Array.from(event.results)
-        .map((result: any) => result[0].transcript)
-        .join('');
-      setValue((prev) => (prev ? `${prev} ` : '') + transcript);
-      resizeTextarea();
+      let interim = '';
+      let final = '';
+      // Start from resultIndex: earlier results were already committed to finalTextRef.
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) final += result[0].transcript;
+        else interim += result[0].transcript;
+      }
+      if (final) finalTextRef.current = joinTranscript(finalTextRef.current, final);
+      interimRef.current = interim;
+      liveTextRef.current = joinTranscript(finalTextRef.current, interim);
+      applyTranscript();
     };
 
     recognition.onerror = (event: any) => {
       console.error('Speech recognition error', event.error);
-      setIsRecording(false);
+      // Permission / hardware failures are terminal; no-speech or network hiccups are not.
+      if (
+        event.error === 'not-allowed' ||
+        event.error === 'service-not-allowed' ||
+        event.error === 'audio-capture'
+      ) {
+        stopRecognition();
+      }
     };
 
-    recognition.onend = () => setIsRecording(false);
+    // The browser may still end a continuous session on its own (long silence, network
+    // hiccup). Restart it so listening lasts until the user taps the mic again.
+    recognition.onend = () => {
+      if (!listeningRef.current) return;
+      commitInterim();
+      restartTimerRef.current = window.setTimeout(() => {
+        restartTimerRef.current = null;
+        if (!listeningRef.current) return;
+        try {
+          recognition.start();
+        } catch (err) {
+          console.error('Speech recognition restart failed', err);
+          stopRecognition();
+        }
+      }, 250);
+    };
 
     recognitionRef.current = recognition;
-    recognition.start();
+    try {
+      recognition.start();
+    } catch (err) {
+      console.error('Speech recognition start failed', err);
+      listeningRef.current = false;
+      setIsRecording(false);
+    }
   }
 
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
@@ -293,19 +390,6 @@ export function InputBar({
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-        />
-
-        <ModelPicker
-          model={model}
-          onModelChange={onModelChange}
-          mode={mode}
-          thinking={thinking}
-          onThinkingChange={onThinkingChange}
-          reasoningEffort={reasoningEffort}
-          onReasoningEffortChange={onReasoningEffortChange}
-          smartSearch={smartSearch}
-          onSmartSearchChange={onSmartSearchChange}
-          locked={locked}
         />
 
         <button

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConexyModel, ReasoningEffort } from '../types/api';
-import { CheckIcon } from './Icons';
+import { CheckIcon, ChevronDownIcon } from './Icons';
 
 interface ModelOption {
   value: ConexyModel;
@@ -91,10 +91,12 @@ export function ModelPicker({
         onClick={() => !locked && setOpen((o) => !o)}
         disabled={locked}
         type="button"
+        title={current.label}
       >
-        <span className="modelpicker__label-full">{current.label}</span>
-        <span className="modelpicker__label-short">{current.shortLabel}</span>
-        <span className="chevron">▾</span>
+        <span className="modelpicker__label">{current.shortLabel}</span>
+        <span className="chevron">
+          <ChevronDownIcon size={14} />
+        </span>
       </button>
 
       {open && (
