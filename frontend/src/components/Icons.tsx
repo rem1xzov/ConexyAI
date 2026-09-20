@@ -244,6 +244,17 @@ export function ChevronDownIcon(props: IconProps) {
   );
 }
 
+// INCOGNITO_CHAT: добавлено 2026-09-20
+export function GhostIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M5 20V10a7 7 0 0 1 14 0v10l-2.33-2-2.34 2-2.33-2-2.33 2L7.33 18 5 20Z" />
+      <circle cx="9.5" cy="10.5" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="14.5" cy="10.5" r="0.9" fill="currentColor" stroke="none" />
+    </Icon>
+  );
+}
+
 export function DownloadIcon(props: IconProps) {
   return (
     <Icon {...props}>

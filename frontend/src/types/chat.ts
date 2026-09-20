@@ -39,4 +39,7 @@ export interface ChatSession {
   messages: ChatMessage[];
   createdAt: number;
   isPinned?: boolean;
+  // INCOGNITO_CHAT: добавлено 2026-09-20
+  /** Local-only chat: hidden from the sidebar and never written to localStorage. */
+  incognito?: boolean;
 }

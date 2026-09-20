@@ -174,6 +174,8 @@ builder.Services.AddScoped<IUsageRepository, UsageRepository>();
 builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
 builder.Services.AddScoped<IUserMemoryService, UserMemoryService>();
 builder.Services.AddSingleton<IMemoryExtractionQueue, MemoryExtractionQueue>();
+// INCOGNITO_CHAT: добавлено 2026-09-20
+builder.Services.AddSingleton<IIncognitoChatStore, IncognitoChatStore>();
 // RAG: добавлено 2026-09-17
 builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();

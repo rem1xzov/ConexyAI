@@ -20,6 +20,9 @@ export interface ConexyRequest {
   sessionId?: string;
   chatId?: string;
   smartSearch?: boolean;
+  // INCOGNITO_CHAT: добавлено 2026-09-20
+  /** Ephemeral turn: not persisted to chat history and excluded from long-term memory. */
+  incognito?: boolean;
 }
 
 export interface ConexyResponse {

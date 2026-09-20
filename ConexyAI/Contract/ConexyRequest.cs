@@ -17,7 +17,11 @@ public record ConexyRequest(
     string? ChatId = null,
     // When true (flash/pro only), the web_search tool is passed to the model for this
     // message. conexy-coder always has web_search and ignores this flag.
-    bool SmartSearch = false
+    bool SmartSearch = false,
+    // INCOGNITO_CHAT: добавлено 2026-09-20
+    // When true the turn is never persisted: no ChatHistory/ConexyChatMessage row, no
+    // long-term-memory read and no memory extraction. Subscription limits are still counted.
+    bool Incognito = false
 );
 
 /// <summary>An uploaded file/image attachment from the user.</summary>

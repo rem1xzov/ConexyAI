@@ -3379,6 +3379,56 @@ body {
   white-space: pre-wrap;
 }
 
+/* ---------- INCOGNITO_CHAT: добавлено 2026-09-20 ---------- */
+/* Compact switch in the chat header; only offered while the chat is still empty. */
+.incognito-toggle,
+.incognito-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.incognito-toggle {
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.incognito-toggle:hover {
+  color: var(--text);
+}
+
+/* Active state: a violet tint so the mode reads as "special but not alarming". */
+.incognito-toggle--on,
+.incognito-badge {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* The desktop chat tab only gets a header while the incognito control is relevant. */
+.chat-header--chat {
+  justify-content: flex-end;
+}
+
+/* Subtle, whole-chat reminder that nothing here is being recorded. */
+.main--incognito {
+  background:
+    linear-gradient(180deg, rgba(198, 139, 212, 0.07) 0%, rgba(198, 139, 212, 0) 38%),
+    var(--bg-main);
+}
+
+.main--incognito .feed {
+  background: transparent;
+}
+
 /* ---------- Live Voice Mode (fullscreen overlay) ---------- */
 
 .live-voice {

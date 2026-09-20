@@ -14,5 +14,9 @@ public record ConexyJob(
     bool Thinking = false,
     string? ReasoningEffort = null,
     bool StudentsMode = false,
-    bool SmartSearch = false
+    bool SmartSearch = false,
+    // INCOGNITO_CHAT: добавлено 2026-09-20
+    // Ephemeral turn: keeps its context in memory only, never in the DB, and is excluded
+    // from long-term memory both as a source and as a target.
+    bool Incognito = false
 );

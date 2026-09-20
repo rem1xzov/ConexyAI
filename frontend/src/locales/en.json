@@ -37,6 +37,8 @@
     "subtitle": "Chat and agent are available after login."
   },
   "chat": {
+    "incognito": "Incognito",
+    "incognitoHint": "Incognito chat: the dialog is not saved to history and is not used to remember you",
     "heroTitle": "Your move, {{name}}",
     "heroSubtitle": "What can I build for you today?",
     "defaultName": "Commander"

@@ -194,9 +194,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         // SUBSCRIPTION_TIERS: добавлено 2026-09-17 — inject durable user memory facts.
         var systemPrompt = WorkerSystemPrompt;
-        var memoryBlock = await _memoryService.BuildPromptBlockAsync(job.UserId, ct);
-        if (!string.IsNullOrEmpty(memoryBlock))
-            systemPrompt += memoryBlock;
+        // INCOGNITO_CHAT: добавлено 2026-09-20 — kept for parity with the chat path; the UI only
+        // enables incognito for the Chat tab today, but a flag that is set must never leak memory.
+        if (!job.Incognito)
+        {
+            var memoryBlock = await _memoryService.BuildPromptBlockAsync(job.UserId, ct);
+            if (!string.IsNullOrEmpty(memoryBlock))
+                systemPrompt += memoryBlock;
+        }
 
         var messages = new List<ChatMessage>
         {

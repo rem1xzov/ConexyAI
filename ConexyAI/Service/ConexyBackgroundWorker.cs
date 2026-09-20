@@ -18,6 +18,8 @@ public class ConexyBackgroundWorker : BackgroundService
     private readonly IConexyTodoService _todoService;
     // COMMAND_CONFIRM: добавлено 2026-09-20
     private readonly IPendingActionService _pendingActions;
+    // INCOGNITO_CHAT: добавлено 2026-09-20
+    private readonly IIncognitoChatStore _incognitoChat;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHubContext<ConexyHub> _hubContext;
     private readonly IConexyWorkspaceService _workspaceService;
@@ -31,6 +33,7 @@ public class ConexyBackgroundWorker : BackgroundService
         IConexyCancellationRegistry cancellations,
         IConexyTodoService todoService,
         IPendingActionService pendingActions,
+        IIncognitoChatStore incognitoChat,
         IServiceScopeFactory scopeFactory,
         IHubContext<ConexyHub> hubContext,
         IConexyWorkspaceService workspaceService,
@@ -42,6 +45,7 @@ public class ConexyBackgroundWorker : BackgroundService
         _cancellations = cancellations;
         _todoService = todoService;
         _pendingActions = pendingActions;
+        _incognitoChat = incognitoChat;
         _scopeFactory = scopeFactory;
         _hubContext = hubContext;
         _workspaceService = workspaceService;
@@ -133,7 +137,7 @@ public class ConexyBackgroundWorker : BackgroundService
                     result = await StreamCompletionAsync(llmClient, chatHistory, webSearch, subscriptionService, memoryService, job, taskToken);
                 }
 
-                entity.Result = result;
+                entity.Result = job.Incognito ? ConexyService.IncognitoPromptPlaceholder : result;
                 entity.Status = ConexyStatus.Completed;
                 entity.FinishedAt = DateTime.UtcNow;
                 await repository.SaveChangesAsync(taskToken);
@@ -224,15 +228,24 @@ public class ConexyBackgroundWorker : BackgroundService
         systemPrompt += $"\n\nТекущая дата и время (UTC): {DateTime.UtcNow:yyyy-MM-dd HH:mm}.";
 
         // SUBSCRIPTION_TIERS: добавлено 2026-09-17 — inject durable user memory facts.
-        var memoryBlock = await memoryService.BuildPromptBlockAsync(job.UserId, ct);
-        if (!string.IsNullOrEmpty(memoryBlock))
-            systemPrompt += "\n" + memoryBlock;
+        // INCOGNITO_CHAT: добавлено 2026-09-20 — an incognito turn must not read the user's
+        // long-term memory, otherwise the profile would leak into a "forgotten" chat.
+        if (!job.Incognito)
+        {
+            var memoryBlock = await memoryService.BuildPromptBlockAsync(job.UserId, ct);
+            if (!string.IsNullOrEmpty(memoryBlock))
+                systemPrompt += "\n" + memoryBlock;
+        }
 
         // web_search is available to flash/pro only when the Smart Search toggle is on.
         var searchEnabled = job.ModelType != ConexyModelType.ConexyCoder && job.SmartSearch;
 
         // Rebuild the prior turns of this chat so the model has conversational context.
-        var history = await chatHistory.GetMessagesAsync(job.ChatId, ct);
+        // INCOGNITO_CHAT: добавлено 2026-09-20 — incognito threads live in memory only, so they
+        // keep their context without ever touching the history table.
+        IReadOnlyList<ConexyChatMessageEntity> history = job.Incognito
+            ? _incognitoChat.GetMessages(job.ChatId)
+            : await chatHistory.GetMessagesAsync(job.ChatId, ct);
 
         var messages = new List<ChatMessage> { new("system", systemPrompt) };
         if (searchEnabled)
@@ -308,20 +321,38 @@ public class ConexyBackgroundWorker : BackgroundService
 
         // Persist the completed turn so the next message in this chat includes it.
         // User text is stored as plain text; image attachments are not part of history.
-        await chatHistory.AppendAsync(job.UserId, job.ChatId, "user", job.Prompt, ct);
-        if (!string.IsNullOrWhiteSpace(result))
+        // INCOGNITO_CHAT: добавлено 2026-09-20 — incognito turns stay in memory and never
+        // produce a ChatHistory row (so the chat also never shows up in the sidebar history).
+        if (job.Incognito)
         {
-            await chatHistory.AppendAsync(job.UserId, job.ChatId, "assistant", result, ct);
+            _incognitoChat.Append(job.ChatId, job.UserId, "user", job.Prompt);
+            if (!string.IsNullOrWhiteSpace(result))
+            {
+                _incognitoChat.Append(job.ChatId, job.UserId, "assistant", result);
+            }
+        }
+        else
+        {
+            await chatHistory.AppendAsync(job.UserId, job.ChatId, "user", job.Prompt, ct);
+            if (!string.IsNullOrWhiteSpace(result))
+            {
+                await chatHistory.AppendAsync(job.UserId, job.ChatId, "assistant", result, ct);
+            }
         }
 
         // SUBSCRIPTION_TIERS: добавлено 2026-09-17
+        // INCOGNITO_CHAT: limits still apply — incognito hides history, it is not a free pass.
         await subscriptionService.RecordRequestAsync(job.UserId, job.ModelType, ct);
 
         // Memory extraction batching: run after every N-th user message in this chat.
-        var userMessageCount = await chatHistory.CountUserMessagesAsync(job.ChatId, ct);
-        if (userMessageCount > 0 && userMessageCount % _memoryOptions.Value.BatchingThreshold == 0)
+        // INCOGNITO_CHAT: skipped entirely, so the MemoryExtractionWorker never sees it.
+        if (!job.Incognito)
         {
-            memoryService.EnqueueExtraction(job.UserId, job.ChatId);
+            var userMessageCount = await chatHistory.CountUserMessagesAsync(job.ChatId, ct);
+            if (userMessageCount > 0 && userMessageCount % _memoryOptions.Value.BatchingThreshold == 0)
+            {
+                memoryService.EnqueueExtraction(job.UserId, job.ChatId);
+            }
         }
 
         return result;

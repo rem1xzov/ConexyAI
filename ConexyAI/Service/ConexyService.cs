@@ -25,6 +25,9 @@ public class ConexyService : IConexyService
     private const int MaxRequestsPerWindow = 60;
     private static readonly TimeSpan WindowDuration = TimeSpan.FromMinutes(1);
 
+    // INCOGNITO_CHAT: добавлено 2026-09-20 — stands in for the prompt of an incognito turn.
+    internal const string IncognitoPromptPlaceholder = "(incognito)";
+
     public ConexyService(IConexyRepository repository, IConexyQueueGuard queueGuard, IWebHostEnvironment environment, ISubscriptionService subscriptionService)
     {
         _repository = repository;
@@ -82,6 +85,12 @@ public class ConexyService : IConexyService
         // EF Core ChangeTracker conflict.
         var existing = await _repository.GetByIdAsNoTrackingAsync(taskId, ct);
 
+        // INCOGNITO_CHAT: добавлено 2026-09-20
+        // The task row itself has to exist — the queue, dedup guard and rate-limit counter all
+        // key off it — but an incognito turn must not leave the user's text behind, so only a
+        // placeholder is persisted.
+        var storedPrompt = request.Incognito ? IncognitoPromptPlaceholder : request.Prompt;
+
         ConexyEntity entity;
         if (existing != null && existing.UserId == userId)
         {
@@ -89,7 +98,7 @@ public class ConexyService : IConexyService
             // instance with the same key.
             entity = existing;
             entity.Model = modelType.ToPublicName();
-            entity.Prompt = request.Prompt;
+            entity.Prompt = storedPrompt;
             entity.Status = ConexyStatus.Pending;
             entity.Result = null;
             entity.FinishedAt = null;
@@ -108,7 +117,7 @@ public class ConexyService : IConexyService
                 Id = taskId,
                 UserId = userId,
                 Model = modelType.ToPublicName(),
-                Prompt = request.Prompt,
+                Prompt = storedPrompt,
                 Status = ConexyStatus.Pending
             };
             entity = await _repository.CreateOrGetAsync(entity, ct);
@@ -116,7 +125,7 @@ public class ConexyService : IConexyService
 
         // Ставим задачу в фоновую очередь (GitHub-токен не сохраняется в БД, а передаётся только в памяти).
         // Идемпотентная постановка: дубликат с тем же SessionId не создаёт вторую задачу.
-        await _queueGuard.EnqueueIfNotInFlightAsync(new ConexyJob(entity.Id, chatId, userId, modelType, request.Prompt, request.GitHubToken, request.GitHubRepo, request.Attachments, request.Thinking, request.ReasoningEffort, request.StudentsMode, request.SmartSearch), ct);
+        await _queueGuard.EnqueueIfNotInFlightAsync(new ConexyJob(entity.Id, chatId, userId, modelType, request.Prompt, request.GitHubToken, request.GitHubRepo, request.Attachments, request.Thinking, request.ReasoningEffort, request.StudentsMode, request.SmartSearch, request.Incognito), ct);
 
         return ToResponse(entity);
     }

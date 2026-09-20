@@ -13,7 +13,7 @@ import { WorkspacePanel } from './components/WorkspacePanel';
 import { StatusBar } from './components/StatusBar';
 // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
 // import { LiveVoiceModal } from './components/LiveVoiceModal';
-import { MenuIcon, PanelRightCloseIcon, PanelRightOpenIcon } from './components/Icons';
+import { MenuIcon, PanelRightCloseIcon, PanelRightOpenIcon, GhostIcon } from './components/Icons';
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 import { UsageIndicator } from './components/UsageIndicator';
 import { UpgradeModal } from './components/UpgradeModal';
@@ -124,6 +124,10 @@ export default function App() {
   const [thinking, setThinking] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('high');
   const [smartSearch, setSmartSearch] = useState(false);
+  // INCOGNITO_CHAT: добавлено 2026-09-20
+  // Local-only switch for the plain chat tab. It is never persisted and is reset whenever the
+  // user moves to another chat, so an incognito session can never be resumed or reused.
+  const [incognito, setIncognito] = useState(false);
   const [search, setSearch] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(() => !isMobile);
   const [workspaceWidth, setWorkspaceWidth] = useState(55); // % width of the IDE pane
@@ -232,7 +236,9 @@ export default function App() {
   }, [isAdminRoute, user]);
 
   useEffect(() => {
-    saveSessions(sessions);
+    // INCOGNITO_CHAT: добавлено 2026-09-20 — incognito chats stay in memory for the current
+    // visit only, so they are filtered out of the persisted list (and the sidebar).
+    saveSessions(sessions.filter((s) => !s.incognito));
   }, [sessions]);
 
   // SUBSCRIPTION_TIERS: добавлено 2026-09-17
@@ -440,6 +446,16 @@ export default function App() {
   const isAgent = activeTab === 'projects';
   const agentRunning = activeSession?.status === 'Running';
 
+  // INCOGNITO_CHAT: добавлено 2026-09-20
+  // The switch is offered only for a still-empty plain chat: once the first message is sent the
+  // mode is locked in (the header keeps a passive badge so the user cannot forget it).
+  const chatTab = !isAgent && !students;
+  const chatEmpty = (activeSession?.messages.length ?? 0) === 0;
+  const incognitoActive = incognito && chatTab;
+  const showIncognitoToggle = chatTab && chatEmpty && Boolean(token);
+  // Incognito chats are in-memory only, so they never reach the sidebar or localStorage.
+  const visibleSessions = sessions.filter((s) => !s.incognito);
+
   // Latest agent progress for the IDE bottom panel (Live Action Status / Todo).
   const lastAssistant = [...(activeSession?.messages ?? [])].reverse().find((m) => m.role === 'assistant') ?? null;
   const latestToolActions = lastAssistant?.toolActions ?? [];
@@ -493,6 +509,8 @@ export default function App() {
     setThinking(false);
     setSmartSearch(false);
     setReasoningEffort('high');
+    // INCOGNITO_CHAT: switching tabs leaves the incognito mode behind with the old chat.
+    setIncognito(false);
     if (next === 'projects') setModel('conexy-coder');
     else if (next === 'students') setModel('ConexyV1-pro');
     else setModel('ConexyV1-flash');
@@ -513,6 +531,8 @@ export default function App() {
     // user sends the first message — see ensureSessionId, which materializes it.
     const draftId = uid();
     setActiveId(draftId);
+    // INCOGNITO_CHAT: a new chat always starts as a normal one.
+    setIncognito(false);
     return draftId;
   }
 
@@ -530,6 +550,8 @@ export default function App() {
       kind,
       messages: [],
       createdAt: Date.now(),
+      // INCOGNITO_CHAT: добавлено 2026-09-20
+      incognito: incognitoActive,
     };
     setSessions((prev) => [session, ...prev]);
     setActiveId(id);
@@ -576,6 +598,8 @@ export default function App() {
     setSessions((prev) => prev.filter((s) => s.id !== id));
     if (activeId === id) {
       setActiveId(uid());
+      // INCOGNITO_CHAT: the deleted chat took its mode with it.
+      setIncognito(false);
     }
   }
 
@@ -645,6 +669,9 @@ export default function App() {
         studentsMode: students,
         sessionId: currentTaskId,
         chatId: sessionId,
+        // INCOGNITO_CHAT: добавлено 2026-09-20 — 'incognitoActive' covers the very first
+        // message (the session does not exist yet); later turns read the flag off the session.
+        incognito: incognitoActive || (activeSession?.incognito ?? false),
       });
 
       setSessions((prev) => updateSession(prev, sessionId, (s) => ({ ...s, taskId: res.id })));
@@ -820,13 +847,34 @@ export default function App() {
     return <AdminPanel onBack={() => { window.location.hash = ''; }} onToast={showToast} />;
   }
 
+  // INCOGNITO_CHAT: добавлено 2026-09-20
+  // Rendered in the chat header: an active switch while the chat is still empty, a passive
+  // badge afterwards (the mode is locked, but the user must not forget it is on).
+  const incognitoControl = showIncognitoToggle ? (
+    <button
+      className={`incognito-toggle ${incognito ? 'incognito-toggle--on' : ''}`}
+      onClick={() => setIncognito((v) => !v)}
+      type="button"
+      aria-pressed={incognito}
+      title={t('chat.incognitoHint')}
+    >
+      <GhostIcon size={15} />
+      <span>{t('chat.incognito')}</span>
+    </button>
+  ) : incognitoActive ? (
+    <span className="incognito-badge" title={t('chat.incognitoHint')}>
+      <GhostIcon size={15} />
+      <span>{t('chat.incognito')}</span>
+    </span>
+  ) : null;
+
   return (
     <div className="app">
       <Sidebar
         open={sidebarOpen}
         activeTab={activeTab}
         search={search}
-        sessions={sessions}
+        sessions={visibleSessions}
         activeId={activeId}
         onToggle={() => setSidebarOpen((o) => !o)}
         onTabChange={(tab) => {
@@ -839,6 +887,8 @@ export default function App() {
         }}
         onSelectSession={(id) => {
           setActiveId(id);
+          // INCOGNITO_CHAT: opening another chat always returns to normal mode.
+          setIncognito(false);
           if (isMobile) setSidebarOpen(false);
         }}
         onSearchChange={setSearch}
@@ -871,7 +921,7 @@ export default function App() {
         <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
       )}
 
-      <main className="main" ref={mainRef}>
+      <main className={incognitoActive ? 'main main--incognito' : 'main'} ref={mainRef}>
         <div className={isAgent ? 'main__body main__body--ide' : 'main__body'}>
           <div
             className={isAgent && !ideCollapsed && !isMobile ? 'ide-chat' : 'ide-chat--single'}
@@ -892,11 +942,13 @@ export default function App() {
                   onSmartSearchChange={setSmartSearch}
                   locked={students}
                 />
-                {isAgent && (
+                {isAgent ? (
                   <div className="chat-header__actions">
                     {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
                     <UsageIndicator usage={usage} />
                   </div>
+                ) : (
+                  incognitoControl
                 )}
               </div>
             )}
@@ -914,6 +966,13 @@ export default function App() {
                 {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
                 <UsageIndicator usage={usage} />
               </div>
+            )}
+            {/* INCOGNITO_CHAT: добавлено 2026-09-20
+                Desktop chat tab gets a thin header only while the incognito control matters —
+                a new, still-empty chat (or an active incognito chat) — so a normal conversation
+                keeps the full height. */}
+            {!isMobile && !isAgent && !students && incognitoControl && (
+              <div className="chat-header chat-header--chat">{incognitoControl}</div>
             )}
             {token ? (
               <ChatFeed
