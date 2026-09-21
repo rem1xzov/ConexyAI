@@ -14,6 +14,9 @@ import { StatusBar } from './components/StatusBar';
 // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
 // import { LiveVoiceModal } from './components/LiveVoiceModal';
 import { MenuIcon, PanelRightCloseIcon, PanelRightOpenIcon, GhostIcon } from './components/Icons';
+// LOGO_SWEEP / CLAUDE_LAYOUT: добавлено 2026-09-20
+import { ConexyLogo } from './components/ConexyLogo';
+import { ChatLayout, type ChatQuickChip } from './components/ChatLayout';
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 import { UsageIndicator } from './components/UsageIndicator';
 import { UpgradeModal } from './components/UpgradeModal';
@@ -455,6 +458,36 @@ export default function App() {
   const showIncognitoToggle = chatTab && chatEmpty && Boolean(token);
   // Incognito chats are in-memory only, so they never reach the sidebar or localStorage.
   const visibleSessions = sessions.filter((s) => !s.incognito);
+
+  // CLAUDE_LAYOUT: добавлено 2026-09-20
+  // A signed-in chat tab with no messages shows the centred start screen; every other case
+  // (agent, students, an existing conversation) keeps the feed-grown layout.
+  const stageEmpty = Boolean(token) && chatTab && chatEmpty;
+  // The compact header mark appears as soon as the conversation starts, and sweeps while
+  // the model is working.
+  const showHeaderLogo = chatTab && !chatEmpty;
+  const quickChips: ChatQuickChip[] = chatTab
+    ? [
+        {
+          key: 'flash',
+          label: t('chat.chipFlash'),
+          onClick: () => handleModelChange('ConexyV1-flash'),
+          active: model === 'ConexyV1-flash',
+        },
+        {
+          key: 'pro',
+          label: t('chat.chipPro'),
+          onClick: () => handleModelChange('ConexyV1-pro'),
+          active: model === 'ConexyV1-pro',
+        },
+        {
+          key: 'search',
+          label: t('chat.chipSmartSearch'),
+          onClick: () => setSmartSearch((v) => !v),
+          active: smartSearch,
+        },
+      ]
+    : [];
 
   // Latest agent progress for the IDE bottom panel (Live Action Status / Todo).
   const lastAssistant = [...(activeSession?.messages ?? [])].reverse().find((m) => m.role === 'assistant') ?? null;
@@ -930,18 +963,25 @@ export default function App() {
             {/* Mobile: the model picker lives in the chat header. */}
             {isMobile && (
               <div className="chat-header">
-                <ModelPicker
-                  model={model}
-                  onModelChange={handleModelChange}
-                  mode={mode}
-                  thinking={thinking}
-                  onThinkingChange={setThinking}
-                  reasoningEffort={reasoningEffort}
-                  onReasoningEffortChange={setReasoningEffort}
-                  smartSearch={smartSearch}
-                  onSmartSearchChange={setSmartSearch}
-                  locked={students}
-                />
+                <div className="chat-header__left">
+                  {showHeaderLogo && (
+                    <span className="chat-header__logo">
+                      <ConexyLogo size={32} active={agentRunning} />
+                    </span>
+                  )}
+                  <ModelPicker
+                    model={model}
+                    onModelChange={handleModelChange}
+                    mode={mode}
+                    thinking={thinking}
+                    onThinkingChange={setThinking}
+                    reasoningEffort={reasoningEffort}
+                    onReasoningEffortChange={setReasoningEffort}
+                    smartSearch={smartSearch}
+                    onSmartSearchChange={setSmartSearch}
+                    locked={students}
+                  />
+                </div>
                 {isAgent ? (
                   <div className="chat-header__actions">
                     {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
@@ -967,65 +1007,84 @@ export default function App() {
                 <UsageIndicator usage={usage} />
               </div>
             )}
-            {/* INCOGNITO_CHAT: добавлено 2026-09-20
-                Desktop chat tab gets a thin header only while the incognito control matters —
-                a new, still-empty chat (or an active incognito chat) — so a normal conversation
-                keeps the full height. */}
-            {!isMobile && !isAgent && !students && incognitoControl && (
-              <div className="chat-header chat-header--chat">{incognitoControl}</div>
-            )}
-            {token ? (
-              <ChatFeed
-                session={activeSession}
-                nickname={user?.displayName ? user.displayName.split('@')[0] : null}
-                onRegenerate={handleRegenerate}
-                onResend={handleResend}
-                onEditMessage={handleEditMessage}
-                onCommandDecision={(id, approved, allowAll) => void handleCommandDecision(id, approved, allowAll)}
-              />
-            ) : initializing ? (
-              <div className="feed feed--empty">
-                <p className="muted">{t('common.loading')}</p>
-              </div>
-            ) : (
-              <div className="feed feed--empty">
-                <div className="hero">
-                  <h1 className="hero__title">{t('hero.title')}</h1>
-                  <p className="hero__subtitle">{t('hero.subtitle')}</p>
+            {/* INCOGNITO_CHAT / LOGO_SWEEP: desktop chat header. Holds the compact mark that the
+                start-screen logo collapses into, plus the incognito control. */}
+            {!isMobile && !isAgent && !students && (
+              <div className="chat-header chat-header--chat">
+                <div className="chat-header__left">
+                  {showHeaderLogo && (
+                    <span className="chat-header__logo">
+                      <ConexyLogo size={32} active={agentRunning} />
+                    </span>
+                  )}
                 </div>
+                {incognitoControl}
               </div>
             )}
-            {/* COMMAND_CONFIRM: добавлено 2026-09-20 — while auto-approve is on, agent commands
-                run without asking; this is the single place to switch it back off. */}
-            {allowAllTaskId && (
-              <div className="agent-autoapprove">
-                <span className="agent-autoapprove__text">{t('cmdConfirm.allowAllActive')}</span>
-                <button
-                  className="agent-autoapprove__off"
-                  onClick={() => void handleDisableAllowAll()}
-                  type="button"
-                >
-                  {t('cmdConfirm.disableAllowAll')}
-                </button>
-              </div>
-            )}
-            <InputBar
-              model={model}
-              onModelChange={handleModelChange}
-              mode={mode}
-              thinking={thinking}
-              onThinkingChange={setThinking}
-              reasoningEffort={reasoningEffort}
-              onReasoningEffortChange={setReasoningEffort}
-              smartSearch={smartSearch}
-              onSmartSearchChange={setSmartSearch}
-              locked={students}
-              disabled={!token}
-              isGenerating={agentRunning}
-              onStop={handleStop}
-              // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
-              // onOpenLive={() => setIsLiveOpen(true)}
-              onSend={handleSend}
+            <ChatLayout
+              empty={stageEmpty}
+              generating={agentRunning}
+              logoSize={88}
+              chips={quickChips}
+              feed={
+                token ? (
+                  <ChatFeed
+                    session={activeSession}
+                    nickname={user?.displayName ? user.displayName.split('@')[0] : null}
+                    onRegenerate={handleRegenerate}
+                    onResend={handleResend}
+                    onEditMessage={handleEditMessage}
+                    onCommandDecision={(id, approved, allowAll) => void handleCommandDecision(id, approved, allowAll)}
+                  />
+                ) : initializing ? (
+                  <div className="feed feed--empty">
+                    <p className="muted">{t('common.loading')}</p>
+                  </div>
+                ) : (
+                  <div className="feed feed--empty">
+                    <div className="hero">
+                      <h1 className="hero__title">{t('hero.title')}</h1>
+                      <p className="hero__subtitle">{t('hero.subtitle')}</p>
+                    </div>
+                  </div>
+                )
+              }
+              composer={
+                <>
+                  {/* COMMAND_CONFIRM: добавлено 2026-09-20 — while auto-approve is on, agent
+                      commands run without asking; this is the single switch-off point. */}
+                  {allowAllTaskId && (
+                    <div className="agent-autoapprove">
+                      <span className="agent-autoapprove__text">{t('cmdConfirm.allowAllActive')}</span>
+                      <button
+                        className="agent-autoapprove__off"
+                        onClick={() => void handleDisableAllowAll()}
+                        type="button"
+                      >
+                        {t('cmdConfirm.disableAllowAll')}
+                      </button>
+                    </div>
+                  )}
+                  <InputBar
+                    model={model}
+                    onModelChange={handleModelChange}
+                    mode={mode}
+                    thinking={thinking}
+                    onThinkingChange={setThinking}
+                    reasoningEffort={reasoningEffort}
+                    onReasoningEffortChange={setReasoningEffort}
+                    smartSearch={smartSearch}
+                    onSmartSearchChange={setSmartSearch}
+                    locked={students}
+                    disabled={!token}
+                    isGenerating={agentRunning}
+                    onStop={handleStop}
+                    // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
+                    // onOpenLive={() => setIsLiveOpen(true)}
+                    onSend={handleSend}
+                  />
+                </>
+              }
             />
           </div>
 

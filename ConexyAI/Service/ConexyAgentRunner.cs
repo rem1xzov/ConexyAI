@@ -223,10 +223,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 : "Обдумываю следующий шаг...";
             await SendAgentStatusAsync(taskId, "thinking", thinkingLabel, ct: ct);
 
-            var llmResult = await _llmClient.SendChatAsync(job.ModelType, messages, AvailableTools, job.ReasoningEffort, job.TaskId, ct);
-            var responseMessage = llmResult.Message;
+            var llmTurn = await StreamAgentTurnAsync(taskId, messages, ct);
+            var responseMessage = llmTurn.Message;
             // SUBSCRIPTION_TIERS: добавлено 2026-09-17 — internal agent tokens count toward the agent budget.
-            await _subscriptionService.RecordAgentTokensAsync(job.UserId, llmResult.TotalTokens, ct);
+            await _subscriptionService.RecordAgentTokensAsync(job.UserId, llmTurn.TotalTokens, ct);
             messages.Add(responseMessage);
 
             if (responseMessage.ToolCalls == null || responseMessage.ToolCalls.Count == 0)
@@ -257,18 +257,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     await group.SendAsync("OnLog", "[Auditor] APPROVED — applying changes.", ct);
                 }
 
-                if (!string.IsNullOrWhiteSpace(responseMessage.ReasoningContent))
-                {
-                    await group.SendAsync("OnThinkingToken", responseMessage.ReasoningContent, ct);
-                }
-
-                // Stream the model's final answer into the chat via OnContentToken so it
-                // appears as a normal assistant reply, not only via OnCompleted.
+                // STREAM_TOKENS: добавлено 2026-09-20 — the answer already reached the client
+                // token by token while the turn streamed, so only a turn that produced no text
+                // at all needs a fallback line here.
                 var answer = string.IsNullOrWhiteSpace(finalText)
                     ? "Готово. Задача выполнена."
                     : finalText;
                 await SendAgentStatusAsync(taskId, "idle", "Готово", ct: ct);
-                await group.SendAsync("OnContentToken", answer, ct);
+                if (string.IsNullOrWhiteSpace(finalText))
+                {
+                    await group.SendAsync("OnContentToken", answer, ct);
+                }
 
                 await group.SendAsync("OnLog", "[Agent Completed] Solution finalized.", ct);
 
@@ -607,6 +606,104 @@ public class ConexyAgentRunner : IConexyAgentRunner
             ? res.ErrorType ?? "command failed"
             : res.Output;
         return new ConexyToolResult(toolCall.Id, output, !res.Success);
+    }
+
+    // STREAM_TOKENS: добавлено 2026-09-20
+    /// <summary>
+    /// Runs one agent turn as a streamed completion and forwards every upstream delta to the
+    /// client immediately, so the coder model answers token by token like flash/pro instead of
+    /// arriving as one block. Content, reasoning and the assembled tool calls are returned as a
+    /// single assistant message so the rest of the loop is unchanged.
+    /// </summary>
+    private async Task<(ChatMessage Message, int TotalTokens)> StreamAgentTurnAsync(
+        Guid taskId,
+        List<ChatMessage> messages,
+        CancellationToken ct)
+    {
+        var group = _hubContext.Clients.Group($"task_{taskId}");
+        var content = new StringBuilder();
+        var reasoning = new StringBuilder();
+        List<LlmToolCall>? toolCalls = null;
+        var totalTokens = 0;
+        var yieldedAnyDelta = false;
+
+        var stream = _llmClient
+            .StreamChatAsync(messages, _job.ModelType, _job.ReasoningEffort, AvailableTools, taskId: _job.TaskId, ct: ct)
+            .GetAsyncEnumerator(ct);
+
+        await using (stream)
+        {
+            while (true)
+            {
+                StreamDelta delta;
+                try
+                {
+                    if (!await stream.MoveNextAsync())
+                        break;
+                    delta = stream.Current;
+                }
+                catch (Exception ex) when (!yieldedAnyDelta && !ct.IsCancellationRequested)
+                {
+                    // Streaming is an optimisation, not a requirement: if the upstream rejects or
+                    // breaks the stream before the first token, fall back to a plain completion so
+                    // the agent still works (just without incremental output).
+                    await group.SendAsync("OnLog", $"[Stream] Incremental output unavailable ({ex.Message}); falling back to a plain completion.", ct);
+                    var fallback = await _llmClient.SendChatAsync(
+                        _job.ModelType, messages, AvailableTools, _job.ReasoningEffort, _job.TaskId, ct);
+                    return (fallback.Message, fallback.TotalTokens);
+                }
+
+                yieldedAnyDelta = true;
+
+                if (!string.IsNullOrEmpty(delta.Reasoning))
+                {
+                    reasoning.Append(delta.Reasoning);
+                    await group.SendAsync("OnThinkingToken", delta.Reasoning, ct);
+                }
+
+                if (!string.IsNullOrEmpty(delta.Content))
+                {
+                    content.Append(delta.Content);
+                    // Forwarded as it arrives: no aggregation, no buffering.
+                    await group.SendAsync("OnContentToken", delta.Content, ct);
+                }
+
+                if (delta.ToolCalls is { Count: > 0 })
+                {
+                    toolCalls = delta.ToolCalls;
+                }
+
+                if (delta.TotalTokens is > 0)
+                {
+                    totalTokens = delta.TotalTokens.Value;
+                }
+            }
+        }
+
+        if (totalTokens <= 0)
+        {
+            // The upstream did not report usage for this streamed turn. Approximate from the
+            // payload so the agent token budget still accrues instead of never being enforced.
+            totalTokens = EstimateTokens(content.Length, reasoning.Length, toolCalls);
+        }
+
+        var message = new ChatMessage(
+            "assistant",
+            content.Length > 0 ? content.ToString() : null,
+            toolCalls,
+            null,
+            reasoning.Length > 0 ? reasoning.ToString() : null);
+
+        return (message, totalTokens);
+    }
+
+    /// <summary>
+    /// Rough ~4 chars/token fallback used only when a streamed turn reports no usage.
+    /// </summary>
+    private static int EstimateTokens(int contentChars, int reasoningChars, List<LlmToolCall>? toolCalls)
+    {
+        var toolCallChars = toolCalls?.Sum(tc => tc.Function.Name.Length + tc.Function.Arguments.Length) ?? 0;
+        return (contentChars + reasoningChars + toolCallChars + 3) / 4;
     }
 
     private async Task<ConexyToolResult> HandleScreenshotAsync(

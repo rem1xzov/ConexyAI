@@ -39,6 +39,9 @@
   "chat": {
     "incognito": "Incognito",
     "incognitoHint": "Incognito chat: the dialog is not saved to history and is not used to remember you",
+    "chipFlash": "Quick answer",
+    "chipPro": "Deep analysis",
+    "chipSmartSearch": "Smart search",
     "heroTitle": "Your move, {{name}}",
     "heroSubtitle": "What can I build for you today?",
     "defaultName": "Commander"

@@ -169,7 +169,10 @@ public class ConexyLlmClient : IConexyLlmClient
             Stream: true,
             ReasoningEffort: resolvedReasoningEffort,
             Thinking: ResolveThinking(modelType, resolvedReasoningEffort),
-            MaxTokens: MaxTokens
+            MaxTokens: MaxTokens,
+            // STREAM_USAGE: добавлено 2026-09-20 — ask for the trailing usage chunk so the
+            // agent token budget is still accounted for when the turn is streamed.
+            StreamOptions: new StreamOptionsConfig(true)
         );
 
         var json = JsonSerializer.Serialize(payload, _jsonOptions);
@@ -247,9 +250,19 @@ public class ConexyLlmClient : IConexyLlmClient
                 string? content = null;
                 string? reasoning = null;
                 string? finishReason = null;
+                int? totalTokens = null;
                 try
                 {
                     using var doc = JsonDocument.Parse(data);
+                    // STREAM_USAGE: the usage chunk arrives last and carries no choices.
+                    if (doc.RootElement.TryGetProperty("usage", out var usageEl) &&
+                        usageEl.ValueKind == JsonValueKind.Object &&
+                        usageEl.TryGetProperty("total_tokens", out var totalTokensEl) &&
+                        totalTokensEl.ValueKind == JsonValueKind.Number)
+                    {
+                        totalTokens = totalTokensEl.GetInt32();
+                    }
+
                     if (doc.RootElement.TryGetProperty("choices", out var choices) &&
                         choices.GetArrayLength() > 0)
                     {
@@ -289,6 +302,11 @@ public class ConexyLlmClient : IConexyLlmClient
                 if (!string.IsNullOrEmpty(content) || !string.IsNullOrEmpty(reasoning))
                 {
                     yield return new StreamDelta(content, reasoning);
+                }
+
+                if (totalTokens is not null)
+                {
+                    yield return new StreamDelta(TotalTokens: totalTokens);
                 }
 
                 if (finishReason is not null)

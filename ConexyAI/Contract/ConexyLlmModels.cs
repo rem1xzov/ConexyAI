@@ -89,7 +89,15 @@ public record LlmChatRequest(
     [property: JsonPropertyName("stream")] bool? Stream = null,
     [property: JsonPropertyName("reasoning_effort")] string? ReasoningEffort = null,
     [property: JsonPropertyName("thinking")] ThinkingConfig? Thinking = null,
-    [property: JsonPropertyName("max_tokens")] int? MaxTokens = null
+    [property: JsonPropertyName("max_tokens")] int? MaxTokens = null,
+    // STREAM_USAGE: добавлено 2026-09-20 — makes the upstream emit a final usage chunk on a
+    // streamed response, so streamed turns still report total_tokens for budget accounting.
+    [property: JsonPropertyName("stream_options")] StreamOptionsConfig? StreamOptions = null
+);
+
+/// <summary>OpenAI-compatible streaming options.</summary>
+public record StreamOptionsConfig(
+    [property: JsonPropertyName("include_usage")] bool IncludeUsage
 );
 
 /// <summary>
@@ -118,9 +126,11 @@ public record LlmUsage(
 /// <summary>Result of a non-streaming chat completion: the message plus token usage.</summary>
 public record LlmChatResult(ChatMessage Message, int TotalTokens);
 
-/// <summary>A single streamed delta: answer content and/or reasoning content, plus the optional finish reason and any completed tool calls.</summary>
+/// <summary>A single streamed delta: answer content and/or reasoning content, plus the optional finish reason, any completed tool calls, and the upstream token usage (final chunk only).</summary>
 public record StreamDelta(
     string? Content = null,
     string? Reasoning = null,
     string? FinishReason = null,
-    List<LlmToolCall>? ToolCalls = null);
+    List<LlmToolCall>? ToolCalls = null,
+    // STREAM_USAGE: добавлено 2026-09-20
+    int? TotalTokens = null);

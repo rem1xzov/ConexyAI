@@ -23,6 +23,10 @@
   --bg-hover: rgba(255, 255, 255, 0.06);
   --bg-soft: rgba(0, 0, 0, 0.25);
   --code-bg: #12141a;
+  /* LOGO_SWEEP: добавлено 2026-09-20 */
+  --logo-track: rgba(236, 231, 238, 0.16);
+  --logo-band: #f4e8fb;
+  --logo-glow: var(--accent);
 }
 
 html[data-theme="light"] {
@@ -46,6 +50,10 @@ html[data-theme="light"] {
   --bg-hover: rgba(0, 0, 0, 0.05);
   --bg-soft: rgba(0, 0, 0, 0.04);
   --code-bg: #f6f4f8;
+  /* LOGO_SWEEP: добавлено 2026-09-20 */
+  --logo-track: rgba(26, 28, 35, 0.14);
+  --logo-band: var(--accent);
+  --logo-glow: var(--accent);
 }
 
 * {
@@ -1385,6 +1393,14 @@ body {
   background: var(--bg-soft);
   position: relative;
   z-index: 20;
+}
+
+/* Left cluster of the chat header: compact mark + (mobile) the model picker. */
+.chat-header__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .chat-header__actions {
@@ -3413,9 +3429,9 @@ body {
   color: var(--accent);
 }
 
-/* The desktop chat tab only gets a header while the incognito control is relevant. */
+/* Desktop chat header: compact mark on the left, incognito control on the right. */
 .chat-header--chat {
-  justify-content: flex-end;
+  padding: 0 16px;
 }
 
 /* Subtle, whole-chat reminder that nothing here is being recorded. */
@@ -3427,6 +3443,218 @@ body {
 
 .main--incognito .feed {
   background: transparent;
+}
+
+/* ---------- CLAUDE_LAYOUT: добавлено 2026-09-20 ---------- */
+/* Claude-style chat stage: a single flex column whose spacers position the composer, so the
+   first message animates the input from the middle of the screen down to the bottom. */
+.chat-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-stage__feed {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: flex-grow 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.chat-stage__hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  flex: 0 1 auto;
+  padding: 0 0 18px;
+  transition:
+    flex-grow 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.25s ease,
+    padding 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.chat-stage__composer {
+  flex: 0 0 auto;
+}
+
+.chat-stage__tail {
+  flex: 0 1 auto;
+  min-height: 0;
+  transition: flex-grow 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Empty: feed collapsed, hero and tail grow equally -> composer centred. */
+.chat-stage--empty .chat-stage__feed {
+  flex-grow: 0;
+}
+
+.chat-stage--empty .chat-stage__hero {
+  flex-grow: 1;
+}
+
+.chat-stage--empty .chat-stage__tail {
+  flex-grow: 1;
+}
+
+/* First message: the feed takes the room, the logo fades out, the composer drops to the bottom. */
+.chat-stage--active .chat-stage__feed {
+  flex-grow: 1;
+}
+
+.chat-stage--active .chat-stage__hero {
+  flex-grow: 0;
+  opacity: 0;
+  padding-bottom: 0;
+}
+
+.chat-stage--active .chat-stage__tail {
+  flex-grow: 0;
+}
+
+.chat-stage__chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 760px;
+  margin: 12px auto 0;
+  padding: 0 24px;
+  transition: opacity 0.25s ease;
+}
+
+.chat-stage--active .chat-stage__chips {
+  opacity: 0;
+  height: 0;
+  margin-top: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.chat-chip {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.chat-chip:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.chat-chip--on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Compact mark in the chat header once the conversation has started. */
+.chat-header__logo {
+  display: flex;
+  align-items: center;
+  animation: logoIn 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes logoIn {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ---------- LOGO_SWEEP: добавлено 2026-09-20 ---------- */
+/*
+ * The mark's geometry comes from assets/conexyai.svg. The travelling highlight is a
+ * stroke-dasharray window on a second copy of each chevron, moved by stroke-dashoffset.
+ * pathLength={100} normalises both paths, so the dash maths below is path-length agnostic:
+ *   dasharray "18 170" -> period 188, one 18-unit band + a gap longer than the path.
+ *   offset 24 -> -100   -> the band enters just before the start (p < 0), crosses the whole
+ *                          contour, and leaves just past the end (p > 100). Because 188 is
+ *                          longer than that sweep, the second copy of the pattern can only
+ *                          reach the path for offsets >= 88, so no second band ever appears
+ *                          mid-path, and the band is invisible at both ends — the loop restart
+ *                          is therefore seamless.
+ */
+.conexy-logo {
+  display: block;
+  flex-shrink: 0;
+}
+
+.conexy-logo__track {
+  stroke: var(--logo-track);
+}
+
+.conexy-logo__band,
+.conexy-logo__glow {
+  stroke-dasharray: 18 170;
+  stroke-dashoffset: 24;
+}
+
+.conexy-logo__band {
+  stroke: var(--logo-band);
+  opacity: 0;
+}
+
+.conexy-logo__glow {
+  stroke: var(--logo-glow);
+  opacity: 0;
+  filter: blur(28px);
+}
+
+.conexy-logo--active .conexy-logo__band {
+  opacity: 0.95;
+  animation: conexySweep 2s linear infinite;
+}
+
+.conexy-logo--active .conexy-logo__glow {
+  opacity: 0.5;
+  animation: conexySweep 2s linear infinite;
+}
+
+/* Lower chevron leads; the upper one follows as a rising wave. */
+.conexy-logo__band--delayed {
+  animation-delay: 0.18s;
+}
+
+@keyframes conexySweep {
+  from {
+    stroke-dashoffset: 24;
+  }
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-stage__feed,
+  .chat-stage__hero,
+  .chat-stage__tail,
+  .chat-stage__chips,
+  .chat-header__logo {
+    transition: none;
+    animation: none;
+  }
+
+  .conexy-logo--active .conexy-logo__band,
+  .conexy-logo--active .conexy-logo__glow {
+    animation: none;
+    /* Keep a static hint of the accent instead of motion. */
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+    opacity: 0.35;
+  }
 }
 
 /* ---------- Live Voice Mode (fullscreen overlay) ---------- */

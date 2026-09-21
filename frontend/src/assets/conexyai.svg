@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" width="100%" height="100%">
+  <rect width="640" height="640" fill="#0a0a0a"/>
+  
+  <g fill="none" stroke="#ffffff" stroke-width="72" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="6">
+    <!-- Верхний шеврон -->
+    <path id="chevron-top" d="M 100 280 L 320 135 L 540 280" />
+    
+    <!-- Нижний шеврон -->
+    <path id="chevron-bottom" d="M 100 450 L 320 305 L 540 450" />
+  </g>
+</svg>

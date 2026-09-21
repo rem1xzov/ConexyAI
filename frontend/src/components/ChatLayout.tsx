@@ -1,0 +1,73 @@
+import type { ReactNode } from 'react';
+import { ConexyLogo } from './ConexyLogo';
+
+// CLAUDE_LAYOUT: добавлено 2026-09-20
+export interface ChatQuickChip {
+  key: string;
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+}
+
+interface ChatLayoutProps {
+  /** No messages yet: the logo and the composer sit in the vertical centre. */
+  empty: boolean;
+  /** Drives the logo sweep while a response is being generated. */
+  generating?: boolean;
+  logoSize?: number;
+  chips?: ChatQuickChip[];
+  feed: ReactNode;
+  composer: ReactNode;
+}
+
+/**
+ * Chat stage (Claude-style start screen).
+ *
+ * Layout is a single flex column — [feed][hero][composer][tail] — so nothing is remounted when
+ * the first message is sent. `flex-grow` on the hero/tail spacers is what positions the
+ * composer, and flex-grow is animatable, so the composer travels from the centre to the bottom
+ * while the logo collapses into the header instead of jumping.
+ *
+ * When empty: feed grows to 0, hero and tail grow to 1 (equal) — the composer lands dead centre,
+ * with the logo just above it and the chips below. When active: the feed takes the free space and
+ * the spacers collapse, leaving the composer at the bottom.
+ */
+export function ChatLayout({
+  empty,
+  generating = false,
+  logoSize = 88,
+  chips = [],
+  feed,
+  composer,
+}: ChatLayoutProps) {
+  return (
+    <div className={`chat-stage ${empty ? 'chat-stage--empty' : 'chat-stage--active'}`}>
+      <div className="chat-stage__feed">{empty ? null : feed}</div>
+
+      <div className="chat-stage__hero">
+        <ConexyLogo size={logoSize} active={generating} />
+      </div>
+
+      <div className="chat-stage__composer">
+        {composer}
+        {chips.length > 0 && (
+          <div className="chat-stage__chips">
+            {chips.map((chip) => (
+              <button
+                key={chip.key}
+                type="button"
+                className={`chat-chip ${chip.active ? 'chat-chip--on' : ''}`}
+                onClick={chip.onClick}
+                aria-pressed={chip.active}
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="chat-stage__tail" />
+    </div>
+  );
+}
