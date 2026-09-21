@@ -4,7 +4,8 @@ import type { ReactNode } from 'react';
 export interface ChatQuickChip {
   key: string;
   label: string;
-  onClick: () => void;
+  /** Omitted for a passive hint chip that only describes the mode. */
+  onClick?: () => void;
   active?: boolean;
 }
 
@@ -45,17 +46,23 @@ export function ChatLayout({ empty, hero, chips = [], feed, composer }: ChatLayo
         {composer}
         {chips.length > 0 && (
           <div className="chat-stage__chips">
-            {chips.map((chip) => (
-              <button
-                key={chip.key}
-                type="button"
-                className={`chat-chip ${chip.active ? 'chat-chip--on' : ''}`}
-                onClick={chip.onClick}
-                aria-pressed={chip.active}
-              >
-                {chip.label}
-              </button>
-            ))}
+            {chips.map((chip) =>
+              chip.onClick ? (
+                <button
+                  key={chip.key}
+                  type="button"
+                  className={`chat-chip ${chip.active ? 'chat-chip--on' : ''}`}
+                  onClick={chip.onClick}
+                  aria-pressed={chip.active}
+                >
+                  {chip.label}
+                </button>
+              ) : (
+                <span key={chip.key} className="chat-chip chat-chip--hint">
+                  {chip.label}
+                </span>
+              ),
+            )}
           </div>
         )}
       </div>

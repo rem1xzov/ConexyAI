@@ -38,7 +38,9 @@
   },
   "guest": {
     "title": "Welcome to ConexyAI",
-    "subtitle": "Sign in or create an account to keep your conversation history, work with documents and use the AI agent",
+    "subtitle_chat": "Sign in or create an account to keep your conversation history, work with documents and use the AI agent",
+    "subtitle_agent": "Sign in or create an account to run the autonomous agent: code, terminal, files and your git repository",
+    "subtitle_students": "Sign in or create an account to learn: topic breakdowns, guiding questions and study materials",
     "login": "Sign in",
     "register": "Create account"
   },
@@ -173,7 +175,23 @@
     "searching": "Searching the web: {{query}}",
     "searchingShort": "Searching the web…",
     "limitExceeded": "Limit exceeded",
-    "generationStopped": "⏹ Generation stopped."
+    "generationStopped": "⏹ Generation stopped.",
+    "chipAutonomous": "Autonomous mode",
+    "chipTools": "Terminal, files, git",
+    "chipVerify": "Build and verify",
+    "goodMorning": "Good morning, {{name}}. What shall we build?",
+    "goodAfternoon": "Good afternoon, {{name}}. What shall we build?",
+    "goodEvening": "Good evening, {{name}}. What shall we build?",
+    "goodNight": "Good night, {{name}}. What shall we build?"
+  },
+  "students": {
+    "chipSocratic": "Socratic method",
+    "chipTopics": "Topic breakdown",
+    "chipNoSolutions": "No ready-made answers",
+    "goodMorning": "Good morning, {{name}}. What shall we dig into?",
+    "goodAfternoon": "Good afternoon, {{name}}. What shall we dig into?",
+    "goodEvening": "Good evening, {{name}}. What shall we dig into?",
+    "goodNight": "Good night, {{name}}. What shall we dig into?"
   },
   "model": {
     "flashDesc": "Fast chat, quick answers, basic help.",

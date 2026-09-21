@@ -3580,6 +3580,19 @@ body {
   color: var(--accent);
 }
 
+/* Passive hint chip (agent / students start screens): describes the mode instead of
+   pretending to be a control. */
+.chat-chip--hint {
+  cursor: default;
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.chat-chip--hint:hover {
+  color: var(--muted);
+  background: var(--surface);
+}
+
 /* Compact mark in the chat header once the conversation has started. */
 .chat-header__logo {
   display: flex;

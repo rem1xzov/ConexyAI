@@ -117,12 +117,20 @@ function defaultTitle(kind: ChatSessionKind, t: (key: string) => string): string
 }
 
 // LOGO_SWEEP: добавлено 2026-09-20 — time-of-day greeting for the start screen.
-function greetingKey(): string {
+// TABS_UNIFIED: each tab has its own full sentence, so translators get a complete string
+// instead of a concatenation.
+function greetingKey(kind: ChatSessionKind): string {
   const hour = new Date().getHours();
-  if (hour >= 5 && hour < 12) return 'chat.goodMorning';
-  if (hour >= 12 && hour < 18) return 'chat.goodAfternoon';
-  if (hour >= 18 && hour < 23) return 'chat.goodEvening';
-  return 'chat.goodNight';
+  const time = hour >= 5 && hour < 12
+    ? 'Morning'
+    : hour >= 12 && hour < 18
+      ? 'Afternoon'
+      : hour >= 18 && hour < 23
+        ? 'Evening'
+        : 'Night';
+
+  const scope = kind === 'projects' ? 'agent' : kind === 'students' ? 'students' : 'chat';
+  return `${scope}.good${time}`;
 }
 
 export default function App() {
@@ -471,40 +479,55 @@ export default function App() {
   const visibleSessions = sessions.filter((s) => !s.incognito);
 
   // CLAUDE_LAYOUT: добавлено 2026-09-20
-  // A chat tab with no messages shows the centred start screen; every other case
-  // (agent, students, an existing conversation) keeps the feed-grown layout.
-  // GUEST_HERO: guests get the same centred layout, with the auth block in the hero slot.
+  // Every tab gets the centred start screen while its conversation is empty; the greeting and
+  // the chips are adapted to the tab, and guests get the auth block instead.
   const isGuest = !token && !initializing;
-  const stageEmpty = chatTab && chatEmpty && (Boolean(token) || isGuest);
-  // The compact header mark appears as soon as the conversation starts, and sweeps while
-  // the model is working.
+  const stageEmpty = chatEmpty && !initializing;
+  // The compact header mark appears as soon as the conversation starts.
   const showHeaderLogo = chatTab && !chatEmpty;
-  const quickChips: ChatQuickChip[] = chatTab && token
-    ? [
-        {
-          key: 'flash',
-          label: t('chat.chipFlash'),
-          onClick: () => handleModelChange('ConexyV1-flash'),
-          active: model === 'ConexyV1-flash',
-        },
-        {
-          key: 'pro',
-          label: t('chat.chipPro'),
-          onClick: () => handleModelChange('ConexyV1-pro'),
-          active: model === 'ConexyV1-pro',
-        },
-        {
-          key: 'search',
-          label: t('chat.chipSmartSearch'),
-          onClick: () => setSmartSearch((v) => !v),
-          active: smartSearch,
-        },
-      ]
-    : [];
+
+  // TABS_UNIFIED: chips follow the tab. The chat tab offers real controls (model, smart
+  // search); the agent and students tabs show passive hint chips instead — the agent runs
+  // autonomously and the students mode fixes its own reasoning depth server-side, so a
+  // clickable control there would do nothing.
+  const quickChips: ChatQuickChip[] = !token
+    ? []
+    : chatTab
+      ? [
+          {
+            key: 'flash',
+            label: t('chat.chipFlash'),
+            onClick: () => handleModelChange('ConexyV1-flash'),
+            active: model === 'ConexyV1-flash',
+          },
+          {
+            key: 'pro',
+            label: t('chat.chipPro'),
+            onClick: () => handleModelChange('ConexyV1-pro'),
+            active: model === 'ConexyV1-pro',
+          },
+          {
+            key: 'search',
+            label: t('chat.chipSmartSearch'),
+            onClick: () => setSmartSearch((v) => !v),
+            active: smartSearch,
+          },
+        ]
+      : isAgent
+        ? [
+            { key: 'agent-autonomous', label: t('agent.chipAutonomous') },
+            { key: 'agent-tools', label: t('agent.chipTools') },
+            { key: 'agent-verify', label: t('agent.chipVerify') },
+          ]
+        : [
+            { key: 'students-socratic', label: t('students.chipSocratic') },
+            { key: 'students-topics', label: t('students.chipTopics') },
+            { key: 'students-no-solutions', label: t('students.chipNoSolutions') },
+          ];
 
   // LOGO_SWEEP: the start screen greets by time of day, next to the mark (Claude-style row).
   const displayName = user?.displayName ? user.displayName.split('@')[0] : null;
-  const greeting = t(greetingKey(), { name: displayName ?? t('chat.defaultName') });
+  const greeting = t(greetingKey(activeTab), { name: displayName ?? t('chat.defaultName') });
 
   // Latest agent progress for the IDE bottom panel (Live Action Status / Todo).
   const lastAssistant = [...(activeSession?.messages ?? [])].reverse().find((m) => m.role === 'assistant') ?? null;
@@ -1051,6 +1074,7 @@ export default function App() {
               hero={
                 isGuest ? (
                   <GuestHero
+                    mode={isAgent ? 'agent' : students ? 'students' : 'chat'}
                     onLogin={() => setAuthModal('login')}
                     onRegister={() => setAuthModal('register')}
                   />
