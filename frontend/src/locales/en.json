@@ -46,6 +46,7 @@
     "goodAfternoon": "Good afternoon, {{name}}",
     "goodEvening": "Good evening, {{name}}",
     "goodNight": "Good night, {{name}}",
+    "newChatTooltip": "Hi, I'm Conexy. How can I help?",
     "heroTitle": "Your move, {{name}}",
     "heroSubtitle": "What can I build for you today?",
     "defaultName": "Commander"

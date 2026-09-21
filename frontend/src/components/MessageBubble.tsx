@@ -18,9 +18,22 @@ interface MessageBubbleProps {
   onEditMessage?: (messageId: string, newContent: string) => void;
   // COMMAND_CONFIRM: добавлено 2026-09-20
   onCommandDecision?: CommandDecisionHandler;
+  // NEW_CHAT_LOGO: добавлено 2026-09-20
+  /** True for the newest message in the feed — only it carries the "new chat" mark. */
+  isLast?: boolean;
+  /** Starts a fresh conversation when the underlying reply mark is clicked. */
+  onNewChat?: () => void;
 }
 
-export function MessageBubble({ message, onRegenerate, onResend, onEditMessage, onCommandDecision }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  onRegenerate,
+  onResend,
+  onEditMessage,
+  onCommandDecision,
+  isLast = false,
+  onNewChat,
+}: MessageBubbleProps) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -174,6 +187,25 @@ export function MessageBubble({ message, onRegenerate, onResend, onEditMessage, 
           content={content}
           onRegenerate={onRegenerate ? () => onRegenerate(message.id) : undefined}
         />
+      )}
+
+      {/* NEW_CHAT_LOGO: добавлено 2026-09-20 — after generation the reply ends with a static
+          mark that opens a new conversation (with a hint bubble on hover / keyboard focus). */}
+      {isLast && !streaming && (
+        <div className="msg-newchat">
+          <button
+            type="button"
+            className="msg-newchat__btn"
+            onClick={onNewChat}
+            disabled={!onNewChat}
+            aria-label={t('chat.newChatTooltip')}
+          >
+            <ConexyLogo size={26} />
+          </button>
+          <span className="msg-newchat__bubble" role="tooltip">
+            {t('chat.newChatTooltip')}
+          </span>
+        </div>
       )}
     </div>
   );

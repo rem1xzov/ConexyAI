@@ -562,6 +562,12 @@ export default function App() {
     else setModel('ConexyV1-flash');
   }
 
+  // NEW_CHAT_LOGO: добавлено 2026-09-20
+  /** Starts a fresh conversation in the current tab (used by the mark under a reply). */
+  function handleNewChat() {
+    handleTabChange(activeTab);
+  }
+
   function handleModelChange(next: ConexyModel) {
     setModel(next);
     // The reasoning/thinking toggle is only meaningful for ConexyV1-pro. Drop its state
@@ -1054,6 +1060,7 @@ export default function App() {
                     onResend={handleResend}
                     onEditMessage={handleEditMessage}
                     onCommandDecision={(id, approved, allowAll) => void handleCommandDecision(id, approved, allowAll)}
+                    onNewChat={handleNewChat}
                   />
                 ) : initializing ? (
                   <div className="feed feed--empty">

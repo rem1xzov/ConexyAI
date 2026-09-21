@@ -46,6 +46,7 @@
     "goodAfternoon": "Добрый день, {{name}}",
     "goodEvening": "Добрый вечер, {{name}}",
     "goodNight": "Доброй ночи, {{name}}",
+    "newChatTooltip": "Привет, я Conexy. Чем могу помочь?",
     "heroTitle": "Ваш ход, {{name}}",
     "heroSubtitle": "Что я могу создать для вас сегодня?",
     "defaultName": "командующий"

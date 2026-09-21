@@ -12,9 +12,11 @@ interface ChatFeedProps {
   onEditMessage?: (messageId: string, newContent: string) => void;
   // COMMAND_CONFIRM: добавлено 2026-09-20
   onCommandDecision?: CommandDecisionHandler;
+  // NEW_CHAT_LOGO: добавлено 2026-09-20
+  onNewChat?: () => void;
 }
 
-export function ChatFeed({ session, nickname, onRegenerate, onResend, onEditMessage, onCommandDecision }: ChatFeedProps) {
+export function ChatFeed({ session, nickname, onRegenerate, onResend, onEditMessage, onCommandDecision, onNewChat }: ChatFeedProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -71,7 +73,7 @@ export function ChatFeed({ session, nickname, onRegenerate, onResend, onEditMess
 
   return (
     <div className="feed" ref={scrollRef}>
-      {session.messages.map((m) => (
+      {session.messages.map((m, index) => (
         <MessageBubble
           key={m.id}
           message={m}
@@ -79,6 +81,8 @@ export function ChatFeed({ session, nickname, onRegenerate, onResend, onEditMess
           onResend={onResend}
           onEditMessage={onEditMessage}
           onCommandDecision={onCommandDecision}
+          isLast={index === session.messages.length - 1}
+          onNewChat={onNewChat}
         />
       ))}
       <div ref={messagesEndRef} className="h-4 w-full shrink-0" />

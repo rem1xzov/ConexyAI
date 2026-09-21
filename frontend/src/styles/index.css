@@ -3493,13 +3493,19 @@ body {
   align-items: flex-end;
   justify-content: center;
   flex: 0 1 auto;
-  max-height: 90px;
   padding: 0 0 18px;
   transition:
     flex-grow 0.35s cubic-bezier(0.4, 0, 0.2, 1),
-    max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.25s ease,
     padding 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Only the content collapses; the spacer itself keeps its flex height so the composer stays
+   exactly centred while empty. */
+.chat-stage__hero-inner {
+  max-height: 90px;
+  transition:
+    max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.25s ease;
 }
 
 .chat-stage__composer {
@@ -3512,7 +3518,10 @@ body {
   transition: flex-grow 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Empty: feed collapsed, hero and tail grow equally -> composer centred. */
+/* Empty: the feed is collapsed, and the hero (which starts at its content height and is
+   bottom-aligned) grows by the same amount as the tail. That makes the gap above the greeting
+   equal to the gap below the chips, so the greeting + composer + chips bundle is centred
+   vertically, and the composer travels to the bottom when the first message arrives. */
 .chat-stage--empty .chat-stage__feed {
   flex-grow: 0;
 }
@@ -3522,19 +3531,22 @@ body {
 }
 
 .chat-stage--empty .chat-stage__tail {
-  flex-grow: 1;
+  flex: 1 1 0;
 }
 
-/* First message: the feed takes the room, the logo fades out, the composer drops to the bottom. */
+/* First message: the feed takes the room, the start screen collapses, the composer drops. */
 .chat-stage--active .chat-stage__feed {
   flex-grow: 1;
 }
 
 .chat-stage--active .chat-stage__hero {
   flex-grow: 0;
+  padding-bottom: 0;
+}
+
+.chat-stage--active .chat-stage__hero-inner {
   max-height: 0;
   opacity: 0;
-  padding-bottom: 0;
   overflow: hidden;
 }
 
@@ -3616,6 +3628,66 @@ body {
   line-height: 1.2;
   letter-spacing: 0.01em;
   color: var(--text);
+}
+
+/* ---------- NEW_CHAT_LOGO: добавлено 2026-09-20 ---------- */
+/* Static mark closing a finished reply: click it to start a new conversation. */
+.msg-newchat {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 10px 0 0 -4px;
+}
+
+.msg-newchat__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.msg-newchat__btn:disabled {
+  cursor: default;
+}
+
+.msg-newchat__btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border);
+  transform: translateY(-1px);
+}
+
+.msg-newchat__bubble {
+  position: absolute;
+  left: 46px;
+  bottom: 100%;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-solid);
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  z-index: 5;
+}
+
+.msg-newchat:hover .msg-newchat__bubble,
+.msg-newchat:focus-within .msg-newchat__bubble {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 /* ---------- TOOL_PILLS: добавлено 2026-09-20 ---------- */
@@ -3835,6 +3907,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .chat-stage__feed,
   .chat-stage__hero,
+  .chat-stage__hero-inner,
   .chat-stage__tail,
   .chat-stage__chips,
   .chat-header__logo {

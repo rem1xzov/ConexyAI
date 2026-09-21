@@ -35,7 +35,11 @@ export function ChatLayout({ empty, hero, chips = [], feed, composer }: ChatLayo
     <div className={`chat-stage ${empty ? 'chat-stage--empty' : 'chat-stage--active'}`}>
       <div className="chat-stage__feed">{empty ? null : feed}</div>
 
-      <div className="chat-stage__hero">{hero}</div>
+      <div className="chat-stage__hero">
+        {/* Wrapped so the collapse animation can cap the content without capping the spacer,
+            which must stay free to grow for the centring to be exact. */}
+        <div className="chat-stage__hero-inner">{hero}</div>
+      </div>
 
       <div className="chat-stage__composer">
         {composer}
