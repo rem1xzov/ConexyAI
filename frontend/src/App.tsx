@@ -947,8 +947,20 @@ export default function App() {
     </span>
   ) : null;
 
+  // INCOGNITO_AURA: добавлено 2026-09-20
+  // The incognito look is document-level state, so the amber aura can sit behind everything
+  // (sidebar included) with the theme variables switching to the black/yellow palette.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (incognitoActive) root.setAttribute('data-incognito', 'true');
+    else root.removeAttribute('data-incognito');
+    return () => root.removeAttribute('data-incognito');
+  }, [incognitoActive]);
+
   return (
-    <div className="app">
+    <>
+      {incognitoActive && <div className="incognito-aura" aria-hidden="true" />}
+      <div className="app">
       <Sidebar
         open={sidebarOpen}
         activeTab={activeTab}
@@ -1000,7 +1012,7 @@ export default function App() {
         <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
       )}
 
-      <main className={incognitoActive ? 'main main--incognito' : 'main'} ref={mainRef}>
+      <main className="main" ref={mainRef}>
         <div className={isAgent ? 'main__body main__body--ide' : 'main__body'}>
           <div
             className={isAgent && !ideCollapsed && !isMobile ? 'ide-chat' : 'ide-chat--single'}
@@ -1223,6 +1235,7 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
         />
       )}
-    </div>
+      </div>
+    </>
   );
 }

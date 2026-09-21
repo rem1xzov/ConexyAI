@@ -23,6 +23,12 @@
   --bg-hover: rgba(255, 255, 255, 0.06);
   --bg-soft: rgba(0, 0, 0, 0.25);
   --code-bg: #12141a;
+  /* Card elevation is a dark-theme no-op; the light theme opts in. */
+  --shadow-soft: none;
+  /* STREAM_BADGES: inline code / key term pill */
+  --badge-border: rgba(82, 82, 91, 0.6);
+  --badge-bg: rgba(38, 38, 38, 0.7);
+  --badge-text: #fb7185;
   /* LOGO_SWEEP: добавлено 2026-09-20 */
   --logo-track: rgba(236, 231, 238, 0.16);
   --logo-band: #f4e8fb;
@@ -32,35 +38,92 @@
 }
 
 html[data-theme="light"] {
-  --surface: rgba(255, 255, 255, 0.7);
+  /* LIGHT_SOFT: a soft rose-white palette instead of pure #ffffff, so the screen does not
+     glare. Surfaces stay white for contrast, while the page and work area carry the tint. */
+  --surface: rgba(255, 255, 255, 0.78);
   --surface-solid: #ffffff;
-  --surface-2: #f2f0f4;
-  --border: rgba(0, 0, 0, 0.1);
-  --text: #1a1c23;
-  --muted: #6b6470;
+  --surface-2: #fff7fa;
+  --border: rgba(190, 24, 93, 0.14);
+  --text: #1c1917;
+  --muted: #78716c;
   --accent: #9b4fb8;
   --accent-soft: rgba(155, 79, 184, 0.12);
   --danger: #e5484d;
   --ok: #22a55b;
   --warn: #b7791f;
-  --cherry: #c2255c;
-  --bg-body: linear-gradient(180deg, #fdf6fd 0%, #f7eef9 40%, #f0e6f3 100%);
-  --bg-sidebar: rgba(0, 0, 0, 0.03);
-  --bg-main: rgba(255, 255, 255, 0.4);
-  --bg-overlay: rgba(0, 0, 0, 0.4);
-  --bg-input: rgba(0, 0, 0, 0.04);
-  --bg-hover: rgba(0, 0, 0, 0.05);
-  --bg-soft: rgba(0, 0, 0, 0.04);
-  --code-bg: #f6f4f8;
+  --cherry: #9f1239;
+  --bg-body: linear-gradient(180deg, #fff7f9 0%, #fdeff4 100%);
+  --bg-sidebar: rgba(255, 255, 255, 0.55);
+  --bg-main: linear-gradient(180deg, #fff7f9 0%, #fdeff4 100%);
+  --bg-overlay: rgba(76, 29, 49, 0.28);
+  --bg-input: rgba(190, 24, 93, 0.05);
+  --bg-hover: rgba(190, 24, 93, 0.07);
+  --bg-soft: rgba(255, 255, 255, 0.6);
+  --code-bg: #fff1f5;
+  /* Card/input elevation: a barely-there rose shadow instead of a hard grey one. */
+  --shadow-soft: 0 1px 2px rgba(190, 24, 93, 0.05), 0 10px 30px rgba(190, 24, 93, 0.05);
   /* LOGO_SWEEP: добавлено 2026-09-20 */
-  --logo-track: rgba(26, 28, 35, 0.14);
+  --logo-track: rgba(28, 25, 23, 0.16);
   --logo-band: var(--accent);
   --logo-glow: var(--accent);
   --font-display: ui-serif, Georgia, 'Iowan Old Style', 'Palatino Linotype', Palatino, serif;
+  /* STREAM_BADGES: inline code / key term pill */
+  --badge-border: #fecdd3;
+  --badge-bg: rgba(255, 241, 245, 0.8);
+  --badge-text: #9f1239;
+}
+
+/* ---------- INCOGNITO_AURA: добавлено 2026-09-20 ---------- */
+/*
+ * Incognito is its own look, not a tweak of the chosen theme: a deep graphite canvas with a warm
+ * amber glow behind the content, and every accent (input focus ring, send button, badges) turned
+ * yellow. Declared after the light theme so it wins on equal specificity.
+ */
+html[data-incognito="true"] {
+  --surface: rgba(20, 20, 20, 0.72);
+  --surface-solid: #0d0d0d;
+  --surface-2: #141414;
+  --border: rgba(234, 179, 8, 0.18);
+  --text: #faf7f0;
+  --muted: #a8a29e;
+  --accent: #eab308;
+  --accent-soft: rgba(234, 179, 8, 0.14);
+  --cherry: #facc15;
+  --bg-body: #080808;
+  --bg-sidebar: rgba(0, 0, 0, 0.35);
+  /* Transparent so the aura layer below shows through the work area. */
+  --bg-main: transparent;
+  --bg-overlay: rgba(0, 0, 0, 0.7);
+  --bg-input: rgba(250, 250, 249, 0.05);
+  --bg-hover: rgba(250, 250, 249, 0.08);
+  --bg-soft: rgba(0, 0, 0, 0.4);
+  --code-bg: #0f0f0f;
+  --shadow-soft: none;
+  --logo-track: rgba(250, 247, 240, 0.18);
+  --logo-band: #fde68a;
+  --logo-glow: #eab308;
+  --badge-border: rgba(202, 138, 4, 0.55);
+  --badge-bg: rgba(234, 179, 8, 0.12);
+  --badge-text: #fbbf24;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* LIGHT_SOFT: cards and inputs are the only pure-white surfaces, lifted by a rose-tinted
+   shadow; the page behind them carries the pastel gradient. Skipped while incognito owns the
+   look, which sets its own palette. */
+html[data-theme="light"]:not([data-incognito="true"]) .chat-surface,
+html[data-theme="light"]:not([data-incognito="true"]) .chat-surface-soft {
+  background: #ffffff;
+  box-shadow: var(--shadow-soft);
+}
+
+html[data-theme="light"]:not([data-incognito="true"]) .inputbar,
+html[data-theme="light"]:not([data-incognito="true"]) .chat-input {
+  background: #ffffff;
+  box-shadow: var(--shadow-soft);
 }
 
 /* ---------- Dark custom scrollbars ---------- */
@@ -116,6 +179,9 @@ body {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
+  /* Stacking anchor so the incognito aura (z-index 0) paints behind the app content. */
+  position: relative;
+  z-index: 1;
 }
 
 /* ---------- Sidebar ---------- */
@@ -2347,9 +2413,29 @@ body {
   animation: slide-in-up 0.2s ease-out;
 }
 
-/* ---------- Markdown emphasis (cherry accent) ---------- */
+/* ---------- STREAM_BADGES: Claude-style inline pills (2026-09-20) ---------- */
+/* Inline code and short key terms render as a compact framed pill instead of bare coloured text. */
+.markdown code.chat-code {
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  white-space: break-spaces;
+}
+
 .markdown strong {
-  color: var(--cherry);
+  color: var(--badge-text);
+  font-weight: 600;
+}
+
+/* Only short terms get the pill; a fully emphasised sentence stays plain bold. */
+.markdown strong.chat-term {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--badge-border);
+  background: var(--badge-bg);
+  line-height: 1.35;
 }
 
 /* ---------- Fenced code blocks ---------- */
@@ -2956,7 +3042,7 @@ body {
 .chat-ok { color: var(--ok); }
 .chat-danger { color: var(--danger); }
 .chat-warn { color: var(--warn); }
-.chat-code { background: var(--bg-input); color: var(--text); }
+.chat-code { background: var(--badge-bg); border: 1px solid var(--badge-border); color: var(--badge-text); }
 .chat-btn { background: var(--bg-input); color: var(--text); }
 .chat-btn:hover { background: var(--bg-hover); }
 .chat-btn-accent { background: var(--accent); color: #fff; }
@@ -3442,14 +3528,40 @@ body {
 }
 
 /* Subtle, whole-chat reminder that nothing here is being recorded. */
-.main--incognito {
+/* Incognito backdrop: the black canvas and the amber glow in a single layer that fades in, so
+   switching the mode is smooth instead of a hard repaint. */
+.incognito-aura {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
   background:
-    linear-gradient(180deg, rgba(198, 139, 212, 0.07) 0%, rgba(198, 139, 212, 0) 38%),
-    var(--bg-main);
+    radial-gradient(ellipse at 50% 30%, rgba(234, 179, 8, 0.14) 0%, rgba(202, 138, 4, 0.05) 45%, transparent 75%),
+    #080808;
+  animation: incognitoAuraIn 0.5s ease both;
 }
 
-.main--incognito .feed {
-  background: transparent;
+@keyframes incognitoAuraIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Accent surfaces also ease into the yellow instead of snapping. */
+.send-btn,
+.inputbar,
+.incognito-badge,
+.incognito-toggle,
+.chat-header,
+.ide-toolbar {
+  transition:
+    background-color 0.35s ease,
+    background 0.35s ease,
+    border-color 0.35s ease,
+    color 0.35s ease;
 }
 
 /* ---------- CLAUDE_LAYOUT: добавлено 2026-09-20 ---------- */
@@ -3974,6 +4086,21 @@ body {
     stroke-dasharray: none;
     stroke-dashoffset: 0;
     opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .incognito-aura {
+    animation: none;
+  }
+
+  .send-btn,
+  .inputbar,
+  .incognito-badge,
+  .incognito-toggle,
+  .chat-header,
+  .ide-toolbar {
+    transition: none;
   }
 }
 

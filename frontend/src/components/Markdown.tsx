@@ -6,6 +6,15 @@ import { useState, type ReactNode } from 'react';
  * and fenced code blocks (```lang ... ```).
  * Plain text is split into blocks; unclosed/unknown tokens are left as-is.
  */
+/**
+ * Short key terms ("«Agent»", "Flash") read as a pill badge; a longer emphasised phrase stays
+ * plain bold so a whole sentence never turns into a badge. Mirrors the Claude inline-code look.
+ */
+function isTermBadge(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.length > 0 && trimmed.length <= 32 && trimmed.split(/\s+/).length <= 4;
+}
+
 function renderInline(text: string): ReactNode[] {
   const out: ReactNode[] = [];
   const regex = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
@@ -16,14 +25,15 @@ function renderInline(text: string): ReactNode[] {
     if (m.index > last) out.push(text.slice(last, m.index));
     const token = m[0];
     if (token.startsWith('**')) {
+      const inner = token.slice(2, -2);
       out.push(
-        <strong key={i++} className="font-semibold">
-          {token.slice(2, -2)}
+        <strong key={i++} className={isTermBadge(inner) ? 'font-semibold chat-term' : 'font-semibold'}>
+          {inner}
         </strong>,
       );
     } else if (token.startsWith('`')) {
       out.push(
-        <code key={i++} className="font-mono text-[0.9em] chat-code px-1 py-0.5 rounded">
+        <code key={i++} className="chat-code">
           {token.slice(1, -1)}
         </code>,
       );
