@@ -32,8 +32,3 @@ export function assistantPhase(message: ChatMessage): AssistantPhase {
 
   return 'thinking';
 }
-
-/** True while the running light should be visible inside the message flow. */
-export function isWorkingPhase(phase: AssistantPhase): boolean {
-  return phase === 'thinking' || phase === 'tool_calling';
-}

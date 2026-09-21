@@ -33,8 +33,14 @@
     "user": "User"
   },
   "hero": {
-    "title": "Log in to continue",
-    "subtitle": "Chat and agent are available after login."
+    "title": "Sign in to continue",
+    "subtitle": "Chat and agent are available after signing in."
+  },
+  "guest": {
+    "title": "Welcome to ConexyAI",
+    "subtitle": "Sign in or create an account to keep your conversation history, work with documents and use the AI agent",
+    "login": "Sign in",
+    "register": "Create account"
   },
   "chat": {
     "incognito": "Incognito",

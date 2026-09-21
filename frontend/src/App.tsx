@@ -17,6 +17,8 @@ import { MenuIcon, PanelRightCloseIcon, PanelRightOpenIcon, GhostIcon } from './
 // LOGO_SWEEP / CLAUDE_LAYOUT: добавлено 2026-09-20
 import { ConexyLogo } from './components/ConexyLogo';
 import { ChatLayout, type ChatQuickChip } from './components/ChatLayout';
+// GUEST_HERO: добавлено 2026-09-20
+import { GuestHero } from './components/GuestHero';
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 import { UsageIndicator } from './components/UsageIndicator';
 import { UpgradeModal } from './components/UpgradeModal';
@@ -469,13 +471,15 @@ export default function App() {
   const visibleSessions = sessions.filter((s) => !s.incognito);
 
   // CLAUDE_LAYOUT: добавлено 2026-09-20
-  // A signed-in chat tab with no messages shows the centred start screen; every other case
+  // A chat tab with no messages shows the centred start screen; every other case
   // (agent, students, an existing conversation) keeps the feed-grown layout.
-  const stageEmpty = Boolean(token) && chatTab && chatEmpty;
+  // GUEST_HERO: guests get the same centred layout, with the auth block in the hero slot.
+  const isGuest = !token && !initializing;
+  const stageEmpty = chatTab && chatEmpty && (Boolean(token) || isGuest);
   // The compact header mark appears as soon as the conversation starts, and sweeps while
   // the model is working.
   const showHeaderLogo = chatTab && !chatEmpty;
-  const quickChips: ChatQuickChip[] = chatTab
+  const quickChips: ChatQuickChip[] = chatTab && token
     ? [
         {
           key: 'flash',
@@ -1045,10 +1049,17 @@ export default function App() {
             <ChatLayout
               empty={stageEmpty}
               hero={
-                <div className="chat-hero-row">
-                  <ConexyLogo size={36} />
-                  <span className="chat-hero-greeting">{greeting}</span>
-                </div>
+                isGuest ? (
+                  <GuestHero
+                    onLogin={() => setAuthModal('login')}
+                    onRegister={() => setAuthModal('register')}
+                  />
+                ) : (
+                  <div className="chat-hero-row">
+                    <ConexyLogo size={36} />
+                    <span className="chat-hero-greeting">{greeting}</span>
+                  </div>
+                )
               }
               chips={quickChips}
               feed={

@@ -2,7 +2,7 @@ import { useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatMessage } from '../types/chat';
 import type { CommandDecisionHandler } from '../types/signalr';
-import { assistantPhase, isWorkingPhase } from '../utils/assistantPhase';
+import { assistantPhase } from '../utils/assistantPhase';
 import { ConexyLogo } from './ConexyLogo';
 import { VisionGallery } from './VisionGallery';
 import { ToolActionFeed } from './ToolActionFeed';
@@ -55,14 +55,13 @@ export function MessageBubble({
   // ASSISTANT_PHASES: добавлено 2026-09-20 — the message lifecycle drives what is shown:
   // a reasoning accordion and tool pills while working, then the streamed answer.
   const phase = assistantPhase(message);
-  // The running light lives in the message flow and disappears the moment the answer starts.
+  // STREAM_LOGO: the running light stays visible for the whole generation and always sits last,
+  // under whatever is currently the newest content — so the growing answer pushes it down.
   const showGeneratingLogo = streaming;
-  const logoAnimating = isWorkingPhase(phase);
   const showThinkingAccordion = hasThinking || phase === 'thinking';
   // Live agent status, rendered as a pill only when no tool event already covers it.
   const statusPill =
     phase === 'tool_calling' && currentAction ? { label: currentAction.label } : null;
-  const showContentCursor = streaming && content.length > 0;
   const showActions = message.status !== 'streaming';
 
   function startEdit() {
@@ -162,22 +161,20 @@ export function MessageBubble({
         statusPill={statusPill}
       />
 
-      {/* 3. Running light: only while a phase is actually working, hidden as soon as the
-          first answer token arrives and the text takes its place. */}
-      {showGeneratingLogo && (
-        <div className={`msg-generating ${logoAnimating ? '' : 'msg-generating--done'}`}>
-          <ConexyLogo size={30} active={logoAnimating} />
-        </div>
-      )}
-
       {/* 4. Streamed answer. */}
-
       <div className="w-full chat-text leading-relaxed">
         <div className="break-words">
           <Markdown text={content} />
-          {showContentCursor && <span className="cursor" />}
         </div>
       </div>
+
+      {/* 5. Running light: last element of the message while generating, so it starts directly
+          under the reasoning pill / tool pills and is pushed down as the answer grows. */}
+      {showGeneratingLogo && (
+        <div className="msg-generating">
+          <ConexyLogo size={24} active />
+        </div>
+      )}
 
       {message.error && <div className="msg__error">{message.error}</div>}
       {hasScreenshots && <VisionGallery screenshots={screenshots} />}
