@@ -42,6 +42,10 @@
     "chipFlash": "Quick answer",
     "chipPro": "Deep analysis",
     "chipSmartSearch": "Smart search",
+    "goodMorning": "Good morning, {{name}}",
+    "goodAfternoon": "Good afternoon, {{name}}",
+    "goodEvening": "Good evening, {{name}}",
+    "goodNight": "Good night, {{name}}",
     "heroTitle": "Your move, {{name}}",
     "heroSubtitle": "What can I build for you today?",
     "defaultName": "Commander"
@@ -223,13 +227,17 @@
     "hideOutput": "▾ Hide output",
     "liveStatus": "Live Action Status"
   },
+  "toolPill": {
+    "searchDocs": "Document search",
+    "searchWeb": "Web search"
+  },
   "todo": {
     "plan": "Task Plan"
   },
   "message": {
     "you": "You",
     "thinking": "Thinking…",
-    "showThinking": "🧠 Show thinking process",
+    "showThinking": "Thought process",
     "copy": "Copy",
     "goodResponse": "Good response",
     "badResponse": "Bad response",

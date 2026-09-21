@@ -114,6 +114,15 @@ function defaultTitle(kind: ChatSessionKind, t: (key: string) => string): string
   return t('sidebar.newChat');
 }
 
+// LOGO_SWEEP: добавлено 2026-09-20 — time-of-day greeting for the start screen.
+function greetingKey(): string {
+  const hour = new Date().getHours();
+  if (hour >= 5 && hour < 12) return 'chat.goodMorning';
+  if (hour >= 12 && hour < 18) return 'chat.goodAfternoon';
+  if (hour >= 18 && hour < 23) return 'chat.goodEvening';
+  return 'chat.goodNight';
+}
+
 export default function App() {
   // EMAIL_AUTH: добавлено 2026-09-19
   const { token, user, initializing, error: authError, login, register, logout } = useAuth();
@@ -488,6 +497,10 @@ export default function App() {
         },
       ]
     : [];
+
+  // LOGO_SWEEP: the start screen greets by time of day, next to the mark (Claude-style row).
+  const displayName = user?.displayName ? user.displayName.split('@')[0] : null;
+  const greeting = t(greetingKey(), { name: displayName ?? t('chat.defaultName') });
 
   // Latest agent progress for the IDE bottom panel (Live Action Status / Todo).
   const lastAssistant = [...(activeSession?.messages ?? [])].reverse().find((m) => m.role === 'assistant') ?? null;
@@ -966,7 +979,9 @@ export default function App() {
                 <div className="chat-header__left">
                   {showHeaderLogo && (
                     <span className="chat-header__logo">
-                      <ConexyLogo size={32} active={agentRunning} />
+                      {/* LOGO_SWEEP: the header mark stays static — the sweep only runs inside
+                          the message flow, under the running tool pills. */}
+                      <ConexyLogo size={32} />
                     </span>
                   )}
                   <ModelPicker
@@ -1014,7 +1029,7 @@ export default function App() {
                 <div className="chat-header__left">
                   {showHeaderLogo && (
                     <span className="chat-header__logo">
-                      <ConexyLogo size={32} active={agentRunning} />
+                      <ConexyLogo size={32} />
                     </span>
                   )}
                 </div>
@@ -1023,8 +1038,12 @@ export default function App() {
             )}
             <ChatLayout
               empty={stageEmpty}
-              generating={agentRunning}
-              logoSize={88}
+              hero={
+                <div className="chat-hero-row">
+                  <ConexyLogo size={36} />
+                  <span className="chat-hero-greeting">{greeting}</span>
+                </div>
+              }
               chips={quickChips}
               feed={
                 token ? (

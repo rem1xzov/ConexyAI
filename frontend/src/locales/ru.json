@@ -42,6 +42,10 @@
     "chipFlash": "Быстрый ответ",
     "chipPro": "Глубокий анализ",
     "chipSmartSearch": "Умный поиск",
+    "goodMorning": "Доброе утро, {{name}}",
+    "goodAfternoon": "Добрый день, {{name}}",
+    "goodEvening": "Добрый вечер, {{name}}",
+    "goodNight": "Доброй ночи, {{name}}",
     "heroTitle": "Ваш ход, {{name}}",
     "heroSubtitle": "Что я могу создать для вас сегодня?",
     "defaultName": "командующий"
@@ -223,13 +227,17 @@
     "hideOutput": "▾ Скрыть вывод",
     "liveStatus": "Live Action Status"
   },
+  "toolPill": {
+    "searchDocs": "Поиск по документам",
+    "searchWeb": "Поиск в интернете"
+  },
   "todo": {
     "plan": "План задач"
   },
   "message": {
     "you": "Вы",
     "thinking": "Думаю…",
-    "showThinking": "🧠 Показать процесс размышлений",
+    "showThinking": "Процесс размышлений",
     "copy": "Копировать",
     "goodResponse": "Хороший ответ",
     "badResponse": "Плохой ответ",

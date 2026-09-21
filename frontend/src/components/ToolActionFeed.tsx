@@ -1,89 +1,180 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
 import { CommandConfirmCard } from './CommandConfirmCard';
 
 const MAX_VISIBLE = 20;
 
-function toolIcon(event: ToolActionEvent): string {
-  if (event.toolName === 'bash') return '▶';
-  switch (event.command) {
-    case 'view':
-      return '👁';
-    case 'create':
-      return '📄';
-    case 'str_replace':
-      return '🔧';
-    case 'insert':
-      return '➕';
-    case 'undo':
-      return '↩';
-    default:
-      return '🔧';
+// TOOL_PILLS: добавлено 2026-09-20
+// The backend emits a `started` event and then a terminal one (completed/failed) per tool
+// invocation. The agent runs tool calls strictly one at a time, so pairing them in order is
+// enough to turn two transport events into one user-facing pill.
+type PillStatus = 'running' | 'completed' | 'failed' | 'rejected';
+
+interface ToolPill {
+  key: string;
+  toolName: string;
+  icon: string;
+  label: string;
+  status: PillStatus;
+  /** Result snippet (found documents, console output) — opened from the pill. */
+  detail?: string;
+  /** Extra line for a failed pill. */
+  errorLine?: string;
+}
+
+function pillKey(event: ToolActionEvent): string {
+  return `${event.toolName}|${event.path}|${event.command}`;
+}
+
+function toolIcon(toolName: string, command: string): string {
+  if (toolName === 'bash') return '⚡';
+  if (toolName === 'search_documents') return '🕒';
+  if (toolName === 'web_search') return '🌐';
+  if (toolName === 'terminal_exec') return '⚡';
+  if (toolName === 'file_write' || toolName === 'file_patch') return '📄';
+  if (toolName === 'str_replace_editor') {
+    switch (command) {
+      case 'view':
+        return '👁';
+      case 'create':
+        return '📄';
+      case 'str_replace':
+      case 'insert':
+        return '🔧';
+      case 'undo':
+        return '↩';
+      default:
+        return '🔧';
+    }
   }
+  return '🔧';
 }
 
-function statusMark(status: ToolActionEvent['status']): JSX.Element {
-  if (status === 'completed') return <span className="chat-ok">✓</span>;
-  if (status === 'failed') return <span className="chat-danger">✕</span>;
-  if (status === 'rejected') return <span className="chat-danger">⊘</span>;
-  if (status === 'pending_confirmation') return <span className="chat-warn animate-pulse">⚠</span>;
-  return <span className="chat-warn animate-pulse">●</span>;
+function statusFrom(event: ToolActionEvent): PillStatus {
+  if (event.status === 'completed') return 'completed';
+  if (event.status === 'failed') return 'failed';
+  if (event.status === 'rejected') return 'rejected';
+  return 'running';
 }
 
-// COMMAND_CONFIRM: добавлено 2026-09-20
-// Every agent bash command is confirmed now, so the card is keyed on the pending-action id
-// rather than on "is this command dangerous". Dangerous commands only get the accent.
+/** COMMAND_CONFIRM: bash commands needing a decision are rendered as their own card. */
 function isConfirmableCommand(event: ToolActionEvent): boolean {
   return event.toolName === 'bash' && event.pendingActionId != null;
+}
+
+/** Synthesised pill for agent stages that have no ToolAction row of their own. */
+export interface ToolStatusPill {
+  label: string;
 }
 
 interface ToolActionFeedProps {
   actions: ToolActionEvent[];
   /** Inline command confirmation handler; omit to render the feed read-only. */
   onCommandDecision?: CommandDecisionHandler;
+  /** Live agent status, shown as a running pill when no tool event covers it. */
+  statusPill?: ToolStatusPill | null;
 }
 
-export function ToolActionFeed({ actions, onCommandDecision }: ToolActionFeedProps) {
+export function ToolActionFeed({ actions, onCommandDecision, statusPill }: ToolActionFeedProps) {
   const { t } = useTranslation();
-  const tail = actions.slice(-MAX_VISIBLE);
-  if (tail.length === 0) return null;
+  const [openPills, setOpenPills] = useState<Record<string, boolean>>({});
 
-  // Confirmation cards are grouped by pending-action id. Grouping over the visible tail is
-  // enough: the agent is blocked while a command awaits a decision, so the pending event is
-  // always the most recent one. Older commands fall back to plain rows, which keeps a long
-  // autonomous run readable.
+  const tail = actions.slice(-MAX_VISIBLE);
+
   const confirmCards = new Map<string, ToolActionEvent[]>();
+  const pills: ToolPill[] = [];
+  const openByKey = new Map<string, ToolPill>();
+
   for (const a of tail) {
-    if (!isConfirmableCommand(a)) continue;
-    const key = a.pendingActionId!;
-    const list = confirmCards.get(key) ?? [];
-    list.push(a);
-    confirmCards.set(key, list);
+    if (isConfirmableCommand(a)) {
+      const key = a.pendingActionId!;
+      const list = confirmCards.get(key) ?? [];
+      list.push(a);
+      confirmCards.set(key, list);
+      continue;
+    }
+
+    const key = pillKey(a);
+    if (a.status === 'started') {
+      const pill: ToolPill = {
+        key: `${key}#${pills.length}`,
+        toolName: a.toolName,
+        icon: toolIcon(a.toolName, a.command),
+        label: pillLabel(a, t),
+        status: 'running',
+      };
+      pills.push(pill);
+      openByKey.set(key, pill);
+      continue;
+    }
+
+    const open = openByKey.get(key);
+    if (open) {
+      open.status = statusFrom(a);
+      open.detail = a.output ?? open.detail;
+      open.errorLine = open.status === 'failed' ? a.summary : undefined;
+      openByKey.delete(key);
+      continue;
+    }
+
+    // A completion whose `started` event fell outside the visible tail (or was never sent).
+    pills.push({
+      key: `${key}#${pills.length}`,
+      toolName: a.toolName,
+      icon: toolIcon(a.toolName, a.command),
+      label: pillLabel(a, t),
+      status: statusFrom(a),
+      detail: a.output,
+      errorLine: a.status === 'failed' ? a.summary : undefined,
+    });
   }
 
-  const ordinary = tail.filter((a) => !isConfirmableCommand(a));
+  const hasRunningPill = pills.some((p) => p.status === 'running') || confirmCards.size > 0;
+  const showStatusPill = Boolean(statusPill) && !hasRunningPill;
+
+  if (pills.length === 0 && confirmCards.size === 0 && !showStatusPill) return null;
 
   return (
-    <div className="my-3 space-y-3">
-      {ordinary.length > 0 && (
-        <div className="rounded-lg chat-surface-soft p-3 text-xs">
-          <div className="chat-muted font-medium mb-2">{t('toolAction.liveStatus')}</div>
-          <ul className="space-y-1.5">
-            {ordinary.map((a, i) => (
-              <li key={`${a.toolName}-${a.command}-${i}`} className="tool-action flex items-center gap-2 chat-text">
-                <span className="w-4 text-center shrink-0">{toolIcon(a)}</span>
-                <span className="flex-1 min-w-0 truncate font-mono" title={a.summary}>
-                  {a.summary || `${a.toolName} ${a.command}`}
-                </span>
-                {a.isDangerous && (
-                  <span className="cmd-confirm__row-badge" title={t('cmdConfirm.dangerous')}>
-                    ⚠
-                  </span>
-                )}
-                <span className="shrink-0 w-4 text-center">{statusMark(a.status)}</span>
-              </li>
-            ))}
-          </ul>
+    <div className="tool-feed">
+      {pills.map((pill) => {
+        const open = Boolean(openPills[pill.key]);
+        const expandable = Boolean(pill.detail);
+        return (
+          <div key={pill.key} className={`tool-pill tool-pill--${pill.status}`}>
+            <button
+              type="button"
+              className={`tool-pill__head ${expandable ? 'tool-pill__head--actionable' : ''}`}
+              onClick={() => expandable && setOpenPills((prev) => ({ ...prev, [pill.key]: !prev[pill.key] }))}
+              aria-expanded={expandable ? open : undefined}
+            >
+              <span className="tool-pill__icon">{pill.icon}</span>
+              <span className="tool-pill__label" title={pill.label}>
+                {pill.label}
+              </span>
+              {pill.errorLine && <span className="tool-pill__error">{pill.errorLine}</span>}
+              {pill.status === 'running' ? (
+                <span className="tool-pill__spinner" aria-hidden="true" />
+              ) : (
+                <span className="tool-pill__mark">{pillMark(pill.status)}</span>
+              )}
+              {expandable && <span className={`tool-pill__chevron ${open ? 'tool-pill__chevron--open' : ''}`}>▾</span>}
+            </button>
+
+            {expandable && open && <pre className="tool-pill__body">{pill.detail}</pre>}
+          </div>
+        );
+      })}
+
+      {/* Rendered after the pills so the running light in the message flow sits under the
+          last one. */}
+      {showStatusPill && statusPill && (
+        <div className="tool-pill tool-pill--running" role="status">
+          <div className="tool-pill__head">
+            <span className="tool-pill__icon">🕒</span>
+            <span className="tool-pill__label">{statusPill.label}</span>
+            <span className="tool-pill__spinner" aria-hidden="true" />
+          </div>
         </div>
       )}
 
@@ -92,4 +183,27 @@ export function ToolActionFeed({ actions, onCommandDecision }: ToolActionFeedPro
       ))}
     </div>
   );
+}
+
+function pillMark(status: PillStatus): JSX.Element {
+  if (status === 'completed') return <span className="chat-ok">✓</span>;
+  if (status === 'rejected') return <span className="chat-danger">⊘</span>;
+  return <span className="chat-danger">✕</span>;
+}
+
+function pillLabel(event: ToolActionEvent, t: (key: string) => string): string {
+  switch (event.toolName) {
+    case 'bash':
+      return event.command;
+    case 'terminal_exec':
+      return event.command;
+    case 'search_documents':
+      return `${t('toolPill.searchDocs')}: ${event.command}`;
+    case 'web_search':
+      return `${t('toolPill.searchWeb')}: ${event.command}`;
+    case 'str_replace_editor':
+      return `${event.command} ${event.path}`;
+    default:
+      return event.summary || `${event.toolName} ${event.command}`;
+  }
 }

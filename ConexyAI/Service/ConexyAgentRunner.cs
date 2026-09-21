@@ -484,8 +484,19 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         return new ConexyToolResult(toolCall.Id, "web_search requires a 'query'.", true);
 
                     await SendAgentStatusAsync(taskId, "searching", $"Ищу в интернете: {request.Query}...", ct: ct);
+                    // TOOL_PILLS: добавлено 2026-09-20 — web_search does not go through the
+                    // bash/editor services, so emit its own live-action pill.
+                    await SendToolActionAsync(taskId, "web_search", request.Query, "started", $"Ищу в интернете: {request.Query}...", null, ct);
 
                     var res = await _webSearchService.SearchAsync(request.Query, ct);
+                    await SendToolActionAsync(
+                        taskId,
+                        "web_search",
+                        request.Query,
+                        res.Success ? "completed" : "failed",
+                        res.Success ? "Поиск завершён" : res.Error,
+                        res.Success ? res.Output : res.Error,
+                        ct);
                     return new ConexyToolResult(toolCall.Id, res.Output, !res.Success);
                 }
 
@@ -497,8 +508,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         return new ConexyToolResult(toolCall.Id, "search_documents requires 'query'.", true);
 
                     await SendAgentStatusAsync(taskId, "searching", $"Ищу в документах: {request.Query}...", ct: ct);
+                    // TOOL_PILLS: добавлено 2026-09-20 — the pill body carries the found snippet.
+                    await SendToolActionAsync(taskId, "search_documents", request.Query, "started", $"Ищу в документах: {request.Query}...", null, ct);
 
                     var json = await _documentService.SearchJsonAsync(_job.UserId, request.Query, request.Limit ?? 5, request.DocumentName, ct);
+                    await SendToolActionAsync(taskId, "search_documents", request.Query, "completed", "Поиск завершён", json, ct);
                     return new ConexyToolResult(toolCall.Id, json, false);
                 }
 
@@ -705,6 +719,40 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var toolCallChars = toolCalls?.Sum(tc => tc.Function.Name.Length + tc.Function.Arguments.Length) ?? 0;
         return (contentChars + reasoningChars + toolCallChars + 3) / 4;
     }
+
+    // TOOL_PILLS: добавлено 2026-09-20
+    /// <summary>
+    /// Streams a live-action event for a tool that does not run through the bash/editor
+    /// services, so the chat can render an execution pill (running -> expandable result) for
+    /// it too. The payload is truncated: it is for display only, the model still gets the
+    /// full result through the tool result.
+    /// </summary>
+    private async Task SendToolActionAsync(
+        Guid taskId,
+        string toolName,
+        string command,
+        string status,
+        string? summary,
+        string? output,
+        CancellationToken ct)
+    {
+        await _hubContext.Clients.Group($"task_{taskId}").SendAsync("ToolAction", new ToolActionEvent
+        {
+            ToolName = toolName,
+            Command = command,
+            Path = "",
+            Status = status,
+            Summary = summary,
+            Output = TruncateToolOutput(output)
+        }, ct);
+    }
+
+    private const int MaxToolOutputChars = 4000;
+
+    private static string? TruncateToolOutput(string? output) =>
+        string.IsNullOrEmpty(output) || output.Length <= MaxToolOutputChars
+            ? output
+            : output[..MaxToolOutputChars] + "\n…";
 
     private async Task<ConexyToolResult> HandleScreenshotAsync(
         Guid taskId,

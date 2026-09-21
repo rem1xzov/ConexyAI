@@ -2,6 +2,8 @@ import { useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatMessage } from '../types/chat';
 import type { CommandDecisionHandler } from '../types/signalr';
+import { assistantPhase, isWorkingPhase } from '../utils/assistantPhase';
+import { ConexyLogo } from './ConexyLogo';
 import { VisionGallery } from './VisionGallery';
 import { ToolActionFeed } from './ToolActionFeed';
 import { TodoPanel } from './TodoPanel';
@@ -34,17 +36,19 @@ export function MessageBubble({ message, onRegenerate, onResend, onEditMessage, 
   const hasScreenshots = screenshots.length > 0;
 
   const currentAction = message.currentAction ?? null;
-  const showActionBar = streaming && currentAction != null && currentAction.stage !== 'idle';
   const toolActions = message.toolActions ?? [];
   const todos = message.todos ?? [];
 
-  // While the assistant is streaming and no answer token has arrived yet, show a
-  // compact "thinking" indicator. The full chain-of-thought is never rendered in the
-  // main flow: it only becomes reachable (collapsed by default) once the answer starts
-  // or the stream finishes — regardless of whether reasoning deltas arrive smoothly or
-  // buffered in one block.
-  const showThinkingBadge = streaming && content.length === 0 && !showActionBar;
-  const showThinkingDetails = hasThinking && (content.length > 0 || !streaming);
+  // ASSISTANT_PHASES: добавлено 2026-09-20 — the message lifecycle drives what is shown:
+  // a reasoning accordion and tool pills while working, then the streamed answer.
+  const phase = assistantPhase(message);
+  // The running light lives in the message flow and disappears the moment the answer starts.
+  const showGeneratingLogo = streaming;
+  const logoAnimating = isWorkingPhase(phase);
+  const showThinkingAccordion = hasThinking || phase === 'thinking';
+  // Live agent status, rendered as a pill only when no tool event already covers it.
+  const statusPill =
+    phase === 'tool_calling' && currentAction ? { label: currentAction.label } : null;
   const showContentCursor = streaming && content.length > 0;
   const showActions = message.status !== 'streaming';
 
@@ -124,36 +128,36 @@ export function MessageBubble({ message, onRegenerate, onResend, onEditMessage, 
   // Assistant message: centered full-width column.
   return (
     <div className="w-full max-w-3xl mx-auto my-6 px-2">
-      {showThinkingBadge && (
-        <div className="thinking-live">
-          <span className="thinking-live__dot" />
-          <span>{t('message.thinking')}</span>
-        </div>
-      )}
+      {/* Agent task plan, kept above the working blocks so the required order
+          pills -> running light -> answer text stays intact. */}
+      <TodoPanel todos={todos} />
 
-      {showThinkingDetails && (
+      {/* 1. Thought process: the reasoning accordion comes first. */}
+      {showThinkingAccordion && (
         <details className="thinking-details">
           <summary className="thinking-details__summary">{t('message.showThinking')}</summary>
-          <div className="thinking-details__body">{thinking}</div>
+          <div className="thinking-details__body">
+            {thinking || <span className="chat-muted">{t('message.thinking')}</span>}
+          </div>
         </details>
       )}
 
-      {showActionBar && currentAction && (
-        <div className="flex items-center gap-2.5 px-3 py-1.5 my-2 w-fit rounded-full chat-surface text-xs shadow-sm animate-pulse">
-          {currentAction.stage === 'thinking' && <span>🧠</span>}
-          {currentAction.stage === 'writing' && <span>📝</span>}
-          {currentAction.stage === 'executing' && <span>⚡</span>}
-          {currentAction.stage === 'searching' && <span>🔍</span>}
-          {currentAction.stage !== 'thinking' && currentAction.stage !== 'writing' && currentAction.stage !== 'executing' && currentAction.stage !== 'searching' && (
-            <span className="chat-muted">●</span>
-          )}
-          <span className="font-mono">{currentAction.label}</span>
+      {/* 2. Tool execution pills (running -> expandable result). */}
+      <ToolActionFeed
+        actions={toolActions}
+        onCommandDecision={onCommandDecision}
+        statusPill={statusPill}
+      />
+
+      {/* 3. Running light: only while a phase is actually working, hidden as soon as the
+          first answer token arrives and the text takes its place. */}
+      {showGeneratingLogo && (
+        <div className={`msg-generating ${logoAnimating ? '' : 'msg-generating--done'}`}>
+          <ConexyLogo size={30} active={logoAnimating} />
         </div>
       )}
 
-      <ToolActionFeed actions={toolActions} onCommandDecision={onCommandDecision} />
-
-      <TodoPanel todos={todos} />
+      {/* 4. Streamed answer. */}
 
       <div className="w-full chat-text leading-relaxed">
         <div className="break-words">
