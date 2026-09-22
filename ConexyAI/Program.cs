@@ -208,6 +208,9 @@ builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 // SANDBOX: добавлено 2026-09-17
 builder.Services.AddSingleton<IDockerSandboxRunner, DockerSandboxRunner>();
+// SANDBOX_SESSIONS: добавлено 2026-09-23 — состояние песочницы на сессию + автоочистка по простою.
+builder.Services.AddSingleton<ISandboxSessionStore, SandboxSessionStore>();
+builder.Services.AddHostedService<SandboxIdleCleanupService>();
 // SUPPORT: добавлено 2026-09-19
 builder.Services.AddScoped<ISupportRepository, SupportRepository>();
 builder.Services.AddScoped<ISupportService, SupportService>();

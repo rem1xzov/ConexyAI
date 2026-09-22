@@ -38,4 +38,42 @@ public class SandboxOptions
     /// <c>/tmp</c> is already capped by the <c>--tmpfs size=...</c> limit.
     /// </summary>
     public ulong FileSizeLimitBytes { get; set; } = 0;
+
+    // SANDBOX_SESSIONS: добавлено 2026-09-23
+
+    /// <summary>
+    /// Minutes of sandbox inactivity after which a session's sandbox state is deleted
+    /// (see <see cref="Service.SandboxIdleCleanupService"/>). <c>0</c> disables the sweeper.
+    /// </summary>
+    public int IdleTimeoutMinutes { get; set; } = 10;
+
+    /// <summary>How often the idle sweeper runs (seconds).</summary>
+    public int IdleSweepIntervalSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Host directory that holds one state directory per session. Mounted into every sandbox
+    /// container at <c>/state</c> so package-manager caches and <c>HOME</c> survive across
+    /// commands, then deleted once the session goes idle.
+    /// <para>
+    /// Must be given as a HOST path (same-path bind mount, like the workspace root): the backend
+    /// only talks to the host Docker daemon, which resolves the path on the host.
+    /// </para>
+    /// </summary>
+    public string StateRootPath { get; set; } = "/srv/conexyai/sandbox-state";
+
+    /// <summary>
+    /// Docker network mode for sandbox containers. <c>none</c> (default) keeps the sandbox fully
+    /// offline, which is the safe default but also means package managers cannot reach a registry.
+    /// Set <c>bridge</c> to let the agent install dependencies — that gives the sandbox outbound
+    /// network access, so treat the change as a security decision, not a convenience.
+    /// </summary>
+    public string Network { get; set; } = "none";
+
+    /// <summary>
+    /// Value for Docker <c>--user</c> (<c>uid:gid</c>). Empty (default) resolves to the current
+    /// process's effective uid, which is what makes the bind-mounted workspace writable: the
+    /// workspace files are owned by the backend's user, so the sandbox must run as that same user.
+    /// A mismatched uid is what produced <c>EACCES</c> on <c>node_modules</c> and package caches.
+    /// </summary>
+    public string User { get; set; } = string.Empty;
 }

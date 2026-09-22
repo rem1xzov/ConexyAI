@@ -22,6 +22,10 @@ WORKDIR /app
 
 # The Docker CLI is required by IDockerSandboxRunner. At runtime DOCKER_HOST must point at
 # the docker-socket-proxy service (never the raw /var/run/docker.sock).
+#
+# NOTE: the proxy keeps EXEC=0 on purpose, so sandbox commands run in a throwaway container per
+# command (no `docker exec`). Per-session continuity comes from a mounted state directory instead
+# of a long-lived container — see SandboxSessionStore / SandboxIdleCleanupService.
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 
 COPY --from=build /app/publish .

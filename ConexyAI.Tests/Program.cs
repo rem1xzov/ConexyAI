@@ -58,6 +58,7 @@ await RunAsync("todo_write: full replacement", TestTodoFullReplacementAsync);
 await RunAsync("todo_write: clear on session end", TestTodoClearAsync);
 await RunAsync("web_search: JSON SEO response is parsed into results", TestJsonSeoSearchParsingAsync);
 await RunAsync("llm: non-streaming message.content is extracted as text", TestNonStreamingMessageContentExtractionAsync);
+await RunAsync("sandbox sessions: per-session state directory + idle expiry", TestSandboxSessionStateAsync);
 await RunAsync("ide files: create -> content -> save -> rename -> delete", TestIdeFileCrudAsync);
 await RunAsync("ide files: path traversal is blocked (shared validator)", TestIdeFilePathTraversalBlockedAsync);
 await RunAsync("ide files: manual save invalidates agent undo stack", TestManualSaveInvalidatesEditorUndoAsync);
@@ -198,7 +199,7 @@ ConexyBashService CreateBashService(string rootPath)
     IDockerSandboxRunner sandbox = DockerAvailable()
         ? new DockerSandboxRunner(Options.Create(new SandboxOptions()), NullLogger<DockerSandboxRunner>.Instance)
         : new FakeSandboxRunner();
-    return new ConexyBashService(workspace, sandbox, hub, NullLogger<ConexyBashService>.Instance);
+    return new ConexyBashService(workspace, sandbox, hub, NullLogger<ConexyBashService>.Instance, new FakeSandboxSessionStore());
 }
 
 bool DockerAvailable()
@@ -922,6 +923,45 @@ Task TestNonStreamingMessageContentExtractionAsync()
     return Task.CompletedTask;
 }
 
+// SANDBOX_SESSIONS: добавлено 2026-09-23
+Task TestSandboxSessionStateAsync()
+{
+    var root = Path.Combine(Path.GetTempPath(), "conexy-sandbox-state-test-" + Guid.NewGuid().ToString("N"));
+    var options = Options.Create(new SandboxOptions { StateRootPath = root });
+    var store = new SandboxSessionStore(options, NullLogger<SandboxSessionStore>.Instance);
+    var sessionId = Guid.NewGuid();
+
+    try
+    {
+        var path = store.GetOrCreateStatePath(sessionId);
+
+        Assert(Directory.Exists(path), "the session state directory must be created on first use");
+        Assert(path.StartsWith(root, StringComparison.Ordinal), "state must live under the configured root");
+        foreach (var sub in new[] { "home", ".npm", ".cache", ".local" })
+        {
+            Assert(Directory.Exists(Path.Combine(path, sub)), $"state sub-directory '{sub}' must exist");
+        }
+
+        // Same session -> same directory, so a package installed by one command is still there for
+        // the next one. A different session must never share it.
+        Assert(store.GetOrCreateStatePath(sessionId) == path, "a session must keep one state directory");
+        Assert(store.GetOrCreateStatePath(Guid.NewGuid()) != path, "sessions must not share state directories");
+        Assert(store.ActiveSessionCount == 2, "both sessions should be tracked");
+
+        // An idle budget of zero expires everything that is not currently being touched; a large one
+        // expires nothing. This is the registry side of the 10-minute idle cleanup.
+        Assert(store.CollectIdle(TimeSpan.FromHours(1)).Count == 0, "nothing may expire while it is fresh");
+        var expired = store.CollectIdle(TimeSpan.Zero);
+        Assert(expired.Count == 2, "an exhausted idle budget must expire every session");
+        Assert(store.ActiveSessionCount == 0, "expired sessions must leave the registry");
+        return Task.CompletedTask;
+    }
+    finally
+    {
+        if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+    }
+}
+
 sealed class FakeQueue : IConexyQueue
 {
     public List<ConexyJob> Enqueued { get; } = new();
@@ -978,8 +1018,37 @@ sealed class FakeSandboxRunner : IDockerSandboxRunner
 {
     public Task<bool> IsDockerAvailableAsync(CancellationToken ct = default) => Task.FromResult(true);
 
-    public Task<SandboxExecutionResult> RunAsync(string command, string workspaceHostPath, TimeSpan timeout, CancellationToken ct = default) =>
+    public Task<SandboxExecutionResult> RunAsync(
+        string command,
+        string workspaceHostPath,
+        TimeSpan timeout,
+        CancellationToken ct = default,
+        string? sessionStateHostPath = null) =>
         Task.FromResult(new SandboxExecutionResult(true, 0, string.Empty, false, null));
+}
+
+// SANDBOX_SESSIONS: добавлено 2026-09-23 — заглушка хранилища состояния песочницы для тестов,
+// которым важна только изоляция команд, а не сам Docker.
+sealed class FakeSandboxSessionStore : ISandboxSessionStore
+{
+    private readonly Dictionary<Guid, string> _paths = [];
+
+    public string GetOrCreateStatePath(Guid sessionId)
+    {
+        if (!_paths.TryGetValue(sessionId, out var path))
+        {
+            path = Path.Combine(Path.GetTempPath(), "conexy-test-sandbox", sessionId.ToString("N"));
+            _paths[sessionId] = path;
+        }
+
+        return path;
+    }
+
+    public void Touch(Guid sessionId) => GetOrCreateStatePath(sessionId);
+
+    public IReadOnlyList<SandboxSessionSnapshot> CollectIdle(TimeSpan timeout) => [];
+
+    public int ActiveSessionCount => _paths.Count;
 }
 
 sealed class FakeHubClients : IHubClients

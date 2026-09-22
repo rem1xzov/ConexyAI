@@ -12,7 +12,19 @@ public record SandboxExecutionResult(bool Success, int ExitCode, string Output, 
 public interface IDockerSandboxRunner
 {
     Task<bool> IsDockerAvailableAsync(CancellationToken ct = default);
-    Task<SandboxExecutionResult> RunAsync(string command, string workspaceHostPath, TimeSpan timeout, CancellationToken ct = default);
+
+    /// <param name="sessionStateHostPath">
+    /// Host directory holding this session's sandbox state (HOME, package caches, installed tooling).
+    /// Mounted at <c>/state</c> and reused by every command of the session, so a dependency installed
+    /// by one command is still there for the next one. <c>null</c> keeps the previous behaviour of a
+    /// completely stateless container.
+    /// </param>
+    Task<SandboxExecutionResult> RunAsync(
+        string command,
+        string workspaceHostPath,
+        TimeSpan timeout,
+        CancellationToken ct = default,
+        string? sessionStateHostPath = null);
 }
 
 /// <summary>
@@ -64,7 +76,12 @@ public class DockerSandboxRunner : IDockerSandboxRunner
         }
     }
 
-    public async Task<SandboxExecutionResult> RunAsync(string command, string workspaceHostPath, TimeSpan timeout, CancellationToken ct = default)
+    public async Task<SandboxExecutionResult> RunAsync(
+        string command,
+        string workspaceHostPath,
+        TimeSpan timeout,
+        CancellationToken ct = default,
+        string? sessionStateHostPath = null)
     {
         if (!await IsDockerAvailableAsync(ct))
         {
@@ -84,7 +101,7 @@ public class DockerSandboxRunner : IDockerSandboxRunner
         //    hijacked attach stream back to the CLI, so stdout/stderr would be lost. Instead
         //    we read output with `docker logs` after the container exits.
         var runResult = await RunDockerCommandAsync(
-            BuildDockerRunStartInfo(command, workspaceHostPath, containerName),
+            BuildDockerRunStartInfo(command, workspaceHostPath, containerName, sessionStateHostPath),
             TimeSpan.FromSeconds(30),
             ct);
 
@@ -140,7 +157,11 @@ public class DockerSandboxRunner : IDockerSandboxRunner
         }
     }
 
-    private ProcessStartInfo BuildDockerRunStartInfo(string command, string workspaceHostPath, string containerName)
+    private ProcessStartInfo BuildDockerRunStartInfo(
+        string command,
+        string workspaceHostPath,
+        string containerName,
+        string? sessionStateHostPath)
     {
         var psi = new ProcessStartInfo
         {
@@ -153,9 +174,10 @@ public class DockerSandboxRunner : IDockerSandboxRunner
             StandardErrorEncoding = Encoding.UTF8,
         };
 
-        // No `-e` / `--env` flags are passed, so the container receives none of the
-        // backend process environment (API keys, connection strings, tokens). The `sh -c`
-        // command is added as a single argv element (no host-shell interpolation).
+        // No inherited environment: no `--env` values are passed, and Docker does not copy the
+        // client's environment into the container, so the backend's secrets (API keys, connection
+        // strings, tokens) can never leak in. The `-e` flags below are explicit non-secret path
+        // overrides for the sandbox's own writable directories.
         psi.ArgumentList.Add("run");
         psi.ArgumentList.Add("-d"); // detached: we read output via `docker logs` (proxy-safe)
         // The sandbox image must already exist on the Docker host (built/pushed at deploy
@@ -164,10 +186,15 @@ public class DockerSandboxRunner : IDockerSandboxRunner
         psi.ArgumentList.Add("never");
         psi.ArgumentList.Add("--name");
         psi.ArgumentList.Add(containerName);
+        // AGENT_SANDBOX_NETWORK: конфигурируемый сетевой режим. По умолчанию `none` — песочница
+        // полностью офлайн, и это осознанный безопасный дефолт. Ставить зависимости агенту
+        // (npm/pip/dotnet add package) можно только включив `Sandbox:Network` (например `bridge`),
+        // и это уже решение по безопасности, а не удобство: вместе с сетью у контейнера появляется
+        // и исходящий доступ наружу.
         psi.ArgumentList.Add("--network");
-        psi.ArgumentList.Add("none");
-        // Read-only root filesystem: the container may only write to /tmp (tmpfs) and the
-        // bind-mounted /workspace. Any other write fails with EROFS.
+        psi.ArgumentList.Add(string.IsNullOrWhiteSpace(_options.Value.Network) ? "none" : _options.Value.Network.Trim());
+        // Read-only root filesystem: the container may only write to /tmp (tmpfs) and the mounted
+        // /workspace and /state. Any other write fails with EROFS.
         psi.ArgumentList.Add("--read-only");
         psi.ArgumentList.Add("--tmpfs");
         psi.ArgumentList.Add($"/tmp:rw,size={_options.Value.TmpfsSize}");
@@ -192,7 +219,29 @@ public class DockerSandboxRunner : IDockerSandboxRunner
         psi.ArgumentList.Add("--pids-limit");
         psi.ArgumentList.Add(_options.Value.PidsLimit.ToString());
         psi.ArgumentList.Add("--user");
-        psi.ArgumentList.Add("1000:1000");
+        psi.ArgumentList.Add(ResolveSandboxUser());
+
+        // AGENT_SANDBOX_SESSION_STATE: постоянное состояние сессии — HOME, кэши пакетных менеджеров
+        // и всё, что агент поставил вне /workspace. Монтируется в /state, живёт между командами и
+        // удаляется sweeper'ом после 10 минут простоя.
+        if (!string.IsNullOrWhiteSpace(sessionStateHostPath))
+        {
+            psi.ArgumentList.Add("-v");
+            psi.ArgumentList.Add($"{sessionStateHostPath}:/state:rw");
+            psi.ArgumentList.Add("-e");
+            psi.ArgumentList.Add("HOME=/state/home");
+            psi.ArgumentList.Add("-e");
+            psi.ArgumentList.Add("DOTNET_CLI_HOME=/state/home");
+            psi.ArgumentList.Add("-e");
+            psi.ArgumentList.Add("NPM_CONFIG_CACHE=/state/.npm");
+            psi.ArgumentList.Add("-e");
+            psi.ArgumentList.Add("XDG_CACHE_HOME=/state/.cache");
+            psi.ArgumentList.Add("-e");
+            psi.ArgumentList.Add("XDG_DATA_HOME=/state/.local");
+            psi.ArgumentList.Add("-e");
+            psi.ArgumentList.Add("PIP_CACHE_DIR=/state/.cache/pip");
+        }
+
         psi.ArgumentList.Add("-v");
         psi.ArgumentList.Add($"{workspaceHostPath}:/workspace:rw");
         psi.ArgumentList.Add("-w");
@@ -204,6 +253,47 @@ public class DockerSandboxRunner : IDockerSandboxRunner
 
         return psi;
     }
+
+    /// <summary>
+    /// Docker <c>--user</c> value for the sandbox container.
+    /// <para>
+    /// AGENT_SANDBOX_SESSION_STATE: defaults to the backend's own effective uid instead of a
+    /// hard-coded <c>1000:1000</c>. The workspace directory is bind-mounted from the host and is
+    /// owned by the backend user, so a sandbox running as a different uid can read the files but not
+    /// write them — which is exactly the <c>EACCES</c> on <c>node_modules</c> and package caches the
+    /// agent used to hit. Running as the same uid makes the mount writable without making anything
+    /// world-writable on the host.
+    /// </para>
+    /// </summary>
+    private string ResolveSandboxUser()
+    {
+        var configured = _options.Value.User?.Trim();
+        if (!string.IsNullOrEmpty(configured))
+        {
+            return configured;
+        }
+
+        var uid = TryGetEffectiveUid();
+        return uid is null ? "1000:1000" : $"{uid}:{uid}";
+    }
+
+    /// <summary>Effective uid of this process, or null on platforms without libc (Windows dev).</summary>
+    private static uint? TryGetEffectiveUid()
+    {
+        if (OperatingSystem.IsWindows()) return null;
+
+        try
+        {
+            return geteuid();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "geteuid", SetLastError = false)]
+    private static extern uint geteuid();
 
     private static ProcessStartInfo BuildDockerWaitStartInfo(string containerName)
     {

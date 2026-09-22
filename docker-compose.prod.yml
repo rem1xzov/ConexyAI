@@ -108,12 +108,24 @@ services:
       Workspace__RootPath: ${WORKSPACE_HOST_PATH:-/srv/conexyai/workspaces}
       Rag__DocumentsDirectory: ${RAG_DOCUMENTS_PATH:-/srv/conexyai/documents}
       Sandbox__Image: ${SANDBOX_IMAGE:-conexy-sandbox:latest}
+      Sandbox__StateRootPath: ${SANDBOX_STATE_HOST_PATH:-/srv/conexyai/sandbox-state}
+      # AGENT_SANDBOX_NETWORK: `none` keeps sandbox containers fully offline. Set it to `bridge` to
+      # let the agent install dependencies (npm/pip/dotnet add package) — that also gives the
+      # container outbound network access, so enable it deliberately.
+      Sandbox__Network: ${SANDBOX_NETWORK:-none}
+      # Sandbox__User is intentionally left unset: the runner then runs the sandbox as the backend's
+      # own uid, which is what makes the bind-mounted workspace writable inside the sandbox.
+      Sandbox__IdleTimeoutMinutes: ${SANDBOX_IDLE_TIMEOUT_MINUTES:-10}
       # The backend talks to the host Docker daemon ONLY through the socket proxy.
       DOCKER_HOST: tcp://docker-socket-proxy:2375
     volumes:
       # Same-path bind mounts: the host path the backend passes to `docker run -v` must
       # resolve to the same directory on the Docker host (see DEPLOY.md).
       - ${WORKSPACE_HOST_PATH:-/srv/conexyai/workspaces}:${WORKSPACE_HOST_PATH:-/srv/conexyai/workspaces}
+      # AGENT_SANDBOX_SESSION_STATE: per-session sandbox state (HOME, package caches, installed
+      # tooling). Same-path rule as the workspace root: the sandbox container is started by the host
+      # daemon, so this path must exist and be writable on the host.
+      - ${SANDBOX_STATE_HOST_PATH:-/srv/conexyai/sandbox-state}:${SANDBOX_STATE_HOST_PATH:-/srv/conexyai/sandbox-state}
       - ${RAG_DOCUMENTS_PATH:-/srv/conexyai/documents}:${RAG_DOCUMENTS_PATH:-/srv/conexyai/documents}
     networks:
       - frontend

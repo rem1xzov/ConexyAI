@@ -27,6 +27,8 @@ public class ConexyBashService : IConexyBashService
     private readonly IDockerSandboxRunner _sandbox;
     private readonly IHubContext<ConexyHub> _hubContext;
     private readonly ILogger<ConexyBashService> _logger;
+    // SANDBOX_SESSIONS: добавлено 2026-09-23 — состояние песочницы, живущее между командами.
+    private readonly ISandboxSessionStore _sandboxSessions;
 
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _sessionLocks = new();
 
@@ -37,12 +39,14 @@ public class ConexyBashService : IConexyBashService
         IConexyWorkspaceService workspaceService,
         IDockerSandboxRunner sandbox,
         IHubContext<ConexyHub> hubContext,
-        ILogger<ConexyBashService> logger)
+        ILogger<ConexyBashService> logger,
+        ISandboxSessionStore sandboxSessions)
     {
         _workspaceService = workspaceService;
         _sandbox = sandbox;
         _hubContext = hubContext;
         _logger = logger;
+        _sandboxSessions = sandboxSessions;
     }
 
     public async Task<BashToolResult> ExecuteAsync(Guid sessionId, BashToolRequest request, bool emitStartEvent = true, CancellationToken ct = default)
@@ -124,7 +128,12 @@ public class ConexyBashService : IConexyBashService
     private async Task<BashToolResult> RunProcessAsync(Guid sessionId, string command, string workingDir, TimeSpan timeout, CancellationToken ct)
     {
         // SANDBOX: добавлено 2026-09-17 — execute inside the isolated Docker container.
-        var result = await _sandbox.RunAsync(command, workingDir, timeout, ct);
+        // SANDBOX_SESSIONS: добавлено 2026-09-23 — контейнер по-прежнему одноразовый (создаётся под
+        // команду и удаляется сразу после неё), но состояние сессии монтируется в /state, поэтому
+        // установленные пакеты и кэши переживают переход к следующей команде, а сам каталог удаляется
+        // sweeper'ом после 10 минут простоя.
+        var statePath = _sandboxSessions.GetOrCreateStatePath(sessionId);
+        var result = await _sandbox.RunAsync(command, workingDir, timeout, ct, statePath);
         var (text, truncated) = TruncateOutput(result.Output);
 
         return new BashToolResult
