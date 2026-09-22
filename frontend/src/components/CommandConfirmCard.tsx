@@ -1,12 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
-import { CheckIcon, CloseIcon } from './Icons';
+import { CheckIcon, ChevronDownIcon, CloseIcon, CopyIcon } from './Icons';
 
 // COMMAND_FEEDBACK: переписано 2026-09-22
+// AGENT_FEED_ZED: перерисовано 2026-09-23 — теперь это тот самый терминальный блок из референса:
+// заголовок «Run Command», команда моноширинным шрифтом, кнопка копирования в правом верхнем углу,
+// приглушённая подпись статуса в шапке и сворачиваемый вывод под командой.
 /**
- * Compact, non-blocking confirmation card for an agent command that actually needs a decision
- * (installs, deletes, writes — read-only diagnostics never get here).
+ * Full-size block for an agent command that actually needs a decision (installs, deletes, writes —
+ * read-only diagnostics never get here and are rendered as a plain `ActionStepLine` instead).
+ *
+ * This is the only element of the agent feed that keeps a border and a background, precisely
+ * because it is the only one with something worth hiding: the command and its output.
  *
  * The card used to change nothing at all on click: the status came exclusively from server events,
  * so between "approved" and "command finished" the buttons stayed on screen and the user could not
@@ -26,6 +32,7 @@ export function CommandConfirmCard({ events, onDecision }: CommandConfirmCardPro
   const [allowAll, setAllowAll] = useState(false);
   const [showOutput, setShowOutput] = useState(false);
   const [decision, setDecision] = useState<LocalDecision>('none');
+  const [copied, setCopied] = useState(false);
 
   const first = events[0];
   const completed = events.find((e) => e.status === 'completed' || e.status === 'failed');
@@ -34,6 +41,7 @@ export function CommandConfirmCard({ events, onDecision }: CommandConfirmCardPro
   const isDangerous = events.some((e) => e.isDangerous);
   const actionId = first.pendingActionId;
   const output = completed?.output ?? '';
+  const command = first.command ?? '';
 
   // The authoritative outcome comes from the server; the local decision only fills the gap while
   // the command is in flight.
@@ -83,6 +91,24 @@ export function CommandConfirmCard({ events, onDecision }: CommandConfirmCardPro
   const canDecide =
     !settled && !inFlight && decision !== 'denying' && Boolean(actionId) && Boolean(onDecision);
 
+  // Reset the "copied" hint on its own; without the cleanup a second copy click could be swallowed
+  // by a timer that was still pending from the first one.
+  useEffect(() => {
+    if (!copied) return;
+    const id = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(id);
+  }, [copied]);
+
+  async function copyCommand() {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+    } catch {
+      // Clipboard unavailable (insecure context / denied permission): leave the button silent
+      // rather than claiming the command was copied.
+    }
+  }
+
   async function decide(approved: boolean) {
     if (!actionId || !onDecision) return;
     // Acknowledge immediately — the user must see the click land, whatever the network does.
@@ -97,29 +123,40 @@ export function CommandConfirmCard({ events, onDecision }: CommandConfirmCardPro
 
   return (
     <div
-      className={`cmd-confirm cmd-confirm--${status} ${isDangerous ? 'cmd-confirm--danger' : ''}`}
+      className={`cmd-card cmd-confirm cmd-confirm--${status} ${isDangerous ? 'cmd-confirm--danger' : ''}`}
       role={canDecide ? 'group' : undefined}
       aria-label={t('cmdConfirm.runCommand')}
     >
-      <div className="cmd-confirm__head">
-        <span className="cmd-confirm__title">{t('cmdConfirm.runCommand')}</span>
-        {isDangerous && <span className="cmd-confirm__badge">{t('cmdConfirm.dangerous')}</span>}
-        <span className="cmd-confirm__status">
+      <div className="cmd-card__head">
+        <span className="cmd-card__title">{t('cmdConfirm.runCommand')}</span>
+        {isDangerous && <span className="cmd-card__badge">{t('cmdConfirm.dangerous')}</span>}
+        <span className="cmd-card__status">
           {statusMark}
-          <span className="cmd-confirm__status-label">{statusLabel}</span>
+          <span className="cmd-card__status-label">{statusLabel}</span>
         </span>
       </div>
 
-      <pre className="cmd-confirm__command">{first.command}</pre>
+      <div className="cmd-card__codewrap">
+        <pre className="cmd-card__command">{command}</pre>
+        <button
+          type="button"
+          className={`cmd-card__copy ${copied ? 'cmd-card__copy--done' : ''}`}
+          onClick={() => void copyCommand()}
+          title={copied ? t('timeline.copied') : t('timeline.copyCommand')}
+          aria-label={copied ? t('timeline.copied') : t('timeline.copyCommand')}
+        >
+          {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+        </button>
+      </div>
 
       {first.workingDirectory && (
-        <div className="cmd-confirm__dir" title={first.workingDirectory}>
+        <div className="cmd-card__dir" title={first.workingDirectory}>
           {first.workingDirectory}
         </div>
       )}
 
       {(canDecide || status === 'error') && (
-        <div className="cmd-confirm__actions">
+        <div className="cmd-card__actions">
           <button
             className="cmd-confirm__btn cmd-confirm__btn--allow"
             onClick={() => void decide(true)}
@@ -148,15 +185,20 @@ export function CommandConfirmCard({ events, onDecision }: CommandConfirmCardPro
       )}
 
       {output && (
-        <div className="cmd-confirm__output">
+        <div className="cmd-card__output">
           <button
-            className="danger-cmd-feed-toggle"
-            onClick={() => setShowOutput((o) => !o)}
             type="button"
+            className="cmd-card__output-toggle"
+            onClick={() => setShowOutput((o) => !o)}
+            aria-expanded={showOutput}
           >
+            <ChevronDownIcon
+              size={12}
+              className={`cmd-card__output-chevron ${showOutput ? 'cmd-card__output-chevron--open' : ''}`}
+            />
             {showOutput ? t('toolAction.hideOutput') : t('toolAction.showOutput')}
           </button>
-          {showOutput && <pre className="cmd-confirm__pre">{output}</pre>}
+          {showOutput && <pre className="cmd-card__pre">{output}</pre>}
         </div>
       )}
     </div>

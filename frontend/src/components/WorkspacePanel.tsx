@@ -36,6 +36,10 @@ interface WorkspacePanelProps {
   onEnsureWorkspace?: () => string;
   running: boolean;
   fileCreatedEvent?: { path: string; name: string } | null;
+  // AGENT_FEED_ZED: добавлено 2026-09-23
+  /** Opens a path the user clicked in the agent feed. The nonce makes a repeat click on the same
+   *  path re-trigger the effect (an equal object would be swallowed by React's dependency check). */
+  openFileRequest?: { path: string; nonce: number } | null;
   fileRefreshToken?: number;
   agentFileChange?: { path: string } | null;
   todos?: TodoItem[];
@@ -167,6 +171,7 @@ export function WorkspacePanel({
   onEnsureWorkspace,
   running,
   fileCreatedEvent,
+  openFileRequest,
   fileRefreshToken,
   agentFileChange,
   todos = [],
@@ -471,6 +476,12 @@ export function WorkspacePanel({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileCreatedEvent]);
+
+  // AGENT_FEED_ZED: открыть путь, по которому кликнули в ленте шагов агента.
+  useEffect(() => {
+    if (openFileRequest?.path) void openFile(openFileRequest.path);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openFileRequest]);
 
   // Agent edited a file: refresh the open tab's content, but never silently clobber
   // a user's unsaved edits — surface a conflict prompt instead.

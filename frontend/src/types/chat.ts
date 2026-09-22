@@ -45,6 +45,14 @@ export interface AgentStep {
   /** Set when the next step (or the end of the run) closes this one; a closed step never ticks. */
   endedAt?: number;
   afterToolCount: number;
+  // AGENT_FEED_ZED: добавлено 2026-09-23
+  /** Offset into `ChatMessage.thinking` where this step's reasoning text begins. The step's own
+   *  reasoning is `thinking.slice(reasoningFrom, reasoningTo)` — that is what the "Размышления"
+   *  block expands to, so each step shows the text that was actually produced during it rather
+   *  than repeating the backend's generic label. */
+  reasoningFrom: number;
+  /** End offset; absent while the step is still open (then the slice runs to the end). */
+  reasoningTo?: number;
 }
 
 // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21

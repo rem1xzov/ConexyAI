@@ -260,13 +260,20 @@
     "allowAllActive": "Автоподтверждение включено: команды выполняются без запроса",
     "disableAllowAll": "Отключить"
   },
+  "timeline": {
+    "thinking": "Размышления",
+    "thinkingEmpty": "Модель не оставила текста для этого шага",
+    "copyCommand": "Копировать команду",
+    "copied": "Скопировано",
+    "toggleOutput": "Показать или скрыть вывод"
+  },
   "toolAction": {
     "completed": "Выполнено",
     "failed": "Ошибка",
     "rejected": "Отклонено пользователем",
     "pending": "Ожидает подтверждения",
-    "showOutput": "▸ Показать вывод",
-    "hideOutput": "▾ Скрыть вывод",
+    "showOutput": "Показать вывод",
+    "hideOutput": "Скрыть вывод",
     "liveStatus": "Live Action Status"
   },
   "toolPill": {

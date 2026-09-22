@@ -3575,18 +3575,21 @@ body {
   border-color: rgba(52, 211, 153, 0.35);
 }
 
-.cmd-confirm__head {
+/* AGENT_FEED_ZED: терминальный блок команды из референса — заголовок, команда моноширинным
+   шрифтом, копирование в правом верхнем углу, сворачиваемый вывод. Это по-прежнему
+   единственный элемент ленты с рамкой и фоном, потому что только здесь есть что прятать. */
+.cmd-card__head {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.cmd-confirm__title {
+.cmd-card__title {
   font-weight: 600;
   color: var(--text);
 }
 
-.cmd-confirm__badge {
+.cmd-card__badge {
   padding: 1px 6px;
   border-radius: 999px;
   border: 1px solid rgba(245, 158, 11, 0.55);
@@ -3596,7 +3599,7 @@ body {
   letter-spacing: 0.04em;
 }
 
-.cmd-confirm__status {
+.cmd-card__status {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
@@ -3605,9 +3608,21 @@ body {
   flex-shrink: 0;
 }
 
-.cmd-confirm__command {
+.cmd-card__status-label {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+/* `position: relative` anchors the copy button to the command block, not to the whole card, so it
+   stays in the top-right corner of the code area exactly as in the reference. */
+.cmd-card__codewrap {
+  position: relative;
+}
+
+.cmd-card__command {
   margin: 0;
-  padding: 8px 10px;
+  /* Right padding leaves room for the copy button so long lines never run under it. */
+  padding: 8px 34px 8px 10px;
   border-radius: 8px;
   background: var(--code-bg);
   border: 1px solid var(--border);
@@ -3618,11 +3633,36 @@ body {
   word-break: break-word;
 }
 
-.cmd-confirm--danger .cmd-confirm__command {
+.cmd-confirm--danger .cmd-card__command {
   color: #fca5a5;
 }
 
-.cmd-confirm__dir {
+.cmd-card__copy {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.cmd-card__copy:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.cmd-card__copy--done {
+  color: var(--ok);
+}
+
+.cmd-card__dir {
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
@@ -3631,7 +3671,7 @@ body {
   white-space: nowrap;
 }
 
-.cmd-confirm__actions {
+.cmd-card__actions {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3723,18 +3763,14 @@ body {
   text-decoration: underline;
 }
 
-/* Marker on an ordinary action row whose command the classifier flagged. */
-.cmd-confirm__row-badge {
-  flex-shrink: 0;
-  color: #fbbf24;
-  font-size: 11px;
-}
-
-.cmd-confirm__output {
+.cmd-card__output {
   margin-top: 2px;
 }
 
-.danger-cmd-feed-toggle {
+.cmd-card__output-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   background: none;
   border: none;
   color: var(--muted);
@@ -3743,11 +3779,20 @@ body {
   padding: 0;
 }
 
-.danger-cmd-feed-toggle:hover {
+.cmd-card__output-toggle:hover {
   color: var(--text);
 }
 
-.cmd-confirm__pre {
+.cmd-card__output-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.cmd-card__output-chevron--open {
+  transform: rotate(180deg);
+}
+
+.cmd-card__pre {
   margin: 8px 0 0;
   padding: 10px 12px;
   border-radius: 8px;
@@ -4158,7 +4203,8 @@ body {
   min-width: 0;
 }
 
-/* Reasoning step: icon-less, muted, one line with its own stopwatch. */
+/* AGENT_FEED_ZED: живая строка статуса под активным прогоном («Выполняю команду: …»).
+   Это единственное, что осталось от старого `tl-step`: строчки размышлений стали `think-step`. */
 .tl-step {
   display: flex;
   align-items: center;
@@ -4169,12 +4215,69 @@ body {
   min-width: 0;
 }
 
-.tl-step__dot {
+/* ---------- AGENT_FEED_ZED: шаг размышления ---------- */
+/* Заголовок «Размышления» с лампочкой: одна лёгкая строка, по клику раскрывает текст под собой.
+   Таймера здесь нет намеренно — единственный счётчик всей генерации живёт внизу ленты. */
+.think-step {
+  min-width: 0;
+}
+
+.think-step__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 2px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.think-step__head:hover {
+  color: var(--text);
+}
+
+.think-step__icon {
   flex-shrink: 0;
-  width: 6px;
-  height: 6px;
+  color: var(--accent);
+  opacity: 0.9;
+}
+
+.think-step__title {
+  font-weight: 600;
+}
+
+.think-step__pulse {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: var(--border);
+  background: var(--accent);
+  animation: tlPulse 1.4s ease-in-out infinite;
+}
+
+.think-step__chevron {
+  flex-shrink: 0;
+  margin-left: auto;
+  transition: transform 0.15s ease;
+}
+
+.think-step__chevron--open {
+  transform: rotate(180deg);
+}
+
+.think-step__body {
+  margin: 0 0 4px 23px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  opacity: 0.85;
 }
 
 .tl-step__pulse {
@@ -4215,72 +4318,106 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Tool row: a single compact line, expandable when the tool produced output. */
-.tl-row {
+/* ---------- AGENT_FEED_ZED: строка действия ---------- */
+/* Поиск, чтение файла, правка файла — ОДНА плотная строка без рамки и без фона. Только так
+   тридцать шагов подряд читаются таймлайном, а не столбиком одинаковых боксов. Рамка осталась
+   лишь у блока команды, которой нужно решение (cmd-card). */
+.action-line {
   max-width: 100%;
   min-width: 0;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: transparent;
-  overflow: hidden;
-  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-.tl-row--running {
-  border-color: rgba(198, 139, 212, 0.28);
-  background: var(--surface-2);
-}
-
-.tl-row--failed,
-.tl-row--rejected {
-  border-color: rgba(239, 68, 68, 0.3);
-}
-
-.tl-row__head {
+.action-line__head {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
-  padding: 5px 8px;
-  background: transparent;
-  border: none;
-  color: var(--text);
+  min-width: 0;
+  min-height: 22px;
+  padding: 0 2px;
   font-size: 12px;
-  text-align: left;
-  cursor: default;
+  color: var(--muted);
 }
 
-.tl-row__head--actionable {
-  cursor: pointer;
-}
-
-.tl-row__head--actionable:hover {
-  background: var(--surface);
-}
-
-.tl-row__icon {
+.action-line__icon {
   flex-shrink: 0;
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: var(--muted);
   opacity: 0.9;
 }
 
-.tl-row__label {
+.action-line--running .action-line__icon {
+  color: var(--accent);
+}
+
+.action-line--failed .action-line__icon,
+.action-line--rejected .action-line__icon {
+  color: var(--danger);
+}
+
+.action-line__text {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.action-line__label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: var(--muted);
 }
 
-.tl-row--running .tl-row__label {
+.action-line--running .action-line__label {
   color: var(--text);
 }
 
-.tl-row__error {
+.action-line--failed .action-line__label,
+.action-line--rejected .action-line__label {
+  color: var(--danger);
+}
+
+.action-line__path {
   flex-shrink: 0;
-  max-width: 40%;
+  max-width: 65%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+/* Clickable path: opens the file in the workspace editor. Underline on hover only, so the row
+   stays quiet until the user actually aims at it. */
+.action-line__path--link {
+  padding: 0;
+  background: none;
+  border: none;
+  font-size: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 2px;
+  transition: text-decoration-color 0.15s ease;
+}
+
+.action-line__path--link:hover {
+  text-decoration-color: currentColor;
+}
+
+.action-line__error {
+  flex-shrink: 0;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4289,7 +4426,7 @@ body {
 }
 
 /* READABLE_RESULT: краткий итог выполненной команды (exit code) в той же строке. */
-.tl-row__meta {
+.action-line__meta {
   flex-shrink: 0;
   max-width: 40%;
   overflow: hidden;
@@ -4300,22 +4437,11 @@ body {
   opacity: 0.75;
 }
 
-.tl-row__mark,
-.tl-row__chevron {
+.action-line__mark {
   flex-shrink: 0;
 }
 
-.tl-row__chevron {
-  color: var(--muted);
-  font-size: 10px;
-  transition: transform 0.15s ease;
-}
-
-.tl-row__chevron--open {
-  transform: rotate(180deg);
-}
-
-.tl-row__spinner {
+.action-line__spinner {
   flex-shrink: 0;
   width: 11px;
   height: 11px;
@@ -4325,16 +4451,38 @@ body {
   animation: toolSpin 0.7s linear infinite;
 }
 
-@keyframes toolSpin {
-  to {
-    transform: rotate(360deg);
-  }
+.action-line__toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease;
 }
 
-.tl-row__body {
-  margin: 0;
-  padding: 8px 10px 10px;
-  border-top: 1px solid var(--border);
+.action-line__toggle:hover {
+  color: var(--text);
+}
+
+.action-line__chevron {
+  transition: transform 0.15s ease;
+}
+
+.action-line__chevron--open {
+  transform: rotate(180deg);
+}
+
+.action-line__body {
+  margin: 2px 0 3px 24px;
+  padding: 8px 10px;
+  border-radius: 8px;
   background: var(--code-bg);
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -4343,6 +4491,12 @@ body {
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+@keyframes toolSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Card-level spinner for "Подтверждено, выполняется…". */
@@ -4358,9 +4512,16 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .tl-step__pulse,
-  .tl-row__spinner,
+  .think-step__pulse,
+  .action-line__spinner,
   .cmd-confirm__spinner {
     animation: none;
+  }
+
+  .think-step__chevron,
+  .action-line__chevron,
+  .cmd-card__output-chevron {
+    transition: none;
   }
 }
 

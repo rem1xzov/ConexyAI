@@ -177,6 +177,12 @@ export default function App() {
   const [activeId, setActiveId] = useState<string | null>(() => uid());
   const [toast, setToast] = useState<string | null>(null);
   const [fileCreatedEvent, setFileCreatedEvent] = useState<{ path: string; name: string } | null>(null);
+  // AGENT_FEED_ZED: добавлено 2026-09-23 — запрос «открой этот файл» из ленты шагов агента.
+  // Воркспейс владеет своими вкладками, поэтому лента не может открыть файл напрямую: она шлёт
+  // запрос, а `WorkspacePanel` его отрабатывает. nonce нужен, чтобы повторный клик по тому же
+  // пути снова запустил эффект (одинаковый объект React бы проигнорировал).
+  const [openFileRequest, setOpenFileRequest] = useState<{ path: string; nonce: number } | null>(null);
+  const openFileNonceRef = useRef(0);
   const [fileRefreshToken, setFileRefreshToken] = useState(0);
   const [agentFileChange, setAgentFileChange] = useState<{ path: string } | null>(null);
   const [agentStatus, setAgentStatus] = useState('Ready');
@@ -458,8 +464,13 @@ export default function App() {
             if (payload.stage === 'thinking') {
               // A new reasoning phase: close the previous one and start a fresh step.
               const now = Date.now();
+              // AGENT_FEED_ZED: the reasoning stream is cumulative on the message, so each step
+              // records the slice of it that belongs to that step.
+              const thinkingLength = (m.thinking ?? '').length;
               const closed = open
-                ? steps.map((s) => (s.id === open.id ? { ...s, endedAt: now } : s))
+                ? steps.map((s) =>
+                    s.id === open.id ? { ...s, endedAt: now, reasoningTo: thinkingLength } : s,
+                  )
                 : steps;
               return {
                 ...m,
@@ -472,6 +483,7 @@ export default function App() {
                     label: payload.label,
                     startedAt: now,
                     afterToolCount: (m.toolActions ?? []).length,
+                    reasoningFrom: thinkingLength,
                   },
                 ],
               };
@@ -480,10 +492,13 @@ export default function App() {
             // Any other phase ends the current reasoning step.
             if (!open) return { ...m, currentAction: payload };
             const now = Date.now();
+            const thinkingLength = (m.thinking ?? '').length;
             return {
               ...m,
               currentAction: payload,
-              steps: steps.map((s) => (s.id === open.id ? { ...s, endedAt: now } : s)),
+              steps: steps.map((s) =>
+                s.id === open.id ? { ...s, endedAt: now, reasoningTo: thinkingLength } : s,
+              ),
             };
           }),
         );
@@ -1238,6 +1253,13 @@ export default function App() {
     finalizeStopped(ctx);
   }
 
+  // AGENT_FEED_ZED: добавлено 2026-09-23 — клик по пути файла в строке действия агента.
+  // BUGFIX_PERF: stable identity so MessageBubble's memo holds.
+  const handleOpenWorkspaceFile = useCallback((path: string) => {
+    openFileNonceRef.current += 1;
+    setOpenFileRequest({ path, nonce: openFileNonceRef.current });
+  }, []);
+
   // COMMAND_CONFIRM: добавлено 2026-09-20
   // CONFIRM_GATE: добавлено 2026-09-22 — сервер теперь отвечает `false`, если ожидающего решения
   // уже нет (гейт сломался или задача завершилась). Это больше не тихий no-op: пользователь видит,
@@ -1464,6 +1486,7 @@ export default function App() {
                     onCommandDecision={handleCommandDecision}
                     onNewChat={handleNewChat}
                     onContinue={handleContinue}
+                    onOpenFile={handleOpenWorkspaceFile}
                   />
                 ) : initializing ? (
                   <div className="feed feed--empty">
@@ -1525,6 +1548,7 @@ export default function App() {
                 onEnsureWorkspace={ensureAgentWorkspace}
                 running={agentRunning}
                 fileCreatedEvent={fileCreatedEvent}
+                openFileRequest={openFileRequest}
                 fileRefreshToken={fileRefreshToken}
                 agentFileChange={agentFileChange}
                 todos={latestTodos}

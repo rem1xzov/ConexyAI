@@ -391,6 +391,28 @@ export function LogoutIcon(props: IconProps) {
   );
 }
 
+// AGENT_FEED_ZED: добавлено 2026-09-23 — иконка заголовка «Размышления» в ленте шагов агента.
+export function LightbulbIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M9 18h6" />
+      <path d="M10 22h4" />
+      <path d="M12 2a7 7 0 0 0-4 12.7V18h8v-3.3A7 7 0 0 0 12 2Z" />
+    </Icon>
+  );
+}
+
+// AGENT_FEED_ZED: добавлено 2026-09-23 — иконка веб-поиска в ленте шагов агента.
+export function GlobeIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18Z" />
+    </Icon>
+  );
+}
+
 // EMAIL_AUTH: добавлено 2026-09-19
 export function ShieldIcon(props: IconProps) {
   return (

@@ -17,6 +17,9 @@ interface ChatFeedProps {
   onNewChat?: () => void;
   // CONTINUE_GENERATION: добавлено 2026-09-21
   onContinue?: (messageId: string) => void;
+  // AGENT_FEED_ZED: добавлено 2026-09-23
+  /** Opens a file mentioned by an agent action row in the workspace editor. */
+  onOpenFile?: (path: string) => void;
 }
 
 export function ChatFeed({
@@ -28,6 +31,7 @@ export function ChatFeed({
   onCommandDecision,
   onNewChat,
   onContinue,
+  onOpenFile,
 }: ChatFeedProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -165,6 +169,7 @@ export function ChatFeed({
             isLastUserMessage={index === lastUserIndex}
             onNewChat={onNewChat}
             onContinue={onContinue}
+            onOpenFile={onOpenFile}
           />
         ))}
       </div>

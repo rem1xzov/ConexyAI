@@ -7,6 +7,7 @@ import { ConexyLogo } from './ConexyLogo';
 import { VisionGallery } from './VisionGallery';
 import { AttachmentGrid } from './AttachmentGrid';
 import { AgentTimeline } from './AgentTimeline';
+import { DurationBadge } from './StepDuration';
 import { TodoPanel } from './TodoPanel';
 import { Markdown } from './Markdown';
 import { MessageActions } from './MessageActions';
@@ -30,6 +31,9 @@ interface MessageBubbleProps {
   // CONTINUE_GENERATION: добавлено 2026-09-21
   /** Resumes a stopped answer from the text already on screen. */
   onContinue?: (messageId: string) => void;
+  // AGENT_FEED_ZED: добавлено 2026-09-23
+  /** Opens a path mentioned by an agent action row in the workspace editor. */
+  onOpenFile?: (path: string) => void;
 }
 
 function MessageBubbleBase({
@@ -42,6 +46,7 @@ function MessageBubbleBase({
   isLastUserMessage = false,
   onNewChat,
   onContinue,
+  onOpenFile,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
@@ -69,7 +74,12 @@ function MessageBubbleBase({
   // STREAM_LOGO: the running light stays visible for the whole generation and always sits last,
   // under whatever is currently the newest content — so the growing answer pushes it down.
   const showGeneratingLogo = streaming;
-  const showThinkingAccordion = hasThinking || phase === 'thinking';
+  // AGENT_FEED_ZED: в агентской ленте каждый шаг размышления теперь сам раскрывает свой кусок
+  // reasoning-а (ThinkingStep), поэтому отдельная аккордеон-«Процесс размышлений» наверху была бы
+  // тем же текстом дважды. Оставляем её только там, где шагов нет: обычный чат, а также
+  // восстановленное после перезагрузки сообщение (steps живут только в памяти вкладки).
+  const hasSteps = (message.steps?.length ?? 0) > 0;
+  const showThinkingAccordion = (hasThinking || phase === 'thinking') && !hasSteps;
   // Live agent status, rendered as a pill only when no tool event already covers it.
   const statusPill =
     phase === 'tool_calling' && currentAction ? { label: currentAction.label } : null;
@@ -175,8 +185,10 @@ function MessageBubbleBase({
       <AgentTimeline
         actions={toolActions}
         steps={message.steps}
+        thinking={thinking}
         onCommandDecision={onCommandDecision}
         statusPill={statusPill}
+        onOpenPath={onOpenFile}
       />
 
       {/* 4. Streamed answer. */}
@@ -187,11 +199,13 @@ function MessageBubbleBase({
       </div>
 
       {/* 5. Running light: last element of the message while generating, so it starts directly
-          under the timeline and is pushed down as the answer grows. The per-step timer lives in
-          the timeline rows above, so no counter is duplicated here. */}
+          under the timeline and is pushed down as the answer grows. This is the ONLY stopwatch in
+          the feed: one honest counter for the whole turn, instead of a timer per step that reset
+          to `1с` several times per answer. */}
       {showGeneratingLogo && (
         <div className="msg-generating">
           <ConexyLogo size={24} active />
+          <DurationBadge startedAt={message.createdAt} className="thinking-timer" />
         </div>
       )}
 

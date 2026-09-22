@@ -260,13 +260,20 @@
     "allowAllActive": "Auto-approve is on: commands run without asking",
     "disableAllowAll": "Disable"
   },
+  "timeline": {
+    "thinking": "Thinking",
+    "thinkingEmpty": "The model left no text for this step",
+    "copyCommand": "Copy command",
+    "copied": "Copied",
+    "toggleOutput": "Show or hide the output"
+  },
   "toolAction": {
     "completed": "Done",
     "failed": "Error",
     "rejected": "Rejected by user",
     "pending": "Awaiting confirmation",
-    "showOutput": "▸ Show output",
-    "hideOutput": "▾ Hide output",
+    "showOutput": "Show output",
+    "hideOutput": "Hide output",
     "liveStatus": "Live Action Status"
   },
   "toolPill": {
