@@ -38,6 +38,8 @@ import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep } from './typ
 import type { PendingActionPayload } from './types/signalr';
 // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
 import { toMessageAttachment } from './utils/attachments';
+// DEPLOY_WINDOW_GRACEFUL_ERRORS: добавлено 2026-09-23
+import { humanError } from './utils/humanError';
 
 const STORAGE_KEY = 'conexy_sessions';
 
@@ -1073,8 +1075,16 @@ export default function App() {
       // Мы слушали только первую, поэтому карточка команды создавалась по pending_confirmation,
       // а событие о завершении уходило в пустоту — статус навсегда застревал на «выполняется»,
       // и строки правок файлов тоже не появлялись. Подписываемся на обе.
-      await signalrService.joinTask(res.id);
-      await signalrService.joinTask(sessionId);
+      // DEPLOY_WINDOW_GRACEFUL_ERRORS: подписка на группы не должна ронять отправку. Задача на
+      // бэкенде УЖЕ принята, а событий мы не увидим только до того, как связь вернётся — сторож
+      // (resyncTurn → ensureGroup) дозальёт группы сам. Раньше ошибка joinTask превращала успешно
+      // принятую задачу в «Ошибку» в UI.
+      await signalrService.joinTask(res.id).catch((e: unknown) => {
+        console.warn('[signalr] joinTask after run failed; the watchdog will retry', { taskId: res.id, error: String(e) });
+      });
+      await signalrService.joinTask(sessionId).catch((e: unknown) => {
+        console.warn('[signalr] joinTask for the workspace failed; the watchdog will retry', { sessionId, error: String(e) });
+      });
       return { ok: true };
     } catch (e) {
       // SUBSCRIPTION_TIERS: добавлено 2026-09-17
@@ -1100,7 +1110,7 @@ export default function App() {
       // поэтому оптимистичные сообщения убираем из ленты, а текст и файлы возвращает композер.
       const tooLarge = (e as { response?: { status?: number } })?.response?.status === 413;
 
-      const message = e instanceof Error ? e.message : String(e);
+      const message = humanError(e, live.t);
       streamingRef.current = null;
 
       if (tooLarge && appendUserMessage) {

@@ -1,7 +1,15 @@
 # Production deployment for the ConexyAI stack.
 #
 #   cp .env.example .env          # then fill in real secrets
-#   docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+#   docker compose -f docker-compose.prod.yml --env-file .env up -d --wait --build
+#
+# DEPLOY_WINDOW: use --wait. `up -d` returns as soon as the container is *started*, not when nginx
+# is serving, and recreating the edge container (frontend) means nobody listens on :80 for a few
+# seconds. Cloudflare answers with its own 502 to anyone who loads the site in that window. --wait
+# blocks the deploy command until every healthcheck passes, so at least the window is bounded and
+# the deploy is not reported as done while the site is down. A true zero-downtime edge needs two
+# replicas behind a load balancer (the client already retries the initial connect for 60s and shows
+# "reconnecting" instead of an error, see signalrService.startWithRetry).
 #
 # The backend launches sandbox containers through the docker-socket-proxy service
 # (never a raw /var/run/docker.sock mount). The conexy-sandbox:latest image must already

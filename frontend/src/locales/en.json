@@ -390,6 +390,9 @@
     "menuToggleExplorer": "Toggle File Explorer"
   },
   "errors": {
+    "serviceUnavailable": "The service is restarting right now. Try again in a few seconds.",
+    "network": "No connection to the server. Check your network and try again.",
+    "httpStatus": "Request failed. Status:",
     "invalid_email": "Invalid email.",
     "invalid_password": "Password must be at least 8 characters.",
     "email_taken": "This email is already registered.",

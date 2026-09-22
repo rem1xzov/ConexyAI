@@ -14,6 +14,7 @@ import type { WorkspaceFileEntry, WorkspaceListing } from '../types/api';
 import type { TodoItem } from '../types/signalr';
 import { signalrService } from '../services/signalrService';
 import { changedLineNumbers } from '../utils/diff';
+import { humanError } from '../utils/humanError';
 import { CodeEditor } from './CodeEditor';
 import { TodoPanel } from './TodoPanel';
 import { FileTypeIcon } from './FileTypeIcon';
@@ -245,7 +246,7 @@ export function WorkspacePanel({
       setListing(data);
     } catch (e) {
       if (seq !== loadSeqRef.current) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e, t));
     } finally {
       if (seq === loadSeqRef.current) setLoading(false);
     }
@@ -282,7 +283,7 @@ export function WorkspacePanel({
       setActivePath(path);
       setSaveStatus('idle');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e, t));
     }
   }
 
@@ -296,7 +297,7 @@ export function WorkspacePanel({
       await loadFiles();
       await openFile(path);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e, t));
     }
   }
 
@@ -361,7 +362,7 @@ export function WorkspacePanel({
       removeTab(path);
       await loadFiles();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e, t));
     }
   }
 
@@ -372,7 +373,7 @@ export function WorkspacePanel({
       const blob = await downloadWorkspaceZip(sessionId);
       triggerDownload(blob, 'workspace.zip');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e, t));
     } finally {
       setZipping(false);
     }
@@ -391,7 +392,7 @@ export function WorkspacePanel({
       notify(t('workspace.uploaded'));
       await loadFiles();
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = humanError(e, t);
       notify(t('workspace.uploadError', { message }));
       setError(message);
     }
@@ -431,7 +432,7 @@ export function WorkspacePanel({
         onRunInSeparateWindow?.();
       }
     } catch (e) {
-      setRunError(e instanceof Error ? e.message : String(e));
+      setRunError(humanError(e, t));
     } finally {
       setRunBusy(false);
     }
