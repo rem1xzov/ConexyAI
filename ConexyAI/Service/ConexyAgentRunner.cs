@@ -22,6 +22,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly IHubContext<ConexyHub> _hubContext;
     // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
     private readonly IDangerousCommandClassifier _dangerousCommandClassifier;
+    // COMMAND_APPROVAL: добавлено 2026-09-22 — какие команды вообще требуют подтверждения.
+    private readonly ICommandApprovalClassifier _commandApproval;
     private readonly IPendingActionService _pendingActionService;
     // SUBSCRIPTION_TIERS: добавлено 2026-09-17
     private readonly ISubscriptionService _subscriptionService;
@@ -165,6 +167,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         IWebSearchService webSearchService,
         IHubContext<ConexyHub> hubContext,
         IDangerousCommandClassifier dangerousCommandClassifier,
+        ICommandApprovalClassifier commandApproval,
         IPendingActionService pendingActionService,
         ISubscriptionService subscriptionService,
         IUserMemoryService memoryService,
@@ -181,6 +184,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _webSearchService = webSearchService;
         _hubContext = hubContext;
         _dangerousCommandClassifier = dangerousCommandClassifier;
+        _commandApproval = commandApproval;
         _pendingActionService = pendingActionService;
         _subscriptionService = subscriptionService;
         _memoryService = memoryService;
@@ -585,6 +589,20 @@ public class ConexyAgentRunner : IConexyAgentRunner
     {
         // Propagated into every ToolAction the bash service emits, so the feed keeps the accent.
         request.IsDangerous = isDangerous;
+
+        // COMMAND_APPROVAL: добавлено 2026-09-22 — read-only диагностика (ls, cat, grep, git status,
+        // find, «--version»…) больше не требует подтверждения и не открывает полноразмерную
+        // карточку. Раньше гейт стоял на КАЖДОЙ команде, из-за чего лента превращалась в столбик
+        // одинаковых карточек, а текст рассуждений терялся между ними.
+        if (!_commandApproval.RequiresApproval(request.Command))
+        {
+            await SendAgentStatusAsync(taskId, "executing", $"Выполняю команду: {request.Command}...", ct: ct);
+            var readOnly = await _bashService.ExecuteAsync(chatId, request, emitStartEvent: true, ct: ct);
+            var readOnlyOutput = string.IsNullOrEmpty(readOnly.Output)
+                ? readOnly.ErrorType ?? "command failed"
+                : readOnly.Output;
+            return new ConexyToolResult(toolCall.Id, readOnlyOutput, !readOnly.Success);
+        }
 
         // "Allow all for this task": the user already approved everything for this run, so the
         // command executes straight away and shows up as an ordinary action row.

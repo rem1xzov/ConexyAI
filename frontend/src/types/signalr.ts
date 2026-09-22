@@ -94,11 +94,18 @@ export interface BuildProblemsPayload {
 
 // COMMAND_CONFIRM: добавлено 2026-09-20
 /**
- * Resolves a pending agent command. Command confirmation is rendered inside ToolActionFeed
- * instead of as a blocking modal, so the card needs a way back to the App-level handler;
- * it is passed down as a single callback. `allowAll` also auto-approves the rest of this task.
+ * Resolves a pending agent command. Command confirmation is rendered inside the agent timeline
+ * instead of as a blocking modal, so the card needs a way back to the App-level handler; it is
+ * passed down as a single callback. `allowAll` also auto-approves the rest of this task.
+ *
+ * COMMAND_FEEDBACK: добавлено 2026-09-22 — возвращает `false`, когда решение некому доставить
+ * (гейт уже снят), чтобы карточка показала ошибку, а не молча осталась «ожидающей».
  */
-export type CommandDecisionHandler = (actionId: string, approved: boolean, allowAll: boolean) => void;
+export type CommandDecisionHandler = (
+  actionId: string,
+  approved: boolean,
+  allowAll: boolean,
+) => Promise<boolean>;
 
 export interface SignalrCallbacks {
   onContentToken?: (delta: string) => void;

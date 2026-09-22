@@ -3483,6 +3483,17 @@ body {
   border-color: rgba(239, 68, 68, 0.45);
 }
 
+/* COMMAND_FEEDBACK: добавлено 2026-09-22 — состояния, которые появились вместе с локальным
+   откликом на клик: команда одобрена и выполняется, и сбой доставки решения. */
+.cmd-confirm--approved {
+  border-color: rgba(52, 211, 153, 0.45);
+}
+
+.cmd-confirm--failed,
+.cmd-confirm--error {
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
 .cmd-confirm--completed {
   border-color: rgba(52, 211, 153, 0.35);
 }
@@ -4056,45 +4067,104 @@ body {
   transform: translateY(0);
 }
 
-/* ---------- TOOL_PILLS: добавлено 2026-09-20 ---------- */
-/* Agent tool activity as compact dark pills: a running one with a spinner, a finished one
-   that opens into its result snippet / console output. */
-.tool-feed {
+/* ---------- AGENT_TIMELINE: добавлено 2026-09-22 ---------- */
+/* Компактный таймлайн шагов агента вместо столбика одинаковых полноразмерных карточек.
+   Строка шага — одна линия: иконка типа действия слева, короткое описание, статус справа.
+   Полноразмерная карточка (cmd-confirm) осталась только для команд, требующих решения. */
+.agent-timeline {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
+  align-items: stretch;
+  gap: 4px;
   margin: 10px 0 0;
-}
-
-.tool-pill {
   max-width: 100%;
   min-width: 0;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
+}
+
+/* Reasoning step: icon-less, muted, one line with its own stopwatch. */
+.tl-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 2px;
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.tl-step__dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.tl-step__pulse {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: tlPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes tlPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.tl-step__label {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.tool-pill--running {
-  border-color: rgba(198, 139, 212, 0.38);
+/* Per-step stopwatch. Tabular figures keep the width stable so the line does not jitter. */
+.step-duration {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
 }
 
-.tool-pill--completed {
-  border-color: rgba(52, 211, 153, 0.28);
+/* Tool row: a single compact line, expandable when the tool produced output. */
+.tl-row {
+  max-width: 100%;
+  min-width: 0;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  overflow: hidden;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-.tool-pill--failed,
-.tool-pill--rejected {
-  border-color: rgba(239, 68, 68, 0.35);
+.tl-row--running {
+  border-color: rgba(198, 139, 212, 0.28);
+  background: var(--surface-2);
 }
 
-.tool-pill__head {
+.tl-row--failed,
+.tl-row--rejected {
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.tl-row__head {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 12px;
+  padding: 5px 8px;
   background: transparent;
   border: none;
   color: var(--text);
@@ -4103,30 +4173,37 @@ body {
   cursor: default;
 }
 
-.tool-pill__head--actionable {
+.tl-row__head--actionable {
   cursor: pointer;
 }
 
-.tool-pill__head--actionable:hover {
+.tl-row__head--actionable:hover {
   background: var(--surface);
 }
 
-.tool-pill__icon {
+.tl-row__icon {
   flex-shrink: 0;
+  font-size: 12px;
+  opacity: 0.9;
 }
 
-.tool-pill__label {
+.tl-row__label {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted);
 }
 
-.tool-pill__error {
+.tl-row--running .tl-row__label {
+  color: var(--text);
+}
+
+.tl-row__error {
   flex-shrink: 0;
-  max-width: 45%;
+  max-width: 40%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4134,25 +4211,25 @@ body {
   color: var(--danger);
 }
 
-.tool-pill__mark,
-.tool-pill__chevron {
+.tl-row__mark,
+.tl-row__chevron {
   flex-shrink: 0;
 }
 
-.tool-pill__chevron {
+.tl-row__chevron {
   color: var(--muted);
   font-size: 10px;
   transition: transform 0.15s ease;
 }
 
-.tool-pill__chevron--open {
+.tl-row__chevron--open {
   transform: rotate(180deg);
 }
 
-.tool-pill__spinner {
+.tl-row__spinner {
   flex-shrink: 0;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
   border: 2px solid var(--border);
   border-top-color: var(--accent);
@@ -4165,15 +4242,9 @@ body {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .tool-pill__spinner {
-    animation: none;
-  }
-}
-
-.tool-pill__body {
+.tl-row__body {
   margin: 0;
-  padding: 8px 12px 10px;
+  padding: 8px 10px 10px;
   border-top: 1px solid var(--border);
   background: var(--code-bg);
   color: var(--muted);
@@ -4183,6 +4254,25 @@ body {
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Card-level spinner for "Подтверждено, выполняется…". */
+.cmd-confirm__spinner {
+  flex-shrink: 0;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: toolSpin 0.7s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tl-step__pulse,
+  .tl-row__spinner,
+  .cmd-confirm__spinner {
+    animation: none;
+  }
 }
 
 /* ---------- Inline running light (message flow) ---------- */

@@ -33,7 +33,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { getStoredTheme, setTheme, type Theme } from './theme';
 import { setLanguage } from './i18n';
 import type { ConexyModel, LimitExceededInfo, ReasoningEffort, SendOutcome, SubscriptionUsage, TaskAttachment } from './types/api';
-import type { ChatMessage, ChatSession, ChatSessionKind } from './types/chat';
+import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep } from './types/chat';
 import type { PendingActionPayload } from './types/signalr';
 // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
 import { toMessageAttachment } from './utils/attachments';
@@ -44,6 +44,19 @@ function uid(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+}
+
+// AGENT_TIMELINE: добавлено 2026-09-22
+/**
+ * Closes the still-running reasoning step. Called when the run finishes, fails or is stopped, so
+ * the step's timer freezes at its real duration instead of ticking forever.
+ */
+function closeSteps(steps?: AgentStep[]): AgentStep[] | undefined {
+  if (!steps || steps.length === 0) return steps;
+  const last = steps[steps.length - 1];
+  if (last.endedAt !== undefined) return steps;
+  const now = Date.now();
+  return steps.map((s) => (s.id === last.id ? { ...s, endedAt: now } : s));
 }
 
 function normalizeMessage(m: ChatMessage): ChatMessage {
@@ -332,7 +345,45 @@ export default function App() {
         if (!ctx || disposed) return;
         setAgentStatus(payload.label);
         setSessions((prev) =>
-          updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => ({ ...m, currentAction: payload })),
+          updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => {
+            // AGENT_TIMELINE: добавлено 2026-09-22 — каждая фаза «размышления» становится
+            // отдельным шагом со своим startedAt, поэтому таймер каждого шага честно идёт
+            // от нуля, а завершённые шаги больше не тикают и не путаются между собой.
+            const steps = m.steps ?? [];
+            const last = steps[steps.length - 1];
+            const open = last && last.endedAt === undefined ? last : undefined;
+
+            if (payload.stage === 'thinking') {
+              // A new reasoning phase: close the previous one and start a fresh step.
+              const now = Date.now();
+              const closed = open
+                ? steps.map((s) => (s.id === open.id ? { ...s, endedAt: now } : s))
+                : steps;
+              return {
+                ...m,
+                currentAction: payload,
+                steps: [
+                  ...closed,
+                  {
+                    id: uid(),
+                    stage: payload.stage,
+                    label: payload.label,
+                    startedAt: now,
+                    afterToolCount: (m.toolActions ?? []).length,
+                  },
+                ],
+              };
+            }
+
+            // Any other phase ends the current reasoning step.
+            if (!open) return { ...m, currentAction: payload };
+            const now = Date.now();
+            return {
+              ...m,
+              currentAction: payload,
+              steps: steps.map((s) => (s.id === open.id ? { ...s, endedAt: now } : s)),
+            };
+          }),
         );
       },
       onFileCreated: (payload) => {
@@ -384,6 +435,7 @@ export default function App() {
             ...m,
             content: m.content || payload.result,
             status: 'complete',
+            steps: closeSteps(m.steps),
           })),
         );
         setSessions((prev) => updateSession(prev, sessionId, (s) => ({ ...s, status: 'Completed' })));
@@ -404,7 +456,12 @@ export default function App() {
         streamingRef.current = null;
         setAgentStatus('Failed');
         setSessions((prev) =>
-          updateMessage(prev, sessionId, messageId, (m) => ({ ...m, status: 'error', error: err })),
+          updateMessage(prev, sessionId, messageId, (m) => ({
+            ...m,
+            status: 'error',
+            error: err,
+            steps: closeSteps(m.steps),
+          })),
         );
         setSessions((prev) => updateSession(prev, sessionId, (s) => ({ ...s, status: 'Failed' })));
         // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
@@ -572,9 +629,8 @@ export default function App() {
     t,
   };
 
-  // Latest agent progress for the IDE bottom panel (Live Action Status / Todo).
+  // Latest agent progress for the IDE bottom panel (the task checklist).
   const lastAssistant = [...(activeSession?.messages ?? [])].reverse().find((m) => m.role === 'assistant') ?? null;
-  const latestToolActions = lastAssistant?.toolActions ?? [];
   const latestTodos = lastAssistant?.todos ?? [];
 
   // Reset the status bar and editor cursor info when switching sessions.
@@ -1017,8 +1073,9 @@ export default function App() {
     // "Продолжить" hands back to the model.
     setSessions((prev) =>
       updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => {
-        if (m.status === 'stopped') return m;
-        return { ...m, status: 'stopped' };
+        const steps = closeSteps(m.steps);
+        if (m.status === 'stopped') return { ...m, steps };
+        return { ...m, status: 'stopped', steps };
       }),
     );
     setSessions((prev) => updateSession(prev, ctx.sessionId, (s) => ({ ...s, status: 'Stopped' })));
@@ -1051,10 +1108,12 @@ export default function App() {
         if (approved && allowAll) setAllowAllTaskId(null);
         live.showToast(live.t('toast.confirmExpired'));
       }
+      return delivered;
     } catch (err) {
       console.error('[CommandConfirm] ConfirmAction failed:', err);
       if (approved && allowAll) setAllowAllTaskId(null);
       live.showToast(live.t('toast.confirmFailed'));
+      return false;
     }
   }, []);
 
@@ -1321,7 +1380,6 @@ export default function App() {
                 fileCreatedEvent={fileCreatedEvent}
                 fileRefreshToken={fileRefreshToken}
                 agentFileChange={agentFileChange}
-                toolActions={latestToolActions}
                 todos={latestTodos}
                 onCursorChange={setCursorInfo}
                 onRunInSeparateWindow={() => showToast(t('toast.runProject'))}

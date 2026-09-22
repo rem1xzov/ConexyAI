@@ -251,6 +251,9 @@
     "allow": "Allow",
     "deny": "Deny",
     "allowAll": "Allow all for this session",
+    "approved": "Approved, running…",
+    "denied": "Denied",
+    "sendFailed": "Couldn't send the decision — try again",
     "allowAllActive": "Auto-approve is on: commands run without asking",
     "disableAllowAll": "Disable"
   },
@@ -265,7 +268,11 @@
   },
   "toolPill": {
     "searchDocs": "Document search",
-    "searchWeb": "Web search"
+    "searchWeb": "Web search",
+    "readFile": "Read",
+    "editFile": "Edit",
+    "listFiles": "List",
+    "search": "Search"
   },
   "todo": {
     "plan": "Task Plan"
@@ -273,7 +280,6 @@
   "message": {
     "you": "You",
     "thinking": "Thinking…",
-    "thinkingFor": "Thinking {{duration}}",
     "showThinking": "Thought process",
     "copy": "Copy",
     "goodResponse": "Good response",

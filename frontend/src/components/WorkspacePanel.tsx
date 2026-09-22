@@ -11,11 +11,10 @@ import {
   uploadWorkspaceZip,
 } from '../api/conexyApi';
 import type { WorkspaceFileEntry, WorkspaceListing } from '../types/api';
-import type { TodoItem, ToolActionEvent } from '../types/signalr';
+import type { TodoItem } from '../types/signalr';
 import { signalrService } from '../services/signalrService';
 import { changedLineNumbers } from '../utils/diff';
 import { CodeEditor } from './CodeEditor';
-import { ToolActionFeed } from './ToolActionFeed';
 import { TodoPanel } from './TodoPanel';
 import { FileTypeIcon } from './FileTypeIcon';
 import { Breadcrumbs } from './Breadcrumbs';
@@ -25,7 +24,6 @@ import { MenuBar, type Menu } from './MenuBar';
 import {
   CheckIcon,
   CloseIcon,
-  CodeIcon,
   DownloadIcon,
   PlayIcon,
   RefreshIcon,
@@ -40,7 +38,6 @@ interface WorkspacePanelProps {
   fileCreatedEvent?: { path: string; name: string } | null;
   fileRefreshToken?: number;
   agentFileChange?: { path: string } | null;
-  toolActions?: ToolActionEvent[];
   todos?: TodoItem[];
   style?: CSSProperties;
   onCursorChange?: (pos: { line: number; column: number; language: string }) => void;
@@ -56,7 +53,9 @@ interface OpenTab {
 }
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
-type BottomTab = 'status' | 'todo';
+// STATUS_TAB_REMOVED: добавлено 2026-09-22 — вкладка «Статус» удалена целиком: она дублировала
+// ленту чата (те же команды и карточки подтверждения). В нижней панели осталась только «Задачи».
+type BottomTab = 'todo';
 
 interface PendingConflict {
   path: string;
@@ -170,7 +169,6 @@ export function WorkspacePanel({
   fileCreatedEvent,
   fileRefreshToken,
   agentFileChange,
-  toolActions = [],
   todos = [],
   style,
   onCursorChange,
@@ -184,9 +182,8 @@ export function WorkspacePanel({
   const [tabs, setTabs] = useState<OpenTab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
 
-  // Default to 'status' (not 'terminal') so selecting a chat never auto-mounts the
-  // TerminalPanel — which would spawn the server-side pty (a visible window on Windows).
-  const [bottomTab, setBottomTab] = useState<BottomTab>('status');
+  // STATUS_TAB_REMOVED: добавлено 2026-09-22 — единственная вкладка нижней панели.
+  const [bottomTab, setBottomTab] = useState<BottomTab>('todo');
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [conflict, setConflict] = useState<PendingConflict | null>(null);
   const [zipping, setZipping] = useState(false);
@@ -255,7 +252,7 @@ export function WorkspacePanel({
     setActivePath(null);
     setTabs([]);
     setConflict(null);
-    setBottomTab('status');
+    setBottomTab('todo');
     setDialog(null);
     setListing(null);
     setError(null);
@@ -730,12 +727,6 @@ export function WorkspacePanel({
       <div className="workspace__bottom">
         <div className="workspace__bottom-tabs">
           <button
-            className={`workspace__bottom-tab ${bottomTab === 'status' ? 'workspace__bottom-tab--active' : ''}`}
-            onClick={() => setBottomTab('status')}
-          >
-            <CodeIcon size={14} /> {t('workspace.status')}
-          </button>
-          <button
             className={`workspace__bottom-tab ${bottomTab === 'todo' ? 'workspace__bottom-tab--active' : ''}`}
             onClick={() => setBottomTab('todo')}
           >
@@ -743,25 +734,13 @@ export function WorkspacePanel({
           </button>
         </div>
         <div className="workspace__bottom-body">
-          {bottomTab === 'status' &&
-            (toolActions.length > 0 ? (
-              // PANEL_NO_CARDS: добавлено 2026-09-22 — панель показывает только статус шагов.
-              // Карточки подтверждения с кнопками живут исключительно в ленте чата, иначе
-              // одна и та же команда дублировалась в двух местах.
-              <ToolActionFeed actions={toolActions} showConfirmCards={false} />
-            ) : (
-              <div className="workspace__empty workspace__empty--panel">
-                <div className="workspace__empty-text">{t('workspace.statusEmpty')}</div>
-              </div>
-            ))}
-          {bottomTab === 'todo' &&
-            (todos.length > 0 ? (
-              <TodoPanel todos={todos} />
-            ) : (
-              <div className="workspace__empty workspace__empty--panel">
-                <div className="workspace__empty-text">{t('workspace.todoEmpty')}</div>
-              </div>
-            ))}
+          {todos.length > 0 ? (
+            <TodoPanel todos={todos} />
+          ) : (
+            <div className="workspace__empty workspace__empty--panel">
+              <div className="workspace__empty-text">{t('workspace.todoEmpty')}</div>
+            </div>
+          )}
         </div>
       </div>
 

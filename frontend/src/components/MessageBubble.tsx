@@ -6,8 +6,7 @@ import { assistantPhase } from '../utils/assistantPhase';
 import { ConexyLogo } from './ConexyLogo';
 import { VisionGallery } from './VisionGallery';
 import { AttachmentGrid } from './AttachmentGrid';
-import { ThinkingTimer } from './ThinkingTimer';
-import { ToolActionFeed } from './ToolActionFeed';
+import { AgentTimeline } from './AgentTimeline';
 import { TodoPanel } from './TodoPanel';
 import { Markdown } from './Markdown';
 import { MessageActions } from './MessageActions';
@@ -171,9 +170,11 @@ function MessageBubbleBase({
         </details>
       )}
 
-      {/* 2. Tool execution pills (running -> expandable result). */}
-      <ToolActionFeed
+      {/* 2. Compact step timeline: reasoning rows + tool rows, and a full card only for the
+          commands that actually need the user's decision. */}
+      <AgentTimeline
         actions={toolActions}
+        steps={message.steps}
         onCommandDecision={onCommandDecision}
         statusPill={statusPill}
       />
@@ -186,13 +187,11 @@ function MessageBubbleBase({
       </div>
 
       {/* 5. Running light: last element of the message while generating, so it starts directly
-          under the reasoning pill / tool pills and is pushed down as the answer grows. */}
+          under the timeline and is pushed down as the answer grows. The per-step timer lives in
+          the timeline rows above, so no counter is duplicated here. */}
       {showGeneratingLogo && (
         <div className="msg-generating">
           <ConexyLogo size={24} active />
-          {/* THINKING_TIMER: anchored to the message start, so it keeps counting across tool
-              steps instead of restarting on every re-render. */}
-          <ThinkingTimer startedAt={message.createdAt} />
         </div>
       )}
 

@@ -177,6 +177,8 @@ builder.Services.AddScoped<IConexyBashService, ConexyBashService>();
 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
 builder.Services.AddScoped<IPendingActionRepository, PendingActionRepository>();
 builder.Services.AddSingleton<IDangerousCommandClassifier, DangerousCommandClassifier>();
+// COMMAND_APPROVAL: добавлено 2026-09-22 — read-only команды выполняются без подтверждения.
+builder.Services.AddSingleton<ICommandApprovalClassifier, CommandApprovalClassifier>();
 builder.Services.AddSingleton<IPendingActionService, PendingActionService>();
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 builder.Services.AddScoped<IUserMemoryRepository, UserMemoryRepository>();

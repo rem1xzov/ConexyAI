@@ -3,34 +3,54 @@ import { useTranslation } from 'react-i18next';
 import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
 import { CheckIcon, CloseIcon } from './Icons';
 
-// COMMAND_CONFIRM: добавлено 2026-09-20
+// COMMAND_FEEDBACK: переписано 2026-09-22
 /**
- * Compact, non-blocking confirmation card for an agent `bash` command. It renders inline in
- * the action feed (chat message / agent status panel) instead of covering the whole app, so
- * the user can keep reading and scrolling while the agent waits for this specific command.
+ * Compact, non-blocking confirmation card for an agent command that actually needs a decision
+ * (installs, deletes, writes — read-only diagnostics never get here).
  *
- * Dangerous commands keep the amber accent; ordinary ones use the neutral surface.
+ * The card used to change nothing at all on click: the status came exclusively from server events,
+ * so between "approved" and "command finished" the buttons stayed on screen and the user could not
+ * tell whether the click registered. It now keeps a local decision state, so the click is
+ * acknowledged instantly, and only then hands over to the backend's completed/failed event.
  */
 interface CommandConfirmCardProps {
-  /** Events sharing one pending-action id: the pending request and its eventual outcome. */
+  /** Events sharing one pending-action id: the request and its eventual outcome. */
   events: ToolActionEvent[];
   onDecision?: CommandDecisionHandler;
 }
+
+type LocalDecision = 'none' | 'approving' | 'denying' | 'failed';
 
 export function CommandConfirmCard({ events, onDecision }: CommandConfirmCardProps) {
   const { t } = useTranslation();
   const [allowAll, setAllowAll] = useState(false);
   const [showOutput, setShowOutput] = useState(false);
+  const [decision, setDecision] = useState<LocalDecision>('none');
 
   const first = events[0];
   const completed = events.find((e) => e.status === 'completed' || e.status === 'failed');
   const rejected = events.find((e) => e.status === 'rejected');
-  const pending = !completed && !rejected;
 
   const isDangerous = events.some((e) => e.isDangerous);
-  const status: ToolActionEvent['status'] = rejected ? 'rejected' : completed ? completed.status : 'pending_confirmation';
-  const output = completed?.output ?? '';
   const actionId = first.pendingActionId;
+  const output = completed?.output ?? '';
+
+  // The authoritative outcome comes from the server; the local decision only fills the gap while
+  // the command is in flight.
+  const status: 'pending_confirmation' | 'approved' | 'rejected' | 'completed' | 'failed' | 'error' =
+    rejected
+      ? 'rejected'
+      : completed
+        ? completed.status === 'failed'
+          ? 'failed'
+          : 'completed'
+        : decision === 'failed'
+          ? 'error'
+          : decision === 'approving'
+            ? 'approved'
+            : decision === 'denying'
+              ? 'rejected'
+              : 'pending_confirmation';
 
   const statusLabel =
     status === 'completed'
@@ -38,21 +58,42 @@ export function CommandConfirmCard({ events, onDecision }: CommandConfirmCardPro
       : status === 'failed'
         ? t('toolAction.failed')
         : status === 'rejected'
-          ? t('toolAction.rejected')
-          : t('toolAction.pending');
+          ? t('cmdConfirm.denied')
+          : status === 'approved'
+            ? t('cmdConfirm.approved')
+            : status === 'error'
+              ? t('cmdConfirm.sendFailed')
+              : t('toolAction.pending');
 
   const statusMark =
     status === 'completed' ? (
       <span className="chat-ok">✓</span>
-    ) : status === 'rejected' ? (
-      <span className="chat-danger">⊘</span>
-    ) : status === 'failed' ? (
-      <span className="chat-danger">✕</span>
+    ) : status === 'rejected' || status === 'failed' ? (
+      <span className="chat-danger">{status === 'rejected' ? '⊘' : '✕'}</span>
+    ) : status === 'error' ? (
+      <span className="chat-danger">!</span>
+    ) : status === 'approved' ? (
+      <span className="cmd-confirm__spinner" aria-hidden="true" />
     ) : (
       <span className="chat-warn animate-pulse">●</span>
     );
 
-  const canDecide = pending && Boolean(actionId) && Boolean(onDecision);
+  const settled = status === 'completed' || status === 'failed' || status === 'rejected';
+  const inFlight = status === 'approved';
+  const canDecide =
+    !settled && !inFlight && decision !== 'denying' && Boolean(actionId) && Boolean(onDecision);
+
+  async function decide(approved: boolean) {
+    if (!actionId || !onDecision) return;
+    // Acknowledge immediately — the user must see the click land, whatever the network does.
+    setDecision(approved ? 'approving' : 'denying');
+    const delivered = await onDecision(actionId, approved, allowAll);
+    if (!delivered) {
+      setDecision('failed');
+      return;
+    }
+    // Keep the optimistic state until the server's terminal event replaces it.
+  }
 
   return (
     <div
@@ -77,30 +118,32 @@ export function CommandConfirmCard({ events, onDecision }: CommandConfirmCardPro
         </div>
       )}
 
-      {canDecide && (
+      {(canDecide || status === 'error') && (
         <div className="cmd-confirm__actions">
           <button
             className="cmd-confirm__btn cmd-confirm__btn--allow"
-            onClick={() => onDecision!(actionId!, true, allowAll)}
+            onClick={() => void decide(true)}
             type="button"
           >
             <CheckIcon size={13} /> {t('cmdConfirm.allow')}
           </button>
           <button
             className="cmd-confirm__btn cmd-confirm__btn--deny"
-            onClick={() => onDecision!(actionId!, false, false)}
+            onClick={() => void decide(false)}
             type="button"
           >
             <CloseIcon size={13} /> {t('cmdConfirm.deny')}
           </button>
-          <label className="cmd-confirm__allow-all">
-            <input
-              type="checkbox"
-              checked={allowAll}
-              onChange={(e) => setAllowAll(e.target.checked)}
-            />
-            {t('cmdConfirm.allowAll')}
-          </label>
+          {canDecide && (
+            <label className="cmd-confirm__allow-all">
+              <input
+                type="checkbox"
+                checked={allowAll}
+                onChange={(e) => setAllowAll(e.target.checked)}
+              />
+              {t('cmdConfirm.allowAll')}
+            </label>
+          )}
         </div>
       )}
 
