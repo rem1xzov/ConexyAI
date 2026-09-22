@@ -12,6 +12,16 @@ using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ATTACHMENT_SIZE_LIMIT: добавлено 2026-09-22 — base64-вложения едут в JSON-теле /api/conexy/run,
+// поэтому несколько фото упираются в дефолтные 30MB Kestrel раньше, чем сработает
+// [RequestSizeLimit] на экшене. Держать в синхроне с атрибутом контроллера (55MB) и с
+// client_max_body_size в frontend/nginx.conf.
+const long MaxUploadBodyBytes = 60_000_000;
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = MaxUploadBodyBytes;
+});
+
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSignalR();
@@ -224,6 +234,26 @@ await using (var scope = app.Services.CreateAsyncScope())
 _ = app.Services.GetRequiredService<IConexyWorkspaceService>();
 
 LogEnvironmentPrerequisites(app);
+
+// ATTACHMENT_SIZE_LIMIT: Kestrel обрывает чтение тела на лимите и бросает BadHttpRequestException
+// со статусом 413. Без этого клиент видит только пустое "413 Request Entity Too Large", поэтому
+// отдаём понятный JSON-маркер, по которому SPA показывает человеческое сообщение.
+app.Use(async (context, next) =>
+{
+    try
+    {
+        await next();
+    }
+    catch (BadHttpRequestException ex)
+        when (ex.StatusCode == StatusCodes.Status413PayloadTooLarge && !context.Response.HasStarted)
+    {
+        context.Response.Clear();
+        context.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsJsonAsync(
+            new { error = "PAYLOAD_TOO_LARGE" }, context.RequestAborted);
+    }
+});
 
 app.UseHttpsRedirection();
 app.UseCors("AllowFrontend");

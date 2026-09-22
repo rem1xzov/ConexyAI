@@ -8,6 +8,15 @@ export interface TaskAttachment {
   contentType: string; // e.g. "image/png", "text/plain", "application/json"
 }
 
+// ATTACHMENT_SIZE_LIMIT: добавлено 2026-09-22
+/** Result of handing a turn to the backend. `ok: false` means nothing was sent, so the composer
+ *  can hand the text and the files back instead of losing them to a failed request. */
+export interface SendOutcome {
+  ok: boolean;
+  /** The payload was rejected for its size (413 from the proxy or the server). */
+  tooLarge?: boolean;
+}
+
 export interface ConexyRequest {
   model: ConexyModel;
   prompt: string;

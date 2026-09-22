@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ConexyModel, ReasoningEffort, TaskAttachment } from '../types/api';
+import type { ConexyModel, ReasoningEffort, SendOutcome, TaskAttachment } from '../types/api';
 import { fileToAttachment, isAllowedMime, pastedImageFile } from '../utils/attachments';
 import { useIsMobile } from '../hooks/useMediaQuery';
 import { ModelPicker } from './ModelPicker';
 import { VoiceWaveIcon, MicIcon, PlusIcon, SendIcon, StopIcon, UploadIcon, PhotoIcon, CameraIcon, CodeIcon, CloseIcon } from './Icons';
 
 const MAX_ATTACHMENTS = 10;
+
+// ATTACHMENT_SIZE_LIMIT: добавлено 2026-09-22 — base64 раздувает payload примерно на треть,
+// а весь запрос должен пройти сквозь nginx и Kestrel (см. client_max_body_size в nginx.conf).
+// Ловим превышение у себя и говорим об этом прямо, вместо голого 413 от прокси.
+const MAX_TOTAL_ATTACHMENT_BYTES = 45_000_000;
 
 interface InputBarProps {
   model: ConexyModel;
@@ -24,7 +29,7 @@ interface InputBarProps {
   onStop: () => void;
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
   // onOpenLive: () => void;
-  onSend: (prompt: string, attachments: TaskAttachment[]) => void;
+  onSend: (prompt: string, attachments: TaskAttachment[]) => Promise<SendOutcome> | SendOutcome | void;
 }
 
 export function InputBar({
@@ -124,13 +129,37 @@ export function InputBar({
     }
   }
 
-  function submit() {
+  // ATTACHMENT_SIZE_LIMIT: единый способ показать/убрать баннер над полем ввода.
+  function showAttachError(message: string) {
+    setAttachError(message);
+    window.setTimeout(() => setAttachError(null), 8000);
+  }
+
+  async function submit() {
     const prompt = value.trim();
     if (!prompt || disabled) return;
-    onSend(prompt, attachments);
+
+    const totalBytes = attachments.reduce((sum, a) => sum + (a.contentBase64.length * 3) / 4, 0);
+    if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+      // Ничего не отправляем и ничего не очищаем — пользователь просто убирает часть файлов.
+      showAttachError(t('input.attachmentsTooLarge'));
+      return;
+    }
+
+    // Clear optimistically so the composer feels instant, then hand everything back if the
+    // request never made it to the model — the user should not have to retype anything.
+    const pending = attachments;
     setValue('');
     setAttachments([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
+
+    const outcome = await onSend(prompt, pending);
+    if (outcome && outcome.ok === false) {
+      setValue(prompt);
+      setAttachments(pending);
+      resizeTextarea();
+      showAttachError(t(outcome.tooLarge ? 'input.attachmentsTooLarge' : 'input.sendFailed'));
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {

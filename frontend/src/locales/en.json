@@ -223,7 +223,16 @@
     "importCode": "Import code",
     "placeholder": "Message…",
     "unsupportedFiles": "Couldn't attach: {{names}}. Images, PDFs, documents, spreadsheets and text files are supported.",
-    "removeFile": "Remove {{name}}"
+    "removeFile": "Remove {{name}}",
+    "attachmentsTooLarge": "These files are too large to send. Reduce their size or attach fewer files — for example, send them one at a time.",
+    "sendFailed": "Couldn't send the message. Please try again."
+  },
+  "attachment": {
+    "view": "Open full size",
+    "close": "Close",
+    "prev": "Previous image",
+    "next": "Next image",
+    "counter": "{{index}} of {{total}}"
   },
   "palette": {
     "runProject": "Run project",

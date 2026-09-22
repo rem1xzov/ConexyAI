@@ -2818,24 +2818,72 @@ body {
 }
 
 /* ---------- Attachments rendered inside a user bubble ---------- */
-.msg-attachments {
+/* ATTACHMENT_GRID: добавлено 2026-09-22 — компактная сетка вместо стопки полноширинных
+   превью. Ширина ячейки ограничена clamp'ом, поэтому 4 фото не растягивают бабл. */
+.attachment-grid {
+  --att-cell: clamp(96px, 34vw, 148px);
+  display: grid;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  margin-bottom: 8px;
+}
+
+.attachment-grid--single {
+  grid-template-columns: min(220px, 100%);
+}
+
+.attachment-grid--duo,
+.attachment-grid--quad {
+  grid-template-columns: repeat(2, var(--att-cell));
+}
+
+.attachment-grid__cell {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: var(--att-cell);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.attachment-grid--single .attachment-grid__cell {
+  height: clamp(120px, 46vw, 165px);
+}
+
+.attachment-grid__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* "+N": сколько картинок свернулось за последней видимой плиткой. */
+.attachment-grid__more {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* Non-image files stay compact chips so they never stretch the bubble vertically. */
+.attachment-files {
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin-bottom: 8px;
 }
 
-.msg-attachments__img {
-  display: block;
-  max-width: 100%;
-  max-height: 180px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  object-fit: cover;
-  cursor: zoom-in;
-}
-
-.msg-attachments__file {
+.attachment-files__chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -2846,9 +2894,85 @@ body {
   background: var(--surface-2);
   color: var(--text);
   font-size: 12px;
-  white-space: nowrap;
+}
+
+.attachment-files__name {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-files__size {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+/* ---------- Attachment lightbox ---------- */
+.attachment-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.88);
+}
+
+.attachment-lightbox__img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 10px;
+  cursor: default;
+}
+
+.attachment-lightbox__close,
+.attachment-lightbox__nav {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.attachment-lightbox__close:hover,
+.attachment-lightbox__nav:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.attachment-lightbox__close {
+  top: 16px;
+  right: 16px;
+}
+
+.attachment-lightbox__nav {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.attachment-lightbox__nav--prev {
+  left: 16px;
+}
+
+.attachment-lightbox__nav--next {
+  right: 16px;
+}
+
+.attachment-lightbox__counter {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
 }
 
 /* Marker shown under an answer the user stopped, derived from message.status. */

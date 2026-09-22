@@ -32,7 +32,7 @@ import type { AuthMode } from './components/AuthModal';
 import { SettingsModal } from './components/SettingsModal';
 import { getStoredTheme, setTheme, type Theme } from './theme';
 import { setLanguage } from './i18n';
-import type { ConexyModel, LimitExceededInfo, ReasoningEffort, SubscriptionUsage, TaskAttachment } from './types/api';
+import type { ConexyModel, LimitExceededInfo, ReasoningEffort, SendOutcome, SubscriptionUsage, TaskAttachment } from './types/api';
 import type { ChatMessage, ChatSession, ChatSessionKind } from './types/chat';
 import type { PendingActionPayload } from './types/signalr';
 // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
@@ -749,7 +749,7 @@ export default function App() {
     // CONTINUE_GENERATION: добавлено 2026-09-21 — when set, the answer resumes inside that
     // existing message instead of appending a new user/assistant pair.
     continueMessageId?: string,
-  ) => {
+  ): Promise<SendOutcome> => {
     const live = liveRef.current;
     setAgentStatus('Working…');
     const session = live.sessions.find((s) => s.id === sessionId);
@@ -826,6 +826,7 @@ export default function App() {
       setSessions((prev) => updateSession(prev, sessionId, (s) => ({ ...s, taskId: res.id })));
       streamingRef.current = { sessionId, messageId: assistantMsg.id, taskId: res.id };
       await signalrService.joinTask(res.id);
+      return { ok: true };
     } catch (e) {
       // SUBSCRIPTION_TIERS: добавлено 2026-09-17
       const data = (e as { response?: { data?: { error?: string; limit?: string; resetsAt?: string } } })?.response?.data;
@@ -842,11 +843,29 @@ export default function App() {
           })),
         );
         void live.refreshUsage();
-        return;
+        return { ok: false };
       }
+
+      // ATTACHMENT_SIZE_LIMIT: добавлено 2026-09-22 — прокси (nginx, дефолт 1MB) режет тело
+      // раньше бэкенда и отдаёт голый 413. Это не ошибка модели, а неудавшаяся отправка,
+      // поэтому оптимистичные сообщения убираем из ленты, а текст и файлы возвращает композер.
+      const tooLarge = (e as { response?: { status?: number } })?.response?.status === 413;
 
       const message = e instanceof Error ? e.message : String(e);
       streamingRef.current = null;
+
+      if (tooLarge && appendUserMessage) {
+        setAgentStatus('Ready');
+        setSessions((prev) =>
+          updateSession(prev, sessionId, (s) => ({
+            ...s,
+            status: 'Idle',
+            messages: s.messages.filter((m) => m.id !== userMsg.id && m.id !== assistantMsg.id),
+          })),
+        );
+        return { ok: false, tooLarge: true };
+      }
+
       setSessions((prev) =>
         updateSession(prev, sessionId, (s) => ({
           ...s,
@@ -860,13 +879,14 @@ export default function App() {
       // const responder = liveRespondRef.current;
       // liveRespondRef.current = null;
       // responder?.reject(new Error(message));
+      return { ok: false };
     }
   }, []);
 
-  async function handleSend(prompt: string, attachments: TaskAttachment[]) {
-    if (!prompt.trim() || !token) return;
+  async function handleSend(prompt: string, attachments: TaskAttachment[]): Promise<SendOutcome> {
+    if (!prompt.trim() || !token) return { ok: false };
     const sessionId = ensureSessionId(activeTab);
-    await startCompletion(sessionId, prompt, attachments, true);
+    return startCompletion(sessionId, prompt, attachments, true);
   }
 
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17

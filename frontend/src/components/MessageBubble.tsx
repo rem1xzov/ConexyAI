@@ -5,6 +5,7 @@ import type { CommandDecisionHandler } from '../types/signalr';
 import { assistantPhase } from '../utils/assistantPhase';
 import { ConexyLogo } from './ConexyLogo';
 import { VisionGallery } from './VisionGallery';
+import { AttachmentGrid } from './AttachmentGrid';
 import { ToolActionFeed } from './ToolActionFeed';
 import { TodoPanel } from './TodoPanel';
 import { Markdown } from './Markdown';
@@ -103,26 +104,8 @@ function MessageBubbleBase({
         <div className="w-fit max-w-[85%] chat-surface rounded-2xl px-5 py-3.5 shadow-sm">
           <div className="font-semibold text-xs chat-muted mb-1">{t('message.you')}</div>
           {/* ATTACHMENTS_IN_BUBBLE: the files travel with this message, inside its bubble —
-              images as thumbnails, anything else as a file chip. */}
-          {attachments.length > 0 && !editing && (
-            <div className="msg-attachments">
-              {attachments.map((a, i) =>
-                a.previewUrl ? (
-                  <img
-                    key={`${a.fileName}-${i}`}
-                    src={a.previewUrl}
-                    alt={a.fileName}
-                    title={a.fileName}
-                    className="msg-attachments__img"
-                  />
-                ) : (
-                  <span key={`${a.fileName}-${i}`} className="msg-attachments__file" title={a.fileName}>
-                    <span aria-hidden="true">📄</span> {a.fileName}
-                  </span>
-                ),
-              )}
-            </div>
-          )}
+              images as a compact grid, anything else as a file chip. */}
+          {attachments.length > 0 && !editing && <AttachmentGrid attachments={attachments} />}
           {editing ? (
             <div className="min-w-[320px]">
               <textarea
