@@ -178,6 +178,7 @@
     "searchingShort": "Ищу в интернете…",
     "limitExceeded": "Лимит исчерпан",
     "generationStopped": "⏹ Генерация остановлена.",
+    "taskFailed": "Задача завершилась с ошибкой на сервере",
     "chipAutonomous": "Автономный режим",
     "chipTools": "Терминал, файлы, git",
     "chipVerify": "Сборка и проверка",
@@ -296,6 +297,7 @@
     "connected": "Подключено",
     "connecting": "Подключение…",
     "reconnecting": "Переподключение…",
+    "reconnectFailed": "Связь не восстановлена",
     "disconnecting": "Отключение…",
     "disconnected": "Офлайн",
     "lineCol": "Ln {{line}}, Col {{column}}",
@@ -304,6 +306,11 @@
     "agentCompleted": "Завершено",
     "agentFailed": "Ошибка",
     "agentStopped": "Остановлено"
+  },
+  "connection": {
+    "reconnecting": "Соединение потеряно, пытаемся переподключиться…",
+    "lost": "Не удалось восстановить соединение. Задача на сервере могла продолжиться — обновите страницу, чтобы увидеть актуальное состояние.",
+    "reload": "Обновить страницу"
   },
   "breadcrumbs": {
     "workspace": "Workspace",

@@ -29,6 +29,35 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
         _logger = logger;
     }
 
+    // SIGNALR_RESILIENCE: добавлено 2026-09-22 — без этих строк невозможно понять, ПОЧЕМУ
+    // оборвалось соединение: раньше хабу было нечего сказать про connect/disconnect, и причину
+    // (idle-таймаут прокси, рестарт бэкенда, сеть клиента) приходилось угадывать.
+    public override async Task OnConnectedAsync()
+    {
+        _logger.LogInformation(
+            "SignalR connected: {ConnectionId} user={UserId} path={Path}",
+            Context.ConnectionId, Context.UserIdentifier, Context.GetHttpContext()?.Request.Path.Value);
+        await base.OnConnectedAsync();
+    }
+
+    public override async Task OnDisconnectedAsync(Exception? exception)
+    {
+        if (exception is null)
+        {
+            _logger.LogInformation("SignalR disconnected: {ConnectionId} (graceful).", Context.ConnectionId);
+        }
+        else
+        {
+            // The exception (or its absence) is the only clue to what killed a long-running stream.
+            _logger.LogWarning(
+                exception,
+                "SignalR disconnected: {ConnectionId} with error: {Message}",
+                Context.ConnectionId, exception.Message);
+        }
+
+        await base.OnDisconnectedAsync(exception);
+    }
+
     public async Task JoinTask(string taskId)
     {
         _logger.LogInformation("JoinTask: connection {ConnectionId} joining task_{TaskId}", Context.ConnectionId, taskId);

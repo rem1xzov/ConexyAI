@@ -178,6 +178,7 @@
     "searchingShort": "Searching the web…",
     "limitExceeded": "Limit exceeded",
     "generationStopped": "⏹ Generation stopped.",
+    "taskFailed": "The task failed on the server",
     "chipAutonomous": "Autonomous mode",
     "chipTools": "Terminal, files, git",
     "chipVerify": "Build and verify",
@@ -296,6 +297,7 @@
     "connected": "Connected",
     "connecting": "Connecting…",
     "reconnecting": "Reconnecting…",
+    "reconnectFailed": "Connection not restored",
     "disconnecting": "Disconnecting…",
     "disconnected": "Offline",
     "lineCol": "Ln {{line}}, Col {{column}}",
@@ -304,6 +306,11 @@
     "agentCompleted": "Completed",
     "agentFailed": "Failed",
     "agentStopped": "Stopped"
+  },
+  "connection": {
+    "reconnecting": "Connection lost, reconnecting…",
+    "lost": "Couldn't restore the connection. The task may still have continued on the server — reload the page to see its current state.",
+    "reload": "Reload page"
   },
   "breadcrumbs": {
     "workspace": "Workspace",

@@ -24,7 +24,18 @@ builder.WebHost.ConfigureKestrel(options =>
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSignalR();
+// SIGNALR_KEEPALIVE: добавлено 2026-09-22 — параметры заданы явно и согласованы с таймаутами
+// прокси (nginx.conf: proxy_read_timeout 3600s для /hubs/, Cloudflare). Причина: во время долгой
+// задачи агента соединение рвалось само по себе. Две конкретные причины:
+//   * дефолтный ClientTimeoutInterval = 30s — если вкладка браузера в фоне, JS-таймеры, включая
+//     клиентский keep-alive, троттлятся до ~1 раза в минуту, и сервер считал клиента мёртвым;
+//   * 15s keep-alive гарантирует, что ни nginx, ни Cloudflare не увидят idle-соединение.
+builder.Services.AddSignalR(options =>
+{
+    options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+    // Must stay >= 2x KeepAliveInterval; 120s tolerates background-tab timer throttling.
+    options.ClientTimeoutInterval = TimeSpan.FromSeconds(120);
+});
 
 // CORS: the production frontend is served from https://conexyai.ru (and www) by nginx and
 // calls the API same-origin via the /api + /hubs proxy, so CORS mainly matters for the local

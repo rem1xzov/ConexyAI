@@ -23,6 +23,7 @@ export function StatusBar({ agentStatus, cursor }: StatusBarProps) {
     connected: t('statusbar.connected'),
     connecting: t('statusbar.connecting'),
     reconnecting: t('statusbar.reconnecting'),
+    'reconnect-failed': t('statusbar.reconnectFailed'),
     disconnecting: t('statusbar.disconnecting'),
     disconnected: t('statusbar.disconnected'),
   };

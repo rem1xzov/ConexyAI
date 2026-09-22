@@ -1,7 +1,30 @@
 import * as signalR from '@microsoft/signalr';
 import type { BuildProblemsPayload, PendingActionPayload, RunProjectErrorPayload, RunProjectResult, SearchStatusPayload, SignalrCallbacks, SupportMessagePayload, TerminalOutputPayload } from '../types/signalr';
 
-export type ConnectionStatus = 'connected' | 'connecting' | 'reconnecting' | 'disconnecting' | 'disconnected';
+export type ConnectionStatus =
+  | 'connected'
+  | 'connecting'
+  | 'reconnecting'
+  // SIGNALR_RESILIENCE: добавлено 2026-09-22 — переподключение идёт слишком долго (прокси/бэкенд
+  // недоступны). Отдельное состояние, чтобы UI показал это явно, а не только бесконечный спиннер.
+  | 'reconnect-failed'
+  | 'disconnecting'
+  | 'disconnected';
+
+// SIGNALR_RESILIENCE: добавлено 2026-09-22
+// Дефолтная политика withAutomaticReconnect делает всего 4 попытки (~42s) и навсегда сдаётся:
+// onclose, и дальше клиент молча ждёт события, которые уже не придут. Для долгой задачи агента это
+// и давало «вечное думает». Политика ниже не сдаётся никогда, а задержка растёт экспоненциально
+// до 30s со случайным разбросом, чтобы не бить в лежащий бэкенд синхронно со всех вкладок.
+const RECONNECT_MAX_DELAY_MS = 30_000;
+// После этого времени непрерывных неудач UI говорит пользователю обновить страницу.
+const RECONNECT_STALLED_AFTER_MS = 60_000;
+
+function nextRetryDelay(context: signalR.RetryContext): number {
+  const attempt = Math.min(context.previousRetryCount, 5);
+  const base = Math.min(1000 * 2 ** attempt, RECONNECT_MAX_DELAY_MS);
+  return base + Math.floor(Math.random() * 500);
+}
 
 function toStatus(state: signalR.HubConnectionState): ConnectionStatus {
   switch (state) {
@@ -28,6 +51,9 @@ class SignalrService {
   private callbacks: SignalrCallbacks = {};
   private terminalOutputHandlers = new Map<string, (data: string) => void>();
   private stateListeners = new Set<(state: ConnectionStatus) => void>();
+  // SIGNALR_RESILIENCE: когда началась текущая серия неудачных переподключений (0 — не идёт).
+  private reconnectStartedAt = 0;
+  private stalledTimer: number | null = null;
   // Groups the client is supposed to belong to. Re-joined after every (re)connect so a
   // stale/restarted connection never silently drops the stream (the connection id changes
   // on reconnect, but SignalR groups are per-connection and must be re-added).
@@ -181,17 +207,59 @@ class SignalrService {
       .withUrl('/hubs/conexy', {
         accessTokenFactory: () => this.token ?? '',
       })
-      .withAutomaticReconnect()
+      .withAutomaticReconnect({ nextRetryDelayInMilliseconds: nextRetryDelay })
+      // Aligned with the server: it pings every 15s and waits 120s for us. The client's default
+      // 30s server timeout was tight enough to declare a healthy connection dead mid-task.
+      .withKeepAliveInterval(15_000)
+      .withServerTimeout(120_000)
       .build();
 
-    connection.onreconnecting(() => this.notifyState(toStatus(connection.state)));
-    connection.onreconnected(() => {
-      this.notifyState(toStatus(connection.state));
-      void this.rejoinGroups();
+    connection.onreconnecting(() => {
+      if (this.reconnectStartedAt === 0) {
+        this.reconnectStartedAt = Date.now();
+      }
+      this.notifyState('reconnecting');
+      this.scheduleStalledCheck();
     });
-    connection.onclose(() => this.notifyState(toStatus(connection.state)));
+
+    connection.onreconnected(() => {
+      this.clearReconnectState();
+      this.notifyState('connected');
+      void this.rejoinGroups();
+      // Let the app reconcile anything that happened while the socket was down.
+      this.callbacks.onReconnected?.();
+    });
+
+    connection.onclose(() => {
+      this.clearReconnectState();
+      this.notifyState('disconnected');
+    });
 
     return connection;
+  }
+
+  // SIGNALR_RESILIENCE: переподключение может длиться долго (502 от прокси, перезапуск бэкенда).
+  // Через минуту непрерывных неудач переводим UI в явное «не удалось восстановить», продолжая
+  // попытки в фоне — так пользователь не гадает, завис агент или отвалилась связь.
+  private scheduleStalledCheck(): void {
+    if (this.stalledTimer !== null) return;
+    this.stalledTimer = window.setInterval(() => {
+      if (
+        this.connection?.state === signalR.HubConnectionState.Reconnecting &&
+        this.reconnectStartedAt > 0 &&
+        Date.now() - this.reconnectStartedAt >= RECONNECT_STALLED_AFTER_MS
+      ) {
+        this.notifyState('reconnect-failed');
+      }
+    }, 5000);
+  }
+
+  private clearReconnectState(): void {
+    this.reconnectStartedAt = 0;
+    if (this.stalledTimer !== null) {
+      window.clearInterval(this.stalledTimer);
+      this.stalledTimer = null;
+    }
   }
 
   private notifyState(state: ConnectionStatus): void {

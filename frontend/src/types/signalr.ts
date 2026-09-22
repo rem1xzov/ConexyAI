@@ -122,6 +122,10 @@ export interface SignalrCallbacks {
   onRunProjectError?: (payload: RunProjectErrorPayload) => void;
   onSearchStatus?: (payload: SearchStatusPayload) => void;
   onProblems?: (payload: BuildProblemsPayload) => void;
+  // SIGNALR_RESILIENCE: добавлено 2026-09-22 — вызывается после успешного автоматического
+  // переподключения, чтобы приложение сверило ход выполнения с сервером (события, которые
+  // пришли пока сокет лежал, уже потеряны).
+  onReconnected?: () => void;
   // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
   onPendingActionCreated?: (payload: PendingActionPayload) => void;
   // SUPPORT: добавлено 2026-09-19

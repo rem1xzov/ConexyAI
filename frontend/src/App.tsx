@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
-import { getSubscriptionUsage, runTask } from './api/conexyApi';
+import { getSubscriptionUsage, getTaskStatus, runTask } from './api/conexyApi';
 import { signalrService } from './services/signalrService';
 import { useAuth } from './hooks/useAuth';
 import { useIsMobile } from './hooks/useMediaQuery';
@@ -11,6 +11,7 @@ import { InputBar } from './components/InputBar';
 import { ModelPicker } from './components/ModelPicker';
 import { WorkspacePanel } from './components/WorkspacePanel';
 import { StatusBar } from './components/StatusBar';
+import { ConnectionBanner } from './components/ConnectionBanner';
 // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
 // import { LiveVoiceModal } from './components/LiveVoiceModal';
 import { MenuIcon, PanelRightCloseIcon, PanelRightOpenIcon, GhostIcon } from './components/Icons';
@@ -202,6 +203,78 @@ export default function App() {
   // const [isLiveOpen, setIsLiveOpen] = useState(false);
 
   const streamingRef = useRef<{ sessionId: string; messageId: string; taskId?: string } | null>(null);
+
+  // SIGNALR_RESILIENCE: добавлено 2026-09-22
+  /**
+   * Сверяет ход выполнения с сервером после обрыва связи (или перезагрузки страницы). События,
+   * прошедшие пока сокет лежал, потеряны навсегда, поэтому единственный источник правды — сама
+   * запись задачи. Без этого UI продолжал крутить спиннер по уже завершившейся задаче.
+   */
+  const resyncTurn = useCallback(
+    async (sessionId: string, messageId: string, taskId: string): Promise<void> => {
+      try {
+        const res = await getTaskStatus(taskId);
+        const status = (res.status ?? '').toLowerCase();
+
+        if (status === 'running' || status === 'pending') {
+          // Задача жива: гарантируем членство в её группах, чтобы поток событий возобновился.
+          void signalrService.joinTask(taskId).catch(() => undefined);
+          return;
+        }
+
+        setSessions((prev) =>
+          updateMessage(prev, sessionId, messageId, (m) => {
+            if (status === 'completed') {
+              return {
+                ...m,
+                content: m.content || (res.result ?? ''),
+                status: 'complete',
+                steps: closeSteps(m.steps),
+              };
+            }
+            if (status === 'cancelled') {
+              return { ...m, status: 'stopped', steps: closeSteps(m.steps) };
+            }
+            return {
+              ...m,
+              status: 'error',
+              error: res.result || t('agent.taskFailed'),
+              steps: closeSteps(m.steps),
+            };
+          }),
+        );
+        setSessions((prev) =>
+          updateSession(prev, sessionId, (s) => ({
+            ...s,
+            status:
+              status === 'completed' ? 'Completed' : status === 'cancelled' ? 'Stopped' : 'Failed',
+          })),
+        );
+      } catch (err) {
+        // Недоступная/чужая задача не фатальна — транскрипт остаётся как есть.
+        console.warn('[Resync] could not read task state', taskId, err);
+      }
+    },
+    [t],
+  );
+
+  // SIGNALR_RESILIENCE: добавлено 2026-09-22 — после перезагрузки в localStorage может остаться ход,
+  // который был в процессе, когда вкладка закрылась: статус «streaming» без единого события о
+  // завершении. Сверяем такие ходы с сервером один раз за загрузку страницы.
+  const didInitialResyncRef = useRef(false);
+  useEffect(() => {
+    if (!token || didInitialResyncRef.current) return;
+    didInitialResyncRef.current = true;
+
+    for (const session of sessions) {
+      if (!session.taskId) continue;
+      const last = session.messages[session.messages.length - 1];
+      if (!last || last.role !== 'assistant' || last.status !== 'streaming') continue;
+      // Ход, который ведёт текущая вкладка, уже отслеживается живьём — не мешаем ему.
+      if (streamingRef.current?.messageId === last.id) continue;
+      void resyncTurn(session.id, last.id, session.taskId);
+    }
+  }, [token, sessions, resyncTurn]);
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
   // const liveRespondRef = useRef<{ resolve: (text: string) => void; reject: (err: Error) => void } | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -512,6 +585,14 @@ export default function App() {
       onPendingActionCreated: (payload) => {
         if (disposed) return;
         setPendingAction(payload);
+      },
+      // SIGNALR_RESILIENCE: добавлено 2026-09-22 — после успешного переподключения события,
+      // которые не дошли, уже не вернуть, поэтому состояние хода надо перечитать с сервера.
+      onReconnected: () => {
+        if (disposed) return;
+        const ctx = streamingRef.current;
+        if (!ctx?.taskId) return;
+        void resyncTurn(ctx.sessionId, ctx.messageId, ctx.taskId);
       },
     });
 
@@ -1176,6 +1257,7 @@ export default function App() {
   return (
     <>
       {incognitoActive && <div className="incognito-aura" aria-hidden="true" />}
+      <ConnectionBanner />
       <div className="app">
       <Sidebar
         open={sidebarOpen}

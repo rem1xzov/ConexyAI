@@ -5449,3 +5449,97 @@ body {
     flex-direction: column;
   }
 }
+
+/* ---------- SIGNALR_RESILIENCE: добавлено 2026-09-22 ---------- */
+/* Явное состояние связи. Без него оборванный сокет оставлял спиннер агента крутиться вечно и
+   пользователь не мог отличить «задача ещё идёт» от «связь потеряна». */
+.conn-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(720px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  background: var(--surface-solid);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.4;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.4);
+  animation: connBannerIn 0.22s ease both;
+}
+
+.conn-banner--failed {
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+@keyframes connBannerIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.conn-banner__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.conn-banner__spinner {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: toolSpin 0.7s linear infinite;
+}
+
+.conn-banner__mark {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.conn-banner__action {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.conn-banner__action:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conn-banner {
+    animation: none;
+  }
+  .conn-banner__spinner {
+    animation: none;
+  }
+}
