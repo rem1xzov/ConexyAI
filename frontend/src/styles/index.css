@@ -1044,6 +1044,19 @@ body {
   background: var(--surface-2);
 }
 
+/* STUDENTS_REASONING: model choice is locked in students mode, but the popover stays open so the
+   reasoning toggle inside it remains reachable. Locked items look inert and never highlight. */
+.modelpicker__item--locked,
+.modelpicker__item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.modelpicker__item--locked:hover,
+.modelpicker__item:disabled:hover {
+  background: transparent;
+}
+
 .modelpicker__name {
   font-size: 13px;
   font-weight: 600;

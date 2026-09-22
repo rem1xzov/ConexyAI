@@ -291,9 +291,11 @@ public class ConexyBackgroundWorker : BackgroundService
             messages.Insert(1, new("system", SmartSearchSystemPrompt));
         }
 
-        // Flash never reasons; Pro reasons only when the Thinking toggle is on
-        // (or in Students mode). The LlmClient maps per model type.
-        var reasoningEffort = job.ModelType == ConexyModelType.ConexyV1Pro && (job.Thinking || job.StudentsMode)
+        // Flash never reasons. Pro reasons only when the Thinking toggle is on — in students mode too:
+        // study mode now exposes the same toggle, so it must actually drive the depth instead of being
+        // forced on. STUDENTS_REASONING: previously this read `job.Thinking || job.StudentsMode`, which
+        // hard-coded "high" for every students request and made the toggle a no-op there.
+        var reasoningEffort = job.ModelType == ConexyModelType.ConexyV1Pro && job.Thinking
             ? "high"
             : null;
 

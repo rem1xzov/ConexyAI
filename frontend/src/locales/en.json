@@ -204,7 +204,8 @@
     "thinkingDesc": "Show the chain of thought",
     "smartSearch": "Smart search",
     "smartSearchDesc": "Look up current information on the web",
-    "reasoningDepth": "Reasoning depth"
+    "reasoningDepth": "Reasoning depth",
+    "modelLocked": "The model is fixed in study mode — only its settings are available"
   },
   "input": {
     "micUnsupported": "Voice input isn't supported in this browser. Open the site in Chrome or Yandex Browser (not in an in-app messenger browser).",

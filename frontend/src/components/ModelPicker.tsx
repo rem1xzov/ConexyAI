@@ -44,6 +44,11 @@ interface ModelPickerProps {
   onReasoningEffortChange: (value: ReasoningEffort) => void;
   smartSearch: boolean;
   onSmartSearchChange: (value: boolean) => void;
+  /**
+   * STUDENTS_REASONING: locks the MODEL CHOICE only (students mode is always Pro). The menu itself
+   * still opens, because it also holds the reasoning toggle, which the user must be able to change —
+   * locking the whole popover used to hide that toggle completely in students mode.
+   */
   locked?: boolean;
 }
 
@@ -80,6 +85,7 @@ export function ModelPicker({
   const showSmartSearch = !isAgent;
 
   function select(m: ModelOption) {
+    if (locked) return;
     onModelChange(m.value);
     setOpen(false);
   }
@@ -88,8 +94,8 @@ export function ModelPicker({
     <div className="modelpicker" ref={ref}>
       <button
         className="modelpicker__trigger"
-        onClick={() => !locked && setOpen((o) => !o)}
-        disabled={locked}
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
         type="button"
       >
         <span className="modelpicker__label-full">{current.label}</span>
@@ -102,7 +108,14 @@ export function ModelPicker({
       {open && (
         <div className="modelpicker__menu">
           {options.map((m) => (
-            <button key={m.value} className="modelpicker__item" onClick={() => select(m)} type="button">
+            <button
+              key={m.value}
+              className={`modelpicker__item ${locked ? 'modelpicker__item--locked' : ''}`}
+              onClick={() => select(m)}
+              disabled={locked}
+              title={locked ? t('model.modelLocked') : undefined}
+              type="button"
+            >
               <span className="modelpicker__name">
                 {m.label}
                 {m.value === model && (

@@ -662,9 +662,9 @@ export default function App() {
   const showHeaderLogo = chatTab && !chatEmpty;
 
   // TABS_UNIFIED: chips follow the tab. The chat tab offers real controls (model, smart
-  // search); the agent and students tabs show passive hint chips instead — the agent runs
-  // autonomously and the students mode fixes its own reasoning depth server-side, so a
-  // clickable control there would do nothing.
+  // search); the agent tab shows passive hint chips instead — it runs autonomously and picks its
+  // own reasoning depth. Students also shows hint chips, but its reasoning on/off switch is a real
+  // control and lives in the model picker, like in the chat tab.
   const quickChips: ChatQuickChip[] = !token
     ? []
     : chatTab
@@ -813,7 +813,12 @@ export default function App() {
     // We set a draft id (not null) so a workspace chatId is already available if the
     // user creates files manually before ever sending a message to the agent.
     setActiveId(uid());
-    setThinking(false);
+    // STUDENTS_REASONING: added 2026-09-23. Reasoning now has an explicit toggle in students mode
+    // too, so the tab switch also picks its default. Students keeps reasoning ON by default — that
+    // is the behaviour it had while the depth was hard-coded server-side, and making it explicit
+    // keeps it discoverable instead of silently changing how the tutor answers. The chat tab keeps
+    // the chat default (off).
+    setThinking(next === 'students');
     setSmartSearch(false);
     setReasoningEffort('high');
     // INCOGNITO_CHAT: switching tabs leaves the incognito mode behind with the old chat.
