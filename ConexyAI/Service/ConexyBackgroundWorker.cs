@@ -18,28 +18,26 @@ public class ConexyBackgroundWorker : BackgroundService
     private readonly IConexyTodoService _todoService;
     // COMMAND_CONFIRM: добавлено 2026-09-20
     private readonly IPendingActionService _pendingActions;
-    // INCOGNITO_CHAT: добавлено 2026-09-20
-    private readonly IIncognitoChatStore _incognitoChat;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHubContext<ConexyHub> _hubContext;
     private readonly IConexyWorkspaceService _workspaceService;
     private readonly ILogger<ConexyBackgroundWorker> _logger;
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — текст, уже отправленный клиенту в этом ходе.
     private string _partialChatText = string.Empty;
-    // SUBSCRIPTION_TIERS: добавлено 2026-09-17
-    private readonly IOptions<MemoryOptions> _memoryOptions;
 
+    // CONVERSATION_SERVICE: добавлено 2026-09-23 — зависимости IIncognitoChatStore и
+    // IOptions<MemoryOptions> убраны отсюда: и история, и батчинг памяти теперь внутри
+    // ConversationService, и держать их здесь означало бы давать воркеру повод снова заняться
+    // историей самостоятельно.
     public ConexyBackgroundWorker(
         IConexyQueue queue,
         IConexyQueueGuard queueGuard,
         IConexyCancellationRegistry cancellations,
         IConexyTodoService todoService,
         IPendingActionService pendingActions,
-        IIncognitoChatStore incognitoChat,
         IServiceScopeFactory scopeFactory,
         IHubContext<ConexyHub> hubContext,
         IConexyWorkspaceService workspaceService,
-        IOptions<MemoryOptions> memoryOptions,
         ILogger<ConexyBackgroundWorker> logger)
     {
         _queue = queue;
@@ -47,11 +45,9 @@ public class ConexyBackgroundWorker : BackgroundService
         _cancellations = cancellations;
         _todoService = todoService;
         _pendingActions = pendingActions;
-        _incognitoChat = incognitoChat;
         _scopeFactory = scopeFactory;
         _hubContext = hubContext;
         _workspaceService = workspaceService;
-        _memoryOptions = memoryOptions;
         _logger = logger;
     }
 
@@ -87,17 +83,9 @@ public class ConexyBackgroundWorker : BackgroundService
     // Conservative cap for how many prior chat messages are sent to DeepSeek in a single
     // request, keeping well inside the context window. The full history stays in the DB;
     // only the oldest messages are dropped from the prompt when the chat grows long.
-    private const int MaxHistoryMessages = 20;
+    // CONVERSATION_SERVICE: MaxHistoryMessages и ContinueInstruction убраны отсюда — теперь это
+    // ConversationOptions.HistoryDepth и ConversationService.ContinueInstruction, одни на все пути.
     private const int MaxSearchRounds = 3;
-
-    // CONTINUE_GENERATION: добавлено 2026-09-21
-    // Last system message when the user resumes a stopped answer. The partial text is already in
-    // the context as the model's own assistant turn, so this only has to say "keep going".
-    private const string ContinueInstruction =
-        """
-        Пользователь остановил твой предыдущий ответ и просит продолжить.
-        Продолжи ровно с того места, где текст оборвался: не повторяй написанное, не начинай заново, не добавляй пояснений о том, что ты продолжаешь — просто допиши ответ до конца.
-        """;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -116,13 +104,13 @@ public class ConexyBackgroundWorker : BackgroundService
         {
             using var scope = _scopeFactory.CreateScope();
             var repository = scope.ServiceProvider.GetRequiredService<IConexyRepository>();
-            var chatHistory = scope.ServiceProvider.GetRequiredService<IChatHistoryRepository>();
             var runner = scope.ServiceProvider.GetRequiredService<IConexyAgentRunner>();
             var llmClient = scope.ServiceProvider.GetRequiredService<IConexyLlmClient>();
             var webSearch = scope.ServiceProvider.GetRequiredService<IWebSearchService>();
             // SUBSCRIPTION_TIERS: добавлено 2026-09-17
             var subscriptionService = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
-            var memoryService = scope.ServiceProvider.GetRequiredService<IUserMemoryService>();
+            // CONVERSATION_SERVICE: добавлено 2026-09-23 — единая сборка контекста и запись хода.
+            var conversation = scope.ServiceProvider.GetRequiredService<IConversationService>();
 
             var entity = await repository.GetByIdAsync(job.TaskId, taskToken);
             if (entity == null) return;
@@ -130,9 +118,27 @@ public class ConexyBackgroundWorker : BackgroundService
             entity.Status = ConexyStatus.Running;
             await repository.SaveChangesAsync(taskToken);
 
-            // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — флаг, что ход уже записан в историю
-            // (успешный путь), чтобы ветки остановки/ошибки не записали его второй раз.
-            var turnPersisted = false;
+            // PARTIAL_TURN_PERSIST: буферы переиспользуются — воркер singleton и обрабатывает
+            // задачи последовательно, поэтому поля не могут перемешаться между задачами.
+            _partialChatText = string.Empty;
+
+            var isCoder = job.ModelType == ConexyModelType.ConexyCoder;
+
+            // CONVERSATION_SERVICE: контекст строится ОДИН раз и используется и для запроса к
+            // модели, и для записи хода — поэтому они не могут разойтись по chatId, userId или
+            // режиму «продолжить».
+            var context = new ConversationContext(
+                TaskId: job.TaskId,
+                ChatId: job.ChatId,
+                UserId: job.UserId,
+                SystemPrompt: isCoder ? runner.SystemPrompt : BuildChatSystemPrompt(job),
+                UserMessage: job.Prompt,
+                Incognito: job.Incognito,
+                Attachments: job.Attachments,
+                AssistantPrefix: job.AssistantPrefix);
+
+            var outcome = TurnOutcome.Completed;
+            var result = string.Empty;
 
             try
             {
@@ -147,36 +153,28 @@ public class ConexyBackgroundWorker : BackgroundService
                         taskToken);
                 }
 
-                // PARTIAL_TURN_PERSIST: буферы переиспользуются — воркер singleton и обрабатывает
-                // задачи последовательно, поэтому поля не могут перемешаться между задачами.
-                _partialChatText = string.Empty;
-
-                string result;
-                // conexy-coder -> autonomous agent pipeline (Maker-Checker + tools).
-                // Flash/Pro -> streaming dialog (Pro is the reasoning chat model and
-                // also powers the Socratic Students mode).
-                if (job.ModelType == ConexyModelType.ConexyCoder)
+                if (isCoder)
                 {
-                    result = await runner.RunLoopAsync(job, taskToken);
-
-                    // AGENT_HISTORY: добавлено 2026-09-22 — раньше агентский путь НИЧЕГО не писал
-                    // в историю чата (запись жила только внутри StreamCompletionAsync). Из-за этого
-                    // на второе сообщение в том же чате агент отвечал «это первое сообщение,
-                    // контекста нет», а его собственные ответы не сохранялись вообще.
-                    // CONTINUE_GENERATION: resumed turn stores prefix + continuation.
-                    var storedAgentResult = string.IsNullOrWhiteSpace(job.AssistantPrefix)
-                        ? result
-                        : job.AssistantPrefix + result;
-                    await PersistTurnAsync(chatHistory, memoryService, job, storedAgentResult, taskToken);
-                    result = storedAgentResult;
+                    // conexy-coder -> autonomous agent pipeline (Maker-Checker + tools).
+                    result = await runner.RunLoopAsync(job, context, taskToken);
                 }
                 else
                 {
-                    result = await StreamCompletionAsync(llmClient, chatHistory, webSearch, subscriptionService, memoryService, job, taskToken);
-                }
-                turnPersisted = true;
+                    // Flash/Pro -> streaming dialog (Pro is the reasoning chat model and
+                    // also powers the Socratic Students mode).
+                    result = await StreamCompletionAsync(llmClient, conversation, context, webSearch, job, taskToken);
 
-                entity.Result = job.Incognito ? ConexyService.IncognitoPromptPlaceholder : result;
+                    // SUBSCRIPTION_TIERS: добавлено 2026-09-17
+                    // INCOGNITO_CHAT: limits still apply — incognito hides history, it is not a free pass.
+                    await subscriptionService.RecordRequestAsync(job.UserId, job.ModelType, taskToken);
+                }
+
+                // entity.Result mirrors exactly what the history stores, prefix included.
+                // CONVERSATION_SERVICE: both the entity and the OnCompleted payload use the same
+                // composed text, so a resumed turn reads identically in the DB, in the payload and
+                // in the chat history.
+                var storedResult = ConversationService.ComposeStoredText(job.AssistantPrefix, result);
+                entity.Result = job.Incognito ? ConexyService.IncognitoPromptPlaceholder : storedResult;
                 entity.Status = ConexyStatus.Completed;
                 entity.FinishedAt = DateTime.UtcNow;
                 await repository.SaveChangesAsync(taskToken);
@@ -186,23 +184,24 @@ public class ConexyBackgroundWorker : BackgroundService
                 // в догадки. Теперь видно и завершение, и факт отправки OnCompleted.
                 _logger.LogInformation(
                     "Task {TaskId} finished; broadcasting OnCompleted ({Chars} char(s) of result).",
-                    job.TaskId, result?.Length ?? 0);
+                    job.TaskId, storedResult.Length);
 
                 await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnCompleted", new
                 {
                     TaskId = job.TaskId,
-                    Result = result
+                    Result = storedResult
                 }, taskToken);
             }
             catch (OperationCanceledException) when (workerToken.IsCancellationRequested)
             {
-                // Host is shutting down — nothing to persist or report to a disconnecting client.
+                outcome = TurnOutcome.Stopped;
                 _logger.LogInformation("Task {TaskId} aborted due to host shutdown.", job.TaskId);
             }
             catch (OperationCanceledException) when (taskToken.IsCancellationRequested)
             {
                 // User-initiated stop. Partial content already streamed to the client stays
                 // as-is; we only mark the entity stopped and notify the group.
+                outcome = TurnOutcome.Stopped;
                 _logger.LogInformation("Task {TaskId} stopped by user.", job.TaskId);
 
                 entity.Status = ConexyStatus.Cancelled;
@@ -210,15 +209,11 @@ public class ConexyBackgroundWorker : BackgroundService
                 entity.FinishedAt = DateTime.UtcNow;
                 await repository.SaveChangesAsync(CancellationToken.None);
 
-                // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — остановленный ход раньше не попадал
-                // в историю вообще, поэтому следующее сообщение в этом чате выходило без контекста
-                // («в этой сессии я ничего не делал»).
-                await PersistInterruptedTurnAsync(chatHistory, memoryService, job, runner, turnPersisted);
-
                 await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnStopped", job.TaskId);
             }
             catch (Exception ex)
             {
+                outcome = TurnOutcome.Failed;
                 _logger.LogError(ex, "Failed to execute task {TaskId}", job.TaskId);
 
                 entity.Status = ConexyStatus.Failed;
@@ -226,11 +221,24 @@ public class ConexyBackgroundWorker : BackgroundService
                 entity.FinishedAt = DateTime.UtcNow;
                 await repository.SaveChangesAsync(CancellationToken.None);
 
-                // PARTIAL_TURN_PERSIST: то же, что и для остановки — упавший ход не должен стирать
-                // контекст разговора.
-                await PersistInterruptedTurnAsync(chatHistory, memoryService, job, runner, turnPersisted);
-
                 await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnError", ex.Message);
+            }
+            finally
+            {
+                // CONVERSATION_SERVICE: сердце рефакторинга. Запись хода живёт ЗДЕСЬ, а не в каждой
+                // ветке по отдельности, поэтому любой исход — завершение, остановка, ошибка —
+                // сохраняет диалог, и любая будущая catch-ветка унаследует это автоматически.
+                // Именно асимметрия «в одной ветке пишем, в другой забыли» дважды ломала контекст.
+                try
+                {
+                    var assistantText = outcome == TurnOutcome.Completed ? result : PartialAssistantText(runner);
+                    await conversation.PersistTurnAsync(context, assistantText, outcome, CancellationToken.None);
+                }
+                catch (Exception persistEx)
+                {
+                    // Сбой записи истории не должен подменять исходную ошибку или остановку.
+                    _logger.LogError(persistEx, "Failed to persist conversation turn for task {TaskId}.", job.TaskId);
+                }
             }
         }
         catch (OperationCanceledException) when (workerToken.IsCancellationRequested)
@@ -265,69 +273,22 @@ public class ConexyBackgroundWorker : BackgroundService
 
     private async Task<string> StreamCompletionAsync(
         IConexyLlmClient llmClient,
-        IChatHistoryRepository chatHistory,
+        IConversationService conversation,
+        ConversationContext context,
         IWebSearchService webSearch,
-        ISubscriptionService subscriptionService,
-        IUserMemoryService memoryService,
         ConexyJob job,
         CancellationToken ct)
     {
-        var systemPrompt = job.StudentsMode
-            ? StudentsSystemPrompt
-            : ChatSystemPrompt;
-
-        // Always inject the current server time so "what day/time is it" questions are
-        // answered directly and reliably, without depending on the web search provider.
-        systemPrompt += $"\n\nТекущая дата и время (UTC): {DateTime.UtcNow:yyyy-MM-dd HH:mm}.";
-
-        // SUBSCRIPTION_TIERS: добавлено 2026-09-17 — inject durable user memory facts.
-        // INCOGNITO_CHAT: добавлено 2026-09-20 — an incognito turn must not read the user's
-        // long-term memory, otherwise the profile would leak into a "forgotten" chat.
-        if (!job.Incognito)
-        {
-            var memoryBlock = await memoryService.BuildPromptBlockAsync(job.UserId, ct);
-            if (!string.IsNullOrEmpty(memoryBlock))
-                systemPrompt += "\n" + memoryBlock;
-        }
-
         // web_search is available to flash/pro only when the Smart Search toggle is on.
         var searchEnabled = job.ModelType != ConexyModelType.ConexyCoder && job.SmartSearch;
 
-        // Rebuild the prior turns of this chat so the model has conversational context.
-        // INCOGNITO_CHAT: добавлено 2026-09-20 — incognito threads live in memory only, so they
-        // keep their context without ever touching the history table.
-        IReadOnlyList<ConexyChatMessageEntity> history = job.Incognito
-            ? _incognitoChat.GetMessages(job.ChatId)
-            : await chatHistory.GetMessagesAsync(job.UserId, job.ChatId, ct);
-
-        var messages = new List<ChatMessage> { new("system", systemPrompt) };
+        // CONVERSATION_SERVICE: system prompt, memory facts, prior turns, the current user message
+        // and the resumed-answer prefix are all assembled by the shared service now. This method
+        // no longer knows how history works — which is what keeps it from drifting again.
+        var messages = await conversation.BuildRequestAsync(context, ct);
         if (searchEnabled)
         {
-            messages.Add(new("system", SmartSearchSystemPrompt));
-        }
-
-        IReadOnlyList<ConexyChatMessageEntity> retained = history;
-        if (history.Count > MaxHistoryMessages)
-        {
-            retained = history.Skip(history.Count - MaxHistoryMessages).ToList();
-            _logger.LogWarning(
-                "Trimming chat history for {ChatId}: {Total} messages, retaining last {Kept} to stay within the context window.",
-                job.ChatId, history.Count, MaxHistoryMessages);
-        }
-
-        foreach (var m in retained)
-        {
-            messages.Add(new ChatMessage(m.Role, m.Content));
-        }
-
-        messages.Add(ChatMessageFactory.User(job.Prompt, job.Attachments));
-
-        // CONTINUE_GENERATION: добавлено 2026-09-21 — the user stopped mid-answer, so hand the
-        // partial text back as the model's own truncated turn and tell it to carry on.
-        if (!string.IsNullOrWhiteSpace(job.AssistantPrefix))
-        {
-            messages.Add(new ChatMessage("assistant", job.AssistantPrefix));
-            messages.Add(new ChatMessage("system", ContinueInstruction));
+            messages.Insert(1, new("system", SmartSearchSystemPrompt));
         }
 
         // Flash never reasons; Pro reasons only when the Thinking toggle is on
@@ -392,96 +353,41 @@ public class ConexyBackgroundWorker : BackgroundService
         }
 
         // Persist the completed turn so the next message in this chat includes it.
-        // CONTINUE_GENERATION: a resumed turn stores the prefix plus the continuation, otherwise
-        // the history would keep only the tail of the answer.
-        var storedResult = string.IsNullOrWhiteSpace(job.AssistantPrefix)
-            ? result
-            : job.AssistantPrefix + result;
-        await PersistTurnAsync(chatHistory, memoryService, job, storedResult, ct);
-
-        // SUBSCRIPTION_TIERS: добавлено 2026-09-17
-        // INCOGNITO_CHAT: limits still apply — incognito hides history, it is not a free pass.
-        await subscriptionService.RecordRequestAsync(job.UserId, job.ModelType, ct);
-
-        return storedResult;
+        // CONVERSATION_SERVICE: the history is written by the caller's finally, once, for every
+        // outcome — this method only produces the text.
+        return result;
     }
 
-    // AGENT_HISTORY: добавлено 2026-09-22
+    // CONVERSATION_SERVICE: добавлено 2026-09-23
+    //
+    // Здесь раньше жили два метода записи истории: PersistTurnAsync (только успешный путь) и
+    // PersistInterruptedTurnAsync (стоп/ошибка). Оба удалены — запись теперь ОДНА и находится в
+    // finally вызывающего, внутри ConversationService. Именно это дублирование и породило два
+    // инцидента с потерей контекста: ветки расходились, и одна из них забывала запись.
+
     /// <summary>
-    /// Stores one completed turn (user prompt + final answer) so the next message in the same
-    /// chat is answered with real context, and enqueues long-term memory extraction on the usual
-    /// batching rule. Shared by the flash/pro path and the conexy-coder path — the coder path used
-    /// to skip this entirely, which is why the agent answered the second message of a conversation
-    /// as if it were the first one.
+    /// System prompt for the dialog paths (chat / students). The coder path takes its prompt from
+    /// the agent runner instead. The durable-memory block is appended by
+    /// <see cref="IConversationService.BuildRequestAsync"/>, so it is not added here.
     /// </summary>
-    private async Task PersistTurnAsync(
-        IChatHistoryRepository chatHistory,
-        IUserMemoryService memoryService,
-        ConexyJob job,
-        string storedResult,
-        CancellationToken ct)
+    private static string BuildChatSystemPrompt(ConexyJob job)
     {
-        // INCOGNITO_CHAT: incognito turns stay in memory and never produce a ChatHistory row
-        // (so the chat also never shows up in the sidebar history).
-        if (job.Incognito)
-        {
-            _incognitoChat.Append(job.ChatId, job.UserId, "user", job.Prompt);
-            if (!string.IsNullOrWhiteSpace(storedResult))
-            {
-                _incognitoChat.Append(job.ChatId, job.UserId, "assistant", storedResult);
-            }
-            return;
-        }
+        var systemPrompt = job.StudentsMode
+            ? StudentsSystemPrompt
+            : ChatSystemPrompt;
 
-        // User text is stored as plain text; image attachments are not part of history.
-        await chatHistory.AppendAsync(job.UserId, job.ChatId, "user", job.Prompt, ct);
-        if (!string.IsNullOrWhiteSpace(storedResult))
-        {
-            await chatHistory.AppendAsync(job.UserId, job.ChatId, "assistant", storedResult, ct);
-        }
-
-        // Memory extraction batching: run after every N-th user message in this chat.
-        var userMessageCount = await chatHistory.CountUserMessagesAsync(job.UserId, job.ChatId, ct);
-        if (userMessageCount > 0 && userMessageCount % _memoryOptions.Value.BatchingThreshold == 0)
-        {
-            memoryService.EnqueueExtraction(job.UserId, job.ChatId);
-        }
+        // Always inject the current server time so "what day/time is it" questions are
+        // answered directly and reliably, without depending on the web search provider.
+        systemPrompt += $"\n\nТекущая дата и время (UTC): {DateTime.UtcNow:yyyy-MM-dd HH:mm}.";
+        return systemPrompt;
     }
 
-    // PARTIAL_TURN_PERSIST: добавлено 2026-09-22
     /// <summary>
-    /// Stores a turn that did NOT finish normally (stopped by the user, or failed). The user's
-    /// prompt is always kept; the assistant side keeps whatever text had already been streamed.
-    /// Skipped when the normal path already persisted the turn.
+    /// The assistant text to store for a turn that did not complete: the chat path keeps its
+    /// buffer in a field, the agent path exposes everything it streamed on the runner.
     /// </summary>
-    private async Task PersistInterruptedTurnAsync(
-        IChatHistoryRepository chatHistory,
-        IUserMemoryService memoryService,
-        ConexyJob job,
-        IConexyAgentRunner runner,
-        bool alreadyPersisted)
-    {
-        if (alreadyPersisted)
-            return;
-
-        // The chat path keeps its partial text in a field; the agent path exposes it on the runner.
-        var partial = string.IsNullOrWhiteSpace(_partialChatText)
-            ? runner.PartialOutput
-            : _partialChatText;
-
-        try
-        {
-            await PersistTurnAsync(chatHistory, memoryService, job, partial, CancellationToken.None);
-            _logger.LogInformation(
-                "Persisted interrupted turn: task={TaskId} chat={ChatId} assistantChars={Chars}",
-                job.TaskId, job.ChatId, partial.Length);
-        }
-        catch (Exception ex)
-        {
-            // Losing the partial history is bad but must never mask the original stop/failure.
-            _logger.LogError(ex, "Failed to persist interrupted turn for task {TaskId}.", job.TaskId);
-        }
-    }
+    private string PartialAssistantText(IConexyAgentRunner runner) =>
+        string.IsNullOrWhiteSpace(_partialChatText) ? runner.PartialOutput : _partialChatText;
 
     private async Task<string> SearchAwareCompletionAsync(
         IConexyLlmClient llmClient,

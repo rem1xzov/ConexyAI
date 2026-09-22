@@ -121,6 +121,8 @@ builder.Services.Configure<DangerousCommandOptions>(builder.Configuration.GetSec
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 builder.Services.Configure<SubscriptionLimitsOptions>(builder.Configuration.GetSection(SubscriptionLimitsOptions.SectionName));
 builder.Services.Configure<MemoryOptions>(builder.Configuration.GetSection(MemoryOptions.SectionName));
+// CONVERSATION_SERVICE: добавлено 2026-09-23 — глубина истории — одна настройка на все пути.
+builder.Services.Configure<ConversationOptions>(builder.Configuration.GetSection(ConversationOptions.SectionName));
 // RAG: добавлено 2026-09-17
 builder.Services.Configure<RagOptions>(builder.Configuration.GetSection(RagOptions.SectionName));
 // SANDBOX: добавлено 2026-09-17
@@ -183,6 +185,8 @@ builder.Services.AddScoped<IGitHubOAuthService, GitHubOAuthService>();
 builder.Services.AddScoped<IEmailAuthService, EmailAuthService>();
 builder.Services.AddScoped<IConexyService, ConexyService>();
 builder.Services.AddScoped<IConexyAgentRunner, ConexyAgentRunner>();
+// CONVERSATION_SERVICE: добавлено 2026-09-23 — единая сборка контекста и запись хода.
+builder.Services.AddScoped<IConversationService, ConversationService>();
 builder.Services.AddScoped<IConexyEditorService, ConexyEditorService>();
 builder.Services.AddScoped<IConexyBashService, ConexyBashService>();
 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17

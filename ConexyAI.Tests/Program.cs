@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,7 +27,17 @@ await RunAsync("UpdateAsync avoids ChangeTracker conflict when entity is already
 await RunAsync("ExecuteAsync reuses an owned session and updates in place", TestExecuteAsyncReuseOwnedSessionAsync);
 await RunAsync("ExecuteAsync never reuses another user's session id", TestExecuteAsyncForeignSessionAsync);
 await RunAsync("Two parallel updates of the same id do not throw a tracking conflict", TestParallelUpdateSameIdAsync);
-await RunAsync("CreateOrGetAsync is idempotent under a parallel creation race (Postgres)", TestCreateOrGetAsyncIsIdempotentUnderParallelRaceAsync);
+// DB_SANDBOX_GATING: these suites exercise the real Postgres race and the real Docker sandbox.
+// They were previously uncompilable (the project did not build at all), so they silently rotted;
+// now they run where the dependency exists and are reported as SKIP (not PASS) where it does not.
+var postgresUp = PostgresAvailable();
+var dockerUp = DockerAvailable();
+const string bashSandboxSkipReason = "requires the Docker sandbox (run with Docker available)";
+await RunOrSkipAsync(
+    "CreateOrGetAsync is idempotent under a parallel creation race (Postgres)",
+    TestCreateOrGetAsyncIsIdempotentUnderParallelRaceAsync,
+    skip: !postgresUp,
+    skipReason: "requires Postgres on localhost:5433 (docker compose up)");
 await RunAsync("QueueGuard deduplicates parallel enqueue for the same session", TestQueueGuardDeduplicatesParallelEnqueueAsync);
 await RunAsync("QueueGuard releases the guard after completion (no leak)", TestQueueGuardReleasesAfterCompletionAsync);
 await RunAsync("str_replace_editor: no match -> no_match", TestEditorStrReplaceNoMatchAsync);
@@ -35,13 +46,13 @@ await RunAsync("str_replace_editor: unique match + undo", TestEditorStrReplaceSu
 await RunAsync("str_replace_editor: path traversal is blocked", TestEditorPathTraversalBlockedAsync);
 await RunAsync("str_replace_editor: large file view is truncated", TestEditorLargeFileViewAsync);
 await RunAsync("str_replace_editor: create -> ambiguous -> refine -> undo chain", TestEditorCreateReplaceUndoChainAsync);
-await RunAsync("bash: >80 lines output is truncated", TestBashTruncationAsync);
-await RunAsync("bash: timeout kills the process", TestBashTimeoutAsync);
-await RunAsync("bash: process tree is killed on timeout", TestBashKillsProcessTreeAsync);
+await RunOrSkipAsync("bash: >80 lines output is truncated", TestBashTruncationAsync, skip: !dockerUp, skipReason: bashSandboxSkipReason);
+await RunOrSkipAsync("bash: timeout kills the process", TestBashTimeoutAsync, skip: !dockerUp, skipReason: bashSandboxSkipReason);
+await RunOrSkipAsync("bash: process tree is killed on timeout", TestBashKillsProcessTreeAsync, skip: !dockerUp, skipReason: bashSandboxSkipReason);
 await RunAsync("bash: workspace_not_found for a missing session", TestBashWorkspaceNotFoundAsync);
-await RunAsync("bash: runs a real shell command", TestBashRunsRealCommandAsync);
-await RunAsync("bash: runs dotnet --version", TestBashRunsDotnetAsync);
-await RunAsync("bash: coreutils (ls/rm/cat) resolve via Git bash PATH", TestBashFindsCoreutilsAsync);
+await RunOrSkipAsync("bash: runs a real shell command", TestBashRunsRealCommandAsync, skip: !dockerUp, skipReason: bashSandboxSkipReason);
+await RunOrSkipAsync("bash: runs dotnet --version", TestBashRunsDotnetAsync, skip: !dockerUp, skipReason: bashSandboxSkipReason);
+await RunOrSkipAsync("bash: coreutils (ls/rm/cat) resolve via Git bash PATH", TestBashFindsCoreutilsAsync, skip: !dockerUp, skipReason: bashSandboxSkipReason);
 await RunAsync("todo_write: validation errors", TestTodoValidationErrorsAsync);
 await RunAsync("todo_write: full replacement", TestTodoFullReplacementAsync);
 await RunAsync("todo_write: clear on session end", TestTodoClearAsync);
@@ -111,7 +122,8 @@ DbConexy CreateContext(string dbName)
     var queue = new FakeQueue();
     var guard = new ConexyQueueGuard(queue, NullLogger<ConexyQueueGuard>.Instance);
     var env = new FakeWebHostEnvironment { EnvironmentName = "Development" };
-    return (new ConexyService(repo, guard, env), queue);
+    // SUBSCRIPTION_TIERS: the service gained a subscription dependency; the stub always allows.
+    return (new ConexyService(repo, guard, env, new FakeSubscriptionService()), queue);
 }
 
 string AdminConnectionString() => "Host=localhost;Port=5433;Database=postgres;Username=postgres;Password=postgres";
@@ -180,7 +192,46 @@ ConexyBashService CreateBashService(string rootPath)
         Options.Create(new WorkspaceOptions { RootPath = rootPath }),
         NullLogger<ConexyWorkspaceService>.Instance);
     var hub = new FakeHubContext();
-    return new ConexyBashService(workspace, hub, NullLogger<ConexyBashService>.Instance);
+    // SANDBOX: use the real Docker sandbox when it is available so these tests exercise real
+    // execution; otherwise fall back to a stub (the path-jail and workspace guards under test fail
+    // before the sandbox is ever reached).
+    IDockerSandboxRunner sandbox = DockerAvailable()
+        ? new DockerSandboxRunner(Options.Create(new SandboxOptions()), NullLogger<DockerSandboxRunner>.Instance)
+        : new FakeSandboxRunner();
+    return new ConexyBashService(workspace, sandbox, hub, NullLogger<ConexyBashService>.Instance);
+}
+
+bool DockerAvailable()
+{
+    try
+    {
+        using var process = Process.Start(new ProcessStartInfo("docker", "version")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        });
+        if (process is null) return false;
+        return process.WaitForExit(5000) && process.ExitCode == 0;
+    }
+    catch
+    {
+        return false;
+    }
+}
+
+bool PostgresAvailable()
+{
+    try
+    {
+        using var connection = new NpgsqlConnection(AdminConnectionString());
+        connection.Open();
+        return true;
+    }
+    catch
+    {
+        return false;
+    }
 }
 
 ConexyTodoService CreateTodoService(RecordingHubContext hub) =>
@@ -899,6 +950,36 @@ sealed class FakeHubContext : IHubContext<ConexyHub>
 {
     public IHubClients Clients { get; } = new FakeHubClients();
     public IGroupManager Groups { get; } = new FakeGroupManager();
+}
+
+// Restores the test project to a compilable state after ConexyService and ConexyBashService gained
+// constructor dependencies. Both stubs are deliberately minimal: these suites assert session
+// ownership and the workspace path jail, so they never reach a real sandbox or a real limit check.
+sealed class FakeSubscriptionService : ISubscriptionService
+{
+    public Task<SubscriptionUsageDto> GetUsageAsync(Guid userId, CancellationToken ct = default) =>
+        Task.FromResult(new SubscriptionUsageDto(
+            "Free",
+            0, 0, DateTime.UtcNow,
+            0, 0, DateTime.UtcNow,
+            0, 0, DateTime.UtcNow));
+
+    public Task<UsageDecision> CheckBeforeRunAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default) =>
+        Task.FromResult(new UsageDecision(UsageDecisionKind.Allowed));
+
+    public Task RecordRequestAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default) =>
+        Task.CompletedTask;
+
+    public Task RecordAgentTokensAsync(Guid userId, long tokens, CancellationToken ct = default) =>
+        Task.CompletedTask;
+}
+
+sealed class FakeSandboxRunner : IDockerSandboxRunner
+{
+    public Task<bool> IsDockerAvailableAsync(CancellationToken ct = default) => Task.FromResult(true);
+
+    public Task<SandboxExecutionResult> RunAsync(string command, string workspaceHostPath, TimeSpan timeout, CancellationToken ct = default) =>
+        Task.FromResult(new SandboxExecutionResult(true, 0, string.Empty, false, null));
 }
 
 sealed class FakeHubClients : IHubClients

@@ -4,7 +4,13 @@ namespace ConexyAI.Service;
 
 public interface IConexyAgentRunner
 {
-    Task<string> RunLoopAsync(ConexyJob job, CancellationToken ct = default);
+    // CONVERSATION_SERVICE: добавлено 2026-09-23 — контекст строится один раз вызывающим и
+    // передаётся сюда, чтобы сборка запроса и запись хода (в finally вызывающего) использовали
+    // один и тот же ConversationContext и не могли разойтись.
+    Task<string> RunLoopAsync(ConexyJob job, ConversationContext context, CancellationToken ct = default);
+
+    // CONVERSATION_SERVICE: системный промпт агента нужен вызывающему, чтобы построить контекст.
+    string SystemPrompt { get; }
 
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22
     /// <summary>

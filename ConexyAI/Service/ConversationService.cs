@@ -1,0 +1,288 @@
+using System.Text;
+using ConexyAI.Configuration;
+using ConexyAI.Contract;
+using ConexyAI.Entity;
+using ConexyAI.Repository;
+using Microsoft.Extensions.Options;
+
+namespace ConexyAI.Service;
+
+// CONVERSATION_SERVICE: добавлено 2026-09-23
+//
+// Единая точка сборки контекста и записи хода для ВСЕХ путей обращения к модели.
+//
+// Зачем: история диалога раньше обрабатывалась в четырёх местах по-разному, и это дважды
+// приводило к потере контекста у пользователя. Сначала агентский путь вообще не читал историю,
+// затем прерванные ходы (стоп/ошибка) нигде не записывались — и агент честно отвечал «это первое
+// сообщение, контекста нет». Оба раза проблема была не в логике, а в том, что чтение и запись
+// были отдельными обязанностями каждого конкретного пути, которые легко забыть.
+//
+// Теперь чтение и запись — не обязанность вызывающего, а следствие структуры: вызывающий
+// строит ConversationContext, оборачивает работу с моделью в try/finally и в finally вызывает
+// PersistTurnAsync. Новая catch-ветка автоматически унаследует сохранение истории.
+
+/// <summary>How a turn ended. Stored with the turn so an interrupted answer is never lost.</summary>
+public enum TurnOutcome
+{
+    Completed,
+    Stopped,
+    Failed,
+}
+
+/// <summary>
+/// Everything the service needs both to build a request and to store the turn afterwards. Built
+/// once by the caller and reused in the <c>finally</c>, so the two operations can never disagree
+/// about the chat, the user or the resumed-answer prefix.
+/// </summary>
+/// <param name="TaskId">Per-run task id — used only for log correlation.</param>
+/// <param name="ChatId">Stable conversation id; the key every history row is stored under.</param>
+/// <param name="UserId">Owning user; history reads are scoped by it.</param>
+/// <param name="SystemPrompt">Path-specific system prompt (chat / students / coder charter).</param>
+/// <param name="UserMessage">The current user turn.</param>
+/// <param name="Incognito">Ephemeral turn: context lives in memory, never in the database.</param>
+/// <param name="Attachments">Files travelling with the current user turn.</param>
+/// <param name="AssistantPrefix">Partial answer being resumed, if any.</param>
+/// <param name="HistoryDepth">Optional per-path override of <see cref="ConversationOptions.HistoryDepth"/>.</param>
+public sealed record ConversationContext(
+    Guid TaskId,
+    Guid ChatId,
+    Guid UserId,
+    string SystemPrompt,
+    string UserMessage,
+    bool Incognito = false,
+    List<TaskAttachment>? Attachments = null,
+    string? AssistantPrefix = null,
+    int? HistoryDepth = null
+);
+
+public interface IConversationService
+{
+    /// <summary>
+    /// Builds the full message list for a model call: system prompt, prior turns (trimmed to the
+    /// configured depth) and the current user turn. Logs what was attached, for every caller.
+    /// </summary>
+    Task<List<ChatMessage>> BuildRequestAsync(ConversationContext context, CancellationToken ct = default);
+
+    /// <summary>
+    /// Stores the turn — the user's prompt plus the assistant text it produced, however partial.
+    /// Must be called from a <c>finally</c> so no outcome (completed / stopped / failed) can skip it.
+    /// </summary>
+    Task PersistTurnAsync(ConversationContext context, string assistantText, TurnOutcome outcome, CancellationToken ct = default);
+
+    /// <summary>
+    /// Raw history rows, newest last, trimmed to <paramref name="depth"/>. Used by
+    /// <see cref="BuildRequestAsync"/> and by callers that need the messages themselves rather
+    /// than a chat-completion payload (the long-term memory extractor formats its own prompt).
+    /// </summary>
+    Task<IReadOnlyList<ConexyChatMessageEntity>> GetHistoryAsync(
+        Guid userId,
+        Guid chatId,
+        bool incognito,
+        int? depth,
+        CancellationToken ct = default);
+}
+
+public class ConversationService : IConversationService
+{
+    // CONTINUE_GENERATION: moved here from the worker and the runner, which each had their own copy.
+    // Pushed when the user resumes a stopped answer: the partial text is already in the context as
+    // the model's own assistant turn, so this only has to say "keep going".
+    private const string ContinueInstruction =
+        """
+        Пользователь остановил твой предыдущий ответ и просит продолжить.
+        Продолжи ровно с того места, где текст оборвался: не повторяй написанное, не начинай заново, не добавляй пояснений о том, что ты продолжаешь — просто допиши ответ до конца.
+        """;
+
+    private readonly IChatHistoryRepository _chatHistory;
+    private readonly IIncognitoChatStore _incognitoChat;
+    private readonly IUserMemoryService _memory;
+    private readonly IOptions<MemoryOptions> _memoryOptions;
+    private readonly ConversationOptions _options;
+    private readonly ILogger<ConversationService> _logger;
+
+    public ConversationService(
+        IChatHistoryRepository chatHistory,
+        IIncognitoChatStore incognitoChat,
+        IUserMemoryService memory,
+        IOptions<MemoryOptions> memoryOptions,
+        IOptions<ConversationOptions> options,
+        ILogger<ConversationService> logger)
+    {
+        _chatHistory = chatHistory;
+        _incognitoChat = incognitoChat;
+        _memory = memory;
+        _memoryOptions = memoryOptions;
+        _options = options.Value;
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// The text that actually lands in the history for a resumed turn: the prefix plus the newly
+    /// generated tail. Public so callers can store the same value on their own entity — one
+    /// definition instead of two.
+    /// </summary>
+    public static string ComposeStoredText(string? assistantPrefix, string assistantText)
+    {
+        var text = assistantText ?? string.Empty;
+        return string.IsNullOrWhiteSpace(assistantPrefix) ? text : assistantPrefix + text;
+    }
+
+    public async Task<List<ChatMessage>> BuildRequestAsync(ConversationContext context, CancellationToken ct = default)
+    {
+        var systemPrompt = context.SystemPrompt;
+
+        // SUBSCRIPTION_TIERS: durable user memory facts are injected in ONE place now, identically
+        // for the chat, students and coder paths.
+        // INCOGNITO_CHAT: skipped — an incognito turn must not read the user's long-term memory,
+        // otherwise the profile would leak into a "forgotten" chat.
+        if (!context.Incognito)
+        {
+            var memoryBlock = await _memory.BuildPromptBlockAsync(context.UserId, ct);
+            if (!string.IsNullOrEmpty(memoryBlock))
+                systemPrompt += "\n" + memoryBlock;
+        }
+
+        var messages = new List<ChatMessage> { new("system", systemPrompt) };
+
+        var depth = context.HistoryDepth ?? _options.HistoryDepth;
+        var history = await GetHistoryAsync(context.UserId, context.ChatId, context.Incognito, depth, ct);
+
+        foreach (var entry in history)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Content))
+                continue;
+
+            // History only ever holds "user" / "assistant"; anything else is skipped so a malformed
+            // row cannot corrupt the tool-call protocol.
+            if (entry.Role != "user" && entry.Role != "assistant")
+                continue;
+
+            messages.Add(new ChatMessage(entry.Role, entry.Content));
+        }
+
+        messages.Add(ChatMessageFactory.User(context.UserMessage, context.Attachments));
+
+        // CONTINUE_GENERATION: the partial answer goes back as the model's own truncated turn.
+        if (!string.IsNullOrWhiteSpace(context.AssistantPrefix))
+        {
+            messages.Add(new ChatMessage("assistant", context.AssistantPrefix));
+            messages.Add(new ChatMessage("system", ContinueInstruction));
+        }
+
+        LogContext(context, depth, history);
+
+        return messages;
+    }
+
+    public async Task PersistTurnAsync(
+        ConversationContext context,
+        string assistantText,
+        TurnOutcome outcome,
+        CancellationToken ct = default)
+    {
+        var stored = ComposeStoredText(context.AssistantPrefix, assistantText);
+
+        // INCOGNITO_CHAT: incognito turns stay in memory and never produce a ChatHistory row
+        // (so the chat also never shows up in the sidebar history).
+        if (context.Incognito)
+        {
+            _incognitoChat.Append(context.ChatId, context.UserId, "user", context.UserMessage);
+            if (!string.IsNullOrWhiteSpace(stored))
+                _incognitoChat.Append(context.ChatId, context.UserId, "assistant", stored);
+        }
+        else
+        {
+            // User text is stored as plain text; image attachments are not part of history.
+            await _chatHistory.AppendAsync(context.UserId, context.ChatId, "user", context.UserMessage, ct);
+            if (!string.IsNullOrWhiteSpace(stored))
+                await _chatHistory.AppendAsync(context.UserId, context.ChatId, "assistant", stored, ct);
+        }
+
+        _logger.LogInformation(
+            "Conversation persist: task=" + context.TaskId +
+            " chat=" + context.ChatId +
+            " user=" + context.UserId +
+            " outcome=" + outcome +
+            " incognito=" + context.Incognito +
+            " userChars=" + (context.UserMessage?.Length ?? 0) +
+            " assistantChars=" + stored.Length +
+            " assistantStored=" + (!string.IsNullOrWhiteSpace(stored)));
+
+        if (context.Incognito)
+            return;
+
+        // Memory extraction batching: run after every N-th user message in this chat. Applied
+        // uniformly, so a stopped turn counts exactly like a completed one.
+        var userMessageCount = await _chatHistory.CountUserMessagesAsync(context.UserId, context.ChatId, ct);
+        if (userMessageCount > 0 && userMessageCount % _memoryOptions.Value.BatchingThreshold == 0)
+        {
+            _memory.EnqueueExtraction(context.UserId, context.ChatId);
+        }
+    }
+
+    public async Task<IReadOnlyList<ConexyChatMessageEntity>> GetHistoryAsync(
+        Guid userId,
+        Guid chatId,
+        bool incognito,
+        int? depth,
+        CancellationToken ct = default)
+    {
+        // INCOGNITO_CHAT: incognito threads live in memory only, so they keep their context
+        // without ever touching the history table.
+        IReadOnlyList<ConexyChatMessageEntity> history = incognito
+            ? _incognitoChat.GetMessages(chatId)
+            : await _chatHistory.GetMessagesAsync(userId, chatId, ct);
+
+        var limit = depth ?? _options.HistoryDepth;
+        if (limit > 0 && history.Count > limit)
+        {
+            // The full history stays in the database; only the oldest rows are dropped from the
+            // prompt so the request stays inside the context window.
+            _logger.LogWarning(
+                "Trimming conversation history for {ChatId}: {Total} rows, retaining last {Kept}.",
+                chatId, history.Count, limit);
+            return history.Skip(history.Count - limit).ToList();
+        }
+
+        return history;
+    }
+
+    // CONTEXT_DIAGNOSTICS: moved out of the agent runner so every path logs the same shape. Without
+    // it there is no way to tell "history was lost" from "the model ignored it".
+    private void LogContext(ConversationContext context, int depth, IReadOnlyList<ConexyChatMessageEntity> history)
+    {
+        var roleList = new StringBuilder();
+        foreach (var entry in history)
+        {
+            if (roleList.Length > 0)
+                roleList.Append(',');
+            roleList.Append(entry.Role);
+        }
+
+        _logger.LogInformation(
+            "Conversation context: task=" + context.TaskId +
+            " chat=" + context.ChatId +
+            " user=" + context.UserId +
+            " depth=" + depth +
+            " incognito=" + context.Incognito +
+            " attached=" + history.Count +
+            " roles=[" + roleList + "]");
+
+        foreach (var entry in history.TakeLast(3))
+        {
+            _logger.LogInformation(
+                "Conversation context tail: task=" + context.TaskId +
+                " role=" + entry.Role +
+                " preview=\"" + Preview(entry.Content) + "\"");
+        }
+    }
+
+    private static string Preview(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return string.Empty;
+
+        var flat = content.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return flat.Length <= 50 ? flat : flat[..50] + "…";
+    }
+}

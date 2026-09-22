@@ -3,8 +3,13 @@ using ConexyAI.Entity;
 namespace ConexyAI.Repository;
 
 /// <summary>
-/// Persistence for the flash/pro dialog history, keyed by the stable <c>chatId</c>.
-/// The agent (conexy-coder) path does not use this repository.
+/// Persistence for the dialog history, keyed by the stable <c>chatId</c>.
+/// <para>
+/// CONVERSATION_SERVICE: it is deliberately used by <see cref="Service.ConversationService"/> ONLY.
+/// The chat/students paths, the conexy-coder path and the memory extractor all go through that
+/// service, so no business logic has to remember to read or write history — which is exactly how
+/// the context was lost twice before. Do not inject this repository into a runner or worker again.
+/// </para>
 /// </summary>
 public interface IChatHistoryRepository
 {

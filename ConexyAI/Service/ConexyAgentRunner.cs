@@ -28,10 +28,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly IPendingActionService _pendingActionService;
     // SUBSCRIPTION_TIERS: добавлено 2026-09-17
     private readonly ISubscriptionService _subscriptionService;
-    private readonly IUserMemoryService _memoryService;
-    // AGENT_HISTORY: добавлено 2026-09-22 — предыдущие ходы этого же чата.
-    private readonly IChatHistoryRepository _chatHistory;
-    // CONTEXT_DIAGNOSTICS: добавлено 2026-09-22 — логирование состава контекста на уровне сервера.
+    // CONVERSATION_SERVICE: добавлено 2026-09-23 — единая сборка контекста и запись хода.
+    private readonly IConversationService _conversation;
+    // TASK_COMPLETION_DIAGNOSTICS: лог агентского цикла (видно, крутится ли он после готового ответа).
     private readonly ILogger<ConexyAgentRunner> _logger;
     // RAG: добавлено 2026-09-17
     private readonly IDocumentService _documentService;
@@ -44,9 +43,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     private readonly int _maxIterations;
     private const int MaxSelfRepairAttempts = 3;
-    // AGENT_HISTORY: добавлено 2026-09-22 — тот же предел, что и у chat-пути, чтобы агент не
-    // вылетал за окно контекста на длинных диалогах.
-    private const int MaxHistoryMessages = 20;
+
+    /// <inheritdoc />
+    public string SystemPrompt => WorkerSystemPrompt;
 
     // Strict engineering charter for the autonomous Pro agent.
     private const string WorkerSystemPrompt =
@@ -158,14 +157,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private const string CorrectionPrompt =
         "[Build/Execution Failed]: Analyze the compiler/runtime errors above, inspect the broken files, and apply a patch to fix them. Do not report completion until the build/tests pass.";
 
-    // CONTINUE_GENERATION: добавлено 2026-09-21
-    // Pushed when the user resumes a stopped answer: the partial text is already in the context
-    // as the model's own assistant turn, so this only has to say "keep going".
-    private const string ContinueInstruction =
-        """
-        Пользователь остановил твой предыдущий ответ и просит продолжить.
-        Продолжи ровно с того места, где текст оборвался: не повторяй написанное, не начинай заново, не добавляй пояснений о том, что ты продолжаешь — просто допиши ответ до конца и заверши задачу.
-        """;
+    // CONTINUE_GENERATION: the resume instruction moved into ConversationService, which now owns
+    // the whole "prefix + continue" composition for every path (it used to be duplicated here and
+    // in the chat worker).
 
     private static readonly List<object> AvailableTools = BuildToolSchemas();
 
@@ -183,8 +177,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         ICommandApprovalClassifier commandApproval,
         IPendingActionService pendingActionService,
         ISubscriptionService subscriptionService,
-        IUserMemoryService memoryService,
-        IChatHistoryRepository chatHistory,
+        IConversationService conversation,
         ILogger<ConexyAgentRunner> logger,
         IDocumentService documentService,
         IOptions<AgentOptions> agentOptions)
@@ -202,8 +195,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _commandApproval = commandApproval;
         _pendingActionService = pendingActionService;
         _subscriptionService = subscriptionService;
-        _memoryService = memoryService;
-        _chatHistory = chatHistory;
+        _conversation = conversation;
         _logger = logger;
         _documentService = documentService;
 
@@ -211,7 +203,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _maxIterations = configured <= 0 ? 15 : configured;
     }
 
-    public async Task<string> RunLoopAsync(ConexyJob job, CancellationToken ct = default)
+    public async Task<string> RunLoopAsync(ConexyJob job, ConversationContext context, CancellationToken ct = default)
     {
         _job = job;
         // taskId = per-run id (SignalR group, logging, todo, dedup).
@@ -222,92 +214,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var group = _hubContext.Clients.Group($"task_{taskId}");
         await group.SendAsync("OnLog", "[Agent Initialized] Processing user request...", ct);
 
-        // SUBSCRIPTION_TIERS: добавлено 2026-09-17 — inject durable user memory facts.
-        var systemPrompt = WorkerSystemPrompt;
-        // INCOGNITO_CHAT: добавлено 2026-09-20 — kept for parity with the chat path; the UI only
-        // enables incognito for the Chat tab today, but a flag that is set must never leak memory.
-        if (!job.Incognito)
-        {
-            var memoryBlock = await _memoryService.BuildPromptBlockAsync(job.UserId, ct);
-            if (!string.IsNullOrEmpty(memoryBlock))
-                systemPrompt += memoryBlock;
-        }
-
-        var messages = new List<ChatMessage>
-        {
-            new("system", systemPrompt)
-        };
-
-        // AGENT_HISTORY: добавлено 2026-09-22 — P0-фикс. Раньше агент получал ТОЛЬКО system +
-        // текущий промпт, поэтому на второе сообщение в том же чате честно отвечал «это первое
-        // сообщение, контекста нет», хотя предыдущий ход (и созданные им файлы) существовали.
-        // Читаем ту же таблицу истории, что и chat-путь, и обрезаем её так же.
-        if (!job.Incognito)
-        {
-            var history = await _chatHistory.GetMessagesAsync(job.UserId, job.ChatId, ct);
-            if (history.Count > 0)
-            {
-                var retained = history.Count > MaxHistoryMessages
-                    ? history.Skip(history.Count - MaxHistoryMessages)
-                    : history;
-
-                // CONTEXT_DIAGNOSTICS: добавлено 2026-09-22 — без этого нельзя было доказать,
-                // теряется история или модель просто её игнорирует. Пишем ключи, количество и
-                // фактические последние реплики.
-                var roleList = new StringBuilder();
-                foreach (var h in retained)
-                {
-                    if (roleList.Length > 0)
-                        roleList.Append(',');
-                    roleList.Append(h.Role);
-                }
-
-                var contextLine =
-                    "Agent context: task=" + job.TaskId +
-                    " chat=" + job.ChatId +
-                    " user=" + job.UserId +
-                    " historyRows=" + history.Count +
-                    " attached=" + retained.Count() +
-                    " roles=[" + roleList + "]";
-                _logger.LogInformation(contextLine);
-
-                foreach (var entry in retained.TakeLast(3))
-                {
-                    var preview = Preview(entry.Content);
-                    _logger.LogInformation(
-                        "Agent context tail: task=" + job.TaskId + " role=" + entry.Role + " preview=\"" + preview + "\"");
-                }
-
-                if (history.Count > MaxHistoryMessages)
-                {
-                    await LogAsync(taskId,
-                        $"[Context] История чата обрезана: {history.Count} -> {MaxHistoryMessages} сообщений.", ct);
-                }
-
-                foreach (var entry in retained)
-                {
-                    if (string.IsNullOrWhiteSpace(entry.Content))
-                        continue;
-
-                    // History only ever holds "user" / "assistant"; anything else is skipped so a
-                    // malformed row cannot corrupt the tool-call protocol.
-                    if (entry.Role != "user" && entry.Role != "assistant")
-                        continue;
-
-                    messages.Add(new ChatMessage(entry.Role, entry.Content));
-                }
-            }
-        }
-
-        messages.Add(ChatMessageFactory.User(job.Prompt, job.Attachments));
-
-        // CONTINUE_GENERATION: добавлено 2026-09-21 — the user stopped mid-answer, so hand the
-        // partial text back as the model's own truncated turn and tell it to carry on.
-        if (!string.IsNullOrWhiteSpace(job.AssistantPrefix))
-        {
-            messages.Add(new ChatMessage("assistant", job.AssistantPrefix));
-            messages.Add(new ChatMessage("system", ContinueInstruction));
-        }
+        // CONVERSATION_SERVICE: history, the memory block and the resumed-answer prefix are all
+        // assembled by the shared service now — this path no longer has its own copy of that logic,
+        // which is what twice drifted away from the chat path.
+        var messages = await _conversation.BuildRequestAsync(context, ct);
 
         var lastCommandFailed = false;
         var failedBuildAttempts = 0;
@@ -1025,6 +935,18 @@ public class ConexyAgentRunner : IConexyAgentRunner
         }
     }
 
+    // CONVERSATION_SERVICE: добавлено 2026-09-23
+    /// <summary>
+    /// Maker-Checker auditor. <b>Deliberately does NOT use <see cref="IConversationService"/></b>:
+    /// it is not a conversation turn but an internal review of the workspace, so it has its own
+    /// fixed system prompt (<see cref="CriticSystemPrompt"/>) and its own payload (file contents),
+    /// and it must neither see nor pollute the user-visible dialog history. Its tokens still count
+    /// toward the agent budget.
+    /// <para>
+    /// If you are looking at this because history handling "looks missing" here — it is not
+    /// missing, it is intentional. Do not route it through the conversation service.
+    /// </para>
+    /// </summary>
     private async Task<AuditVerdict> ReviewWorkspaceAsync(Guid chatId, string taskPrompt, CancellationToken ct)
     {
         var files = await _workspaceService.ListFilesAsync(chatId, "", ct);
@@ -1121,16 +1043,6 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     private static string Truncate(string value, int maxLength) =>
         value.Length <= maxLength ? value : value[..maxLength] + "\n... (truncated)";
-
-    // CONTEXT_DIAGNOSTICS: короткий однострочный превью реплики для логов.
-    private static string Preview(string? content)
-    {
-        if (string.IsNullOrWhiteSpace(content))
-            return string.Empty;
-
-        var flat = content.Replace('\r', ' ').Replace('\n', ' ').Trim();
-        return flat.Length <= 50 ? flat : flat[..50] + "…";
-    }
 
     private static string GetString(JsonElement root, string name, string fallback = "")
     {

@@ -73,12 +73,22 @@ public class MemoryExtractionWorker : BackgroundService
     private async Task ProcessAsync(MemoryExtractionJob job, CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
-        var chatHistory = scope.ServiceProvider.GetRequiredService<IChatHistoryRepository>();
         var memoryRepository = scope.ServiceProvider.GetRequiredService<IUserMemoryRepository>();
         var llmClient = scope.ServiceProvider.GetRequiredService<IConexyLlmClient>();
+        // CONVERSATION_SERVICE: добавлено 2026-09-23
+        //
+        // Используем read-only GetHistoryAsync, а не BuildRequestAsync. Обоснование: этому воркеру
+        // нужны САМИ реплики (он подставляет их в свой шаблон ExtractionPrompt), а не список
+        // сообщений для чат-комплишена. Полный BuildRequestAsync добавлял бы системный промпт пути,
+        // блок долговременной памяти и текущий пользовательский ход — всё это здесь лишнее и
+        // исказило бы промпт извлечения. При этом чтение идёт через тот же сервис и ту же логику
+        // доступа, а не через собственный вызов репозитория, поэтому «забыть про владельца истории»
+        // здесь больше нельзя.
+        var conversation = scope.ServiceProvider.GetRequiredService<IConversationService>();
 
-        var history = await chatHistory.GetMessagesAsync(job.UserId, job.ChatId, ct);
-        var recent = history.TakeLast(_options.Value.RecentMessagesToReview).ToList();
+        var history = await conversation.GetHistoryAsync(
+            job.UserId, job.ChatId, incognito: false, depth: _options.Value.RecentMessagesToReview, ct: ct);
+        var recent = history.ToList();
 
         var currentFacts = await memoryRepository.GetFactsAsync(job.UserId, ct);
 

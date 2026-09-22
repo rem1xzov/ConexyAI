@@ -7,9 +7,11 @@
 
 ## 1. Контекст внутри одной сессии (ломается повторно)
 
-**Почему этот сценарий обязателен:** история для агента (`ConexyAgentRunner`) уже собиралась
-неправильно дважды — сначала она вообще не передавалась, затем не записывалась для прерванных
-ходов. Поэтому проверять нужно не «одно сообщение», а цепочку из трёх.
+**Почему этот сценарий обязателен:** история уже дважды терялась: сначала агент вообще её не
+читал, затем прерванные ходы нигде не записывались. После рефакторинга `IConversationService` — это
+ОДНА точка: `BuildRequestAsync` собирает контекст, `PersistTurnAsync` вызывается в `finally`, поэтому
+любой исход сохраняет диалог. Если баг вернётся снова — значит, новый путь обходит
+`IConversationService`, и именно это надо искать в первую очередь.
 
 1. Открыть вкладку **Агент**, дать короткую задачу (например «объясни, что делает этот файл»).
 2. Дождаться **самостоятельного** завершения (без нажатия «Стоп»).
@@ -22,21 +24,30 @@
 **Что смотреть в логах бэкенда** (уровень Information):
 
 ```
-Agent context: task=<taskId> chat=<chatId> user=<userId> historyRows=<N> attached=<M> roles=[user,assistant,...]
-Agent context tail: task=<taskId> role=assistant preview="..."
+Conversation context: task=<taskId> chat=<chatId> user=<userId> depth=20 incognito=False attached=<M> roles=[user,assistant,...]
+Conversation context tail: task=<taskId> role=assistant preview="..."
+Conversation persist: task=<taskId> chat=<chatId> user=<userId> outcome=Completed incognito=False userChars=42 assistantChars=2413 assistantStored=True
 ```
+
+Эти три строки пишет `IConversationService`, поэтому они одинаковы для чата, режима «Ученики» и
+агента — раньше такие логи были только в агентском пути.
 
 - `attached=0` при непустом диалоге → история не читается (проверить `chatId`/`userId`).
 - `attached>0`, но агент всё равно «не помнит» → проблема не в передаче контекста, смотреть промпт.
+- `outcome=Stopped` с `assistantChars=0` → прерванный ход сохранил промпт, но модель ничего не
+  успела выдать; это нормально и контекст разговора не теряет.
 
 **Известные ловушки (уже исправлены, не регрессировать):**
 
-- Агентский путь должен **читать** историю (`_chatHistory.GetMessagesAsync`) и **писать** её
-  (`PersistTurnAsync`).
-- Прерванный ход (стоп / ошибка) тоже должен попадать в историю — иначе следующее сообщение
-  приходит без контекста. См. `PersistInterruptedTurnAsync`.
+- И агентский, и чат-путь обязаны ходить за контекстом и записью ТОЛЬКО через
+  `IConversationService`. Если где-то появился прямой вызов `IChatHistoryRepository` из
+  бизнес-логики — это рецидив.
+- Прерванный ход (стоп / ошибка) обязан попадать в историю — это делает `finally` в
+  `ConexyBackgroundWorker.ProcessJobAsync`.
 - Рабочая область разговора **не должна** удаляться при остановке/ошибке — иначе агент видит
   пустую папку и отвечает «файлов нет».
+- Аудитор `ReviewWorkspaceAsync` сознательно НЕ использует `IConversationService` — это не
+  забытое место, там есть комментарий в коде.
 
 ---
 
@@ -76,3 +87,19 @@ Agent iteration <step>/<max> task=<taskId> toolCalls=<k> contentChars=<n> ...
 SignalR connected: <connId> user=<userId> path=<path>
 SignalR disconnected: <connId> with error: <...>   (или "(graceful)")
 ```
+
+---
+
+## 4. Автотесты
+
+```bash
+dotnet run --project ConexyAI.Tests/ConexyAI.Tests.csproj
+```
+
+Часть проверок зависит от окружения и честно помечается `SKIP`, а не притворяется пройденной:
+
+- `bash: ...` — нужен Docker (реальная песочница `IDockerSandboxRunner`);
+- `CreateOrGetAsync ... (Postgres)` — нужен Postgres на `localhost:5433`;
+- `ide terminal ...` — нужен Linux pty.
+
+При наличии Docker/Postgres эти сценарии выполняются по-настоящему.
