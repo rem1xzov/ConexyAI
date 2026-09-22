@@ -21,6 +21,20 @@ export interface ChatMessage {
   createdAt: number;
   /** The model that generated this message (used to gate voice features to flash). */
   model?: ConexyModel;
+  // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
+  /** Files sent with this message. Kept on the message so they render in its bubble and survive
+   *  a reload (only a small preview is stored — the original bytes go to the model, not to disk). */
+  attachments?: MessageAttachment[];
+}
+
+// ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
+export interface MessageAttachment {
+  fileName: string;
+  contentType: string;
+  /** Downscaled data URL for display; absent when the file is not an image. */
+  previewUrl?: string;
+  /** Original size in bytes, when known. */
+  sizeBytes?: number;
 }
 
 export interface AgentAction {

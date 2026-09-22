@@ -1,10 +1,13 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CheckIcon, CopyIcon, RefreshIcon, ThumbsDownIcon, ThumbsUpIcon } from './Icons';
+import { CheckIcon, CopyIcon, PlayIcon, RefreshIcon, ThumbsDownIcon, ThumbsUpIcon } from './Icons';
 
 interface MessageActionsProps {
   content: string;
   onRegenerate?: () => void;
+  // CONTINUE_GENERATION: добавлено 2026-09-21
+  /** Shown only for an answer that was stopped mid-generation. */
+  onContinue?: () => void;
 }
 
 type Feedback = 'like' | 'dislike' | null;
@@ -13,7 +16,7 @@ type Feedback = 'like' | 'dislike' | null;
  * Compact action row shown under every assistant reply: copy raw markdown,
  * like/dislike (local UI state for now), and regenerate the last prompt.
  */
-export function MessageActions({ content, onRegenerate }: MessageActionsProps) {
+export function MessageActions({ content, onRegenerate, onContinue }: MessageActionsProps) {
   const { t } = useTranslation();
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [copied, setCopied] = useState(false);
@@ -53,6 +56,17 @@ export function MessageActions({ content, onRegenerate }: MessageActionsProps) {
       >
         <ThumbsDownIcon size={15} />
       </button>
+      {onContinue && (
+        <button
+          className="message-actions__btn message-actions__btn--continue"
+          onClick={onContinue}
+          title={t('message.continue')}
+          aria-label={t('message.continue')}
+        >
+          <PlayIcon size={15} />
+          <span>{t('message.continue')}</span>
+        </button>
+      )}
       {onRegenerate && (
         <button className="message-actions__btn" onClick={onRegenerate} title={t('message.regenerate')} aria-label={t('message.regenerate')}>
           <RefreshIcon size={15} />

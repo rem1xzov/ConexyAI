@@ -14,9 +14,20 @@ interface ChatFeedProps {
   onCommandDecision?: CommandDecisionHandler;
   // NEW_CHAT_LOGO: добавлено 2026-09-20
   onNewChat?: () => void;
+  // CONTINUE_GENERATION: добавлено 2026-09-21
+  onContinue?: (messageId: string) => void;
 }
 
-export function ChatFeed({ session, nickname, onRegenerate, onResend, onEditMessage, onCommandDecision, onNewChat }: ChatFeedProps) {
+export function ChatFeed({
+  session,
+  nickname,
+  onRegenerate,
+  onResend,
+  onEditMessage,
+  onCommandDecision,
+  onNewChat,
+  onContinue,
+}: ChatFeedProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -83,6 +94,7 @@ export function ChatFeed({ session, nickname, onRegenerate, onResend, onEditMess
           onCommandDecision={onCommandDecision}
           isLast={index === session.messages.length - 1}
           onNewChat={onNewChat}
+          onContinue={onContinue}
         />
       ))}
       <div ref={messagesEndRef} className="h-4 w-full shrink-0" />

@@ -219,11 +219,14 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         public string Command { get; set; } = string.Empty;
     }
 
-    public async Task SaveAttachmentsAsync(Guid chatId, IReadOnlyList<TaskAttachment>? attachments, CancellationToken ct = default)
+    public async Task<IReadOnlyList<string>> SaveAttachmentsAsync(Guid chatId, IReadOnlyList<TaskAttachment>? attachments, CancellationToken ct = default)
     {
+        // ATTACHMENT_ERRORS: добавлено 2026-09-21 — a bad file must not silently vanish: the
+        // name is returned so the caller can surface it, and every failure is logged here.
+        var failed = new List<string>();
         if (attachments == null || attachments.Count == 0)
         {
-            return;
+            return failed;
         }
 
         var workspaceDir = GetTaskWorkspacePath(chatId);
@@ -240,12 +243,29 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             var fileName = Path.GetFileName(attachment.FileName);
             if (string.IsNullOrWhiteSpace(fileName))
             {
+                _logger.LogWarning("Skipping attachment with an unusable file name '{FileName}' for chat {ChatId}", attachment.FileName, chatId);
+                failed.Add(attachment.FileName ?? "(unnamed)");
                 continue;
             }
 
-            var bytes = Convert.FromBase64String(attachment.ContentBase64.Trim());
-            await File.WriteAllBytesAsync(Path.Combine(workspaceDir, fileName), bytes, ct);
+            try
+            {
+                var bytes = Convert.FromBase64String(attachment.ContentBase64?.Trim() ?? string.Empty);
+                await File.WriteAllBytesAsync(Path.Combine(workspaceDir, fileName), bytes, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Corrupt base64, an illegal name, a full disk — one bad file must not abort the run.
+                _logger.LogError(ex, "Failed to save attachment '{FileName}' for chat {ChatId}", fileName, chatId);
+                failed.Add(fileName);
+            }
         }
+
+        return failed;
     }
 
     public async Task<GitOperationResult> GitCloneAsync(

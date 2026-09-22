@@ -143,6 +143,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private const string CorrectionPrompt =
         "[Build/Execution Failed]: Analyze the compiler/runtime errors above, inspect the broken files, and apply a patch to fix them. Do not report completion until the build/tests pass.";
 
+    // CONTINUE_GENERATION: добавлено 2026-09-21
+    // Pushed when the user resumes a stopped answer: the partial text is already in the context
+    // as the model's own assistant turn, so this only has to say "keep going".
+    private const string ContinueInstruction =
+        """
+        Пользователь остановил твой предыдущий ответ и просит продолжить.
+        Продолжи ровно с того места, где текст оборвался: не повторяй написанное, не начинай заново, не добавляй пояснений о том, что ты продолжаешь — просто допиши ответ до конца и заверши задачу.
+        """;
+
     private static readonly List<object> AvailableTools = BuildToolSchemas();
 
     public ConexyAgentRunner(
@@ -208,6 +217,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
             new("system", systemPrompt),
             ChatMessageFactory.User(job.Prompt, job.Attachments)
         };
+
+        // CONTINUE_GENERATION: добавлено 2026-09-21 — the user stopped mid-answer, so hand the
+        // partial text back as the model's own truncated turn and tell it to carry on.
+        if (!string.IsNullOrWhiteSpace(job.AssistantPrefix))
+        {
+            messages.Add(new ChatMessage("assistant", job.AssistantPrefix));
+            messages.Add(new ChatMessage("system", ContinueInstruction));
+        }
 
         var lastCommandFailed = false;
         var failedBuildAttempts = 0;

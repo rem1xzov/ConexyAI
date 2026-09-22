@@ -43,8 +43,12 @@ public interface IConexyWorkspaceService
     /// <summary>Deletes the task sandbox directory (used on fatal failure or on demand).</summary>
     Task CleanupWorkspaceAsync(Guid chatId, CancellationToken ct = default);
 
-    /// <summary>Writes non-graphical attachments into the workspace root with their original names.</summary>
-    Task SaveAttachmentsAsync(Guid chatId, IReadOnlyList<TaskAttachment>? attachments, CancellationToken ct = default);
+    /// <summary>
+    /// Writes non-graphical attachments into the workspace root with their original names.
+    /// Returns the names that could not be written, so the caller can report them instead of
+    /// losing the failure silently.
+    /// </summary>
+    Task<IReadOnlyList<string>> SaveAttachmentsAsync(Guid chatId, IReadOnlyList<TaskAttachment>? attachments, CancellationToken ct = default);
 
     /// <summary>Returns the persisted run command for a chat, or <c>null</c> if none is stored.</summary>
     Task<string?> GetRunCommandAsync(Guid chatId, CancellationToken ct = default);

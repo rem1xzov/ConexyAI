@@ -2817,6 +2817,47 @@ body {
   opacity: 0.85;
 }
 
+/* ---------- Attachments rendered inside a user bubble ---------- */
+.msg-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.msg-attachments__img {
+  display: block;
+  max-width: 100%;
+  max-height: 180px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+  cursor: zoom-in;
+}
+
+.msg-attachments__file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Marker shown under an answer the user stopped, derived from message.status. */
+.msg-stopped {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* ---------- Per-message action row (copy / like / dislike / regenerate) ---------- */
 .message-actions {
   display: flex;
@@ -2855,6 +2896,15 @@ body {
 
 .message-actions__btn--dislike.message-actions__btn--active {
   color: var(--danger);
+}
+
+/* The continue button carries a text label, so it grows past the icon square. */
+.message-actions__btn--continue {
+  width: auto;
+  gap: 5px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 /* ---------- IDE empty state hints ---------- */

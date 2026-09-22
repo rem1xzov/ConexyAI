@@ -23,6 +23,13 @@ public class ConexyLlmClient : IConexyLlmClient
     private readonly JsonSerializerOptions _jsonOptions = new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
 
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(180);
+    // STALL_GUARD: добавлено 2026-09-21
+    // With ResponseHeadersRead, HttpClient.Timeout only covers the response *headers* — a stream
+    // that goes silent afterwards would hang the task indefinitely (the "6 minutes of thinking"
+    // report). These two caps bound it: no chunk for StreamIdleTimeout, or the whole stream
+    // running longer than MaxStreamDuration.
+    private static readonly TimeSpan StreamIdleTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan MaxStreamDuration = TimeSpan.FromMinutes(10);
     private const int MaxRetries = 3;
     private static readonly TimeSpan[] RetryDelays = { TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(8) };
 
@@ -209,21 +216,41 @@ public class ConexyLlmClient : IConexyLlmClient
             await using var stream = await response.Content.ReadAsStreamAsync(ct);
             using var reader = new StreamReader(stream);
 
+            // STALL_GUARD: linked token so an idle stream or an over-long stream aborts with a
+            // readable error instead of leaving the user watching a spinner.
+            using var streamCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var streamDeadline = DateTime.UtcNow + MaxStreamDuration;
+
             // Accumulate streamed tool_call fragments by index so a completed tool
             // call can be yielded as one unit once the stream finishes.
             var toolCallAccumulators = new Dictionary<int, ToolCallAccumulator>();
 
             while (true)
             {
+                if (DateTime.UtcNow > streamDeadline)
+                {
+                    _logger.LogError(
+                        "DeepSeek stream exceeded {Minutes} minutes on task {TaskId}; aborting.",
+                        MaxStreamDuration.TotalMinutes, taskId);
+                    throw new HttpRequestException(
+                        $"Upstream LLM stream ran longer than {MaxStreamDuration.TotalMinutes:0} minutes.");
+                }
+
                 string? line;
                 try
                 {
-                    line = await reader.ReadLineAsync(ct);
+                    // Reset the idle timer for every chunk, including keep-alive comments.
+                    streamCts.CancelAfter(StreamIdleTimeout);
+                    line = await reader.ReadLineAsync(streamCts.Token);
                 }
                 catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
                 {
-                    _logger.LogError(ex, "DeepSeek stream read timed out after {Timeout}s", RequestTimeout.TotalSeconds);
-                    throw new HttpRequestException($"Upstream LLM stream timed out after {RequestTimeout.TotalSeconds} seconds.", ex);
+                    _logger.LogError(
+                        ex,
+                        "DeepSeek stream stalled: no data for {IdleSeconds}s on task {TaskId}.",
+                        StreamIdleTimeout.TotalSeconds, taskId);
+                    throw new HttpRequestException(
+                        $"Upstream LLM stopped sending data for more than {StreamIdleTimeout.TotalSeconds:0} seconds.", ex);
                 }
 
                 if (line is null)

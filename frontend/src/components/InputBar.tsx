@@ -55,6 +55,8 @@ export function InputBar({
   const [limitHint, setLimitHint] = useState(false);
   // Visible reason why voice input could not start (permission, no device, unsupported…).
   const [micError, setMicError] = useState<string | null>(null);
+  // ATTACHMENTS: files the picker refused, so the user is told instead of seeing nothing happen.
+  const [attachError, setAttachError] = useState<string | null>(null);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const photoRef = useRef<HTMLInputElement>(null);
@@ -157,17 +159,32 @@ export function InputBar({
 
   async function addFiles(files: FileList | File[], skipMimeCheck = false) {
     const next = [...attachments];
+    const rejected: string[] = [];
     for (const file of Array.from(files)) {
-      if (!skipMimeCheck && !isAllowedMime(file.type)) continue;
+      // BUGFIX_ATTACHMENTS: a refused file used to be dropped without a word, which reads as
+      // "the picker ignores .docx in the agent tab". Report it instead of swallowing it.
+      if (!skipMimeCheck && !isAllowedMime(file.type, file.name)) {
+        rejected.push(file.name);
+        continue;
+      }
       if (next.length >= MAX_ATTACHMENTS) {
         setLimitHint(true);
         window.setTimeout(() => setLimitHint(false), 2500);
         break;
       }
-      next.push(await fileToAttachment(file));
+      try {
+        next.push(await fileToAttachment(file));
+      } catch (err) {
+        console.error('[Attachments] failed to read file', file.name, err);
+        rejected.push(file.name);
+      }
     }
     setAttachments(next);
     setMenuOpen(false);
+    if (rejected.length > 0) {
+      setAttachError(t('input.unsupportedFiles', { names: rejected.join(', ') }));
+      window.setTimeout(() => setAttachError(null), 6000);
+    }
   }
 
   function applyTranscript() {
@@ -464,6 +481,19 @@ export function InputBar({
       {limitHint && (
         <div className="inputbar-limit">{t('input.maxFiles')}</div>
       )}
+      {attachError && (
+        <div className="inputbar-error" role="alert">
+          <span className="inputbar-error__text">{attachError}</span>
+          <button
+            className="inputbar-error__close"
+            onClick={() => setAttachError(null)}
+            aria-label={t('common.close')}
+            type="button"
+          >
+            <CloseIcon size={12} />
+          </button>
+        </div>
+      )}
       {micError && (
         <div className="inputbar-error" role="alert">
           <span className="inputbar-error__text">{micError}</span>
@@ -515,6 +545,7 @@ export function InputBar({
           type="file"
           multiple
           hidden
+          accept="image/*,text/*,.pdf,.doc,.docx,.rtf,.odt,.xls,.xlsx,.ppt,.pptx,.csv,.json,.xml,.yaml,.yml,.md,.zip"
           onChange={(e) => {
             if (e.target.files?.length) void addFiles(e.target.files);
             e.target.value = '';

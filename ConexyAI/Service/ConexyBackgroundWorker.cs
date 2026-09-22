@@ -88,6 +88,15 @@ public class ConexyBackgroundWorker : BackgroundService
     private const int MaxHistoryMessages = 20;
     private const int MaxSearchRounds = 3;
 
+    // CONTINUE_GENERATION: добавлено 2026-09-21
+    // Last system message when the user resumes a stopped answer. The partial text is already in
+    // the context as the model's own assistant turn, so this only has to say "keep going".
+    private const string ContinueInstruction =
+        """
+        Пользователь остановил твой предыдущий ответ и просит продолжить.
+        Продолжи ровно с того места, где текст оборвался: не повторяй написанное, не начинай заново, не добавляй пояснений о том, что ты продолжаешь — просто допиши ответ до конца.
+        """;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await foreach (var job in _queue.ReadAllAsync(stoppingToken))
@@ -122,7 +131,15 @@ public class ConexyBackgroundWorker : BackgroundService
             try
             {
                 // Materialize non-graphical attachments into the sandbox before the loop.
-                await _workspaceService.SaveAttachmentsAsync(job.ChatId, job.Attachments, taskToken);
+                // ATTACHMENT_ERRORS: failures are reported instead of being swallowed.
+                var failedAttachments = await _workspaceService.SaveAttachmentsAsync(job.ChatId, job.Attachments, taskToken);
+                if (failedAttachments.Count > 0)
+                {
+                    await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync(
+                        "OnLog",
+                        $"[Attachments] Не удалось сохранить в рабочую область: {string.Join(", ", failedAttachments)}. Файлы не будут доступны агенту.",
+                        taskToken);
+                }
 
                 string result;
                 // conexy-coder -> autonomous agent pipeline (Maker-Checker + tools).
@@ -269,6 +286,14 @@ public class ConexyBackgroundWorker : BackgroundService
 
         messages.Add(ChatMessageFactory.User(job.Prompt, job.Attachments));
 
+        // CONTINUE_GENERATION: добавлено 2026-09-21 — the user stopped mid-answer, so hand the
+        // partial text back as the model's own truncated turn and tell it to carry on.
+        if (!string.IsNullOrWhiteSpace(job.AssistantPrefix))
+        {
+            messages.Add(new ChatMessage("assistant", job.AssistantPrefix));
+            messages.Add(new ChatMessage("system", ContinueInstruction));
+        }
+
         // Flash never reasons; Pro reasons only when the Thinking toggle is on
         // (or in Students mode). The LlmClient maps per model type.
         var reasoningEffort = job.ModelType == ConexyModelType.ConexyV1Pro && (job.Thinking || job.StudentsMode)
@@ -321,22 +346,27 @@ public class ConexyBackgroundWorker : BackgroundService
 
         // Persist the completed turn so the next message in this chat includes it.
         // User text is stored as plain text; image attachments are not part of history.
+        // CONTINUE_GENERATION: a resumed turn stores the prefix plus the continuation, otherwise
+        // the history would keep only the tail of the answer.
+        var storedResult = string.IsNullOrWhiteSpace(job.AssistantPrefix)
+            ? result
+            : job.AssistantPrefix + result;
         // INCOGNITO_CHAT: добавлено 2026-09-20 — incognito turns stay in memory and never
         // produce a ChatHistory row (so the chat also never shows up in the sidebar history).
         if (job.Incognito)
         {
             _incognitoChat.Append(job.ChatId, job.UserId, "user", job.Prompt);
-            if (!string.IsNullOrWhiteSpace(result))
+            if (!string.IsNullOrWhiteSpace(storedResult))
             {
-                _incognitoChat.Append(job.ChatId, job.UserId, "assistant", result);
+                _incognitoChat.Append(job.ChatId, job.UserId, "assistant", storedResult);
             }
         }
         else
         {
             await chatHistory.AppendAsync(job.UserId, job.ChatId, "user", job.Prompt, ct);
-            if (!string.IsNullOrWhiteSpace(result))
+            if (!string.IsNullOrWhiteSpace(storedResult))
             {
-                await chatHistory.AppendAsync(job.UserId, job.ChatId, "assistant", result, ct);
+                await chatHistory.AppendAsync(job.UserId, job.ChatId, "assistant", storedResult, ct);
             }
         }
 
@@ -355,7 +385,7 @@ public class ConexyBackgroundWorker : BackgroundService
             }
         }
 
-        return result;
+        return storedResult;
     }
 
     private async Task<string> SearchAwareCompletionAsync(

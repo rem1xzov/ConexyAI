@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from 'react';
+import { memo, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatMessage } from '../types/chat';
 import type { CommandDecisionHandler } from '../types/signalr';
@@ -23,9 +23,12 @@ interface MessageBubbleProps {
   isLast?: boolean;
   /** Starts a fresh conversation when the underlying reply mark is clicked. */
   onNewChat?: () => void;
+  // CONTINUE_GENERATION: добавлено 2026-09-21
+  /** Resumes a stopped answer from the text already on screen. */
+  onContinue?: (messageId: string) => void;
 }
 
-export function MessageBubble({
+function MessageBubbleBase({
   message,
   onRegenerate,
   onResend,
@@ -33,6 +36,7 @@ export function MessageBubble({
   onCommandDecision,
   isLast = false,
   onNewChat,
+  onContinue,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
@@ -51,6 +55,8 @@ export function MessageBubble({
   const currentAction = message.currentAction ?? null;
   const toolActions = message.toolActions ?? [];
   const todos = message.todos ?? [];
+  // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
+  const attachments = message.attachments ?? [];
 
   // ASSISTANT_PHASES: добавлено 2026-09-20 — the message lifecycle drives what is shown:
   // a reasoning accordion and tool pills while working, then the streamed answer.
@@ -96,6 +102,27 @@ export function MessageBubble({
       <div className="w-full max-w-3xl mx-auto my-4 flex flex-col items-end px-2">
         <div className="w-fit max-w-[85%] chat-surface rounded-2xl px-5 py-3.5 shadow-sm">
           <div className="font-semibold text-xs chat-muted mb-1">{t('message.you')}</div>
+          {/* ATTACHMENTS_IN_BUBBLE: the files travel with this message, inside its bubble —
+              images as thumbnails, anything else as a file chip. */}
+          {attachments.length > 0 && !editing && (
+            <div className="msg-attachments">
+              {attachments.map((a, i) =>
+                a.previewUrl ? (
+                  <img
+                    key={`${a.fileName}-${i}`}
+                    src={a.previewUrl}
+                    alt={a.fileName}
+                    title={a.fileName}
+                    className="msg-attachments__img"
+                  />
+                ) : (
+                  <span key={`${a.fileName}-${i}`} className="msg-attachments__file" title={a.fileName}>
+                    <span aria-hidden="true">📄</span> {a.fileName}
+                  </span>
+                ),
+              )}
+            </div>
+          )}
           {editing ? (
             <div className="min-w-[320px]">
               <textarea
@@ -179,10 +206,17 @@ export function MessageBubble({
       {message.error && <div className="msg__error">{message.error}</div>}
       {hasScreenshots && <VisionGallery screenshots={screenshots} />}
 
+      {/* CONTINUE_GENERATION: the stop marker is derived from the status, not baked into the
+          text, so the stored content stays exactly the partial answer to resume from. */}
+      {message.status === 'stopped' && <div className="msg-stopped">{t('agent.generationStopped')}</div>}
+
       {showActions && (
         <MessageActions
           content={content}
           onRegenerate={onRegenerate ? () => onRegenerate(message.id) : undefined}
+          onContinue={
+            message.status === 'stopped' && onContinue ? () => onContinue(message.id) : undefined
+          }
         />
       )}
 
@@ -207,3 +241,10 @@ export function MessageBubble({
     </div>
   );
 }
+
+// BUGFIX_PERF: добавлено 2026-09-21
+// Every streamed token replaces one message object in the session list, which re-renders the whole
+// feed. Memoising the bubble keeps that O(1) instead of re-rendering (and re-parsing) every
+// message in a long conversation — that was what made the action row feel laggy to click.
+// All callbacks passed in from App are stable (useCallback), so the memo actually holds.
+export const MessageBubble = memo(MessageBubbleBase);

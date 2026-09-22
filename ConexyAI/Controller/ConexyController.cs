@@ -28,6 +28,9 @@ public class ConexyController : ControllerBase
     }
 
     [HttpPost("run")]
+    // ATTACHMENT_ERRORS: добавлено 2026-09-21 — base64 attachments ride in the JSON body, so the
+    // request needs the same headroom as the other upload endpoints instead of Kestrel's default.
+    [RequestSizeLimit(55_000_000)]
     public async Task<ActionResult<ConexyResponse>> RunTask([FromBody] ConexyRequest request, CancellationToken ct)
     {
         if (!TryGetUserId(out var userId))

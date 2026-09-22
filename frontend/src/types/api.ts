@@ -23,6 +23,9 @@ export interface ConexyRequest {
   // INCOGNITO_CHAT: добавлено 2026-09-20
   /** Ephemeral turn: not persisted to chat history and excluded from long-term memory. */
   incognito?: boolean;
+  // CONTINUE_GENERATION: добавлено 2026-09-21
+  /** Already-generated answer text; the model resumes from here instead of starting over. */
+  assistantPrefix?: string;
 }
 
 export interface ConexyResponse {

@@ -222,6 +222,7 @@
     "takePhoto": "Take photo",
     "importCode": "Import code",
     "placeholder": "Message…",
+    "unsupportedFiles": "Couldn't attach: {{names}}. Images, PDFs, documents, spreadsheets and text files are supported.",
     "removeFile": "Remove {{name}}"
   },
   "palette": {
@@ -267,6 +268,7 @@
     "goodResponse": "Good response",
     "badResponse": "Bad response",
     "regenerate": "Regenerate",
+    "continue": "Continue",
     "resend": "Resend",
     "edit": "Edit"
   },

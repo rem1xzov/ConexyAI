@@ -18,5 +18,9 @@ public record ConexyJob(
     // INCOGNITO_CHAT: добавлено 2026-09-20
     // Ephemeral turn: keeps its context in memory only, never in the DB, and is excluded
     // from long-term memory both as a source and as a target.
-    bool Incognito = false
+    bool Incognito = false,
+    // CONTINUE_GENERATION: добавлено 2026-09-21
+    // Partial answer to resume from. The model receives it as its own truncated turn plus a
+    // continue instruction, so it finishes the sentence instead of regenerating the reply.
+    string? AssistantPrefix = null
 );

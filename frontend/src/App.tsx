@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
 import { getSubscriptionUsage, runTask } from './api/conexyApi';
@@ -35,6 +35,8 @@ import { setLanguage } from './i18n';
 import type { ConexyModel, LimitExceededInfo, ReasoningEffort, SubscriptionUsage, TaskAttachment } from './types/api';
 import type { ChatMessage, ChatSession, ChatSessionKind } from './types/chat';
 import type { PendingActionPayload } from './types/signalr';
+// ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
+import { toMessageAttachment } from './utils/attachments';
 
 const STORAGE_KEY = 'conexy_sessions';
 
@@ -529,6 +531,47 @@ export default function App() {
   const displayName = user?.displayName ? user.displayName.split('@')[0] : null;
   const greeting = t(greetingKey(activeTab), { name: displayName ?? t('chat.defaultName') });
 
+  // BUGFIX_PERF: добавлено 2026-09-21
+  // MessageBubble is memoised, which only helps if the callbacks it receives keep one identity
+  // for the whole session. The handlers below therefore read the mutable inputs through this
+  // latest-values ref instead of closing over state that changes on every streamed token.
+  const liveRef = useRef({} as {
+    token: string | null;
+    sessions: ChatSession[];
+    activeId: string | null;
+    activeTab: ChatSessionKind;
+    model: ConexyModel;
+    thinking: boolean;
+    reasoningEffort: ReasoningEffort;
+    smartSearch: boolean;
+    students: boolean;
+    incognitoActive: boolean;
+    sessionIncognito: boolean;
+    sessionTaskId: string | undefined;
+    pendingAction: PendingActionPayload | null;
+    showToast: (message: string) => void;
+    refreshUsage: () => Promise<void>;
+    t: typeof t;
+  });
+  liveRef.current = {
+    token,
+    sessions,
+    activeId,
+    activeTab,
+    model,
+    thinking,
+    reasoningEffort,
+    smartSearch,
+    students,
+    incognitoActive,
+    sessionIncognito: activeSession?.incognito ?? false,
+    sessionTaskId: activeSession?.taskId,
+    pendingAction,
+    showToast,
+    refreshUsage,
+    t,
+  };
+
   // Latest agent progress for the IDE bottom panel (Live Action Status / Todo).
   const lastAssistant = [...(activeSession?.messages ?? [])].reverse().find((m) => m.role === 'assistant') ?? null;
   const latestToolActions = lastAssistant?.toolActions ?? [];
@@ -572,7 +615,9 @@ export default function App() {
     };
   }, []);
 
-  function handleTabChange(next: ChatSessionKind) {
+  // BUGFIX_PERF: stable identity — it is a dependency of handleNewChat, which is passed to the
+  // memoised MessageBubble.
+  const handleTabChange = useCallback((next: ChatSessionKind) => {
     setActiveTab(next);
     // A top-level tab switch opens a fresh, empty composer for that mode — it must
     // never auto-restore the last-opened chat of the previous (or current) mode.
@@ -587,13 +632,13 @@ export default function App() {
     if (next === 'projects') setModel('conexy-coder');
     else if (next === 'students') setModel('ConexyV1-pro');
     else setModel('ConexyV1-flash');
-  }
+  }, []);
 
   // NEW_CHAT_LOGO: добавлено 2026-09-20
   /** Starts a fresh conversation in the current tab (used by the mark under a reply). */
-  function handleNewChat() {
-    handleTabChange(activeTab);
-  }
+  const handleNewChat = useCallback(() => {
+    handleTabChange(liveRef.current.activeTab);
+  }, [handleTabChange]);
 
   function handleModelChange(next: ConexyModel) {
     setModel(next);
@@ -694,15 +739,31 @@ export default function App() {
     }
   }
 
-  async function startCompletion(
+  // BUGFIX_PERF: stable identity (see liveRef above). Everything mutable is read from the ref so
+  // the memo on MessageBubble survives per-token session updates.
+  const startCompletion = useCallback(async (
     sessionId: string,
     prompt: string,
     attachments: TaskAttachment[],
     appendUserMessage: boolean,
-  ) {
+    // CONTINUE_GENERATION: добавлено 2026-09-21 — when set, the answer resumes inside that
+    // existing message instead of appending a new user/assistant pair.
+    continueMessageId?: string,
+  ) => {
+    const live = liveRef.current;
     setAgentStatus('Working…');
-    const kind = sessions.find((s) => s.id === sessionId)?.kind ?? activeTab;
-    const currentTaskId = sessions.find((s) => s.id === sessionId)?.taskId;
+    const session = live.sessions.find((s) => s.id === sessionId);
+    const kind = session?.kind ?? live.activeTab;
+    const currentTaskId = session?.taskId;
+    const continueFrom = continueMessageId
+      ? session?.messages.find((m) => m.id === continueMessageId)?.content
+      : undefined;
+
+    // ATTACHMENTS_IN_BUBBLE: turn the outgoing files into the transcript representation (image
+    // thumbnails, file chips). Only the preview is kept — the originals go to the model.
+    const messageAttachments = attachments.length
+      ? await Promise.all(attachments.map((a) => toMessageAttachment(a)))
+      : [];
 
     const userMsg: ChatMessage = {
       id: uid(),
@@ -713,10 +774,11 @@ export default function App() {
       logs: [],
       screenshots: [],
       createdAt: Date.now(),
-      model,
+      model: live.model,
+      attachments: messageAttachments.length ? messageAttachments : undefined,
     };
     const assistantMsg: ChatMessage = {
-      id: uid(),
+      id: continueMessageId ?? uid(),
       role: 'assistant',
       content: '',
       thinking: '',
@@ -724,33 +786,41 @@ export default function App() {
       logs: [],
       screenshots: [],
       createdAt: Date.now(),
-      model,
+      model: live.model,
     };
 
     setSessions((prev) =>
       updateSession(prev, sessionId, (s) => ({
         ...s,
-        title: s.title === defaultTitle(kind, t) ? prompt.slice(0, 40) : s.title,
+        title: s.title === defaultTitle(kind, live.t) ? prompt.slice(0, 40) : s.title,
         status: 'Running',
-        model,
-        messages: appendUserMessage ? [...s.messages, userMsg, assistantMsg] : [...s.messages, assistantMsg],
+        model: live.model,
+        messages: continueMessageId
+          ? s.messages.map((m) =>
+              m.id === continueMessageId ? { ...m, status: 'streaming', error: undefined } : m,
+            )
+          : appendUserMessage
+            ? [...s.messages, userMsg, assistantMsg]
+            : [...s.messages, assistantMsg],
       })),
     );
 
     try {
       const res = await runTask({
-        model,
+        model: live.model,
         prompt,
         attachments: attachments.length ? attachments : undefined,
-        thinking,
-        reasoningEffort,
-        smartSearch,
-        studentsMode: students,
+        thinking: live.thinking,
+        reasoningEffort: live.reasoningEffort,
+        smartSearch: live.smartSearch,
+        studentsMode: live.students,
         sessionId: currentTaskId,
         chatId: sessionId,
         // INCOGNITO_CHAT: добавлено 2026-09-20 — 'incognitoActive' covers the very first
         // message (the session does not exist yet); later turns read the flag off the session.
-        incognito: incognitoActive || (activeSession?.incognito ?? false),
+        incognito: live.incognitoActive || live.sessionIncognito,
+        // CONTINUE_GENERATION: the partial answer is handed back so the model finishes it.
+        assistantPrefix: continueFrom?.trim() ? continueFrom : undefined,
       });
 
       setSessions((prev) => updateSession(prev, sessionId, (s) => ({ ...s, taskId: res.id })));
@@ -767,11 +837,11 @@ export default function App() {
             ...s,
             status: 'Failed',
             messages: s.messages.map((m) =>
-              m.id === assistantMsg.id ? { ...m, status: 'error', error: t('agent.limitExceeded') } : m,
+              m.id === assistantMsg.id ? { ...m, status: 'error', error: live.t('agent.limitExceeded') } : m,
             ),
           })),
         );
-        void refreshUsage();
+        void live.refreshUsage();
         return;
       }
 
@@ -791,7 +861,7 @@ export default function App() {
       // liveRespondRef.current = null;
       // responder?.reject(new Error(message));
     }
-  }
+  }, []);
 
   async function handleSend(prompt: string, attachments: TaskAttachment[]) {
     if (!prompt.trim() || !token) return;
@@ -830,9 +900,11 @@ export default function App() {
   }
   */
 
-  function handleRegenerate(assistantMessageId: string) {
-    if (!token || streamingRef.current) return;
-    const session = sessions.find((s) => s.id === activeId);
+  // BUGFIX_PERF: stable callbacks (see liveRef) so MessageBubble's memo is not defeated.
+  const handleRegenerate = useCallback((assistantMessageId: string) => {
+    const live = liveRef.current;
+    if (!live.token || streamingRef.current) return;
+    const session = live.sessions.find((s) => s.id === live.activeId);
     if (!session) return;
     const idx = session.messages.findIndex((m) => m.id === assistantMessageId);
     if (idx < 0) return;
@@ -849,37 +921,64 @@ export default function App() {
     if (!prompt.trim()) return;
 
     void startCompletion(session.id, prompt, [], false);
-  }
+  }, [startCompletion]);
 
-  function handleResend(messageId: string) {
-    if (!token || streamingRef.current) return;
-    const session = sessions.find((s) => s.id === activeId);
+  const handleResend = useCallback((messageId: string) => {
+    const live = liveRef.current;
+    if (!live.token || streamingRef.current) return;
+    const session = live.sessions.find((s) => s.id === live.activeId);
     if (!session) return;
     const message = session.messages.find((m) => m.id === messageId);
     if (!message || message.role !== 'user') return;
     void startCompletion(session.id, message.content, [], true);
-  }
+  }, [startCompletion]);
 
-  function handleEditMessage(messageId: string, newContent: string) {
-    if (!token || streamingRef.current) return;
-    const session = sessions.find((s) => s.id === activeId);
+  const handleEditMessage = useCallback((messageId: string, newContent: string) => {
+    const live = liveRef.current;
+    if (!live.token || streamingRef.current) return;
+    const session = live.sessions.find((s) => s.id === live.activeId);
     if (!session) return;
     const message = session.messages.find((m) => m.id === messageId);
     if (!message || message.role !== 'user') return;
     void startCompletion(session.id, newContent, [], true);
-  }
+  }, [startCompletion]);
+
+  // CONTINUE_GENERATION: добавлено 2026-09-21
+  // Resumes a stopped answer: the already-streamed text goes back to the model as its own
+  // truncated turn, and the reply keeps growing inside the very same message.
+  const handleContinue = useCallback((messageId: string) => {
+    const live = liveRef.current;
+    if (!live.token || streamingRef.current) return;
+    const session = live.sessions.find((s) => s.messages.some((m) => m.id === messageId));
+    if (!session) return;
+
+    const index = session.messages.findIndex((m) => m.id === messageId);
+    const target = session.messages[index];
+    if (!target?.content.trim()) return;
+
+    // The prompt this answer belongs to.
+    let prompt = '';
+    for (let i = index - 1; i >= 0; i--) {
+      const m = session.messages[i];
+      if (m.role === 'user') {
+        prompt = m.content;
+        break;
+      }
+    }
+    if (!prompt.trim()) return;
+
+    void startCompletion(session.id, prompt, [], false, messageId);
+  }, [startCompletion]);
 
   function finalizeStopped(ctx: { sessionId: string; messageId: string }) {
     setAgentStatus('Stopped');
+    // CONTINUE_GENERATION: the stop marker is no longer baked into the text — it is rendered
+    // from the 'stopped' status, so the stored content stays exactly the partial answer that
+    // "Продолжить" hands back to the model.
     setSessions((prev) =>
       updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => {
         if (m.status === 'stopped') return m;
-        const note = t('agent.generationStopped');
-        return {
-          ...m,
-          status: 'stopped',
-          content: m.content ? `${m.content}\n\n${note}` : note,
-        };
+        return { ...m, status: 'stopped' };
       }),
     );
     setSessions((prev) => updateSession(prev, ctx.sessionId, (s) => ({ ...s, status: 'Stopped' })));
@@ -897,17 +996,19 @@ export default function App() {
   }
 
   // COMMAND_CONFIRM: добавлено 2026-09-20
-  async function handleCommandDecision(actionId: string, approved: boolean, allowAll: boolean) {
-    const taskId = pendingAction?.taskId ?? streamingRef.current?.taskId ?? activeSession?.taskId;
+  // BUGFIX_PERF: stable identity so MessageBubble's memo holds.
+  const handleCommandDecision = useCallback(async (actionId: string, approved: boolean, allowAll: boolean) => {
+    const live = liveRef.current;
+    const taskId = live.pendingAction?.taskId ?? streamingRef.current?.taskId ?? live.sessionTaskId;
     setPendingAction(null);
     if (approved && allowAll && taskId) setAllowAllTaskId(taskId);
     try {
       await signalrService.confirmAction(actionId, approved, allowAll);
     } catch (err) {
       console.error('[CommandConfirm] ConfirmAction failed:', err);
-      showToast(t('toast.confirmFailed'));
+      live.showToast(live.t('toast.confirmFailed'));
     }
-  }
+  }, []);
 
   // COMMAND_CONFIRM: added 2026-09-20 — the user asked to be asked again for this task.
   async function handleDisableAllowAll() {
@@ -1106,8 +1207,9 @@ export default function App() {
                     onRegenerate={handleRegenerate}
                     onResend={handleResend}
                     onEditMessage={handleEditMessage}
-                    onCommandDecision={(id, approved, allowAll) => void handleCommandDecision(id, approved, allowAll)}
+                    onCommandDecision={handleCommandDecision}
                     onNewChat={handleNewChat}
+                    onContinue={handleContinue}
                   />
                 ) : initializing ? (
                   <div className="feed feed--empty">
@@ -1173,7 +1275,7 @@ export default function App() {
                 agentFileChange={agentFileChange}
                 toolActions={latestToolActions}
                 todos={latestTodos}
-                onCommandDecision={(id, approved, allowAll) => void handleCommandDecision(id, approved, allowAll)}
+                onCommandDecision={handleCommandDecision}
                 onCursorChange={setCursorInfo}
                 onRunInSeparateWindow={() => showToast(t('toast.runProject'))}
                 style={{ flex: `0 0 ${workspaceWidth}%` }}

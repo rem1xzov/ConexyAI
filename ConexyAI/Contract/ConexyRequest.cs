@@ -21,7 +21,11 @@ public record ConexyRequest(
     // INCOGNITO_CHAT: добавлено 2026-09-20
     // When true the turn is never persisted: no ChatHistory/ConexyChatMessage row, no
     // long-term-memory read and no memory extraction. Subscription limits are still counted.
-    bool Incognito = false
+    bool Incognito = false,
+    // CONTINUE_GENERATION: добавлено 2026-09-21
+    // Already-generated answer text (the user pressed stop mid-reply). It is passed to the
+    // model as its own assistant turn so it continues from there instead of starting over.
+    string? AssistantPrefix = null
 );
 
 /// <summary>An uploaded file/image attachment from the user.</summary>
