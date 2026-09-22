@@ -55,6 +55,7 @@
     "goodEvening": "Добрый вечер, {{name}}",
     "goodNight": "Доброй ночи, {{name}}",
     "newChatTooltip": "Привет, я Conexy. Чем могу помочь?",
+    "scrollToBottom": "К последнему сообщению",
     "heroTitle": "Ваш ход, {{name}}",
     "heroSubtitle": "Что я могу создать для вас сегодня?",
     "defaultName": "командующий"

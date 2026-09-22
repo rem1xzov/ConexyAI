@@ -418,11 +418,75 @@ body {
 
 .feed {
   flex: 1;
+  /* Allows the feed to shrink inside its wrapper so the inner overflow actually scrolls. */
+  min-height: 0;
   overflow-y: auto;
   padding: 24px;
   display: flex;
   flex-direction: column;
   scrollbar-gutter: stable;
+}
+
+/* SCROLL_TO_BOTTOM: добавлено 2026-09-22 — обёртка вокруг ленты, задающая контекст
+   позиционирования для кнопки «вниз». Кнопка лежит ВНЕ скроллящегося .feed, поэтому не уезжает
+   вместе с контентом, и по центру той же колонки, что и поле ввода. */
+.chat-feed-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.scroll-to-bottom {
+  position: absolute;
+  left: 50%;
+  /* Отступ от низа ленты = над полем ввода: safe-area уже учтён в padding у .inputbar-wrap,
+     поэтому кнопка гарантированно выше системных элементов на мобильном. */
+  bottom: 12px;
+  z-index: 15;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface-solid);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transform: translateX(-50%) translateY(6px);
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.scroll-to-bottom--visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+
+.scroll-to-bottom:hover {
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+
+.scroll-to-bottom:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 768px) {
+  /* Touch target a bit bigger on phones; the safe-area inset is already handled by the
+     composer's own bottom padding, which sits below this button. */
+  .scroll-to-bottom {
+    width: 40px;
+    height: 40px;
+    bottom: 8px;
+  }
 }
 
 .feed--empty {
