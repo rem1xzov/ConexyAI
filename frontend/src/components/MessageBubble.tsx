@@ -22,6 +22,9 @@ interface MessageBubbleProps {
   // NEW_CHAT_LOGO: добавлено 2026-09-20
   /** True for the newest message in the feed — only it carries the "new chat" mark. */
   isLast?: boolean;
+  // BUGFIX_LAST_USER_ACTIONS: добавлено 2026-09-22
+  /** True only for the newest user message — the edit/resend row is hidden on older prompts. */
+  isLastUserMessage?: boolean;
   /** Starts a fresh conversation when the underlying reply mark is clicked. */
   onNewChat?: () => void;
   // CONTINUE_GENERATION: добавлено 2026-09-21
@@ -36,6 +39,7 @@ function MessageBubbleBase({
   onEditMessage,
   onCommandDecision,
   isLast = false,
+  isLastUserMessage = false,
   onNewChat,
   onContinue,
 }: MessageBubbleProps) {
@@ -136,7 +140,9 @@ function MessageBubbleBase({
             <div className="whitespace-pre-wrap text-base leading-relaxed break-words">{content}</div>
           )}
         </div>
-        {showActions && !editing && (
+        {/* BUGFIX_LAST_USER_ACTIONS: edit/resend only make sense for the current prompt, so the
+            row is rendered for the newest user message and nowhere else. */}
+        {showActions && !editing && isLastUserMessage && (
           <UserMessageActions
             content={content}
             onResend={onResend ? () => onResend(message.id) : undefined}

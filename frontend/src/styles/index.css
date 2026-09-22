@@ -3029,6 +3029,17 @@ body {
   padding: 0 10px;
   font-size: 12px;
   font-weight: 500;
+  /* BUGFIX_CONTINUE_CLICK: явный вид кнопки (рамка + подложка + accent), чтобы элемент
+     однозначно читался как кликабельный, а не как подпись. */
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.message-actions__btn--continue:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 /* ---------- IDE empty state hints ---------- */
@@ -3987,6 +3998,9 @@ body {
   position: relative;
   display: flex;
   align-items: center;
+  /* BUGFIX_TOOLTIP_HOVER: добавлено 2026-09-22 — без width: fit-content строка занимала всю
+     ширину колонки сообщений, и тултип всплывал при наведении на любую её точку. */
+  width: fit-content;
   margin: 10px 0 0 -4px;
 }
 
@@ -4035,8 +4049,9 @@ body {
   z-index: 5;
 }
 
-.msg-newchat:hover .msg-newchat__bubble,
-.msg-newchat:focus-within .msg-newchat__bubble {
+/* BUGFIX_TOOLTIP_HOVER: подсказка привязана к самой иконке, а не к строке целиком. */
+.msg-newchat__btn:hover + .msg-newchat__bubble,
+.msg-newchat__btn:focus-visible + .msg-newchat__bubble {
   opacity: 1;
   transform: translateY(0);
 }

@@ -964,17 +964,31 @@ export default function App() {
   }, [startCompletion]);
 
   // CONTINUE_GENERATION: добавлено 2026-09-21
+  // BUGFIX_CONTINUE_CLICK: добавлено 2026-09-22 — раньше здесь были «тихие» return'ы (нет
+  // токена, идёт стрим, пустой частичный ответ), из-за которых клик по «Продолжить» выглядел
+  // как полностью мёртвая кнопка. Теперь каждый отказ либо логичен, либо виден пользователю.
   // Resumes a stopped answer: the already-streamed text goes back to the model as its own
   // truncated turn, and the reply keeps growing inside the very same message.
   const handleContinue = useCallback((messageId: string) => {
     const live = liveRef.current;
-    if (!live.token || streamingRef.current) return;
-    const session = live.sessions.find((s) => s.messages.some((m) => m.id === messageId));
+    if (!live.token) return;
+
+    if (streamingRef.current) {
+      // Something is already running — say so instead of swallowing the click.
+      live.showToast(live.t('message.continueBusy'));
+      return;
+    }
+
+    // Prefer the session currently on screen, then fall back to whichever session owns it.
+    const session =
+      live.sessions.find(
+        (s) => s.id === live.activeId && s.messages.some((m) => m.id === messageId),
+      ) ?? live.sessions.find((s) => s.messages.some((m) => m.id === messageId));
     if (!session) return;
 
     const index = session.messages.findIndex((m) => m.id === messageId);
     const target = session.messages[index];
-    if (!target?.content.trim()) return;
+    if (!target || target.role !== 'assistant') return;
 
     // The prompt this answer belongs to.
     let prompt = '';
@@ -985,8 +999,14 @@ export default function App() {
         break;
       }
     }
-    if (!prompt.trim()) return;
+    if (!prompt.trim()) {
+      live.showToast(live.t('message.continueNoPrompt'));
+      return;
+    }
 
+    // An answer stopped before the first token has nothing to resume from; the call is still made
+    // with an empty prefix, so the model simply answers the prompt again inside the same message
+    // instead of the button doing nothing at all.
     void startCompletion(session.id, prompt, [], false, messageId);
   }, [startCompletion]);
 

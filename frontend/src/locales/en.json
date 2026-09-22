@@ -278,6 +278,8 @@
     "badResponse": "Bad response",
     "regenerate": "Regenerate",
     "continue": "Continue",
+    "continueBusy": "Wait for the current generation to finish, then press Continue again",
+    "continueNoPrompt": "Couldn't find the prompt this answer belongs to",
     "resend": "Resend",
     "edit": "Edit"
   },

@@ -82,6 +82,18 @@ export function ChatFeed({
     );
   }
 
+  // BUGFIX_LAST_USER_ACTIONS: добавлено 2026-09-22 — панель «изменить / отправить снова» имеет
+  // смысл только у актуального запроса. Ищем индекс последнего сообщения пользователя: он
+  // пересчитывается на каждый рендер, поэтому при новом сообщении панель у предыдущего гаснет
+  // сразу, без перезагрузки.
+  let lastUserIndex = -1;
+  for (let i = session.messages.length - 1; i >= 0; i--) {
+    if (session.messages[i].role === 'user') {
+      lastUserIndex = i;
+      break;
+    }
+  }
+
   return (
     <div className="feed" ref={scrollRef}>
       {session.messages.map((m, index) => (
@@ -93,6 +105,7 @@ export function ChatFeed({
           onEditMessage={onEditMessage}
           onCommandDecision={onCommandDecision}
           isLast={index === session.messages.length - 1}
+          isLastUserMessage={index === lastUserIndex}
           onNewChat={onNewChat}
           onContinue={onContinue}
         />

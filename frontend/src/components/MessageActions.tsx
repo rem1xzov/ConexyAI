@@ -35,12 +35,22 @@ export function MessageActions({ content, onRegenerate, onContinue }: MessageAct
     setFeedback((prev) => (prev === next ? null : next));
   }
 
+  // BUGFIX_CONTINUE_CLICK: добавлено 2026-09-22 — у всех кнопок явный type="button". Без него
+  // кнопка внутри формы по умолчанию считается submit и клик уходит в отправку формы, а не в
+  // обработчик — именно так «Продолжить» могла выглядеть полностью нерабочей.
   return (
     <div className="message-actions">
-      <button className="message-actions__btn" onClick={() => void copy()} title={t('message.copy')} aria-label={t('message.copy')}>
+      <button
+        type="button"
+        className="message-actions__btn"
+        onClick={() => void copy()}
+        title={t('message.copy')}
+        aria-label={t('message.copy')}
+      >
         {copied ? <CheckIcon size={15} /> : <CopyIcon size={15} />}
       </button>
       <button
+        type="button"
         className={`message-actions__btn ${feedback === 'like' ? 'message-actions__btn--active message-actions__btn--like' : ''}`}
         onClick={() => toggle('like')}
         title={t('message.goodResponse')}
@@ -49,6 +59,7 @@ export function MessageActions({ content, onRegenerate, onContinue }: MessageAct
         <ThumbsUpIcon size={15} />
       </button>
       <button
+        type="button"
         className={`message-actions__btn ${feedback === 'dislike' ? 'message-actions__btn--active message-actions__btn--dislike' : ''}`}
         onClick={() => toggle('dislike')}
         title={t('message.badResponse')}
@@ -58,6 +69,7 @@ export function MessageActions({ content, onRegenerate, onContinue }: MessageAct
       </button>
       {onContinue && (
         <button
+          type="button"
           className="message-actions__btn message-actions__btn--continue"
           onClick={onContinue}
           title={t('message.continue')}
@@ -68,7 +80,13 @@ export function MessageActions({ content, onRegenerate, onContinue }: MessageAct
         </button>
       )}
       {onRegenerate && (
-        <button className="message-actions__btn" onClick={onRegenerate} title={t('message.regenerate')} aria-label={t('message.regenerate')}>
+        <button
+          type="button"
+          className="message-actions__btn"
+          onClick={onRegenerate}
+          title={t('message.regenerate')}
+          aria-label={t('message.regenerate')}
+        >
           <RefreshIcon size={15} />
         </button>
       )}
