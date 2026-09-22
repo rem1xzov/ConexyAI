@@ -209,6 +209,8 @@ export default function App() {
   // const [isLiveOpen, setIsLiveOpen] = useState(false);
 
   const streamingRef = useRef<{ sessionId: string; messageId: string; taskId?: string } | null>(null);
+  // TASK_COMPLETION_DIAGNOSTICS: добавлено 2026-09-23 — номер тика сторожа для логов.
+  const watchdogTickRef = useRef(0);
 
   // SIGNALR_RESILIENCE: добавлено 2026-09-22
   /**
@@ -217,14 +219,26 @@ export default function App() {
    * запись задачи. Без этого UI продолжал крутить спиннер по уже завершившейся задаче.
    */
   const resyncTurn = useCallback(
-    async (sessionId: string, messageId: string, taskId: string): Promise<void> => {
+    async (sessionId: string, messageId: string, taskId: string, tick = 0): Promise<void> => {
       try {
         const res = await getTaskStatus(taskId);
         const status = (res.status ?? '').toLowerCase();
+        // Снимок до того, как мы могли обнулить streamingRef: нужен для лога, иначе он всегда false.
+        const wasStreaming = streamingRef.current?.messageId === messageId;
+
+        // TASK_COMPLETION_WATCHDOG: добавлено 2026-09-22
+        // TASK_COMPLETION_DIAGNOSTICS: расширено 2026-09-23 — при следующем воспроизведении
+        // «висит генерация» по этой строке видно ЦЕЛИКОМ решение сторожа: на каком тике он сработал,
+        // какой статус реально вернул сервер и что из этого следует. Раньше удачный опрос «running»
+        // вообще ничего не писал, и нельзя было отличить «сторож не вызвался» от «вызвался, но статус
+        // не тот».
+        console.info('[Watchdog] poll', { taskId, tick, status, resultChars: res.result?.length ?? 0 });
 
         if (status === 'running' || status === 'pending') {
           // Задача жива: гарантируем членство в её группах, чтобы поток событий возобновился.
-          void signalrService.ensureGroup(taskId).catch(() => undefined);
+          void signalrService.ensureGroup(taskId).catch((e: unknown) => {
+            console.warn('[Watchdog] ensureGroup failed', { taskId, error: String(e) });
+          });
           return;
         }
 
@@ -269,10 +283,17 @@ export default function App() {
           status === 'completed' ? 'Completed' : status === 'cancelled' ? 'Stopped' : 'Failed',
         );
 
-        console.info('[Resync] turn finalized from server state', { sessionId, taskId, status });
+        console.info('[Watchdog] finalizing turn from server state', {
+          sessionId,
+          taskId,
+          tick,
+          status,
+          wasStreaming,
+        });
       } catch (err) {
-        // Недоступная/чужая задача не фатальна — транскрипт остаётся как есть.
-        console.warn('[Resync] could not read task state', taskId, err);
+        // Недоступная/чужая задача не фатальна — транскрипт остаётся как есть. Но молчать нельзя:
+        // именно проглатывание ошибки опроса делало баг невидимым (502 от прокси = вечный спиннер).
+        console.warn('[Watchdog] could not read task state', { taskId, tick, error: String(err) });
       }
     },
     [t],
@@ -286,9 +307,20 @@ export default function App() {
   // задачи, пока идёт стрим, и сообщение закрывается автоматически.
   useEffect(() => {
     const id = window.setInterval(() => {
+      watchdogTickRef.current += 1;
       const ctx = streamingRef.current;
-      if (!ctx?.taskId) return;
-      void resyncTurn(ctx.sessionId, ctx.messageId, ctx.taskId);
+      if (!ctx) return;
+      if (!ctx.taskId) {
+        // Раньше это молча выключало сторожа: ход «генерируется», а опрашивать нечего. Такой
+        // случай обязан быть виден в консоли, иначе его невозможно отличить от «сторож не работает».
+        console.warn('[Watchdog] streaming turn has no taskId — completion cannot be verified', {
+          tick: watchdogTickRef.current,
+          sessionId: ctx.sessionId,
+          messageId: ctx.messageId,
+        });
+        return;
+      }
+      void resyncTurn(ctx.sessionId, ctx.messageId, ctx.taskId, watchdogTickRef.current);
     }, 5000);
     return () => window.clearInterval(id);
   }, [resyncTurn]);

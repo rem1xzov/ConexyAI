@@ -19,11 +19,27 @@ export type ConnectionStatus =
 const RECONNECT_MAX_DELAY_MS = 30_000;
 // После этого времени непрерывных неудач UI говорит пользователю обновить страницу.
 const RECONNECT_STALLED_AFTER_MS = 60_000;
+// SIGNALR_RELIABILITY: добавлено 2026-09-23
+// Сколько ждать, пока идущий процесс (пере)соединения сам завершится, прежде чем что-то трогать.
+const CONNECT_SETTLE_WAIT_MS = 5_000;
+// Бюджет на ПЕРВИЧНОЕ соединение. `withAutomaticReconnect` покрывает только уже установленное
+// соединение: если первый `start()` падает (например negotiate отвечает 502, пока бэкенд
+// пересоздаётся), клиент раньше молчал навсегда — до ручной перезагрузки страницы.
+const INITIAL_CONNECT_DEADLINE_MS = 60_000;
+
+function backoffDelay(attempt: number): number {
+  const capped = Math.min(attempt, 5);
+  const base = Math.min(1000 * 2 ** capped, RECONNECT_MAX_DELAY_MS);
+  return base + Math.floor(Math.random() * 500);
+}
 
 function nextRetryDelay(context: signalR.RetryContext): number {
-  const attempt = Math.min(context.previousRetryCount, 5);
-  const base = Math.min(1000 * 2 ** attempt, RECONNECT_MAX_DELAY_MS);
-  return base + Math.floor(Math.random() * 500);
+  return backoffDelay(context.previousRetryCount);
+}
+
+/** Human-readable message for the connection logs (thrown values are not always Error instances). */
+function describeError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function toStatus(state: signalR.HubConnectionState): ConnectionStatus {
@@ -54,6 +70,10 @@ class SignalrService {
   // SIGNALR_RESILIENCE: когда началась текущая серия неудачных переподключений (0 — не идёт).
   private reconnectStartedAt = 0;
   private stalledTimer: number | null = null;
+  // SIGNALR_RELIABILITY: сколько прямо сейчас идёт вызовов start() (startWithRetry). Пока этот
+  // счётчик не ноль, никто другой не имеет права вызывать start() — второй вызов на том же
+  // соединении бросает исключение, и вместо восстановления связи получался бы новый разрыв.
+  private startInFlight = 0;
   // Groups the client is supposed to belong to. Re-joined after every (re)connect so a
   // stale/restarted connection never silently drops the stream (the connection id changes
   // on reconnect, but SignalR groups are per-connection and must be re-added).
@@ -66,18 +86,31 @@ class SignalrService {
     this.token = token;
     this.callbacks = callbacks;
 
-    if (this.connection?.state === signalR.HubConnectionState.Connected) {
+    const current = this.connection?.state;
+    if (current === signalR.HubConnectionState.Connected) {
       await this.rejoinGroups();
       return;
+    }
+
+    // SIGNALR_RELIABILITY: добавлено 2026-09-23 — не трогать соединение, чьё (пере)соединение уже
+    // идёт. Раньше здесь безусловно вызывался disconnect() → stop(), и это выбрасывало здоровое
+    // переподключение на помойку (клиент потом заново проходил negotiate и получал 502).
+    if (
+      current === signalR.HubConnectionState.Connecting ||
+      current === signalR.HubConnectionState.Reconnecting
+    ) {
+      const settled = await this.waitForSettled(this.connection!, CONNECT_SETTLE_WAIT_MS);
+      if (settled === signalR.HubConnectionState.Connected) {
+        await this.rejoinGroups();
+        return;
+      }
     }
 
     await this.disconnect();
 
     this.connection = this.build();
     this.registerCallbacks();
-    await this.connection.start();
-    this.notifyState('connected');
-    await this.rejoinGroups();
+    await this.startWithRetry();
   }
 
   async joinTask(taskId: string): Promise<void> {
@@ -103,10 +136,18 @@ class SignalrService {
   }
 
   async disconnect(): Promise<void> {
-    if (this.connection) {
-      await this.connection.stop();
-      this.connection = null;
+    // SIGNALR_RELIABILITY: обнуляем ссылку ДО stop(), чтобы никто не увидел полузакрытое
+    // соединение как рабочее; stop() же может бросить (например если шёл start()).
+    const conn = this.connection;
+    this.connection = null;
+    if (conn) {
+      try {
+        await conn.stop();
+      } catch (err) {
+        console.warn('[signalr] stop() failed', describeError(err));
+      }
     }
+    this.clearReconnectState();
     this.notifyState('disconnected');
   }
 
@@ -324,10 +365,113 @@ class SignalrService {
       this.connection = this.build();
       this.registerCallbacks();
     }
-    if (this.connection.state !== signalR.HubConnectionState.Connected) {
-      await this.connection.start();
+    const conn = this.connection;
+
+    // SIGNALR_RELIABILITY: добавлено 2026-09-23.
+    // Раньше здесь стояло `if (state !== Connected) await start()`. Это ГЛАВНАЯ причина, по которой
+    // во время переподключения отваливалась вся работа через хаб — включая кнопку «Запустить»:
+    // start() на соединении в состоянии Reconnecting бросает
+    //   "Cannot start a HubConnection that is not in the 'Disconnected' state."
+    // Поэтому и RunProject, и StopGeneration, и JoinTask падали ровно тогда, когда связь как раз
+    // восстанавливалась. Теперь: дожидаемся, что идущий процесс сам разрешится, и только по-настоящему
+    // разорванное соединение поднимаем вручную.
+    const settled = await this.waitForSettled(conn, CONNECT_SETTLE_WAIT_MS);
+    if (this.connection !== conn) return; // connect()/disconnect() заменили соединение, пока мы ждали
+
+    if (settled === signalR.HubConnectionState.Connected) return;
+
+    if (settled === signalR.HubConnectionState.Disconnected) {
+      // Сюда попадаем, если соединение вообще не поднималось (первый start() ещё не вызван или
+      // провалился). Ретрай-цикл живёт в connect(); здесь одна попытка, а ошибка должна дойти до
+      // вызывающего, чтобы кнопка показала понятное сообщение, а не молчала.
+      await conn.start();
+      await this.rejoinGroups();
     }
-    this.notifyState(toStatus(this.connection.state));
+
+    if (conn.state !== signalR.HubConnectionState.Connected) {
+      this.notifyState(toStatus(conn.state));
+      throw new Error('Подключение к серверу восстанавливается — повторите через несколько секунд.');
+    }
+
+    this.notifyState('connected');
+  }
+
+  /**
+   * Waits until the connection leaves the transient Connecting/Reconnecting/Disconnecting states
+   * (and until no start() of ours is in flight) and reports the state it settled in. Bounded, so a
+   * wedged transport can never block a click handler forever.
+   */
+  private async waitForSettled(
+    conn: signalR.HubConnection,
+    timeoutMs: number,
+  ): Promise<signalR.HubConnectionState> {
+    const transient = [
+      signalR.HubConnectionState.Connecting,
+      signalR.HubConnectionState.Reconnecting,
+      signalR.HubConnectionState.Disconnecting,
+    ];
+    const deadline = Date.now() + timeoutMs;
+
+    for (;;) {
+      if (this.connection !== conn) return conn.state; // replaced while we waited
+
+      const state = conn.state;
+      // A retry loop of ours owns start() right now: between attempts the state reads as
+      // Disconnected, and acting on that would race the next start().
+      const ownedByStartLoop = this.startInFlight > 0 && state === signalR.HubConnectionState.Disconnected;
+      if (!transient.includes(state) && !ownedByStartLoop) return state;
+
+      if (Date.now() >= deadline) return conn.state;
+      await new Promise((resolve) => window.setTimeout(resolve, 200));
+    }
+  }
+
+  /**
+   * The FIRST connection needs its own retry loop: `withAutomaticReconnect` only covers a connection
+   * that was established once, so a failing negotiate (502 while the backend is being redeployed)
+   * used to leave the app permanently offline until a manual reload.
+   *
+   * Never rejects — callers fire this off and rely on the connection-status banner for feedback.
+   */
+  private async startWithRetry(): Promise<void> {
+    const conn = this.connection;
+    if (!conn) return;
+
+    this.notifyState('connecting');
+    const deadline = Date.now() + INITIAL_CONNECT_DEADLINE_MS;
+    let attempt = 0;
+
+    this.startInFlight += 1;
+    try {
+      for (;;) {
+        if (this.connection !== conn) return; // replaced by connect()/disconnect() meanwhile
+
+        try {
+          await conn.start();
+          this.clearReconnectState();
+          this.notifyState('connected');
+          console.info('[signalr] connected', { attempt, connectionId: conn.connectionId });
+          await this.rejoinGroups();
+          return;
+        } catch (err) {
+          attempt += 1;
+          console.warn('[signalr] initial connect failed', { attempt, error: describeError(err) });
+
+          if (Date.now() >= deadline) {
+            console.error('[signalr] giving up on the initial connect after', attempt, 'attempt(s)');
+            this.notifyState('reconnect-failed');
+            return;
+          }
+
+          if (this.reconnectStartedAt === 0) this.reconnectStartedAt = Date.now();
+          this.notifyState('reconnecting');
+          this.scheduleStalledCheck();
+          await new Promise((resolve) => window.setTimeout(resolve, backoffDelay(attempt)));
+        }
+      }
+    } finally {
+      this.startInFlight -= 1;
+    }
   }
 }
 

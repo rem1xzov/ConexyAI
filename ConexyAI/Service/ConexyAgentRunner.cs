@@ -223,6 +223,18 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var failedBuildAttempts = 0;
         var changedFiles = new HashSet<string>(StringComparer.Ordinal);
         var executedCommands = new List<string>();
+        // AGENT_TERMINATION: добавлено 2026-09-23 — у обоих «не дай агенту закончить» гейтов теперь
+        // есть бюджет. Раньше оба были НЕОГРАНИЧЕННЫМИ, и это и был баг «ответ написан, а генерация
+        // не завершается»:
+        //   * флаг lastCommandFailed «липкий» — он выставляется только при terminal_exec и больше
+        //     нигде не сбрасывается, поэтому падение ЛЮБОЙ команды (в т.ч. curl/find, к сборке не
+        //     относящейся) заставляло цикл требовать ещё и ещё ход каждый раз, когда модель уже
+        //     пыталась завершить ответ без вызова инструментов;
+        //   * гейт аудитора (`changedFiles.Count > 0`) тоже липкий — он срабатывал на КАЖДОМ
+        //     последующем финальном ходе, а каждый вызов критика это отдельный большой запрос к модели.
+        // С MaxIterations = 500 такой цикл выглядел как «навсегда генерирует», хотя ответ уже был готов.
+        var buildGateNudges = 0;
+        var auditReworks = 0;
 
         for (var step = 1; step <= _maxIterations; step++)
         {
@@ -252,22 +264,48 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             if (responseMessage.ToolCalls == null || responseMessage.ToolCalls.Count == 0)
             {
-                // The worker may not finalize while a build/test is still red.
-                if (lastCommandFailed)
+                // The worker may not finalize while a build/test is still red — but only for a
+                // bounded number of nudges. After that the model's explicit final answer wins,
+                // because nothing guarantees another round will change its mind, and an unbounded
+                // gate is indistinguishable from a hang for the user.
+                if (lastCommandFailed && buildGateNudges < MaxSelfRepairAttempts)
                 {
+                    buildGateNudges++;
+                    _logger.LogInformation(
+                        "Agent build gate: last command failed, forcing rework {Attempt}/{Max} task={TaskId}",
+                        buildGateNudges, MaxSelfRepairAttempts, taskId);
                     messages.Add(new ChatMessage("system", CorrectionPrompt));
                     continue;
+                }
+
+                if (lastCommandFailed)
+                {
+                    _logger.LogWarning(
+                        "Agent build gate: still red after {Max} nudges; honouring the model's final answer. task={TaskId}",
+                        MaxSelfRepairAttempts, taskId);
                 }
 
                 var finalText = ExtractTextContent(responseMessage);
 
                 // Maker-Checker only applies to real code changes. A pure dialog reply
                 // must be returned verbatim instead of being swallowed by the auditor.
-                if (changedFiles.Count > 0)
+                if (changedFiles.Count > 0 && auditReworks < MaxSelfRepairAttempts)
                 {
+                    // AGENT_TERMINATION: аудитор — это отдельный большой запрос к модели, который
+                    // идёт ПОСЛЕ того, как ответ уже улетел в чат токенами. Без этой строки пауза
+                    // выглядела как «ответ закончился, а генерация всё ещё идёт» — то есть ровно
+                    // как зависание. Стадия именно `thinking`, чтобы фронт открыл видимый шаг в
+                    // ленте (другие стадии лента только закрывают и ничего не показывают).
+                    await SendAgentStatusAsync(taskId, "thinking", "Проверяю изменения (аудитор)…", ct: ct);
+                    await group.SendAsync("OnLog", "[Auditor] Reviewing the workspace changes…", ct);
+
                     var audit = await ReviewWorkspaceAsync(chatId, job.Prompt, ct);
                     if (!audit.Approved)
                     {
+                        auditReworks++;
+                        _logger.LogInformation(
+                            "Agent auditor: REJECT {Attempt}/{Max} with {Issues} issue(s); sending back for rework. task={TaskId}",
+                            auditReworks, MaxSelfRepairAttempts, audit.Issues.Count, taskId);
                         await group.SendAsync("OnLog", $"[Auditor] REJECT — {audit.Issues.Count} issue(s) found. Sending back for rework.", ct);
                         messages.Add(new ChatMessage("system",
                             "[Auditor REJECT] The reviewer found the following problems. Fix every item, then re-run verification:\n- " +
@@ -276,6 +314,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     }
 
                     await group.SendAsync("OnLog", "[Auditor] APPROVED — applying changes.", ct);
+                }
+                else if (changedFiles.Count > 0)
+                {
+                    _logger.LogWarning(
+                        "Agent auditor: rework budget exhausted; finalizing without re-review. task={TaskId}",
+                        taskId);
                 }
 
                 // STREAM_TOKENS: добавлено 2026-09-20 — the answer already reached the client
@@ -291,6 +335,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
 
                 await group.SendAsync("OnLog", "[Agent Completed] Solution finalized.", ct);
+
+                // AGENT_TERMINATION: без этой строки нельзя было отличить «модель закончила» от
+                // «гейт отправил на доработку» — теперь виден и шаг, и число доработок.
+                _logger.LogInformation(
+                    "Agent loop finished at step {Step}/{Max} task={TaskId} nudges={Nudges} auditReworks={Reworks} changedFiles={Files} textChars={Chars}",
+                    step, _maxIterations, taskId, buildGateNudges, auditReworks, changedFiles.Count, finalText.Length);
 
                 // No file modifications were made: the model's text is the whole answer.
                 if (changedFiles.Count == 0)
@@ -359,6 +409,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 messages.Add(new ChatMessage("system", CorrectionPrompt));
             }
         }
+
+        _logger.LogWarning(
+            "Agent loop hit the iteration cap at step {Max} task={TaskId} nudges={Nudges} auditReworks={Reworks} changedFiles={Files}",
+            _maxIterations, taskId, buildGateNudges, auditReworks, changedFiles.Count);
 
         if (lastCommandFailed)
         {
