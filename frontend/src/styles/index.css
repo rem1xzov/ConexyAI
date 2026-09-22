@@ -4191,7 +4191,18 @@ body {
 .msg-generating {
   display: flex;
   align-items: center;
+  gap: 10px;
   margin-top: 12px;
+}
+
+/* THINKING_TIMER: добавлено 2026-09-22 — приглушённая подпись «Думает 12с» рядом с лого.
+   Tabular-nums держит ширину стабильной, чтобы текст не дёргался каждую секунду. */
+.thinking-timer {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* ---------- LOGO_SWEEP: добавлено 2026-09-20 ---------- */

@@ -6,6 +6,7 @@ import { assistantPhase } from '../utils/assistantPhase';
 import { ConexyLogo } from './ConexyLogo';
 import { VisionGallery } from './VisionGallery';
 import { AttachmentGrid } from './AttachmentGrid';
+import { ThinkingTimer } from './ThinkingTimer';
 import { ToolActionFeed } from './ToolActionFeed';
 import { TodoPanel } from './TodoPanel';
 import { Markdown } from './Markdown';
@@ -189,6 +190,9 @@ function MessageBubbleBase({
       {showGeneratingLogo && (
         <div className="msg-generating">
           <ConexyLogo size={24} active />
+          {/* THINKING_TIMER: anchored to the message start, so it keeps counting across tool
+              steps instead of restarting on every re-render. */}
+          <ThinkingTimer startedAt={message.createdAt} />
         </div>
       )}
 

@@ -10,6 +10,22 @@ namespace ConexyAI.Service;
 
 // COMMAND_CONFIRM: расширено 2026-09-20 — подтверждение теперь требуется для любой bash-команды,
 // поэтому сервис больше не описывает только "опасные" команды.
+
+// CONFIRM_GATE: добавлено 2026-09-22
+/// <summary>
+/// Thrown when the confirmation gate itself could not be established (the pending action could
+/// not be persisted or announced). The command must NOT run in that case: without a working gate
+/// there is nothing to approve, and silently executing it is exactly the bug where the card was
+/// rendered but the agent kept going.
+/// </summary>
+public sealed class CommandConfirmationException : Exception
+{
+    public CommandConfirmationException(string message, Exception? inner = null)
+        : base(message, inner)
+    {
+    }
+}
+
 /// <summary>
 /// Coordinates the command-confirmation flow across scopes. The agent loop (scoped background
 /// worker) registers a pending action and awaits a <see cref="TaskCompletionSource{TResult}"/>;
@@ -22,7 +38,9 @@ public interface IPendingActionService
     /// <summary>
     /// Persists a pending action, broadcasts <c>OnPendingActionCreated</c> to the task
     /// group, and blocks until the user confirms. Returns <c>true</c> (approved) or
-    /// <c>false</c> (rejected); throws on cancellation/timeout.
+    /// <c>false</c> (rejected); throws <see cref="CommandConfirmationException"/> when the gate
+    /// itself could not be established (the caller must then NOT execute the command), and
+    /// <see cref="OperationCanceledException"/> on cancellation/timeout.
     /// </summary>
     Task<bool> WaitForDecisionAsync(
         Guid actionId,
@@ -93,16 +111,33 @@ public class PendingActionService : IPendingActionService
         using var scope = _scopeFactory.CreateScope();
         var repository = scope.ServiceProvider.GetRequiredService<IPendingActionRepository>();
 
-        await repository.CreateAsync(new PendingActionEntity
+        // CONFIRM_GATE: добавлено 2026-09-22 — если состояние подтверждения не удаётся сохранить,
+        // бросаем CommandConfirmationException, а не пропускаем команду без подтверждения.
+        // Раньше это исключение съедалось в DispatchToolAsync, агент продолжал работу, а карточка
+        // навсегда оставалась «ожидающей» — ровно тот баг, когда кнопки ничего не решают.
+        try
         {
-            Id = actionId,
-            ChatId = chatId,
-            TaskId = taskId,
-            UserId = userId,
-            Command = command,
-            WorkingDirectory = workingDirectory,
-            Status = PendingActionStatus.Pending
-        }, ct);
+            await repository.CreateAsync(new PendingActionEntity
+            {
+                Id = actionId,
+                ChatId = chatId,
+                TaskId = taskId,
+                UserId = userId,
+                Command = command,
+                WorkingDirectory = workingDirectory,
+                Status = PendingActionStatus.Pending
+            }, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to persist pending action {ActionId} for task {TaskId}.", actionId, taskId);
+            throw new CommandConfirmationException(
+                $"Не удалось создать запрос подтверждения команды: {ex.Message}", ex);
+        }
 
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!_waiters.TryAdd(actionId, new Waiter(tcs, taskId)))
@@ -115,17 +150,29 @@ public class PendingActionService : IPendingActionService
         timeoutCts.CancelAfter(ConfirmationTimeout);
         var waitToken = timeoutCts.Token;
 
-        await _hubContext.Clients.Group($"task_{taskId}").SendAsync("OnPendingActionCreated", new PendingActionEvent
+        try
         {
-            ActionId = actionId,
-            ChatId = chatId,
-            TaskId = taskId,
-            Command = command,
-            WorkingDirectory = workingDirectory,
-            Status = "Pending",
-            CreatedAt = DateTime.UtcNow,
-            IsDangerous = isDangerous
-        }, waitToken);
+            await _hubContext.Clients.Group($"task_{taskId}").SendAsync("OnPendingActionCreated", new PendingActionEvent
+            {
+                ActionId = actionId,
+                ChatId = chatId,
+                TaskId = taskId,
+                Command = command,
+                WorkingDirectory = workingDirectory,
+                Status = "Pending",
+                CreatedAt = DateTime.UtcNow,
+                IsDangerous = isDangerous
+            }, waitToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The card never reached the user, so there is nothing they could approve.
+            _waiters.TryRemove(actionId, out _);
+            await MarkResolvedQuietlyAsync(actionId, PendingActionStatus.Cancelled);
+            _logger.LogError(ex, "Failed to broadcast pending action {ActionId}; command will not run.", actionId);
+            throw new CommandConfirmationException(
+                $"Не удалось показать запрос подтверждения команды: {ex.Message}", ex);
+        }
 
         using var registration = waitToken.Register(() => tcs.TrySetCanceled(waitToken));
 
@@ -135,12 +182,26 @@ public class PendingActionService : IPendingActionService
         }
         catch (OperationCanceledException)
         {
-            await MarkResolvedAsync(actionId, PendingActionStatus.Cancelled, ct);
+            await MarkResolvedQuietlyAsync(actionId, PendingActionStatus.Cancelled);
             throw;
         }
         finally
         {
             _waiters.TryRemove(actionId, out _);
+        }
+    }
+
+    // CONFIRM_GATE: добавлено 2026-09-22 — лучшая попытка отметить действие разрешённым;
+    // сбой записи не должен маскировать исходную ошибку или отмену.
+    private async Task MarkResolvedQuietlyAsync(Guid actionId, PendingActionStatus status)
+    {
+        try
+        {
+            await MarkResolvedAsync(actionId, status, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to mark pending action {ActionId} as {Status}.", actionId, status);
         }
     }
 

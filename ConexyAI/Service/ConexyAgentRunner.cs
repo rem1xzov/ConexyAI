@@ -435,19 +435,22 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
                 case "terminal_exec":
                 {
+                    // CONFIRM_GATE: добавлено 2026-09-22 — legacy-инструмент больше не является
+                    // обходом подтверждения. Схема инструментов его не предлагает, но если модель
+                    // всё же его вызовет, команда идёт через тот же гейт, что и `bash`.
                     var command = GetString(root, "command");
-                    var workingDirectory = Optional(root, "working_directory");
                     if (string.IsNullOrEmpty(command))
                         return new ConexyToolResult(toolCall.Id, "terminal_exec requires 'command'.", true);
 
-                    await SendAgentStatusAsync(taskId, "executing", $"Выполняю команду в терминале: {command}...", ct: ct);
+                    var legacyRequest = new BashToolRequest
+                    {
+                        Command = command,
+                        TimeoutSeconds = null,
+                        IsDangerous = _dangerousCommandClassifier.IsDangerous(command)
+                    };
 
-                    var res = await _workspaceService.ExecuteCommandAsync(chatId, command, workingDirectory, ct);
-                    var output = string.IsNullOrWhiteSpace(res.StdErr)
-                        ? res.StdOut
-                        : $"Stdout: {res.StdOut}\nStderr: {res.StdErr}";
-                    await LogAsync(taskId, $"[Command Executed] {command} (Exit Code: {res.ExitCode})", ct);
-                    return new ConexyToolResult(toolCall.Id, output, !res.Success);
+                    return await RunBashWithConfirmationAsync(
+                        taskId, chatId, toolCall, legacyRequest, legacyRequest.IsDangerous, ct);
                 }
 
                 case "github_action":
@@ -547,6 +550,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     return new ConexyToolResult(toolCall.Id, $"Unknown tool '{toolCall.Function.Name}'.", true);
             }
         }
+        catch (CommandConfirmationException)
+        {
+            // CONFIRM_GATE: добавлено 2026-09-22 — сломанный гейт подтверждения обязан остановить
+            // прогон. Раньше это исключение попадало в общий catch ниже, агент получал "Execution
+            // error" и спокойно шёл дальше, а карточка подтверждения оставалась висеть вечно.
+            throw;
+        }
         catch (Exception ex)
         {
             return new ConexyToolResult(toolCall.Id, $"Execution error: {ex.Message}", true);
@@ -560,6 +570,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
     /// then either executes normally or returns a <c>USER_REJECTED</c> result so the model
     /// can propose an alternative without stopping the whole task. When the task is
     /// auto-approved ("allow all for this session") the wait is skipped entirely.
+    ///
+    /// CONFIRM_GATE: добавлено 2026-09-22 — гейт теперь fail-closed. Карточка всегда получает
+    /// терминальное событие (completed/failed/rejected), а при невозможности самого запроса
+    /// подтверждения команда НЕ выполняется и прогон останавливается — вместо тихого продолжения.
     /// </summary>
     private async Task<ConexyToolResult> RunBashWithConfirmationAsync(
         Guid taskId,
@@ -587,17 +601,40 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var actionId = Guid.NewGuid();
         var workingDirectory = _workspaceService.GetTaskWorkspacePath(chatId);
 
-        await _hubContext.Clients.Group($"task_{taskId}").SendAsync("ToolAction", new ToolActionEvent
+        // The card is driven purely by ToolAction events, so every exit path below must emit a
+        // terminal status for this action id — otherwise the buttons stay on screen forever.
+        async Task EmitAsync(string status, string summary, string? output = null, CancellationToken token = default)
         {
-            ToolName = "bash",
-            Command = request.Command,
-            Path = "",
-            Status = "pending_confirmation",
-            Summary = $"Ожидает подтверждения: {request.Command}",
-            WorkingDirectory = workingDirectory,
-            PendingActionId = actionId,
-            IsDangerous = isDangerous
-        }, ct);
+            await _hubContext.Clients.Group($"task_{taskId}").SendAsync("ToolAction", new ToolActionEvent
+            {
+                ToolName = "bash",
+                Command = request.Command,
+                Path = "",
+                Status = status,
+                Summary = summary,
+                WorkingDirectory = workingDirectory,
+                Output = output,
+                PendingActionId = actionId,
+                IsDangerous = isDangerous
+            }, token);
+        }
+
+        // Best-effort variant: used on failure paths, where the original error matters more than
+        // whether the UI managed to clear the card.
+        async Task TryEmitAsync(string status, string summary, string? output = null)
+        {
+            try
+            {
+                await EmitAsync(status, summary, output, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                await LogAsync(taskId, $"[Confirm] Не удалось обновить карточку команды: {ex.Message}", ct);
+            }
+        }
+
+        await SendAgentStatusAsync(taskId, "confirming", $"Ожидает подтверждения: {request.Command}", ct: ct);
+        await EmitAsync("pending_confirmation", $"Ожидает подтверждения: {request.Command}", token: ct);
 
         bool approved;
         try
@@ -605,28 +642,29 @@ public class ConexyAgentRunner : IConexyAgentRunner
             approved = await _pendingActionService.WaitForDecisionAsync(
                 actionId, _job.UserId, chatId, taskId, request.Command, workingDirectory, isDangerous, ct);
         }
+        catch (CommandConfirmationException)
+        {
+            // The gate itself failed: nothing was approved and nothing may run. Clear the card
+            // and stop the run with a visible error rather than pretending the tool failed.
+            await TryEmitAsync("failed", "Не удалось запросить подтверждение — команда не выполнена.");
+            throw;
+        }
         catch (OperationCanceledException)
         {
-            return new ConexyToolResult(toolCall.Id, "CANCELLED: подтверждение команды отменено (таймаут/остановка).", true);
+            await TryEmitAsync("rejected", "Подтверждение отменено (таймаут или остановка).");
+            return new ConexyToolResult(
+                toolCall.Id,
+                $"CANCELLED: подтверждение команды '{request.Command}' не получено (таймаут или остановка). Команда НЕ выполнена.",
+                true);
         }
 
         if (!approved)
         {
-            await _hubContext.Clients.Group($"task_{taskId}").SendAsync("ToolAction", new ToolActionEvent
-            {
-                ToolName = "bash",
-                Command = request.Command,
-                Path = "",
-                Status = "rejected",
-                Summary = "Отклонено пользователем",
-                WorkingDirectory = workingDirectory,
-                PendingActionId = actionId,
-                IsDangerous = isDangerous
-            }, ct);
+            await EmitAsync("rejected", "Отклонено пользователем", token: ct);
 
             return new ConexyToolResult(
                 toolCall.Id,
-                $"USER_REJECTED: команда '{request.Command}' отклонена пользователем. Предложи альтернативный способ или продолжи без неё.",
+                $"USER_REJECTED: команда '{request.Command}' отклонена пользователем и НЕ выполнена. Предложи альтернативный способ или продолжи без неё.",
                 false);
         }
 

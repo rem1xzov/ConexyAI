@@ -169,6 +169,7 @@
   "toast": {
     "runProject": "Project is launching in a separate console window",
     "confirmFailed": "Failed to submit the command decision",
+    "confirmExpired": "The decision was not applied: this command is no longer waiting for confirmation",
     "runError": "Launch error: {{message}}"
   },
   "agent": {
@@ -272,6 +273,7 @@
   "message": {
     "you": "You",
     "thinking": "Thinking…",
+    "thinkingFor": "Thinking {{duration}}",
     "showThinking": "Thought process",
     "copy": "Copy",
     "goodResponse": "Good response",

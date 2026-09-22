@@ -74,9 +74,21 @@ interface ToolActionFeedProps {
   onCommandDecision?: CommandDecisionHandler;
   /** Live agent status, shown as a running pill when no tool event covers it. */
   statusPill?: ToolStatusPill | null;
+  // PANEL_NO_CARDS: добавлено 2026-09-22
+  /**
+   * When false, commands awaiting confirmation are rendered as plain status pills instead of
+   * decision cards. The agent workspace panel uses this so the cards (and their Allow/Deny
+   * buttons) exist in exactly one place — the chat feed.
+   */
+  showConfirmCards?: boolean;
 }
 
-export function ToolActionFeed({ actions, onCommandDecision, statusPill }: ToolActionFeedProps) {
+export function ToolActionFeed({
+  actions,
+  onCommandDecision,
+  statusPill,
+  showConfirmCards = true,
+}: ToolActionFeedProps) {
   const { t } = useTranslation();
   const [openPills, setOpenPills] = useState<Record<string, boolean>>({});
 
@@ -87,7 +99,7 @@ export function ToolActionFeed({ actions, onCommandDecision, statusPill }: ToolA
   const openByKey = new Map<string, ToolPill>();
 
   for (const a of tail) {
-    if (isConfirmableCommand(a)) {
+    if (showConfirmCards && isConfirmableCommand(a)) {
       const key = a.pendingActionId!;
       const list = confirmCards.get(key) ?? [];
       list.push(a);
@@ -95,8 +107,10 @@ export function ToolActionFeed({ actions, onCommandDecision, statusPill }: ToolA
       continue;
     }
 
+    // PANEL_NO_CARDS: without cards, a pending_confirmation event has no "started" twin to pair
+    // with, so it starts its own pill and later completion/rejection events settle it.
     const key = pillKey(a);
-    if (a.status === 'started') {
+    if (a.status === 'started' || (!showConfirmCards && a.status === 'pending_confirmation')) {
       const pill: ToolPill = {
         key: `${key}#${pills.length}`,
         toolName: a.toolName,

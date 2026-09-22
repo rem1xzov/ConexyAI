@@ -1036,6 +1036,9 @@ export default function App() {
   }
 
   // COMMAND_CONFIRM: добавлено 2026-09-20
+  // CONFIRM_GATE: добавлено 2026-09-22 — сервер теперь отвечает `false`, если ожидающего решения
+  // уже нет (гейт сломался или задача завершилась). Это больше не тихий no-op: пользователь видит,
+  // что решение не применилось, и не остаётся в уверенности, что команда была одобрена.
   // BUGFIX_PERF: stable identity so MessageBubble's memo holds.
   const handleCommandDecision = useCallback(async (actionId: string, approved: boolean, allowAll: boolean) => {
     const live = liveRef.current;
@@ -1043,9 +1046,14 @@ export default function App() {
     setPendingAction(null);
     if (approved && allowAll && taskId) setAllowAllTaskId(taskId);
     try {
-      await signalrService.confirmAction(actionId, approved, allowAll);
+      const delivered = await signalrService.confirmAction(actionId, approved, allowAll);
+      if (!delivered) {
+        if (approved && allowAll) setAllowAllTaskId(null);
+        live.showToast(live.t('toast.confirmExpired'));
+      }
     } catch (err) {
       console.error('[CommandConfirm] ConfirmAction failed:', err);
+      if (approved && allowAll) setAllowAllTaskId(null);
       live.showToast(live.t('toast.confirmFailed'));
     }
   }, []);
@@ -1315,7 +1323,6 @@ export default function App() {
                 agentFileChange={agentFileChange}
                 toolActions={latestToolActions}
                 todos={latestTodos}
-                onCommandDecision={handleCommandDecision}
                 onCursorChange={setCursorInfo}
                 onRunInSeparateWindow={() => showToast(t('toast.runProject'))}
                 style={{ flex: `0 0 ${workspaceWidth}%` }}

@@ -11,7 +11,7 @@ import {
   uploadWorkspaceZip,
 } from '../api/conexyApi';
 import type { WorkspaceFileEntry, WorkspaceListing } from '../types/api';
-import type { CommandDecisionHandler, TodoItem, ToolActionEvent } from '../types/signalr';
+import type { TodoItem, ToolActionEvent } from '../types/signalr';
 import { signalrService } from '../services/signalrService';
 import { changedLineNumbers } from '../utils/diff';
 import { CodeEditor } from './CodeEditor';
@@ -45,8 +45,6 @@ interface WorkspacePanelProps {
   style?: CSSProperties;
   onCursorChange?: (pos: { line: number; column: number; language: string }) => void;
   onRunInSeparateWindow?: () => void;
-  // COMMAND_CONFIRM: добавлено 2026-09-20
-  onCommandDecision?: CommandDecisionHandler;
 }
 
 interface OpenTab {
@@ -177,7 +175,6 @@ export function WorkspacePanel({
   style,
   onCursorChange,
   onRunInSeparateWindow,
-  onCommandDecision,
 }: WorkspacePanelProps) {
   const { t } = useTranslation();
   const [listing, setListing] = useState<WorkspaceListing | null>(null);
@@ -748,7 +745,10 @@ export function WorkspacePanel({
         <div className="workspace__bottom-body">
           {bottomTab === 'status' &&
             (toolActions.length > 0 ? (
-              <ToolActionFeed actions={toolActions} onCommandDecision={onCommandDecision} />
+              // PANEL_NO_CARDS: добавлено 2026-09-22 — панель показывает только статус шагов.
+              // Карточки подтверждения с кнопками живут исключительно в ленте чата, иначе
+              // одна и та же команда дублировалась в двух местах.
+              <ToolActionFeed actions={toolActions} showConfirmCards={false} />
             ) : (
               <div className="workspace__empty workspace__empty--panel">
                 <div className="workspace__empty-text">{t('workspace.statusEmpty')}</div>
