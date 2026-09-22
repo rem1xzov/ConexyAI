@@ -157,11 +157,30 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private const string CorrectionPrompt =
         "[Build/Execution Failed]: Analyze the compiler/runtime errors above, inspect the broken files, and apply a patch to fix them. Do not report completion until the build/tests pass.";
 
+    // AGENT_TOOL_FAILURES: добавлено 2026-09-23
+    // Бюджет ПОДРЯД идущих ошибок инструментов — для ЛЮБОГО инструмента, не только bash-команд.
+    // Раньше бюджет был только у bash (`lastCommandFailed` / `failedBuildAttempts`), поэтому инструмент,
+    // который в этом окружении не может сработать в принципе (take_screenshot без Chromium), не имел
+    // вообще никакой верхней границы — ни на число попыток, ни на завершение прогона.
+    // Именно серия, а не сумма: любой успешный вызов сбрасывает счётчик, поэтому обычная отладка
+    // (упал тест → поправил → прошёл) его не наберёт, а петля на недоступном инструменте — наберёт.
+    private const int ToolFailureBudget = 6;
+
+    // Сколько раз ОДИН инструмент должен упасть, чтобы мы сказали модели «он тут не работает».
+    private const int ToolRetryWarningLimit = 3;
+
     // CONTINUE_GENERATION: the resume instruction moved into ConversationService, which now owns
     // the whole "prefix + continue" composition for every path (it used to be duplicated here and
     // in the chat worker).
 
-    private static readonly List<object> AvailableTools = BuildToolSchemas();
+    private static readonly List<object> AvailableTools = BuildToolSchemas(includeScreenshot: true);
+
+    // Тот же список без take_screenshot: используется, когда Chromium в окружении недоступен.
+    private static readonly List<object> ToolsWithoutScreenshot = BuildToolSchemas(includeScreenshot: false);
+
+    // Набор инструментов текущего прогона. Член, а не константа, потому что зависит от окружения
+    // (есть ли Chromium) — см. ResolveToolsAsync.
+    private List<object> _tools = AvailableTools;
 
     public ConexyAgentRunner(
         IConexyWorkspaceService workspaceService,
@@ -236,8 +255,25 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var buildGateNudges = 0;
         var auditReworks = 0;
 
+        // AGENT_TOOL_FAILURES: добавлено 2026-09-23 — бюджет ошибок ЛЮБОГО инструмента (раньше он был
+        // только у bash-команд), чтобы инструмент, который в этом окружении не может сработать в
+        // принципе (take_screenshot без Chromium), не мог бесконечно продолжать прогон.
+        // Считаем именно СЕРИЮ неудач подряд, а не общее число: счётчик сбрасывается на любом успешном
+        // вызове, поэтому обычная работа (тест упал → поправил → тест прошёл) его никогда не наберёт,
+        // а чистая петля на недоступном инструменте — наберёт за считанные шаги.
+        var consecutiveToolFailures = 0;
+        var totalToolFailures = 0;
+        var toolFailureCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var nudgedTools = new HashSet<string>(StringComparer.Ordinal);
+        var toolBudgetExhausted = false;
+        var completedSteps = 0;
+
+        // Инструменты этого прогона: take_screenshot убирается, если Chromium в окружении нет.
+        _tools = await ResolveToolsAsync(ct);
+
         for (var step = 1; step <= _maxIterations; step++)
         {
+            completedSteps = step;
             ct.ThrowIfCancellationRequested();
 
             var thinkingLabel = step == 1
@@ -353,6 +389,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
             }
 
             var failedThisIteration = false;
+            // AGENT_TOOL_FAILURES: инструменты, упавшие именно в этом ходе (для одного сообщения
+            // с подсказкой после всего батча tool-результатов).
+            var failedToolsThisIteration = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var toolCall in responseMessage.ToolCalls)
             {
                 RecordToolEffect(toolCall, changedFiles, executedCommands);
@@ -360,13 +400,32 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 await group.SendAsync("OnLog", $"[Tool Call] Executing {toolCall.Function.Name}...", ct);
 
                 ConexyToolResult result;
-                if (toolCall.Function.Name == "take_screenshot")
+                // AGENT_TOOL_FAILURES: ЕДИНАЯ точка вызова инструмента. Раньше take_screenshot шёл в
+                // обход DispatchToolAsync (и его catch), поэтому исключение из HandleScreenshotAsync
+                // улетало из RunLoopAsync в воркер: задача падала в Failed на полуслове, вместо того
+                // чтобы отдать модели обычную ошибку инструмента. Теперь через этот try/catch идёт
+                // ЛЮБОЙ инструмент, и ни один из них не может прервать прогон исключением.
+                try
                 {
-                    result = await HandleScreenshotAsync(taskId, toolCall, messages, group, ct);
+                    result = toolCall.Function.Name == "take_screenshot"
+                        ? await HandleScreenshotAsync(taskId, toolCall, messages, group, ct)
+                        : await DispatchToolAsync(taskId, chatId, toolCall, ct);
                 }
-                else
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
-                    result = await DispatchToolAsync(taskId, chatId, toolCall, ct);
+                    // Остановка пользователем/хостом обязана завершить прогон, а не стать tool-ошибкой.
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Agent tool {Tool} threw; reporting it as a normal tool error. task={TaskId}",
+                        toolCall.Function.Name, taskId);
+                    result = new ConexyToolResult(
+                        toolCall.Id,
+                        $"Tool error ({toolCall.Function.Name}): {ex.Message}",
+                        true);
                 }
 
                 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
@@ -402,25 +461,112 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         failedBuildAttempts = 0;
                     }
                 }
+
+                // AGENT_TOOL_FAILURES: счёт ошибок идёт по ЛЮБОМУ инструменту, а не только по bash.
+                // Отклонённая пользователем команда ошибкой не считается (USER_REJECTED приходит с
+                // IsError = false) — это решение пользователя, а не сломанное окружение.
+                if (result.IsError)
+                {
+                    totalToolFailures++;
+                    consecutiveToolFailures++;
+                    toolFailureCounts[toolCall.Function.Name] =
+                        toolFailureCounts.GetValueOrDefault(toolCall.Function.Name) + 1;
+                    failedToolsThisIteration.Add(toolCall.Function.Name);
+                }
+                else
+                {
+                    // Прогресс есть — серия неудач прервана.
+                    consecutiveToolFailures = 0;
+                }
             }
 
             if (failedThisIteration)
             {
                 messages.Add(new ChatMessage("system", CorrectionPrompt));
             }
+
+            // AGENT_TOOL_FAILURES: один явный сигнал на инструмент, который в этом окружении не
+            // работает, — чтобы модель перестала его вызывать и закончила ответ без него.
+            // Ставится ПОСЛЕ всего батча tool-результатов, чтобы не разрывать пары
+            // assistant(tool_calls) → tool(...), которые требует формат запроса к модели.
+            var newlyUnavailable = failedToolsThisIteration
+                .Where(name =>
+                    toolFailureCounts.GetValueOrDefault(name) >= ToolRetryWarningLimit &&
+                    nudgedTools.Add(name))
+                .ToList();
+            if (newlyUnavailable.Count > 0)
+            {
+                messages.Add(new ChatMessage("system", ToolUnavailablePrompt(newlyUnavailable)));
+            }
+
+            // AGENT_TOOL_FAILURES: и жёсткая верхняя граница. Дальше модели не даётся шанса крутить
+            // неудачные вызовы: цикл завершается с тем текстом, который уже написан.
+            if (consecutiveToolFailures >= ToolFailureBudget)
+            {
+                toolBudgetExhausted = true;
+                _logger.LogWarning(
+                    "Agent tool failure budget exhausted ({Failures} failures in a row, {Total} total); ending the run with the text produced so far. task={TaskId} failedTools=[{Tools}]",
+                    consecutiveToolFailures, totalToolFailures, taskId, string.Join(", ", nudgedTools));
+                await group.SendAsync(
+                    "OnLog",
+                    $"[Tool Errors] {consecutiveToolFailures} failed tool call(s) in a row — finishing with the work already done.",
+                    ct);
+                break;
+            }
         }
 
         _logger.LogWarning(
-            "Agent loop hit the iteration cap at step {Max} task={TaskId} nudges={Nudges} auditReworks={Reworks} changedFiles={Files}",
-            _maxIterations, taskId, buildGateNudges, auditReworks, changedFiles.Count);
+            "Agent loop stopped early: reason={Reason} step={Step}/{Max} consecutiveToolFailures={Consecutive} totalToolFailures={Total} nudges={Nudges} auditReworks={Reworks} changedFiles={Files}",
+            toolBudgetExhausted ? "tool-failure-budget" : "iteration-cap",
+            completedSteps, _maxIterations, consecutiveToolFailures, totalToolFailures, buildGateNudges, auditReworks, changedFiles.Count);
 
-        if (lastCommandFailed)
+        // Исчерпанный бюджет ошибок инструментов — это НЕ ошибка сборки: задача не завершена по
+        // причине окружения, и ронять прогон в Failed здесь неправильно. Отдаём то, что модель уже
+        // написала, чтобы в чат ушёл реальный ответ (и он же попал в историю), а не служебная строка.
+        if (lastCommandFailed && !toolBudgetExhausted)
         {
             throw new InvalidOperationException("Agent could not resolve build/execution errors within the iteration limit.");
         }
 
-        return "Task reached maximum autonomous iteration limit.";
+        var accumulated = _streamedOutput.ToString().Trim();
+        if (accumulated.Length > 0)
+        {
+            return accumulated;
+        }
+
+        return toolBudgetExhausted
+            ? "Не удалось завершить задачу: инструменты, которые нужны агенту, не работают в этом окружении. Запустите задачу заново после устранения ограничения."
+            : "Task reached maximum autonomous iteration limit.";
     }
+
+    /// <summary>
+    /// Tool set for the current run. <c>take_screenshot</c> is advertised only when headless Chromium
+    /// can actually be launched: otherwise the model would keep calling a tool that is guaranteed to
+    /// fail (it did exactly that for SVG/UI work, where a visual check looks like a required
+    /// verification step), burning iterations and derailing the run.
+    /// </summary>
+    private async Task<List<object>> ResolveToolsAsync(CancellationToken ct)
+    {
+        if (await _visionService.IsAvailableAsync(ct))
+        {
+            return AvailableTools;
+        }
+
+        _logger.LogWarning(
+            "Agent tool set: take_screenshot excluded — headless Chromium is unavailable. task={TaskId}",
+            _job.TaskId);
+        return ToolsWithoutScreenshot;
+    }
+
+    /// <summary>
+    /// One-time instruction for tools that failed in this environment, so the model stops retrying
+    /// them and finishes the task without them.
+    /// </summary>
+    private static string ToolUnavailablePrompt(IReadOnlyCollection<string> tools) =>
+        "[Tool Unavailable] These tools failed and will keep failing in this environment: " +
+        string.Join(", ", tools) +
+        ". Do NOT call them again. Continue with the remaining tools; if the failed step was optional " +
+        "(for example a visual verification), skip it and state that limitation explicitly in your final answer.";
 
     private async Task<ConexyToolResult> DispatchToolAsync(Guid taskId, Guid chatId, LlmToolCall toolCall, CancellationToken ct)
     {
@@ -615,6 +761,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // error" и спокойно шёл дальше, а карточка подтверждения оставалась висеть вечно.
             throw;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // AGENT_TOOL_FAILURES: остановка пользователем — это не ошибка инструмента. Уводим её в
+            // общий catch ниже, и агент вместо завершения делал бы ещё один ход с "Execution error".
+            throw;
+        }
         catch (Exception ex)
         {
             return new ConexyToolResult(toolCall.Id, $"Execution error: {ex.Message}", true);
@@ -769,7 +921,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var yieldedAnyDelta = false;
 
         var stream = _llmClient
-            .StreamChatAsync(messages, _job.ModelType, _job.ReasoningEffort, AvailableTools, taskId: _job.TaskId, ct: ct)
+            .StreamChatAsync(messages, _job.ModelType, _job.ReasoningEffort, _tools, taskId: _job.TaskId, ct: ct)
             .GetAsyncEnumerator(ct);
 
         await using (stream)
@@ -790,7 +942,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     // the agent still works (just without incremental output).
                     await group.SendAsync("OnLog", $"[Stream] Incremental output unavailable ({ex.Message}); falling back to a plain completion.", ct);
                     var fallback = await _llmClient.SendChatAsync(
-                        _job.ModelType, messages, AvailableTools, _job.ReasoningEffort, _job.TaskId, ct);
+                        _job.ModelType, messages, _tools, _job.ReasoningEffort, _job.TaskId, ct);
                     return (fallback.Message, fallback.TotalTokens);
                 }
 
@@ -1190,9 +1342,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
             }
         }
-        catch (JsonException)
+        catch (Exception)
         {
             // Best-effort bookkeeping; DispatchToolAsync validates arguments authoritatively.
+            // AGENT_TOOL_FAILURES: расширено с JsonException до Exception — model-supplied arguments
+            // могут быть валидным JSON, но не объектом (например "[]"), и тогда TryGetProperty ниже
+            // бросает InvalidOperationException. Эта функция вызывается вне try/catch вызова
+            // инструмента, поэтому такое исключение роняло весь прогон агента.
         }
     }
 
@@ -1267,8 +1423,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         public static AuditVerdict ApprovedVerdict { get; } = new(true, Array.Empty<string>());
     }
 
-    private static List<object> BuildToolSchemas() => new()
+    private static List<object> BuildToolSchemas(bool includeScreenshot)
     {
+        var tools = new List<object>
+        {
         Function("file_read", "Read the full contents of a workspace file.",
             new { type = "object", properties = new { path = new { type = "string", description = "Relative path to the file within the workspace." } }, required = new[] { "path" } }),
         Function("file_write", "Write or overwrite a workspace file with the complete new content.",
@@ -1310,12 +1468,6 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     skip_reason = new { type = "string", description = "Required when status = skipped" }
                 }, required = new[] { "id", "content", "status" } } }
             }, required = new[] { "todos" } }),
-        Function("take_screenshot", "Render a URL or local HTML file with headless Chromium and attach the screenshot for visual audit.",
-            new { type = "object", properties = new {
-                url = new { type = "string", description = "http(s) URL or local file path to render" },
-                viewport_width = new { type = "integer", description = "Viewport width in pixels (default 1280)" },
-                viewport_height = new { type = "integer", description = "Viewport height in pixels (default 800)" }
-            }, required = new[] { "url" } }),
         Function("github_action", "Perform a GitHub workflow operation using the configured PAT.",
             new { type = "object", properties = new {
                 operation = new { type = "string", @enum = new[] { "clone_repo", "create_branch", "commit_and_push", "create_pull_request" } },
@@ -1344,7 +1496,20 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 chunk_index = new { type = "integer", description = "Индекс конкретного фрагмента (если не указан — вернётся полный текст документа)" }
             }, required = new[] { "document_id" } }),
         WebSearchTool.Schema(),
-    };
+        };
+
+        if (includeScreenshot)
+        {
+            tools.Add(Function("take_screenshot", "Render a URL or local HTML file with headless Chromium and attach the screenshot for visual audit.",
+                new { type = "object", properties = new {
+                    url = new { type = "string", description = "http(s) URL or local file path to render" },
+                    viewport_width = new { type = "integer", description = "Viewport width in pixels (default 1280)" },
+                    viewport_height = new { type = "integer", description = "Viewport height in pixels (default 800)" }
+                }, required = new[] { "url" } }));
+        }
+
+        return tools;
+    }
 
     private static object Function(string name, string description, object parameters) => new
     {

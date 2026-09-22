@@ -304,5 +304,27 @@ static void LogEnvironmentPrerequisites(WebApplication app)
     }
 
     // Playwright Chromium — required for take_screenshot.
-    logger.LogInformation("Playwright Chromium is installed on first use, or manually with: npx playwright install chromium");
+    // AGENT_TOOL_FAILURES: добавлено 2026-09-23. Раньше здесь утверждалось, что Chromium «ставится при
+    // первом использовании» через npx — но runtime-образ это dotnet/aspnet без node/npm/npx, то есть
+    // в проде установить его изнутри контейнера невозможно. Теперь мы честно проверяем окружение и
+    // сообщаем, будет ли инструмент вообще предложен агенту (см. ConexyAgentRunner.ResolveToolsAsync).
+    try
+    {
+        var vision = app.Services.GetRequiredService<IConexyVisionService>();
+        if (vision.IsAvailableAsync().GetAwaiter().GetResult())
+        {
+            logger.LogInformation("Playwright Chromium is available: take_screenshot is offered to the agent.");
+        }
+        else
+        {
+            logger.LogWarning(
+                "Playwright Chromium is NOT available: take_screenshot is hidden from the agent tool set. " +
+                "To enable it, the runtime image must ship the browser (Playwright .NET cannot install it at " +
+                "runtime: this image has no node/npx).");
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Could not probe Playwright Chromium availability; take_screenshot stays hidden.");
+    }
 }
