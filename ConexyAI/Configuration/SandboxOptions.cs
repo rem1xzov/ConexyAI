@@ -62,12 +62,22 @@ public class SandboxOptions
     public string StateRootPath { get; set; } = "/srv/conexyai/sandbox-state";
 
     /// <summary>
-    /// Docker network mode for sandbox containers. <c>none</c> (default) keeps the sandbox fully
-    /// offline, which is the safe default but also means package managers cannot reach a registry.
-    /// Set <c>bridge</c> to let the agent install dependencies — that gives the sandbox outbound
-    /// network access, so treat the change as a security decision, not a convenience.
+    /// Docker network mode for sandbox containers.
+    /// <para>
+    /// <c>none</c> keeps the sandbox fully offline. To let the agent install dependencies the value
+    /// must be a DEDICATED network that holds nothing else — the default here is
+    /// <c>conexy-sandbox-net</c>, created once on the host with
+    /// <c>docker network create conexy-sandbox-net</c>. That gives the container outbound internet
+    /// access (package registries) with no route to any application network: Docker isolates
+    /// distinct bridge networks from each other, and the sandbox's DNS only resolves names on its
+    /// own network, so <c>backend</c>/<c>postgres</c>/<c>docker-socket-proxy</c> are unreachable and
+    /// unresolvable from inside it.
+    /// </para>
+    /// <para>
+    /// Do not point this at a compose-managed application network, and do not use <c>host</c>.
+    /// </para>
     /// </summary>
-    public string Network { get; set; } = "none";
+    public string Network { get; set; } = "conexy-sandbox-net";
 
     /// <summary>
     /// Value for Docker <c>--user</c> (<c>uid:gid</c>). Empty (default) resolves to the current

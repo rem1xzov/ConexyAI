@@ -40,6 +40,11 @@ public class DockerSandboxRunner : IDockerSandboxRunner
     private readonly IOptions<SandboxOptions> _options;
     private readonly ILogger<DockerSandboxRunner> _logger;
 
+    private const string NoNetwork = "none";
+
+    // AGENT_SANDBOX_NETWORK_ISOLATION: выставляется один раз, если настроенной сети нет на хосте.
+    private volatile bool _configuredNetworkUnavailable;
+
     public DockerSandboxRunner(IOptions<SandboxOptions> options, ILogger<DockerSandboxRunner> logger)
     {
         _options = options;
@@ -100,10 +105,19 @@ public class DockerSandboxRunner : IDockerSandboxRunner
         //    (attach) flow: the docker-socket-proxy (HAProxy) does not reliably forward the
         //    hijacked attach stream back to the CLI, so stdout/stderr would be lost. Instead
         //    we read output with `docker logs` after the container exits.
-        var runResult = await RunDockerCommandAsync(
-            BuildDockerRunStartInfo(command, workspaceHostPath, containerName, sessionStateHostPath),
-            TimeSpan.FromSeconds(30),
-            ct);
+        var runResult = await StartContainerAsync(command, workspaceHostPath, sessionStateHostPath, containerName, ct);
+
+        // AGENT_SANDBOX_NETWORK_ISOLATION: настроенной сети может не быть на хосте, а проверить или
+        // создать её через сокет-прокси нельзя (NETWORKS=0). Без этой ветки опечатка в имени сети
+        // ломала бы КАЖДУЮ команду агента: docker run падает с "network ... not found". Поэтому
+        // первую такую ошибку мы трактуем как «сеть недоступна», один раз явно логируем и повторяем
+        // запуск офлайн — агент остаётся работоспособным (без интернета), а причина видна в логе.
+        if (runResult.ExitCode != 0 && DisableNetworkAfterMissingNetwork(runResult.Output))
+        {
+            // Fresh name: a partially created container would collide on the retry.
+            containerName = $"conexy-sandbox-{Guid.NewGuid():N}";
+            runResult = await StartContainerAsync(command, workspaceHostPath, sessionStateHostPath, containerName, ct);
+        }
 
         if (runResult.ExitCode != 0)
         {
@@ -187,12 +201,14 @@ public class DockerSandboxRunner : IDockerSandboxRunner
         psi.ArgumentList.Add("--name");
         psi.ArgumentList.Add(containerName);
         // AGENT_SANDBOX_NETWORK: конфигурируемый сетевой режим. По умолчанию `none` — песочница
-        // полностью офлайн, и это осознанный безопасный дефолт. Ставить зависимости агенту
-        // (npm/pip/dotnet add package) можно только включив `Sandbox:Network` (например `bridge`),
-        // и это уже решение по безопасности, а не удобство: вместе с сетью у контейнера появляется
-        // и исходящий доступ наружу.
+        // полностью офлайн. Ставить зависимости агенту (npm/pip/dotnet add package) можно только
+        // включив сеть, и тогда это должна быть ВЫДЕЛЕННАЯ сеть (например `conexy-sandbox-net`),
+        // в которой нет ни одного другого контейнера: тогда контейнер песочницы видит интернет, но
+        // не имеет маршрута ни в одну из сетей приложения (backend, postgres, docker-socket-proxy).
+        // `bridge` (дефолтная docker-сеть) тоже изолирован от compose-сетей, но её разделяют все
+        // неуправляемые контейнеры хоста, поэтому выделенная сеть предпочтительнее.
         psi.ArgumentList.Add("--network");
-        psi.ArgumentList.Add(string.IsNullOrWhiteSpace(_options.Value.Network) ? "none" : _options.Value.Network.Trim());
+        psi.ArgumentList.Add(ResolveNetwork());
         // Read-only root filesystem: the container may only write to /tmp (tmpfs) and the mounted
         // /workspace and /state. Any other write fails with EROFS.
         psi.ArgumentList.Add("--read-only");
@@ -212,6 +228,8 @@ public class DockerSandboxRunner : IDockerSandboxRunner
             psi.ArgumentList.Add("--ulimit");
             psi.ArgumentList.Add($"fsize={_options.Value.FileSizeLimitBytes}");
         }
+        // AGENT_SANDBOX_NETWORK_ISOLATION: ресурсные лимиты ниже остаются в силе и при включённой
+        // сети — изоляция от хоста и ограничение ресурсов не ослабляются доступом в интернет.
         psi.ArgumentList.Add("--memory");
         psi.ArgumentList.Add(_options.Value.MemoryLimit);
         psi.ArgumentList.Add("--cpus");
@@ -228,18 +246,11 @@ public class DockerSandboxRunner : IDockerSandboxRunner
         {
             psi.ArgumentList.Add("-v");
             psi.ArgumentList.Add($"{sessionStateHostPath}:/state:rw");
-            psi.ArgumentList.Add("-e");
-            psi.ArgumentList.Add("HOME=/state/home");
-            psi.ArgumentList.Add("-e");
-            psi.ArgumentList.Add("DOTNET_CLI_HOME=/state/home");
-            psi.ArgumentList.Add("-e");
-            psi.ArgumentList.Add("NPM_CONFIG_CACHE=/state/.npm");
-            psi.ArgumentList.Add("-e");
-            psi.ArgumentList.Add("XDG_CACHE_HOME=/state/.cache");
-            psi.ArgumentList.Add("-e");
-            psi.ArgumentList.Add("XDG_DATA_HOME=/state/.local");
-            psi.ArgumentList.Add("-e");
-            psi.ArgumentList.Add("PIP_CACHE_DIR=/state/.cache/pip");
+            foreach (var (key, value) in BuildSessionStateEnvironment())
+            {
+                psi.ArgumentList.Add("-e");
+                psi.ArgumentList.Add($"{key}={value}");
+            }
         }
 
         psi.ArgumentList.Add("-v");
@@ -255,7 +266,92 @@ public class DockerSandboxRunner : IDockerSandboxRunner
     }
 
     /// <summary>
-    /// Docker <c>--user</c> value for the sandbox container.
+    private Task<(int ExitCode, string Output, bool TimedOut)> StartContainerAsync(
+        string command,
+        string workspaceHostPath,
+        string? sessionStateHostPath,
+        string containerName,
+        CancellationToken ct) =>
+        RunDockerCommandAsync(
+            BuildDockerRunStartInfo(command, workspaceHostPath, containerName, sessionStateHostPath),
+            TimeSpan.FromSeconds(30),
+            ct);
+
+    /// <summary>
+    /// Network mode for the sandbox container: the configured name, or <c>none</c> once we know the
+    /// configured one does not exist on the host (see <see cref="DisableNetworkAfterMissingNetwork"/>).
+    /// </summary>
+    private string ResolveNetwork()
+    {
+        var configured = _options.Value.Network?.Trim();
+        if (string.IsNullOrEmpty(configured) || string.Equals(configured, NoNetwork, StringComparison.Ordinal))
+        {
+            return NoNetwork;
+        }
+
+        return _configuredNetworkUnavailable ? NoNetwork : configured;
+    }
+
+    /// <summary>
+    /// Recognises "the configured network does not exist" in a failed <c>docker run</c> and marks the
+    /// network unusable for the rest of the process. Returns true exactly once, so the caller retries
+    /// offline instead of failing every command on a typo.
+    /// </summary>
+    private bool DisableNetworkAfterMissingNetwork(string runOutput)
+    {
+        if (_configuredNetworkUnavailable) return false;
+
+        var configured = _options.Value.Network?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(configured) || string.Equals(configured, NoNetwork, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (runOutput.IndexOf("network", StringComparison.OrdinalIgnoreCase) < 0 ||
+            runOutput.IndexOf("not found", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return false;
+        }
+
+        _configuredNetworkUnavailable = true;
+        _logger.LogWarning(
+            "Sandbox network '{Network}' is not available on the Docker host; continuing with 'none' (no internet inside the sandbox, so package installs will fail). Create it with: docker network create {Network}",
+            configured, configured);
+        return true;
+    }
+
+    /// <summary>
+    /// Environment of the sandbox container in session mode.
+    /// <para>
+    /// Every value is a path the sandbox itself owns — none is a secret, and nothing is inherited
+    /// from the backend process (no <c>--env-file</c>, no pass-through). That property is what keeps
+    /// enabling the sandbox network safe from a credential-exposure standpoint: there are simply no
+    /// backend credentials inside the container to exfiltrate.
+    /// </para>
+    /// </summary>
+    private static IEnumerable<(string Key, string Value)> BuildSessionStateEnvironment() =>
+    [
+        ("HOME", "/state/home"),
+        ("DOTNET_CLI_HOME", "/state/home"),
+        ("NPM_CONFIG_CACHE", "/state/.npm"),
+        // `npm install -g` must not target the read-only node prefix.
+        ("NPM_CONFIG_PREFIX", "/state/.npm-global"),
+        ("XDG_CACHE_HOME", "/state/.cache"),
+        ("XDG_DATA_HOME", "/state/.local"),
+        // Python: user-site and caches inside the state directory. PIP_BREAK_SYSTEM_PACKAGES lifts
+        // Debian's PEP 668 guard, which otherwise refuses `pip install` outright, and PIP_USER makes
+        // it install into ~/.local instead of the read-only system site-packages.
+        ("PYTHONUSERBASE", "/state/.local"),
+        ("PIP_CACHE_DIR", "/state/.cache/pip"),
+        ("PIP_USER", "1"),
+        ("PIP_BREAK_SYSTEM_PACKAGES", "1"),
+        ("PYTHONDONTWRITEBYTECODE", "1"),
+        // Console scripts installed by pip/npm land in these bin directories. The remaining entries
+        // mirror the image's PATH (see docker/sandbox/Dockerfile) so node/dotnet stay reachable.
+        ("PATH", "/state/.local/bin:/state/.npm-global/bin:/opt/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
+    ];
+
+    /// <summary>Docker <c>--user</c> value for the sandbox container.
     /// <para>
     /// AGENT_SANDBOX_SESSION_STATE: defaults to the backend's own effective uid instead of a
     /// hard-coded <c>1000:1000</c>. The workspace directory is bind-mounted from the host and is

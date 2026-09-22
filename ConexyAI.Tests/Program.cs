@@ -937,7 +937,7 @@ Task TestSandboxSessionStateAsync()
 
         Assert(Directory.Exists(path), "the session state directory must be created on first use");
         Assert(path.StartsWith(root, StringComparison.Ordinal), "state must live under the configured root");
-        foreach (var sub in new[] { "home", ".npm", ".cache", ".local" })
+        foreach (var sub in new[] { "home", ".npm", ".npm-global", ".cache", ".local" })
         {
             Assert(Directory.Exists(Path.Combine(path, sub)), $"state sub-directory '{sub}' must exist");
         }

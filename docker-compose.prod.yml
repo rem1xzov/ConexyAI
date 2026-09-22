@@ -15,6 +15,22 @@
 # (never a raw /var/run/docker.sock mount). The conexy-sandbox:latest image must already
 # exist on the Docker host — build/push it separately, see DEPLOY.md.
 #
+# --- Required one-time host setup (sandbox networking) --------------------------------
+#
+# AGENT_SANDBOX_NETWORK_ISOLATION: sandbox containers get internet access so the agent can run
+# `npm install` / `pip install`, but they must NOT be able to see the application services. They
+# therefore join a DEDICATED network that contains nothing else:
+#
+#   docker network create conexy-sandbox-net
+#
+# Docker isolates distinct bridge networks from one another, and the sandbox's embedded DNS only
+# resolves names on its own network, so `backend`, `postgres` and `docker-socket-proxy` are neither
+# reachable nor resolvable from inside a sandbox. Do not attach any service below to this network,
+# and never set Sandbox__Network to one of the compose networks (or to `host`).
+#
+# If the network is missing, the backend logs a warning and runs sandboxes offline rather than
+# failing every command.
+#
 # Two networks isolate the security-sensitive surfaces (PostgreSQL and the Docker socket
 # proxy) from the public-facing nginx frontend.
 
@@ -109,10 +125,9 @@ services:
       Rag__DocumentsDirectory: ${RAG_DOCUMENTS_PATH:-/srv/conexyai/documents}
       Sandbox__Image: ${SANDBOX_IMAGE:-conexy-sandbox:latest}
       Sandbox__StateRootPath: ${SANDBOX_STATE_HOST_PATH:-/srv/conexyai/sandbox-state}
-      # AGENT_SANDBOX_NETWORK: `none` keeps sandbox containers fully offline. Set it to `bridge` to
-      # let the agent install dependencies (npm/pip/dotnet add package) — that also gives the
-      # container outbound network access, so enable it deliberately.
-      Sandbox__Network: ${SANDBOX_NETWORK:-none}
+      # AGENT_SANDBOX_NETWORK: dedicated, sandbox-only network (see the header). `none` disables
+      # sandbox internet access entirely, which also makes package installs impossible.
+      Sandbox__Network: ${SANDBOX_NETWORK:-conexy-sandbox-net}
       # Sandbox__User is intentionally left unset: the runner then runs the sandbox as the backend's
       # own uid, which is what makes the bind-mounted workspace writable inside the sandbox.
       Sandbox__IdleTimeoutMinutes: ${SANDBOX_IDLE_TIMEOUT_MINUTES:-10}

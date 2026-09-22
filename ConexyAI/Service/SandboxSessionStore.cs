@@ -84,6 +84,10 @@ public sealed class SandboxSessionStore : ISandboxSessionStore
             var path = PathFor(sessionId);
             EnsureDirectory(path, "home");
             EnsureDirectory(path, ".npm");
+            // `npm install -g` writes here (NPM_CONFIG_PREFIX), pip's user-site writes to .local
+            // (PYTHONUSERBASE) — both live in the state directory so nothing targets the
+            // read-only root filesystem.
+            EnsureDirectory(path, ".npm-global");
             EnsureDirectory(path, ".cache");
             EnsureDirectory(path, ".local");
             RelaxPermissions(path);
