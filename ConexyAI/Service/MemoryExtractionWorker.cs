@@ -77,7 +77,7 @@ public class MemoryExtractionWorker : BackgroundService
         var memoryRepository = scope.ServiceProvider.GetRequiredService<IUserMemoryRepository>();
         var llmClient = scope.ServiceProvider.GetRequiredService<IConexyLlmClient>();
 
-        var history = await chatHistory.GetMessagesAsync(job.ChatId, ct);
+        var history = await chatHistory.GetMessagesAsync(job.UserId, job.ChatId, ct);
         var recent = history.TakeLast(_options.Value.RecentMessagesToReview).ToList();
 
         var currentFacts = await memoryRepository.GetFactsAsync(job.UserId, ct);

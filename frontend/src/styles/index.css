@@ -4275,6 +4275,18 @@ body {
   color: var(--danger);
 }
 
+/* READABLE_RESULT: краткий итог выполненной команды (exit code) в той же строке. */
+.tl-row__meta {
+  flex-shrink: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.75;
+}
+
 .tl-row__mark,
 .tl-row__chevron {
   flex-shrink: 0;

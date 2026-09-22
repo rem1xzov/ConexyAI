@@ -148,6 +148,17 @@ public class ConexyBackgroundWorker : BackgroundService
                 if (job.ModelType == ConexyModelType.ConexyCoder)
                 {
                     result = await runner.RunLoopAsync(job, taskToken);
+
+                    // AGENT_HISTORY: добавлено 2026-09-22 — раньше агентский путь НИЧЕГО не писал
+                    // в историю чата (запись жила только внутри StreamCompletionAsync). Из-за этого
+                    // на второе сообщение в том же чате агент отвечал «это первое сообщение,
+                    // контекста нет», а его собственные ответы не сохранялись вообще.
+                    // CONTINUE_GENERATION: resumed turn stores prefix + continuation.
+                    var storedAgentResult = string.IsNullOrWhiteSpace(job.AssistantPrefix)
+                        ? result
+                        : job.AssistantPrefix + result;
+                    await PersistTurnAsync(chatHistory, memoryService, job, storedAgentResult, taskToken);
+                    result = storedAgentResult;
                 }
                 else
                 {
@@ -181,7 +192,10 @@ public class ConexyBackgroundWorker : BackgroundService
                 entity.FinishedAt = DateTime.UtcNow;
                 await repository.SaveChangesAsync(CancellationToken.None);
 
-                await _workspaceService.CleanupWorkspaceAsync(job.ChatId, CancellationToken.None);
+                // WORKSPACE_PERSISTENCE: удалено 2026-09-22 — здесь удалялся весь воркспейс
+                // разговора (CleanupWorkspaceAsync → Directory.Delete recursive). После остановки
+                // или ошибки агент на следующее сообщение видел пустую папку и справедливо
+                // отвечал, что файлов нет. Воркспейс живёт ровно столько, сколько живёт чат.
                 await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnStopped", job.TaskId);
             }
             catch (Exception ex)
@@ -193,7 +207,8 @@ public class ConexyBackgroundWorker : BackgroundService
                 entity.FinishedAt = DateTime.UtcNow;
                 await repository.SaveChangesAsync(CancellationToken.None);
 
-                await _workspaceService.CleanupWorkspaceAsync(job.ChatId, CancellationToken.None);
+                // WORKSPACE_PERSISTENCE: см. комментарий в ветке OnStopped — файлы сессии больше
+                // не удаляются при ошибке/остановке агента.
                 await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnError", ex.Message);
             }
         }
@@ -262,7 +277,7 @@ public class ConexyBackgroundWorker : BackgroundService
         // keep their context without ever touching the history table.
         IReadOnlyList<ConexyChatMessageEntity> history = job.Incognito
             ? _incognitoChat.GetMessages(job.ChatId)
-            : await chatHistory.GetMessagesAsync(job.ChatId, ct);
+            : await chatHistory.GetMessagesAsync(job.UserId, job.ChatId, ct);
 
         var messages = new List<ChatMessage> { new("system", systemPrompt) };
         if (searchEnabled)
@@ -345,14 +360,37 @@ public class ConexyBackgroundWorker : BackgroundService
         }
 
         // Persist the completed turn so the next message in this chat includes it.
-        // User text is stored as plain text; image attachments are not part of history.
         // CONTINUE_GENERATION: a resumed turn stores the prefix plus the continuation, otherwise
         // the history would keep only the tail of the answer.
         var storedResult = string.IsNullOrWhiteSpace(job.AssistantPrefix)
             ? result
             : job.AssistantPrefix + result;
-        // INCOGNITO_CHAT: добавлено 2026-09-20 — incognito turns stay in memory and never
-        // produce a ChatHistory row (so the chat also never shows up in the sidebar history).
+        await PersistTurnAsync(chatHistory, memoryService, job, storedResult, ct);
+
+        // SUBSCRIPTION_TIERS: добавлено 2026-09-17
+        // INCOGNITO_CHAT: limits still apply — incognito hides history, it is not a free pass.
+        await subscriptionService.RecordRequestAsync(job.UserId, job.ModelType, ct);
+
+        return storedResult;
+    }
+
+    // AGENT_HISTORY: добавлено 2026-09-22
+    /// <summary>
+    /// Stores one completed turn (user prompt + final answer) so the next message in the same
+    /// chat is answered with real context, and enqueues long-term memory extraction on the usual
+    /// batching rule. Shared by the flash/pro path and the conexy-coder path — the coder path used
+    /// to skip this entirely, which is why the agent answered the second message of a conversation
+    /// as if it were the first one.
+    /// </summary>
+    private async Task PersistTurnAsync(
+        IChatHistoryRepository chatHistory,
+        IUserMemoryService memoryService,
+        ConexyJob job,
+        string storedResult,
+        CancellationToken ct)
+    {
+        // INCOGNITO_CHAT: incognito turns stay in memory and never produce a ChatHistory row
+        // (so the chat also never shows up in the sidebar history).
         if (job.Incognito)
         {
             _incognitoChat.Append(job.ChatId, job.UserId, "user", job.Prompt);
@@ -360,32 +398,22 @@ public class ConexyBackgroundWorker : BackgroundService
             {
                 _incognitoChat.Append(job.ChatId, job.UserId, "assistant", storedResult);
             }
-        }
-        else
-        {
-            await chatHistory.AppendAsync(job.UserId, job.ChatId, "user", job.Prompt, ct);
-            if (!string.IsNullOrWhiteSpace(storedResult))
-            {
-                await chatHistory.AppendAsync(job.UserId, job.ChatId, "assistant", storedResult, ct);
-            }
+            return;
         }
 
-        // SUBSCRIPTION_TIERS: добавлено 2026-09-17
-        // INCOGNITO_CHAT: limits still apply — incognito hides history, it is not a free pass.
-        await subscriptionService.RecordRequestAsync(job.UserId, job.ModelType, ct);
+        // User text is stored as plain text; image attachments are not part of history.
+        await chatHistory.AppendAsync(job.UserId, job.ChatId, "user", job.Prompt, ct);
+        if (!string.IsNullOrWhiteSpace(storedResult))
+        {
+            await chatHistory.AppendAsync(job.UserId, job.ChatId, "assistant", storedResult, ct);
+        }
 
         // Memory extraction batching: run after every N-th user message in this chat.
-        // INCOGNITO_CHAT: skipped entirely, so the MemoryExtractionWorker never sees it.
-        if (!job.Incognito)
+        var userMessageCount = await chatHistory.CountUserMessagesAsync(job.UserId, job.ChatId, ct);
+        if (userMessageCount > 0 && userMessageCount % _memoryOptions.Value.BatchingThreshold == 0)
         {
-            var userMessageCount = await chatHistory.CountUserMessagesAsync(job.ChatId, ct);
-            if (userMessageCount > 0 && userMessageCount % _memoryOptions.Value.BatchingThreshold == 0)
-            {
-                memoryService.EnqueueExtraction(job.UserId, job.ChatId);
-            }
+            memoryService.EnqueueExtraction(job.UserId, job.ChatId);
         }
-
-        return storedResult;
     }
 
     private async Task<string> SearchAwareCompletionAsync(

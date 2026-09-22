@@ -13,11 +13,11 @@ public class ChatHistoryRepository : IChatHistoryRepository
         _context = context;
     }
 
-    public async Task<IReadOnlyList<ConexyChatMessageEntity>> GetMessagesAsync(Guid chatId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<ConexyChatMessageEntity>> GetMessagesAsync(Guid userId, Guid chatId, CancellationToken ct = default)
     {
         return await _context.ChatMessages
             .AsNoTracking()
-            .Where(m => m.ChatId == chatId)
+            .Where(m => m.ChatId == chatId && m.UserId == userId)
             .OrderBy(m => m.CreatedAt)
             .ToListAsync(ct);
     }
@@ -35,9 +35,9 @@ public class ChatHistoryRepository : IChatHistoryRepository
     }
 
     // SUBSCRIPTION_TIERS: добавлено 2026-09-17
-    public async Task<int> CountUserMessagesAsync(Guid chatId, CancellationToken ct = default)
+    public async Task<int> CountUserMessagesAsync(Guid userId, Guid chatId, CancellationToken ct = default)
     {
         return await _context.ChatMessages
-            .CountAsync(m => m.ChatId == chatId && m.Role == "user", ct);
+            .CountAsync(m => m.ChatId == chatId && m.UserId == userId && m.Role == "user", ct);
     }
 }

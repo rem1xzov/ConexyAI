@@ -27,6 +27,9 @@ interface RowUnit {
   status: RowStatus;
   detail?: string;
   errorLine?: string;
+  // READABLE_RESULT: добавлено 2026-09-22 — краткий итог (exit code) прямо в строке, чтобы связка
+  // «команда → результат» читалась без раскрытия, как в терминальном блоке.
+  meta?: string;
 }
 
 interface StepUnit {
@@ -176,6 +179,7 @@ function buildUnits(actions: ToolActionEvent[], steps: AgentStep[], t: Translate
       open.status = statusFrom(action);
       open.detail = action.output ?? open.detail;
       open.errorLine = open.status === 'failed' ? action.summary : undefined;
+      open.meta = open.status === 'completed' ? action.summary : undefined;
       openRows.delete(key);
       return;
     }
@@ -190,6 +194,7 @@ function buildUnits(actions: ToolActionEvent[], steps: AgentStep[], t: Translate
       status: statusFrom(action),
       detail: action.output,
       errorLine: action.status === 'failed' ? action.summary : undefined,
+      meta: action.status === 'completed' ? action.summary : undefined,
     });
   });
 
@@ -257,6 +262,7 @@ export function AgentTimeline({ actions, steps = [], onCommandDecision, statusPi
             <span className="tl-row__icon" aria-hidden="true">{unit.icon}</span>
             <span className="tl-row__label" title={unit.label}>{unit.label}</span>
             {unit.errorLine && <span className="tl-row__error">{unit.errorLine}</span>}
+            {unit.meta && <span className="tl-row__meta">{unit.meta}</span>}
             {statusMark(unit.status)}
             {expandable && <span className={`tl-row__chevron ${open ? 'tl-row__chevron--open' : ''}`}>▾</span>}
           </>

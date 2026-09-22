@@ -4,6 +4,7 @@ using ConexyAI.Configuration;
 using ConexyAI.Contract;
 using ConexyAI.Hub;
 using ConexyAI.Model;
+using ConexyAI.Repository;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 
@@ -28,12 +29,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // SUBSCRIPTION_TIERS: добавлено 2026-09-17
     private readonly ISubscriptionService _subscriptionService;
     private readonly IUserMemoryService _memoryService;
+    // AGENT_HISTORY: добавлено 2026-09-22 — предыдущие ходы этого же чата.
+    private readonly IChatHistoryRepository _chatHistory;
     // RAG: добавлено 2026-09-17
     private readonly IDocumentService _documentService;
     private ConexyJob _job = null!;
 
     private readonly int _maxIterations;
     private const int MaxSelfRepairAttempts = 3;
+    // AGENT_HISTORY: добавлено 2026-09-22 — тот же предел, что и у chat-пути, чтобы агент не
+    // вылетал за окно контекста на длинных диалогах.
+    private const int MaxHistoryMessages = 20;
 
     // Strict engineering charter for the autonomous Pro agent.
     private const string WorkerSystemPrompt =
@@ -171,6 +177,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         IPendingActionService pendingActionService,
         ISubscriptionService subscriptionService,
         IUserMemoryService memoryService,
+        IChatHistoryRepository chatHistory,
         IDocumentService documentService,
         IOptions<AgentOptions> agentOptions)
     {
@@ -188,6 +195,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _pendingActionService = pendingActionService;
         _subscriptionService = subscriptionService;
         _memoryService = memoryService;
+        _chatHistory = chatHistory;
         _documentService = documentService;
 
         var configured = agentOptions.Value.MaxIterations;
@@ -218,9 +226,44 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         var messages = new List<ChatMessage>
         {
-            new("system", systemPrompt),
-            ChatMessageFactory.User(job.Prompt, job.Attachments)
+            new("system", systemPrompt)
         };
+
+        // AGENT_HISTORY: добавлено 2026-09-22 — P0-фикс. Раньше агент получал ТОЛЬКО system +
+        // текущий промпт, поэтому на второе сообщение в том же чате честно отвечал «это первое
+        // сообщение, контекста нет», хотя предыдущий ход (и созданные им файлы) существовали.
+        // Читаем ту же таблицу истории, что и chat-путь, и обрезаем её так же.
+        if (!job.Incognito)
+        {
+            var history = await _chatHistory.GetMessagesAsync(job.UserId, job.ChatId, ct);
+            if (history.Count > 0)
+            {
+                var retained = history.Count > MaxHistoryMessages
+                    ? history.Skip(history.Count - MaxHistoryMessages)
+                    : history;
+
+                if (history.Count > MaxHistoryMessages)
+                {
+                    await LogAsync(taskId,
+                        $"[Context] История чата обрезана: {history.Count} -> {MaxHistoryMessages} сообщений.", ct);
+                }
+
+                foreach (var entry in retained)
+                {
+                    if (string.IsNullOrWhiteSpace(entry.Content))
+                        continue;
+
+                    // History only ever holds "user" / "assistant"; anything else is skipped so a
+                    // malformed row cannot corrupt the tool-call protocol.
+                    if (entry.Role != "user" && entry.Role != "assistant")
+                        continue;
+
+                    messages.Add(new ChatMessage(entry.Role, entry.Content));
+                }
+            }
+        }
+
+        messages.Add(ChatMessageFactory.User(job.Prompt, job.Attachments));
 
         // CONTINUE_GENERATION: добавлено 2026-09-21 — the user stopped mid-answer, so hand the
         // partial text back as the model's own truncated turn and tell it to carry on.

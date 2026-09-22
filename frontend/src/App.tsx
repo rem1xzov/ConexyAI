@@ -881,7 +881,15 @@ export default function App() {
 
       setSessions((prev) => updateSession(prev, sessionId, (s) => ({ ...s, taskId: res.id })));
       streamingRef.current = { sessionId, messageId: assistantMsg.id, taskId: res.id };
+      // AGENT_EVENT_GROUPS: добавлено 2026-09-22 — бэкенд вещает в ДВЕ разные группы:
+      //   * task_{taskId}  — раннер и воркер (OnAgentStatus, pending_confirmation, OnCompleted…);
+      //   * task_{chatId}  — сервисы bash и редактора (started/completed/failed, TerminalOutput,
+      //                      BuildProblems), потому что для них этот id — ещё и ключ воркспейса.
+      // Мы слушали только первую, поэтому карточка команды создавалась по pending_confirmation,
+      // а событие о завершении уходило в пустоту — статус навсегда застревал на «выполняется»,
+      // и строки правок файлов тоже не появлялись. Подписываемся на обе.
       await signalrService.joinTask(res.id);
+      await signalrService.joinTask(sessionId);
       return { ok: true };
     } catch (e) {
       // SUBSCRIPTION_TIERS: добавлено 2026-09-17
