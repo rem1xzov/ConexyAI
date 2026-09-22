@@ -87,6 +87,15 @@ class SignalrService {
     await this.connection!.invoke('JoinTask', taskId);
   }
 
+  // TASK_COMPLETION_WATCHDOG: добавлено 2026-09-22 — повторная подписка нужна только если её нет,
+  // иначе сторож опрашивал бы хаб каждые несколько секунд без причины.
+  async ensureGroup(taskId: string): Promise<void> {
+    if (this.joinedTaskIds.has(taskId) && this.connection?.state === signalR.HubConnectionState.Connected) {
+      return;
+    }
+    await this.joinTask(taskId);
+  }
+
   async leaveTask(taskId: string): Promise<void> {
     this.joinedTaskIds.delete(taskId);
     if (!this.connection) return;

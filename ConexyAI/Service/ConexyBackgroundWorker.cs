@@ -24,6 +24,8 @@ public class ConexyBackgroundWorker : BackgroundService
     private readonly IHubContext<ConexyHub> _hubContext;
     private readonly IConexyWorkspaceService _workspaceService;
     private readonly ILogger<ConexyBackgroundWorker> _logger;
+    // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — текст, уже отправленный клиенту в этом ходе.
+    private string _partialChatText = string.Empty;
     // SUBSCRIPTION_TIERS: добавлено 2026-09-17
     private readonly IOptions<MemoryOptions> _memoryOptions;
 
@@ -128,6 +130,10 @@ public class ConexyBackgroundWorker : BackgroundService
             entity.Status = ConexyStatus.Running;
             await repository.SaveChangesAsync(taskToken);
 
+            // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — флаг, что ход уже записан в историю
+            // (успешный путь), чтобы ветки остановки/ошибки не записали его второй раз.
+            var turnPersisted = false;
+
             try
             {
                 // Materialize non-graphical attachments into the sandbox before the loop.
@@ -140,6 +146,10 @@ public class ConexyBackgroundWorker : BackgroundService
                         $"[Attachments] Не удалось сохранить в рабочую область: {string.Join(", ", failedAttachments)}. Файлы не будут доступны агенту.",
                         taskToken);
                 }
+
+                // PARTIAL_TURN_PERSIST: буферы переиспользуются — воркер singleton и обрабатывает
+                // задачи последовательно, поэтому поля не могут перемешаться между задачами.
+                _partialChatText = string.Empty;
 
                 string result;
                 // conexy-coder -> autonomous agent pipeline (Maker-Checker + tools).
@@ -164,11 +174,19 @@ public class ConexyBackgroundWorker : BackgroundService
                 {
                     result = await StreamCompletionAsync(llmClient, chatHistory, webSearch, subscriptionService, memoryService, job, taskToken);
                 }
+                turnPersisted = true;
 
                 entity.Result = job.Incognito ? ConexyService.IncognitoPromptPlaceholder : result;
                 entity.Status = ConexyStatus.Completed;
                 entity.FinishedAt = DateTime.UtcNow;
                 await repository.SaveChangesAsync(taskToken);
+
+                // TASK_COMPLETION_DIAGNOSTICS: добавлено 2026-09-22 — без этой строки нельзя было
+                // доказать, что бэкенд реально закрыл задачу, и разбор «висит генерация» упирался
+                // в догадки. Теперь видно и завершение, и факт отправки OnCompleted.
+                _logger.LogInformation(
+                    "Task {TaskId} finished; broadcasting OnCompleted ({Chars} char(s) of result).",
+                    job.TaskId, result?.Length ?? 0);
 
                 await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnCompleted", new
                 {
@@ -192,10 +210,11 @@ public class ConexyBackgroundWorker : BackgroundService
                 entity.FinishedAt = DateTime.UtcNow;
                 await repository.SaveChangesAsync(CancellationToken.None);
 
-                // WORKSPACE_PERSISTENCE: удалено 2026-09-22 — здесь удалялся весь воркспейс
-                // разговора (CleanupWorkspaceAsync → Directory.Delete recursive). После остановки
-                // или ошибки агент на следующее сообщение видел пустую папку и справедливо
-                // отвечал, что файлов нет. Воркспейс живёт ровно столько, сколько живёт чат.
+                // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — остановленный ход раньше не попадал
+                // в историю вообще, поэтому следующее сообщение в этом чате выходило без контекста
+                // («в этой сессии я ничего не делал»).
+                await PersistInterruptedTurnAsync(chatHistory, memoryService, job, runner, turnPersisted);
+
                 await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnStopped", job.TaskId);
             }
             catch (Exception ex)
@@ -207,8 +226,10 @@ public class ConexyBackgroundWorker : BackgroundService
                 entity.FinishedAt = DateTime.UtcNow;
                 await repository.SaveChangesAsync(CancellationToken.None);
 
-                // WORKSPACE_PERSISTENCE: см. комментарий в ветке OnStopped — файлы сессии больше
-                // не удаляются при ошибке/остановке агента.
+                // PARTIAL_TURN_PERSIST: то же, что и для остановки — упавший ход не должен стирать
+                // контекст разговора.
+                await PersistInterruptedTurnAsync(chatHistory, memoryService, job, runner, turnPersisted);
+
                 await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnError", ex.Message);
             }
         }
@@ -329,23 +350,34 @@ public class ConexyBackgroundWorker : BackgroundService
             var builder = new StringBuilder();
             var truncated = false;
 
-            await foreach (var delta in llmClient.StreamChatAsync(messages, job.ModelType, reasoningEffort, taskId: job.TaskId, ct: ct))
+            // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — если пользователь остановит генерацию,
+            // исключение разматывает стек и локальный builder теряется. Сохраняем то, что уже
+            // успело прийти, чтобы ход всё равно попал в историю чата.
+            try
             {
-                if (!string.IsNullOrEmpty(delta.Reasoning))
+                await foreach (var delta in llmClient.StreamChatAsync(messages, job.ModelType, reasoningEffort, taskId: job.TaskId, ct: ct))
                 {
-                    await group.SendAsync("OnThinkingToken", delta.Reasoning, ct);
-                }
+                    if (!string.IsNullOrEmpty(delta.Reasoning))
+                    {
+                        await group.SendAsync("OnThinkingToken", delta.Reasoning, ct);
+                    }
 
-                if (!string.IsNullOrEmpty(delta.Content))
-                {
-                    builder.Append(delta.Content);
-                    await group.SendAsync("OnContentToken", delta.Content, ct);
-                }
+                    if (!string.IsNullOrEmpty(delta.Content))
+                    {
+                        builder.Append(delta.Content);
+                        await group.SendAsync("OnContentToken", delta.Content, ct);
+                    }
 
-                if (delta.FinishReason == "length")
-                {
-                    truncated = true;
+                    if (delta.FinishReason == "length")
+                    {
+                        truncated = true;
+                    }
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                _partialChatText = builder.ToString();
+                throw;
             }
 
             // Surface a truncation instead of silently returning an empty/partial answer.
@@ -413,6 +445,41 @@ public class ConexyBackgroundWorker : BackgroundService
         if (userMessageCount > 0 && userMessageCount % _memoryOptions.Value.BatchingThreshold == 0)
         {
             memoryService.EnqueueExtraction(job.UserId, job.ChatId);
+        }
+    }
+
+    // PARTIAL_TURN_PERSIST: добавлено 2026-09-22
+    /// <summary>
+    /// Stores a turn that did NOT finish normally (stopped by the user, or failed). The user's
+    /// prompt is always kept; the assistant side keeps whatever text had already been streamed.
+    /// Skipped when the normal path already persisted the turn.
+    /// </summary>
+    private async Task PersistInterruptedTurnAsync(
+        IChatHistoryRepository chatHistory,
+        IUserMemoryService memoryService,
+        ConexyJob job,
+        IConexyAgentRunner runner,
+        bool alreadyPersisted)
+    {
+        if (alreadyPersisted)
+            return;
+
+        // The chat path keeps its partial text in a field; the agent path exposes it on the runner.
+        var partial = string.IsNullOrWhiteSpace(_partialChatText)
+            ? runner.PartialOutput
+            : _partialChatText;
+
+        try
+        {
+            await PersistTurnAsync(chatHistory, memoryService, job, partial, CancellationToken.None);
+            _logger.LogInformation(
+                "Persisted interrupted turn: task={TaskId} chat={ChatId} assistantChars={Chars}",
+                job.TaskId, job.ChatId, partial.Length);
+        }
+        catch (Exception ex)
+        {
+            // Losing the partial history is bad but must never mask the original stop/failure.
+            _logger.LogError(ex, "Failed to persist interrupted turn for task {TaskId}.", job.TaskId);
         }
     }
 

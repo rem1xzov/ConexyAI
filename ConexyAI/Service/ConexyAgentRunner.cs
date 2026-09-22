@@ -31,9 +31,16 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly IUserMemoryService _memoryService;
     // AGENT_HISTORY: добавлено 2026-09-22 — предыдущие ходы этого же чата.
     private readonly IChatHistoryRepository _chatHistory;
+    // CONTEXT_DIAGNOSTICS: добавлено 2026-09-22 — логирование состава контекста на уровне сервера.
+    private readonly ILogger<ConexyAgentRunner> _logger;
     // RAG: добавлено 2026-09-17
     private readonly IDocumentService _documentService;
     private ConexyJob _job = null!;
+    // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — накопленный поток ответа на случай остановки.
+    private readonly StringBuilder _streamedOutput = new();
+
+    /// <inheritdoc />
+    public string PartialOutput => _streamedOutput.ToString();
 
     private readonly int _maxIterations;
     private const int MaxSelfRepairAttempts = 3;
@@ -178,6 +185,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         ISubscriptionService subscriptionService,
         IUserMemoryService memoryService,
         IChatHistoryRepository chatHistory,
+        ILogger<ConexyAgentRunner> logger,
         IDocumentService documentService,
         IOptions<AgentOptions> agentOptions)
     {
@@ -196,6 +204,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _subscriptionService = subscriptionService;
         _memoryService = memoryService;
         _chatHistory = chatHistory;
+        _logger = logger;
         _documentService = documentService;
 
         var configured = agentOptions.Value.MaxIterations;
@@ -241,6 +250,33 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 var retained = history.Count > MaxHistoryMessages
                     ? history.Skip(history.Count - MaxHistoryMessages)
                     : history;
+
+                // CONTEXT_DIAGNOSTICS: добавлено 2026-09-22 — без этого нельзя было доказать,
+                // теряется история или модель просто её игнорирует. Пишем ключи, количество и
+                // фактические последние реплики.
+                var roleList = new StringBuilder();
+                foreach (var h in retained)
+                {
+                    if (roleList.Length > 0)
+                        roleList.Append(',');
+                    roleList.Append(h.Role);
+                }
+
+                var contextLine =
+                    "Agent context: task=" + job.TaskId +
+                    " chat=" + job.ChatId +
+                    " user=" + job.UserId +
+                    " historyRows=" + history.Count +
+                    " attached=" + retained.Count() +
+                    " roles=[" + roleList + "]";
+                _logger.LogInformation(contextLine);
+
+                foreach (var entry in retained.TakeLast(3))
+                {
+                    var preview = Preview(entry.Content);
+                    _logger.LogInformation(
+                        "Agent context tail: task=" + job.TaskId + " role=" + entry.Role + " preview=\"" + preview + "\"");
+                }
 
                 if (history.Count > MaxHistoryMessages)
                 {
@@ -292,6 +328,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // SUBSCRIPTION_TIERS: добавлено 2026-09-17 — internal agent tokens count toward the agent budget.
             await _subscriptionService.RecordAgentTokensAsync(job.UserId, llmTurn.TotalTokens, ct);
             messages.Add(responseMessage);
+
+            // TASK_COMPLETION_DIAGNOSTICS: добавлено 2026-09-22 — по этой строке видно, крутится ли
+            // агентский цикл после того, как ответ уже выглядит законченным (главная гипотеза
+            // «генерация не завершается»): растущий номер шага при нулевом тексте = петля,
+            // а один шаг с toolCalls=0 = нормальное завершение.
+            _logger.LogInformation(
+                "Agent iteration " + step + "/" + _maxIterations +
+                " task=" + taskId +
+                " toolCalls=" + (responseMessage.ToolCalls?.Count ?? 0) +
+                " contentChars=" + (responseMessage.Text?.Length ?? 0) +
+                " historyAttached=" + Math.Max(0, messages.Count - 3));
 
             if (responseMessage.ToolCalls == null || responseMessage.ToolCalls.Count == 0)
             {
@@ -794,6 +841,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 if (!string.IsNullOrEmpty(delta.Content))
                 {
                     content.Append(delta.Content);
+                    // PARTIAL_TURN_PERSIST: keeps the worker able to persist a stopped turn.
+                    _streamedOutput.Append(delta.Content);
                     // Forwarded as it arrives: no aggregation, no buffering.
                     await group.SendAsync("OnContentToken", delta.Content, ct);
                 }
@@ -1072,6 +1121,16 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     private static string Truncate(string value, int maxLength) =>
         value.Length <= maxLength ? value : value[..maxLength] + "\n... (truncated)";
+
+    // CONTEXT_DIAGNOSTICS: короткий однострочный превью реплики для логов.
+    private static string Preview(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return string.Empty;
+
+        var flat = content.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return flat.Length <= 50 ? flat : flat[..50] + "…";
+    }
 
     private static string GetString(JsonElement root, string name, string fallback = "")
     {

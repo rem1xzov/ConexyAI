@@ -218,8 +218,15 @@ export default function App() {
 
         if (status === 'running' || status === 'pending') {
           // Задача жива: гарантируем членство в её группах, чтобы поток событий возобновился.
-          void signalrService.joinTask(taskId).catch(() => undefined);
+          void signalrService.ensureGroup(taskId).catch(() => undefined);
           return;
+        }
+
+        // TASK_COMPLETION_WATCHDOG: добавлено 2026-09-22 — терминальный статус на сервере
+        // означает, что мы больше не в стриме. Без этого сторож продолжал бы опрос, а кнопка
+        // «Стоп» оставалась бы доступной по уже законченной задаче.
+        if (streamingRef.current?.messageId === messageId) {
+          streamingRef.current = null;
         }
 
         setSessions((prev) =>
@@ -250,6 +257,13 @@ export default function App() {
               status === 'completed' ? 'Completed' : status === 'cancelled' ? 'Stopped' : 'Failed',
           })),
         );
+
+        // Keep the status bar honest: the run is over even if no live event told us so.
+        setAgentStatus(
+          status === 'completed' ? 'Completed' : status === 'cancelled' ? 'Stopped' : 'Failed',
+        );
+
+        console.info('[Resync] turn finalized from server state', { sessionId, taskId, status });
       } catch (err) {
         // Недоступная/чужая задача не фатальна — транскрипт остаётся как есть.
         console.warn('[Resync] could not read task state', taskId, err);
@@ -257,6 +271,21 @@ export default function App() {
     },
     [t],
   );
+
+  // TASK_COMPLETION_WATCHDOG: добавлено 2026-09-22
+  // Гарантия, что генерация завершается САМА. Живое событие OnCompleted приходит по SignalR и в
+  // редких случаях может быть потеряно (короткий прогон завершился до подписки на группу,
+  // переподключение, обрыв). Раньше в этой ситуации интерфейс оставался в состоянии «генерирует»
+  // навсегда, и пользователь был вынужден жать «Стоп». Теперь состояние сверяется с записью
+  // задачи, пока идёт стрим, и сообщение закрывается автоматически.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const ctx = streamingRef.current;
+      if (!ctx?.taskId) return;
+      void resyncTurn(ctx.sessionId, ctx.messageId, ctx.taskId);
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [resyncTurn]);
 
   // SIGNALR_RESILIENCE: добавлено 2026-09-22 — после перезагрузки в localStorage может остаться ход,
   // который был в процессе, когда вкладка закрылась: статус «streaming» без единого события о
@@ -498,8 +527,12 @@ export default function App() {
         // backend drops the flag in its own finally block.
         setPendingAction(null);
         setAllowAllTaskId(null);
-        const ctx = streamingRef.current;
-        if (!ctx || disposed) return;
+        if (disposed) return;
+
+        // TASK_COMPLETION_WATCHDOG: fall back to resolving the message by task id, so a finished run
+        // can never leave the transcript stuck in "streaming".
+        const ctx = streamingRef.current ?? findStreamingTarget(payload.taskId);
+        if (!ctx) return;
         const { sessionId, messageId } = ctx;
         streamingRef.current = null;
         setAgentStatus('Completed');
@@ -523,8 +556,9 @@ export default function App() {
         // COMMAND_CONFIRM: добавлено 2026-09-20
         setPendingAction(null);
         setAllowAllTaskId(null);
-        const ctx = streamingRef.current;
-        if (!ctx || disposed) return;
+        if (disposed) return;
+        const ctx = streamingRef.current ?? findStreamingTarget();
+        if (!ctx) return;
         const { sessionId, messageId } = ctx;
         streamingRef.current = null;
         setAgentStatus('Failed');
@@ -548,8 +582,9 @@ export default function App() {
         // COMMAND_CONFIRM: добавлено 2026-09-20
         setPendingAction(null);
         setAllowAllTaskId(null);
-        const ctx = streamingRef.current;
-        if (!ctx || disposed) return;
+        if (disposed) return;
+        const ctx = streamingRef.current ?? findStreamingTarget();
+        if (!ctx) return;
         streamingRef.current = null;
         finalizeStopped(ctx);
         // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
@@ -709,6 +744,23 @@ export default function App() {
     refreshUsage,
     t,
   };
+
+  // TASK_COMPLETION_WATCHDOG: добавлено 2026-09-22
+  // Резолвер цели для терминальных событий. Раньше onCompleted/onError/onStopped просто выходили,
+  // если streamingRef оказался пуст, и сообщение навсегда оставалось в состоянии «генерирует».
+  // Теперь цель ищется по taskId (или по активной сессии), а не только по локальному контексту.
+  function findStreamingTarget(taskId?: string): { sessionId: string; messageId: string } | null {
+    const all = liveRef.current.sessions;
+    const session =
+      (taskId ? all.find((s) => s.taskId === taskId) : undefined) ??
+      all.find((s) => s.id === liveRef.current.activeId);
+    if (!session) return null;
+
+    const message = [...session.messages]
+      .reverse()
+      .find((m) => m.role === 'assistant' && m.status === 'streaming');
+    return message ? { sessionId: session.id, messageId: message.id } : null;
+  }
 
   // Latest agent progress for the IDE bottom panel (the task checklist).
   const lastAssistant = [...(activeSession?.messages ?? [])].reverse().find((m) => m.role === 'assistant') ?? null;
