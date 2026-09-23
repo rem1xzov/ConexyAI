@@ -44,5 +44,17 @@ public class ConexyChatMessageEntity
     /// </summary>
     public string? Title { get; set; }
 
+    // CHAT_PIN: добавлено 2026-09-23
+    /// <summary>
+    /// Whether the user pinned this chat to the top of the sidebar. Stored on the history rows for the
+    /// same reason as <see cref="Kind"/> and <see cref="Title"/>: this table is the only one keyed by
+    /// the chat id, so a pin needs no second table and no join.
+    /// <para>
+    /// Defaults to false and later rows are written with false. The list takes the maximum, so a pin
+    /// survives new messages and only an explicit unpin — which clears every row — turns it off.
+    /// </para>
+    /// </summary>
+    public bool IsPinned { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

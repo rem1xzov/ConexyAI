@@ -201,6 +201,35 @@ public class ConexyController : ControllerBase
         return Ok(new { id = chatId, title });
     }
 
+    // CHAT_PIN: добавлено 2026-09-23
+    /// <summary>
+    /// Pins or unpins one chat. Like a rename, the flag is stored with the chat's history rows under
+    /// the caller's user id, so the sidebar order follows the user to every device. A separate route
+    /// (rather than a field on the rename body) keeps "rename" and "pin" from guessing at each other's
+    /// missing fields.
+    /// </summary>
+    [HttpPatch("chats/{chatId:guid}/pin")]
+    public async Task<IActionResult> PinChat(Guid chatId, [FromBody] ChatPinDto? dto, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        if (dto is null)
+            return BadRequest(new { error = "A boolean 'isPinned' is required." });
+
+        var updatedRows = await _conversation.SetPinnedAsync(userId, chatId, dto.IsPinned, ct);
+        if (updatedRows == 0)
+        {
+            // Same ownership gate as rename/delete: no rows of this user means no such chat for them.
+            return NotFound(new { error = "Chat not found." });
+        }
+
+        _logger.LogInformation(
+            "Chat {ChatId} {PinState} by user {UserId} ({Rows} row(s) updated).",
+            chatId, dto.IsPinned ? "pinned" : "unpinned", userId, updatedRows);
+        return Ok(new { id = chatId, isPinned = dto.IsPinned });
+    }
+
     /// <summary>
     /// Chat list projection. The chat <em>kind</em> is inferred from the workspace: a chat that has
     /// one on disk is a conexy-coder (agent) chat, because the workspace is keyed by the chat id and
@@ -216,7 +245,9 @@ public class ConexyController : ControllerBase
             ResolveChatKind(chat.ChatId, chat.Kind),
             chat.LastActivityAt,
             chat.MessageCount,
-            ForPreview(chat.LastAssistantMessage));
+            ForPreview(chat.LastAssistantMessage),
+            // CHAT_PIN: закрепление приезжает вместе с чатом, чтобы порядок сайдбара был общим.
+            chat.IsPinned);
     }
 
     /// <summary>

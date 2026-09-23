@@ -111,6 +111,13 @@ public interface IConversationService
     /// chat is not this user's, so a caller must treat it as "nothing was renamed".
     /// </summary>
     Task<int> RenameChatAsync(Guid userId, Guid chatId, string title, CancellationToken ct = default);
+
+    // CHAT_PIN: добавлено 2026-09-23
+    /// <summary>
+    /// Pins or unpins one chat and reports how many rows were updated. Zero means the chat is not this
+    /// user's, so a caller must treat it as "nothing changed".
+    /// </summary>
+    Task<int> SetPinnedAsync(Guid userId, Guid chatId, bool isPinned, CancellationToken ct = default);
 }
 
 public class ConversationService : IConversationService
@@ -320,6 +327,10 @@ public class ConversationService : IConversationService
     // CHAT_RENAME: добавлено 2026-09-23
     public Task<int> RenameChatAsync(Guid userId, Guid chatId, string title, CancellationToken ct = default) =>
         _chatHistory.RenameChatAsync(userId, chatId, title, ct);
+
+    // CHAT_PIN: добавлено 2026-09-23
+    public Task<int> SetPinnedAsync(Guid userId, Guid chatId, bool isPinned, CancellationToken ct = default) =>
+        _chatHistory.SetPinnedAsync(userId, chatId, isPinned, ct);
 
     // CONTEXT_DIAGNOSTICS: moved out of the agent runner so every path logs the same shape. Without
     // it there is no way to tell "history was lost" from "the model ignored it".

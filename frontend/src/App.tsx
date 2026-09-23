@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
-import { getChats, getChatTranscript, deleteChat, renameChat, getSubscriptionUsage, getTaskStatus, runTask } from './api/conexyApi';
+import { getChats, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, getTaskStatus, runTask } from './api/conexyApi';
 import { signalrService } from './services/signalrService';
 import { useAuth } from './hooks/useAuth';
 import { useIsMobile } from './hooks/useMediaQuery';
@@ -201,6 +201,8 @@ function sessionFromServer(
     model: kind === 'projects' ? 'conexy-coder' : kind === 'students' ? 'ConexyV1-pro' : 'ConexyV1-flash',
     kind,
     messages,
+    // CHAT_PIN: закрепление, сделанное на другом устройстве, приезжает вместе с чатом.
+    isPinned: chat.isPinned,
     createdAt: messages.length > 0 ? messages[0].createdAt : new Date(chat.lastActivityAt).getTime(),
   };
 }
@@ -539,6 +541,9 @@ export default function App() {
   // на сервер ДО переименования, содержит старое имя — без этой защиты он откатил бы только что
   // введённое название обратно.
   const recentRenamesRef = useRef(new Map<string, { title: string; at: number }>());
+  // CHAT_PIN: то же самое для закрепления — иначе ответ синхронизации, ушедший до переключения,
+  // вернул бы старый флаг и чат «отклеился» бы на глазах.
+  const recentPinsRef = useRef(new Map<string, { isPinned: boolean; at: number }>());
 
   const syncChats = useCallback(async () => {
     if (!token) return;
@@ -555,6 +560,8 @@ export default function App() {
       const serverIds = new Set(chats.map((c) => c.id));
       // CHAT_RENAME: серверные имена — для актуализации тех чатов, что уже есть локально.
       const serverTitles = new Map(chats.map((c) => [c.id, c.title ?? null]));
+      // CHAT_PIN: серверное закрепление — то же самое, но для порядка в сайдбаре.
+      const serverPins = new Map(chats.map((c) => [c.id, c.isPinned]));
       const known = new Set(sessionsRef.current.map((s) => s.id));
       const missing = chats.filter((c) => !known.has(c.id));
 
@@ -575,6 +582,7 @@ export default function App() {
       let added = 0;
       let pruned = 0;
       let retitled = 0;
+      let repinned = 0;
       setSessions((prev) => {
         const existing = new Set(prev.map((s) => s.id));
         const fresh = restored.filter((s) => !existing.has(s.id));
@@ -591,20 +599,33 @@ export default function App() {
         // CHAT_RENAME: имя тоже берём с сервера — так переименование, сделанное на телефоне,
         // доезжает до этого устройства, а у чатов, которым имя не задавали, в сайдбаре появляется
         // реальный первый вопрос вместо «Новый чат».
+        // CHAT_PIN: и закрепление — оно задаёт порядок, а не только значок.
         }).map((s) => {
           const serverTitle = serverTitles.get(s.id);
-          if (!serverTitle || serverTitle === s.title) return s;
           // Наш rename новее этого ответа — он и побеждает.
-          const recent = recentRenamesRef.current.get(s.id);
-          if (recent && recent.at > syncStartedAt) return s;
-          retitled += 1;
-          return { ...s, title: serverTitle };
+          const recentRename = recentRenamesRef.current.get(s.id);
+          const titleWins = Boolean(serverTitle) && serverTitle !== s.title
+            && !(recentRename && recentRename.at > syncStartedAt);
+
+          const serverPin = serverPins.get(s.id);
+          const recentPin = recentPinsRef.current.get(s.id);
+          const pinWins = serverPin !== undefined && serverPin !== (s.isPinned ?? false)
+            && !(recentPin && recentPin.at > syncStartedAt);
+
+          if (!titleWins && !pinWins) return s;
+          if (titleWins) retitled += 1;
+          if (pinWins) repinned += 1;
+          return {
+            ...s,
+            ...(titleWins ? { title: serverTitle as string } : {}),
+            ...(pinWins ? { isPinned: serverPin } : {}),
+          };
         });
 
         added = fresh.length;
         // map длины не меняет, поэтому длина kept и есть число оставленных чатов.
         pruned = prev.length - kept.length;
-        if (fresh.length === 0 && pruned === 0 && retitled === 0) return prev;
+        if (fresh.length === 0 && pruned === 0 && retitled === 0 && repinned === 0) return prev;
         return [...kept, ...fresh];
       });
 
@@ -612,8 +633,12 @@ export default function App() {
       for (const [chatId, entry] of recentRenamesRef.current) {
         if (entry.at <= syncStartedAt) recentRenamesRef.current.delete(chatId);
       }
+      // То же для закреплений.
+      for (const [chatId, entry] of recentPinsRef.current) {
+        if (entry.at <= syncStartedAt) recentPinsRef.current.delete(chatId);
+      }
 
-      console.info('[ChatSync] chat list synced', { fetched: chats.length, added, pruned, retitled });
+      console.info('[ChatSync] chat list synced', { fetched: chats.length, added, pruned, retitled, repinned });
     } catch (e) {
       // Offline or a failed request must not break the app: the local list stays as it is.
       console.warn('[ChatSync] could not load the chat list', e);
@@ -1183,8 +1208,34 @@ export default function App() {
     return id;
   }
 
-  function handlePinSession(id: string) {
-    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, isPinned: !s.isPinned } : s)));
+  // CHAT_PIN: добавлено 2026-09-23 — закрепление живёт на сервере, чтобы порядок сайдбара был
+  // одинаковым на всех устройствах (раньше флаг оставался только в этом браузере).
+  async function handlePinSession(id: string) {
+    const session = sessionsRef.current.find((s) => s.id === id);
+    const next = !(session?.isPinned ?? false);
+    // Черновик и инкогнито-чат на сервере не существуют — закрепление останется локальным.
+    const shouldAskServer = Boolean(session) && !session!.incognito && session!.remote && GUID_LIKE.test(id);
+
+    // Оптимистично: порядок должен перестроиться сразу, а не после ответа сервера.
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, isPinned: next } : s)));
+
+    if (!shouldAskServer) return;
+
+    try {
+      await setChatPinned(id, next);
+      // Отмечаем время переключения, чтобы синхронизация, ушедшая до него, не вернула старый флаг.
+      recentPinsRef.current.set(id, { isPinned: next, at: Date.now() });
+    } catch (e) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      // 404 = сервер такого чата у этого пользователя не знает: локальный флаг всё равно корректно
+      // применён. Любая другая ошибка — откатываем оптимистичное изменение, иначе состояние
+      // разойдётся с сервером и следующий sync молча вернёт старый порядок.
+      if (status !== 404) {
+        console.warn('[ChatPin] could not pin the chat on the server', { id, status, error: String(e) });
+        showToast(t('chat.pinFailed'));
+        setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, isPinned: !next } : s)));
+      }
+    }
   }
 
   // CHAT_RENAME: добавлено 2026-09-23 — имя сохраняется на сервере, чтобы приехать на другое устройство.

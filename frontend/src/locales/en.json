@@ -60,7 +60,8 @@
     "heroSubtitle": "What can I build for you today?",
     "defaultName": "Commander",
     "deleteFailed": "Could not delete the chat on the server — it is still in the list. Try again.",
-    "renameFailed": "Could not save the name on the server — the chat was not renamed."
+    "renameFailed": "Could not save the name on the server — the chat was not renamed.",
+    "pinFailed": "Could not pin the chat on the server — the order was not changed."
   },
   "sidebar": {
     "login": "Log in",

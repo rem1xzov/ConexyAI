@@ -35,6 +35,11 @@ public class ConexyChatMessage_config : IEntityTypeConfiguration<ConexyChatMessa
         builder.Property(x => x.Title)
             .HasMaxLength(200);
 
+        // CHAT_PIN: добавлено 2026-09-23 — закреплён ли чат наверху сайдбара.
+        // Строкам, записанным до появления колонки, миграция проставляет false.
+        builder.Property(x => x.IsPinned)
+            .IsRequired();
+
         builder.Property(x => x.CreatedAt)
             .IsRequired();
 

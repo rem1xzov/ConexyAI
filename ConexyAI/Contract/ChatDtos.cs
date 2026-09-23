@@ -13,13 +13,15 @@ namespace ConexyAI.Contract;
 /// <param name="Id">Stable chat id — the same value the client uses for the session and workspace.</param>
 /// <param name="Kind">"chat" or "projects" (the agent mode), inferred from the chat's workspace.</param>
 /// <param name="Title">Null when the chat has no user message yet; the client localizes the fallback.</param>
+/// <param name="IsPinned">CHAT_PIN: pinned chats are listed first on every device.</param>
 public record ChatSummaryDto(
     Guid Id,
     string? Title,
     string Kind,
     DateTime LastActivityAt,
     int MessageCount,
-    string? LastMessage);
+    string? LastMessage,
+    bool IsPinned);
 
 /// <summary>One stored turn. Only what the transcript needs: role, text and when it was stored.</summary>
 public record ChatTranscriptMessageDto(string Role, string Content, DateTime CreatedAt);
@@ -30,3 +32,7 @@ public record ChatTranscriptDto(Guid Id, IReadOnlyList<ChatTranscriptMessageDto>
 // CHAT_RENAME: добавлено 2026-09-23
 /// <summary>Body of <c>PATCH /api/conexy/chats/{id}</c>: the new name for one chat.</summary>
 public record ChatRenameDto(string? Title);
+
+// CHAT_PIN: добавлено 2026-09-23
+/// <summary>Body of <c>PATCH /api/conexy/chats/{id}/pin</c>: pin or unpin one chat.</summary>
+public record ChatPinDto(bool IsPinned);

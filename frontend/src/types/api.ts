@@ -68,6 +68,8 @@ export interface ChatSummary {
   lastActivityAt: string;
   messageCount: number;
   lastMessage?: string | null;
+  // CHAT_PIN: добавлено 2026-09-23 — закреплён ли чат наверху сайдбара (общий флаг для всех устройств).
+  isPinned: boolean;
 }
 
 /** One stored turn inside a chat transcript. */

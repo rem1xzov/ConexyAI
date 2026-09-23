@@ -68,7 +68,7 @@ public class ChatHistoryRepository : IChatHistoryRepository
         var rows = await QueryChatSummariesAsync(userId, excludeChatId: null, limit, ct);
         return rows
             .Select(r => new ChatListSummary(
-                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind, r.Title))
+                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind, r.Title, r.IsPinned))
             .ToList();
     }
 
@@ -112,6 +112,9 @@ public class ChatHistoryRepository : IChatHistoryRepository
                 // CHAT_RENAME: то же для пользовательского имени: переименование обновляет все
                 // строки чата, а новые пишутся с null и потому его не перебивают.
                 Title = g.Max(m => m.Title),
+                // CHAT_PIN: у PostgreSQL нет MAX(bool), поэтому флаг сначала сводится к 0/1 —
+                // закрепление (true) перебивает значение по умолчанию (false).
+                IsPinned = g.Max(m => m.IsPinned ? 1 : 0) == 1,
             })
             .OrderByDescending(c => c.LastActivityAt)
             .Take(limit)
@@ -119,7 +122,7 @@ public class ChatHistoryRepository : IChatHistoryRepository
 
         return rows
             .Select(r => new ChatSummaryRow(
-                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind, r.Title))
+                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind, r.Title, r.IsPinned))
             .ToList();
     }
 
@@ -130,7 +133,8 @@ public class ChatHistoryRepository : IChatHistoryRepository
         string? FirstUser,
         string? LastAssistant,
         string? Kind,
-        string? Title);
+        string? Title,
+        bool IsPinned);
 
     // CHAT_DELETE: добавлено 2026-09-23
     public async Task<int> DeleteChatAsync(Guid userId, Guid chatId, CancellationToken ct = default)
@@ -169,6 +173,29 @@ public class ChatHistoryRepository : IChatHistoryRepository
         foreach (var row in rows)
         {
             row.Title = title;
+        }
+
+        await _context.SaveChangesAsync(ct);
+        return rows.Count;
+    }
+
+    // CHAT_PIN: добавлено 2026-09-23
+    public async Task<int> SetPinnedAsync(Guid userId, Guid chatId, bool isPinned, CancellationToken ct = default)
+    {
+        // Like a rename, the flag lives on every row of the chat: one pass covers the conversation and
+        // the ownership check is the same filtered read used across this repository.
+        var rows = await _context.ChatMessages
+            .Where(m => m.ChatId == chatId && m.UserId == userId)
+            .ToListAsync(ct);
+
+        if (rows.Count == 0)
+        {
+            return 0;
+        }
+
+        foreach (var row in rows)
+        {
+            row.IsPinned = isPinned;
         }
 
         await _context.SaveChangesAsync(ct);

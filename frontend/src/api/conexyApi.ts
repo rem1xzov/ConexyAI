@@ -189,6 +189,15 @@ export async function renameChat(chatId: string, title: string): Promise<void> {
   await http.patch(`/conexy/chats/${chatId}`, { title });
 }
 
+// CHAT_PIN: добавлено 2026-09-23
+/**
+ * Pins or unpins a chat on the server, so the sidebar order reaches every device.
+ * 404 means the chat is not this user's (or was never persisted) — the caller keeps its local flag.
+ */
+export async function setChatPinned(chatId: string, isPinned: boolean): Promise<void> {
+  await http.patch(`/conexy/chats/${chatId}/pin`, { isPinned });
+}
+
 export async function getWorkspaceFiles(sessionId: string): Promise<WorkspaceListing> {
   const { data } = await http.get<WorkspaceListing>(`/conexy/workspace/${sessionId}/files`);
   return data;

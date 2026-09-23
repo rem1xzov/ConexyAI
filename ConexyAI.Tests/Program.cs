@@ -75,6 +75,7 @@ await RunAsync("chat sync: chat list + transcript are scoped to the owner", Test
 await RunAsync("chat kind: the tab mode round-trips and junk is dropped", TestChatKindPersistsAsync);
 await RunAsync("chat delete: physical, owner-scoped, idempotent", TestChatDeleteAsync);
 await RunAsync("chat rename: owner-scoped and survives later turns", TestChatRenameAsync);
+await RunAsync("chat pin: owner-scoped and survives later turns", TestChatPinAsync);
 await RunAsync("ide files: create -> content -> save -> rename -> delete", TestIdeFileCrudAsync);
 await RunAsync("ide files: path traversal is blocked (shared validator)", TestIdeFilePathTraversalBlockedAsync);
 await RunAsync("ide files: manual save invalidates agent undo stack", TestManualSaveInvalidatesEditorUndoAsync);
@@ -1280,6 +1281,48 @@ async Task TestChatRenameAsync()
         "a new turn must not overwrite the chosen name");
 }
 
+// CHAT_PIN: добавлено 2026-09-23 — закрепление чата живёт на сервере и доступно только владельцу.
+// Для каждого чата берётся максимум по строкам, поэтому закрепление не слетает от новых сообщений,
+// а снимается только явным unpin, который чистит все строки.
+async Task TestChatPinAsync()
+{
+    await using var context = CreateContext("chatpin_" + Guid.NewGuid().ToString("N"));
+    var (service, _, _) = CreateConversationService(context);
+    var owner = Guid.NewGuid();
+    var stranger = Guid.NewGuid();
+    var chatId = Guid.NewGuid();
+
+    await service.PersistTurnAsync(
+        new ConversationContext(Guid.NewGuid(), chatId, owner, "SYSTEM", "первый вопрос"),
+        "ответ",
+        TurnOutcome.Completed);
+
+    Assert(!(await service.GetChatsAsync(owner, 50)).Single(c => c.ChatId == chatId).IsPinned,
+        "a fresh chat must not be pinned");
+
+    // A foreign user must not be able to pin somebody else's chat.
+    Assert(await service.SetPinnedAsync(stranger, chatId, true) == 0, "a foreign pin must change nothing");
+    Assert(!(await service.GetChatsAsync(owner, 50)).Single(c => c.ChatId == chatId).IsPinned,
+        "the owner's chat must stay unpinned after a foreign attempt");
+
+    Assert(await service.SetPinnedAsync(owner, chatId, true) == 2, "both stored rows must carry the pin");
+    Assert((await service.GetChatsAsync(owner, 50)).Single(c => c.ChatId == chatId).IsPinned,
+        "the pinned flag must reach the chat list");
+
+    // Later turns are written unpinned, so they must not clear the pin.
+    await service.PersistTurnAsync(
+        new ConversationContext(Guid.NewGuid(), chatId, owner, "SYSTEM", "второй вопрос"),
+        "второй ответ",
+        TurnOutcome.Completed);
+    Assert((await service.GetChatsAsync(owner, 50)).Single(c => c.ChatId == chatId).IsPinned,
+        "a new turn must not unpin the chat");
+
+    // An explicit unpin clears every row, so the flag stays off.
+    Assert(await service.SetPinnedAsync(owner, chatId, false) == 4, "unpinning must cover all rows");
+    Assert(!(await service.GetChatsAsync(owner, 50)).Single(c => c.ChatId == chatId).IsPinned,
+        "an unpin must reach the chat list");
+}
+
 async Task TestCrossChatDigestAsync()
 {
     await using var context = CreateContext("crosschat_" + Guid.NewGuid().ToString("N"));
@@ -1845,6 +1888,10 @@ sealed class StaticConversationService : IConversationService
 
     // CHAT_RENAME: и переименования тоже — история не у него.
     public Task<int> RenameChatAsync(Guid userId, Guid chatId, string title, CancellationToken ct = default) =>
+        Task.FromResult(0);
+
+    // CHAT_PIN: и закрепления тоже.
+    public Task<int> SetPinnedAsync(Guid userId, Guid chatId, bool isPinned, CancellationToken ct = default) =>
         Task.FromResult(0);
 }
 

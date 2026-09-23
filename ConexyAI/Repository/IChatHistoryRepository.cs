@@ -62,6 +62,13 @@ public interface IChatHistoryRepository
     /// updated. Zero means "no such chat for this user" — same ownership gate as the delete path.
     /// </summary>
     Task<int> RenameChatAsync(Guid userId, Guid chatId, string title, CancellationToken ct = default);
+
+    // CHAT_PIN: добавлено 2026-09-23
+    /// <summary>
+    /// Pins or unpins one chat for its owner and returns how many rows were updated. Zero means "no
+    /// such chat for this user" — the same ownership gate as the rename and delete paths.
+    /// </summary>
+    Task<int> SetPinnedAsync(Guid userId, Guid chatId, bool isPinned, CancellationToken ct = default);
 }
 
 // CROSS_CHAT_CONTEXT: добавлено 2026-09-23
@@ -83,4 +90,6 @@ public sealed record ChatListSummary(
     string? Kind,
     // CHAT_RENAME: пользовательское имя чата, если его задавали (иначе null — берётся из первого
     // сообщения пользователя).
-    string? Title);
+    string? Title,
+    // CHAT_PIN: закреплён ли чат наверху сайдбара; сюда же приезжает закрепление с другого устройства.
+    bool IsPinned);
