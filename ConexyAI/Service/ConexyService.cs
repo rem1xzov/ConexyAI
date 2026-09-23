@@ -40,7 +40,7 @@ public class ConexyService : IConexyService
     {
         if (!ConexyModelMapper.TryParse(request.Model, out var modelType))
         {
-            throw new ArgumentException($"Invalid model: '{request.Model}'. Allowed: ConexyV1-flash, ConexyV1-pro, conexy-coder");
+            throw new ArgumentException($"Invalid model: '{request.Model}'. Allowed: ConexyV1-flash, ConexyV1-pro, conexy-coder, conexy-cowork");
         }
 
         // SUBSCRIPTION_TIERS: добавлено 2026-09-17

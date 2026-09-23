@@ -78,7 +78,10 @@ public class SubscriptionService : ISubscriptionService
                 }
                 return new UsageDecision(UsageDecisionKind.Allowed);
 
+            // COWORK_MODE: Cowork is the same agent pipeline and draws on the same token budget —
+            // without this case it would fall through to `default` and be unlimited.
             case ConexyModelType.ConexyCoder:
+            case ConexyModelType.ConexyCowork:
                 if (counter.AgentTokensUsed >= limits.AgentTokenBudget)
                     return new UsageDecision(UsageDecisionKind.LimitExceeded, "agent", counter.AgentWindowResetAt);
                 return new UsageDecision(UsageDecisionKind.Allowed);

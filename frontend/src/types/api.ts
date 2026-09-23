@@ -1,4 +1,5 @@
-export type ConexyModel = 'ConexyV1-flash' | 'ConexyV1-pro' | 'conexy-coder';
+// COWORK_MODE: добавлено 2026-09-23 — conexy-cowork: агент для нетехнических задач (вкладка «Агент»).
+export type ConexyModel = 'ConexyV1-flash' | 'ConexyV1-pro' | 'conexy-coder' | 'conexy-cowork';
 
 export type ReasoningEffort = 'low' | 'high' | 'max';
 

@@ -1,4 +1,5 @@
 ﻿using ConexyAI.Contract;
+using ConexyAI.Model;
 
 namespace ConexyAI.Service;
 
@@ -10,7 +11,8 @@ public interface IConexyAgentRunner
     Task<string> RunLoopAsync(ConexyJob job, ConversationContext context, CancellationToken ct = default);
 
     // CONVERSATION_SERVICE: системный промпт агента нужен вызывающему, чтобы построить контекст.
-    string SystemPrompt { get; }
+    // COWORK_MODE: у каждого агентского режима свой промпт, поэтому это метод от режима.
+    string GetSystemPrompt(ConexyModelType modelType);
 
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22
     /// <summary>

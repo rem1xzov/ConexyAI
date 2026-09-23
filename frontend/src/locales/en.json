@@ -185,7 +185,10 @@
     "goodMorning": "Good morning, {{name}}. What shall we build?",
     "goodAfternoon": "Good afternoon, {{name}}. What shall we build?",
     "goodEvening": "Good evening, {{name}}. What shall we build?",
-    "goodNight": "Good night, {{name}}. What shall we build?"
+    "goodNight": "Good night, {{name}}. What shall we build?",
+    "coworkChipResearch": "Research",
+    "coworkChipDocuments": "Documents and tables",
+    "coworkChipReports": "Reports and summaries"
   },
   "students": {
     "chipSocratic": "Socratic method",
@@ -205,7 +208,8 @@
     "smartSearch": "Smart search",
     "smartSearchDesc": "Look up current information on the web",
     "reasoningDepth": "Reasoning depth",
-    "modelLocked": "The model is fixed in study mode — only its settings are available"
+    "modelLocked": "The model is fixed in study mode — only its settings are available",
+    "coworkDesc": "Research, documents, analysis: web and file search, reports and tables. No code."
   },
   "input": {
     "micUnsupported": "Voice input isn't supported in this browser. Open the site in Chrome or Yandex Browser (not in an in-app messenger browser).",

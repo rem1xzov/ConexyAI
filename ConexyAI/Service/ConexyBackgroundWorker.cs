@@ -163,7 +163,9 @@ public class ConexyBackgroundWorker : BackgroundService
             // задачи последовательно, поэтому поля не могут перемешаться между задачами.
             _partialChatText = string.Empty;
 
-            var isCoder = job.ModelType == ConexyModelType.ConexyCoder;
+            // COWORK_MODE: both agent modes go through the same runner; the runner picks the mode's
+            // prompt and tools itself.
+            var isAgent = job.ModelType.IsAgent();
 
             // CONVERSATION_SERVICE: контекст строится ОДИН раз и используется и для запроса к
             // модели, и для записи хода — поэтому они не могут разойтись по chatId, userId или
@@ -172,7 +174,7 @@ public class ConexyBackgroundWorker : BackgroundService
                 TaskId: job.TaskId,
                 ChatId: job.ChatId,
                 UserId: job.UserId,
-                SystemPrompt: isCoder ? runner.SystemPrompt : BuildChatSystemPrompt(job),
+                SystemPrompt: isAgent ? runner.GetSystemPrompt(job.ModelType) : BuildChatSystemPrompt(job),
                 UserMessage: job.Prompt,
                 Incognito: job.Incognito,
                 Attachments: job.Attachments,
@@ -194,9 +196,9 @@ public class ConexyBackgroundWorker : BackgroundService
                         taskToken);
                 }
 
-                if (isCoder)
+                if (isAgent)
                 {
-                    // conexy-coder -> autonomous agent pipeline (Maker-Checker + tools).
+                    // conexy-coder / conexy-cowork -> autonomous agent pipeline (tools; Maker-Checker for code).
                     result = await runner.RunLoopAsync(job, context, taskToken);
                 }
                 else
@@ -340,7 +342,7 @@ public class ConexyBackgroundWorker : BackgroundService
         CancellationToken ct)
     {
         // web_search is available to flash/pro only when the Smart Search toggle is on.
-        var searchEnabled = job.ModelType != ConexyModelType.ConexyCoder && job.SmartSearch;
+        var searchEnabled = !job.ModelType.IsAgent() && job.SmartSearch;
 
         // CONVERSATION_SERVICE: system prompt, memory facts, prior turns, the current user message
         // and the resumed-answer prefix are all assembled by the shared service now. This method

@@ -62,6 +62,8 @@ await RunAsync("llm: non-streaming message.content is extracted as text", TestNo
 await RunAsync("agent: a hung auditor cannot keep a delivered answer running", TestAgentHungAuditorDoesNotHoldTaskAsync);
 await RunAsync("agent: auditor reviews only the files the agent changed", TestAgentAuditorReviewsOnlyChangedFilesAsync);
 await RunAsync("worker startup: tasks orphaned by a dead process are closed", TestWorkerStartupClosesOrphanedTasksAsync);
+await RunAsync("cowork: its own charter and model id, same agent pipeline", TestCoworkModeRoutingAsync);
+await RunAsync("cowork: writes documents, never runs bash, skips the code auditor", TestCoworkToolsAndNoCodeAuditAsync);
 await RunAsync("sandbox sessions: per-session state directory + idle expiry", TestSandboxSessionStateAsync);
 await RunAsync("ide files: create -> content -> save -> rename -> delete", TestIdeFileCrudAsync);
 await RunAsync("ide files: path traversal is blocked (shared validator)", TestIdeFilePathTraversalBlockedAsync);
@@ -1017,14 +1019,16 @@ async Task TestRunRefusedWithoutBackendShellAsync()
     string workspaceRoot,
     ScriptedAgentLlm llm,
     IHubContext<ConexyHub> hub,
-    int auditTimeoutSeconds)
+    int auditTimeoutSeconds,
+    ConexyModelType modelType = ConexyModelType.ConexyCoder,
+    IConexyEditorService? editor = null)
 {
     var runner = new ConexyAgentRunner(
         CreateWorkspaceService(workspaceRoot),
         new UnavailableVisionService(),
         llm,
         githubService: null!,
-        editorService: null!,
+        editorService: editor!,
         bashService: null!,
         todoService: null!,
         webSearchService: null!,
@@ -1038,8 +1042,8 @@ async Task TestRunRefusedWithoutBackendShellAsync()
         documentService: null!,
         Options.Create(new AgentOptions { MaxIterations = 5, AuditTimeoutSeconds = auditTimeoutSeconds }));
 
-    var job = new ConexyJob(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), ConexyModelType.ConexyCoder, "Создай app.js");
-    var context = new ConversationContext(job.TaskId, job.ChatId, job.UserId, runner.SystemPrompt, job.Prompt);
+    var job = new ConexyJob(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), modelType, "Создай app.js");
+    var context = new ConversationContext(job.TaskId, job.ChatId, job.UserId, runner.GetSystemPrompt(job.ModelType), job.Prompt);
     return (runner, job, context);
 }
 
@@ -1100,6 +1104,81 @@ async Task TestAgentAuditorReviewsOnlyChangedFilesAsync()
             "the file the agent wrote must be reviewed");
         Assert(!llm.AuditPrompt.Contains("JUNK_FROM_NODE_MODULES"), "files the agent did not touch must not reach the reviewer");
         Assert(HasLog(hub, "[Auditor] APPROVED"), "an approved review keeps its log line");
+    }
+    finally
+    {
+        DeleteDirBestEffort(root);
+    }
+}
+
+// COWORK_MODE: добавлено 2026-09-23 — Cowork отличается от Coder только промптом и инструментами;
+// всё остальное (очередь, раннер, лимит токенов агента) обязано быть общим.
+async Task TestCoworkModeRoutingAsync()
+{
+    Assert(ConexyModelMapper.TryParse("conexy-cowork", out var cowork) && cowork == ConexyModelType.ConexyCowork,
+        "conexy-cowork must parse");
+    Assert(cowork.ToPublicName() == "conexy-cowork", "the public name must round-trip");
+    Assert(cowork.IsAgent() && ConexyModelType.ConexyCoder.IsAgent(), "both agent modes go through the agent pipeline");
+    Assert(!ConexyModelType.ConexyV1Flash.IsAgent() && !ConexyModelType.ConexyV1Pro.IsAgent(), "chat models stay chat");
+
+    var root = CreateTempWorkspaceRoot();
+    try
+    {
+        var (runner, _, _) = CreateAgentRunner(root, new ScriptedAgentLlm(), new RecordingHubContext(), 30);
+        var coworkPrompt = runner.GetSystemPrompt(ConexyModelType.ConexyCowork);
+        var coderPrompt = runner.GetSystemPrompt(ConexyModelType.ConexyCoder);
+        Assert(coworkPrompt.Contains("ConexyAI Cowork") && coworkPrompt.Contains("Текущая дата"),
+            "Cowork gets its own charter with the current date");
+        Assert(coderPrompt.Contains("ConexyAI Coder") && !coderPrompt.Contains("Cowork"), "Coder keeps its charter");
+    }
+    finally
+    {
+        DeleteDirBestEffort(root);
+    }
+
+    // The request path enqueues Cowork like any other model.
+    await using var context = CreateContext("cowork_" + Guid.NewGuid().ToString("N"));
+    var (service, queue) = CreateService(context);
+    var response = await service.ExecuteAsync(Guid.NewGuid(), new ConexyRequest("conexy-cowork", "сводка"));
+    Assert(response.Model == "conexy-cowork", $"the task row must record the mode, was {response.Model}");
+    Assert(queue.Enqueued.Count == 1 && queue.Enqueued[0].ModelType == ConexyModelType.ConexyCowork, "the job must carry the Cowork mode");
+}
+
+async Task TestCoworkToolsAndNoCodeAuditAsync()
+{
+    var root = CreateTempWorkspaceRoot();
+    try
+    {
+        var llm = new ScriptedAgentLlm
+        {
+            FirstTurnCalls = new()
+            {
+                // Not offered to Cowork, but a model can still name it: it must be refused, not run.
+                new("call_bash", "function", new LlmFunctionCall("bash", "{\"command\":\"echo SHOULD_NOT_RUN\"}")),
+                new("call_doc", "function", new LlmFunctionCall("str_replace_editor",
+                    "{\"command\":\"create\",\"path\":\"svodka.md\",\"file_text\":\"# Сводка\\n- пункт\"}")),
+            },
+            FinalText = "Сводка готова: svodka.md.",
+        };
+        var hub = new RecordingHubContext();
+        var (runner, job, context) = CreateAgentRunner(
+            root, llm, hub, 30, ConexyModelType.ConexyCowork, CreateEditorService(root));
+
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var result = await runner.RunLoopAsync(job, context, guard.Token);
+
+        Assert(!llm.AdvertisedTools.Contains("bash") && !llm.AdvertisedTools.Contains("terminal_exec") &&
+               !llm.AdvertisedTools.Contains("github_action") && !llm.AdvertisedTools.Contains("take_screenshot"),
+            $"Cowork must not be offered code tools, got [{string.Join(", ", llm.AdvertisedTools)}]");
+        Assert(llm.AdvertisedTools.Contains("str_replace_editor") && llm.AdvertisedTools.Contains("web_search") &&
+               llm.AdvertisedTools.Contains("search_documents"),
+            "Cowork must be offered documents, the knowledge base and the web");
+        Assert(llm.AuditCalls == 0, "the code auditor must not review a Cowork report");
+
+        var document = Path.Combine(CreateWorkspaceService(root).GetTaskWorkspacePath(job.ChatId), "svodka.md");
+        Assert(File.Exists(document) && File.ReadAllText(document).Contains("# Сводка"), "the document must be written to the workspace");
+        Assert(result.Contains("Сводка готова") && result.Contains("svodka.md"), "the final answer lists the document");
+        Assert(!result.Contains("SHOULD_NOT_RUN"), "a refused command must not appear among executed commands");
     }
     finally
     {
@@ -1334,6 +1413,14 @@ sealed class ScriptedAgentLlm : IConexyLlmClient
 {
     private int _turn;
 
+    // COWORK_MODE: the first turn's tool calls and the final text are scriptable per test.
+    public List<LlmToolCall> FirstTurnCalls { get; init; } = new()
+    {
+        new("call_1", "function", new LlmFunctionCall("file_write", "{\"path\":\"app.js\",\"content\":\"console.log('app');\"}"))
+    };
+    public string FinalText { get; init; } = "app.js готов.";
+    public List<string> AdvertisedTools { get; } = new();
+
     public bool HangAudit { get; init; }
     public string AuditReply { get; init; } = "{\"verdict\":\"APPROVED\"}";
     public int AuditCalls { get; private set; }
@@ -1369,14 +1456,17 @@ sealed class ScriptedAgentLlm : IConexyLlmClient
         await Task.Yield();
         if (Interlocked.Increment(ref _turn) == 1)
         {
-            yield return new StreamDelta(ToolCalls: new List<LlmToolCall>
+            foreach (var schema in tools ?? new List<object>())
             {
-                new("call_1", "function", new LlmFunctionCall("file_write", "{\"path\":\"app.js\",\"content\":\"console.log('app');\"}"))
-            });
+                AdvertisedTools.Add(System.Text.Json.JsonSerializer.SerializeToElement(schema)
+                    .GetProperty("function").GetProperty("name").GetString() ?? "");
+            }
+
+            yield return new StreamDelta(ToolCalls: FirstTurnCalls);
             yield break;
         }
 
-        yield return new StreamDelta(Content: "app.js готов.");
+        yield return new StreamDelta(Content: FinalText);
     }
 }
 

@@ -47,6 +47,8 @@ interface WorkspacePanelProps {
   style?: CSSProperties;
   onCursorChange?: (pos: { line: number; column: number; language: string }) => void;
   onRunInSeparateWindow?: () => void;
+  // COWORK_MODE: Cowork produces documents, not programs — there is nothing to "Run".
+  hideRun?: boolean;
 }
 
 interface OpenTab {
@@ -179,6 +181,7 @@ export function WorkspacePanel({
   style,
   onCursorChange,
   onRunInSeparateWindow,
+  hideRun,
 }: WorkspacePanelProps) {
   const { t } = useTranslation();
   const [listing, setListing] = useState<WorkspaceListing | null>(null);
@@ -399,7 +402,8 @@ export function WorkspacePanel({
   }
 
   async function handleRun() {
-    if (!sessionId || runBusy) return;
+    // Ctrl+F5 and the command palette reach this too, not only the (hidden) button.
+    if (!sessionId || runBusy || hideRun) return;
     setRunBusy(true);
     setRunError(null);
     try {
@@ -593,17 +597,19 @@ export function WorkspacePanel({
           {sessionId && <span className="workspace__id">{sessionId.slice(0, 8)}…</span>}
         </div>
         <div className="workspace__actions">
-          <button
-            className="workspace__run-btn"
-            onClick={() => void handleRun()}
-            disabled={!sessionId || runBusy}
-            title={t('workspace.runTitle')}
-            aria-label={t('workspace.runAria')}
-          >
-            <PlayIcon size={15} />
-            {runBusy ? t('workspace.running') : t('workspace.run')}
-          </button>
-          {runError && <span className="workspace__run-error" title={runError}>{runError}</span>}
+          {!hideRun && (
+            <button
+              className="workspace__run-btn"
+              onClick={() => void handleRun()}
+              disabled={!sessionId || runBusy}
+              title={t('workspace.runTitle')}
+              aria-label={t('workspace.runAria')}
+            >
+              <PlayIcon size={15} />
+              {runBusy ? t('workspace.running') : t('workspace.run')}
+            </button>
+          )}
+          {!hideRun && runError && <span className="workspace__run-error" title={runError}>{runError}</span>}
           {activeTab && (
             <span className={`workspace__save-status workspace__save-status--${saveStatus}`}>
               {saveStatus === 'saving' && t('workspace.saving')}

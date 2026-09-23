@@ -74,16 +74,22 @@ function normalizeMessage(m: ChatMessage): ChatMessage {
   };
 }
 
+// COWORK_MODE: добавлено 2026-09-23 — оба режима агента живут во вкладке «Агент».
+function isAgentModel(model: ConexyModel): boolean {
+  return model === 'conexy-coder' || model === 'conexy-cowork';
+}
+
 function normalizeSession(s: ChatSession): ChatSession {
   const raw = s.model as string;
   const model: ConexyModel =
     raw === 'conexy-coder' || raw === 'Conexy-coder' ? 'conexy-coder'
+    : raw === 'conexy-cowork' ? 'conexy-cowork'
     : raw === 'ConexyV1-pro' ? 'ConexyV1-pro'
     : 'ConexyV1-flash';
   return {
     ...s,
     model,
-    kind: s.kind ?? (model === 'conexy-coder' ? 'projects' : 'chat'),
+    kind: s.kind ?? (isAgentModel(model) ? 'projects' : 'chat'),
     messages: (s.messages ?? []).map(normalizeMessage),
   };
 }
@@ -738,11 +744,17 @@ export default function App() {
           },
         ]
       : isAgent
-        ? [
-            { key: 'agent-autonomous', label: t('agent.chipAutonomous') },
-            { key: 'agent-tools', label: t('agent.chipTools') },
-            { key: 'agent-verify', label: t('agent.chipVerify') },
-          ]
+        ? model === 'conexy-cowork'
+          ? [
+              { key: 'cowork-research', label: t('agent.coworkChipResearch') },
+              { key: 'cowork-documents', label: t('agent.coworkChipDocuments') },
+              { key: 'cowork-reports', label: t('agent.coworkChipReports') },
+            ]
+          : [
+              { key: 'agent-autonomous', label: t('agent.chipAutonomous') },
+              { key: 'agent-tools', label: t('agent.chipTools') },
+              { key: 'agent-verify', label: t('agent.chipVerify') },
+            ]
         : [
             { key: 'students-socratic', label: t('students.chipSocratic') },
             { key: 'students-topics', label: t('students.chipTopics') },
@@ -937,7 +949,7 @@ export default function App() {
       id,
       title: defaultTitle('projects', t),
       status: 'Idle',
-      model: 'conexy-coder',
+      model: isAgentModel(model) ? model : 'conexy-coder',
       kind: 'projects',
       messages: [],
       createdAt: Date.now(),
@@ -1397,6 +1409,12 @@ export default function App() {
         }}
         onSelectSession={(id) => {
           setActiveId(id);
+          // COWORK_MODE: an agent chat reopens in the mode it was run in (Coder or Cowork) —
+          // otherwise the next message would silently go to whichever mode the picker showed last.
+          const selected = sessions.find((s) => s.id === id);
+          if (selected && selected.kind === 'projects' && isAgentModel(selected.model)) {
+            setModel(selected.model);
+          }
           // INCOGNITO_CHAT: opening another chat always returns to normal mode.
           setIncognito(false);
           if (isMobile) setSidebarOpen(false);
@@ -1596,6 +1614,7 @@ export default function App() {
                 todos={latestTodos}
                 onCursorChange={setCursorInfo}
                 onRunInSeparateWindow={() => showToast(t('toast.runProject'))}
+                hideRun={model === 'conexy-cowork'}
                 style={{ flex: `0 0 ${workspaceWidth}%` }}
               />
             </>

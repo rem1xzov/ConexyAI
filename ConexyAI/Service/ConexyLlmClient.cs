@@ -116,7 +116,9 @@ public class ConexyLlmClient : IConexyLlmClient
         {
             ConexyModelType.ConexyV1Flash => (_options.DeepSeek.BaseUrl, _options.DeepSeek.ApiKey, _options.DeepSeek.FlashModel),
             ConexyModelType.ConexyV1Pro => (_options.DeepSeek.BaseUrl, _options.DeepSeek.ApiKey, _options.DeepSeek.ProAgentModel),
-            ConexyModelType.ConexyCoder => (_options.DeepSeek.BaseUrl, _options.DeepSeek.ApiKey, _options.DeepSeek.FlashModel),
+            // COWORK_MODE: both agent modes run on the same upstream model; they differ only in the
+            // system prompt and the tool set (see ConexyAgentRunner.AgentProfile).
+            ConexyModelType.ConexyCoder or ConexyModelType.ConexyCowork => (_options.DeepSeek.BaseUrl, _options.DeepSeek.ApiKey, _options.DeepSeek.FlashModel),
             _ => throw new ArgumentOutOfRangeException(nameof(modelType), modelType, "Unsupported model type.")
         };
     }
@@ -130,7 +132,7 @@ public class ConexyLlmClient : IConexyLlmClient
             // Pro reasons only when the Thinking toggle is on (requested == "high").
             ConexyModelType.ConexyV1Pro => NormalizeReasoning(requested),
             // The coder agent runs on the flash model and reasons through its tool loop.
-            ConexyModelType.ConexyCoder => null,
+            ConexyModelType.ConexyCoder or ConexyModelType.ConexyCowork => null,
             _ => NormalizeReasoning(requested)
         };
     }

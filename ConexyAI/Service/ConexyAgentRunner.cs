@@ -58,7 +58,91 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private const int AuditMaxPromptChars = 80_000;
 
     /// <inheritdoc />
-    public string SystemPrompt => WorkerSystemPrompt;
+    public string GetSystemPrompt(ConexyModelType modelType) => ProfileFor(modelType).BuildSystemPrompt();
+
+    // COWORK_MODE: добавлено 2026-09-23
+    /// <summary>
+    /// Everything that distinguishes one agent mode from another. The loop itself — streaming, the
+    /// tool-failure budget, history through <see cref="IConversationService"/>, auto-completion, the
+    /// auditor timeout — is shared, so a fix to the pipeline applies to every mode at once.
+    /// </summary>
+    /// <param name="AllowedTools">Tools the mode may call; <c>null</c> means every tool. Enforced at the
+    /// single tool call point, not only in the advertised list: a model can call a tool it was not
+    /// offered, and Cowork must never reach <c>bash</c>.</param>
+    /// <param name="AuditsCode">Whether the Maker-Checker code auditor reviews the changed files. Its
+    /// charter is about code (race conditions, injections), which is meaningless for a report.</param>
+    /// <param name="IncludesDate">Research answers depend on "now"; the coder charter never needed it.</param>
+    private sealed record AgentProfile(
+        string Mode,
+        string SystemPrompt,
+        IReadOnlySet<string>? AllowedTools,
+        bool AuditsCode,
+        bool IncludesDate)
+    {
+        public bool Allows(string tool) => AllowedTools is null || AllowedTools.Contains(tool);
+
+        public string BuildSystemPrompt() => IncludesDate
+            ? SystemPrompt + $"\n\nТекущая дата и время (UTC): {DateTime.UtcNow:yyyy-MM-dd HH:mm}."
+            : SystemPrompt;
+    }
+
+    private static readonly AgentProfile CoderProfile = new(
+        "coder", WorkerSystemPrompt, AllowedTools: null, AuditsCode: true, IncludesDate: false);
+
+    // COWORK_MODE: no bash/terminal_exec/github/screenshot and no legacy file_* tools — only reading
+    // and writing documents in the chat workspace, the user's knowledge base, the web and a plan.
+    // With no code execution there is nothing to run in a Docker sandbox: files live in the same
+    // per-chat workspace directory the file tools already use.
+    private static readonly AgentProfile CoworkProfile = new(
+        "cowork",
+        CoworkSystemPrompt,
+        AllowedTools: new HashSet<string>(StringComparer.Ordinal)
+        {
+            "str_replace_editor",
+            "workspace_list_files",
+            "todo_write",
+            WebSearchTool.Name,
+            "search_documents",
+            "read_document_chunk",
+        },
+        AuditsCode: false,
+        IncludesDate: true);
+
+    private static AgentProfile ProfileFor(ConexyModelType modelType) =>
+        modelType == ConexyModelType.ConexyCowork ? CoworkProfile : CoderProfile;
+
+    // Profile of the current run (set in RunLoopAsync).
+    private AgentProfile _profile = CoderProfile;
+
+    // COWORK_MODE: добавлено 2026-09-23 — устав режима Cowork (нетехнические задачи).
+    private const string CoworkSystemPrompt =
+        """
+        Ты — ConexyAI Cowork, автономный помощник для нетехнических задач: исследования, аналитика, работа с документами и данными, подготовка отчётов, сводок, писем и планов.
+        Твоя цель — довести задачу до конца и оставить результат готовым файлом в рабочей области, а не только текстом в чате.
+
+        ПРИНЦИПЫ:
+        1. НИКАКОГО УГОДНИЧЕСТВА: без вступительных любезностей, сразу к сути.
+        2. ТОЧНОСТЬ ВАЖНЕЕ ГЛАДКОСТИ: не выдумывай факты, цифры, цитаты и источники. Если данных нет — прямо так и напиши; оценки и допущения явно помечай как допущения.
+        3. ИСТОЧНИКИ: всё, что взято из интернета, подкрепляй ссылкой; всё, что взято из документов пользователя, — названием документа и раздела.
+        4. ЯЗЫК: пиши на языке пользователя, простым деловым языком, без технического жаргона, если пользователь сам его не использует.
+        5. ТЫ НЕ ПИШЕШЬ И НЕ ЗАПУСКАЕШЬ КОД. Терминала у тебя нет. Если задача требует программирования (приложение, скрипт, сборка, запуск), сделай ту часть, что возможна без кода, и прямо предложи переключиться на режим Coder во вкладке «Агент».
+
+        ИНСТРУМЕНТЫ:
+        - `web_search` — актуальная информация из интернета. ОБЯЗАТЕЛЕН для фактов, которые могли измениться: цены, даты, новости, компании, продукты, статистика, законы. Для широкой темы делай несколько запросов с разных сторон.
+        - `search_documents` и `read_document_chunk` — поиск по документам, которые загрузил пользователь. Используй ПЕРВЫМИ, если вопрос касается его файлов, регламентов, договоров.
+        - `str_replace_editor` — создание и правка файлов в рабочей области (`create`, `view`, `str_replace`, `insert`, `undo`). `workspace_list_files` — что уже лежит в рабочей области, включая вложения пользователя.
+        - `todo_write` — план многошаговой задачи: перед началом перечисли все шаги, затем отмечай прогресс.
+
+        РЕЗУЛЬТАТ В ФАЙЛАХ:
+        - Отчёты, сводки, письма, планы, протоколы — Markdown (`.md`): заголовки, списки, таблицы.
+        - Таблицы и данные — CSV (`.csv`, UTF-8, разделитель запятая, первая строка — заголовки): открывается в Excel и Google Таблицах.
+        - Называй файлы по смыслу и без пробелов (например `svodka-konkurentov.md`, `budget-2026.csv`).
+        - Форматы .docx, .xlsx и .pptx пока не поддерживаются: сделай Markdown или CSV и скажи об этом.
+
+        ФОРМАТ ОТВЕТА В ЧАТЕ:
+        После выполнения — короткое резюме: главные выводы (3–7 пунктов), какие файлы созданы, что осталось непроверенным. Не пересказывай весь файл в чате.
+        Используй Markdown: **жирный** для ключевых цифр и фактов, заголовки `##` для длинных ответов, списки для перечислений.
+        """;
 
     // Strict engineering charter for the autonomous Pro agent.
     private const string WorkerSystemPrompt =
@@ -191,6 +275,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // Тот же список без take_screenshot: используется, когда Chromium в окружении недоступен.
     private static readonly List<object> ToolsWithoutScreenshot = BuildToolSchemas(includeScreenshot: false);
 
+    // COWORK_MODE: те же схемы, отфильтрованные по профилю, — описание каждого инструмента одно на все режимы.
+    private static readonly List<object> CoworkTools = ToolsWithoutScreenshot
+        .Where(schema => CoworkProfile.Allows(ToolName(schema)))
+        .ToList();
+
     // Набор инструментов текущего прогона. Член, а не константа, потому что зависит от окружения
     // (есть ли Chromium) — см. ResolveToolsAsync.
     private List<object> _tools = AvailableTools;
@@ -241,6 +330,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
     public async Task<string> RunLoopAsync(ConexyJob job, ConversationContext context, CancellationToken ct = default)
     {
         _job = job;
+        _profile = ProfileFor(job.ModelType);
         // taskId = per-run id (SignalR group, logging, todo, dedup).
         // chatId = stable per-conversation id (workspace files, editor undo, bash).
         var taskId = job.TaskId;
@@ -341,7 +431,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
                 // Maker-Checker only applies to real code changes. A pure dialog reply
                 // must be returned verbatim instead of being swallowed by the auditor.
-                if (changedFiles.Count > 0 && auditReworks < MaxSelfRepairAttempts)
+                if (_profile.AuditsCode && changedFiles.Count > 0 && auditReworks < MaxSelfRepairAttempts)
                 {
                     // AGENT_TERMINATION: аудитор — это отдельный большой запрос к модели, который
                     // идёт ПОСЛЕ того, как ответ уже улетел в чат токенами. Без этой строки пауза
@@ -372,7 +462,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                             : $"[Auditor] Skipped ({audit.SkipReason}) — finalizing without review.",
                         ct);
                 }
-                else if (changedFiles.Count > 0)
+                else if (_profile.AuditsCode && changedFiles.Count > 0)
                 {
                     _logger.LogWarning(
                         "Agent auditor: rework budget exhausted; finalizing without re-review. task={TaskId}",
@@ -416,7 +506,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             foreach (var toolCall in responseMessage.ToolCalls)
             {
-                RecordToolEffect(toolCall, changedFiles, executedCommands);
+                // COWORK_MODE: a tool outside the mode's profile is never executed, and a refused
+                // call must not show up in the "Commands executed" summary either.
+                var toolAllowed = _profile.Allows(toolCall.Function.Name);
+                if (toolAllowed)
+                {
+                    RecordToolEffect(toolCall, changedFiles, executedCommands);
+                }
 
                 await group.SendAsync("OnLog", $"[Tool Call] Executing {toolCall.Function.Name}...", ct);
 
@@ -428,9 +524,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // ЛЮБОЙ инструмент, и ни один из них не может прервать прогон исключением.
                 try
                 {
-                    result = toolCall.Function.Name == "take_screenshot"
-                        ? await HandleScreenshotAsync(taskId, toolCall, messages, group, ct)
-                        : await DispatchToolAsync(taskId, chatId, toolCall, ct);
+                    result = !toolAllowed
+                        ? new ConexyToolResult(
+                            toolCall.Id,
+                            $"Tool '{toolCall.Function.Name}' is not available in {_profile.Mode} mode.",
+                            true)
+                        : toolCall.Function.Name == "take_screenshot"
+                            ? await HandleScreenshotAsync(taskId, toolCall, messages, group, ct)
+                            : await DispatchToolAsync(taskId, chatId, toolCall, ct);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -568,6 +669,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
     /// </summary>
     private async Task<List<object>> ResolveToolsAsync(CancellationToken ct)
     {
+        if (_profile.AllowedTools is not null)
+        {
+            // Cowork never renders pages, so there is nothing to probe.
+            return CoworkTools;
+        }
+
         if (await _visionService.IsAvailableAsync(ct))
         {
             return AvailableTools;
@@ -1588,6 +1695,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         return tools;
     }
+
+    // COWORK_MODE: the schemas are anonymous objects; the name is read back from their JSON shape
+    // ({ type, function: { name, ... } }) once, at type initialization.
+    private static string ToolName(object schema) =>
+        JsonSerializer.SerializeToElement(schema).GetProperty("function").GetProperty("name").GetString() ?? string.Empty;
 
     private static object Function(string name, string description, object parameters) => new
     {

@@ -31,7 +31,15 @@ const CODER_MODEL: ModelOption = {
   descKey: 'model.coderDesc',
 };
 
-const ALL_MODELS: ModelOption[] = [FLASH_MODEL, PRO_MODEL, CODER_MODEL];
+// COWORK_MODE: добавлено 2026-09-23 — второй режим агента: исследования, документы, аналитика.
+const COWORK_MODEL: ModelOption = {
+  value: 'conexy-cowork',
+  label: 'conexy-cowork',
+  shortLabel: 'Cowork',
+  descKey: 'model.coworkDesc',
+};
+
+const ALL_MODELS: ModelOption[] = [FLASH_MODEL, PRO_MODEL, CODER_MODEL, COWORK_MODEL];
 const REASONING_LEVELS: ReasoningEffort[] = ['low', 'high', 'max'];
 
 interface ModelPickerProps {
@@ -78,11 +86,14 @@ export function ModelPicker({
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
 
-  const options = mode === 'code' ? [CODER_MODEL] : [FLASH_MODEL, PRO_MODEL];
+  const options = mode === 'code' ? [CODER_MODEL, COWORK_MODEL] : [FLASH_MODEL, PRO_MODEL];
   const current = ALL_MODELS.find((o) => o.value === model) ?? options[0];
   const isAgent = mode === 'code';
   const showThinking = !isAgent && model === 'ConexyV1-pro';
   const showSmartSearch = !isAgent;
+  // The reasoning depth only drives Coder's code auditor; Cowork has no auditor, so the control
+  // would do nothing there.
+  const showReasoningDepth = isAgent && model === 'conexy-coder';
 
   function select(m: ModelOption) {
     if (locked) return;
@@ -166,7 +177,7 @@ export function ModelPicker({
             </>
           )}
 
-          {isAgent && (
+          {showReasoningDepth && (
             <>
               <div className="modelpicker__divider" />
               <div className="modelpicker__reasoning">
