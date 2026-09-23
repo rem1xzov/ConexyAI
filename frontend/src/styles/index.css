@@ -1231,6 +1231,28 @@ body {
   opacity: 1;
 }
 
+/* CHAT_MENU_TOUCH: on a phone or tablet there is no hover, so a hover-only button is invisible.
+   The button is always shown there and the touch target grows to at least 36x36 (the icon keeps
+   its size): a 16px glyph is not a realistic finger target. */
+@media (hover: none), (max-width: 768px) {
+  .chats__menu-btn {
+    opacity: 1;
+    visibility: visible;
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    right: 2px;
+  }
+
+  /* Keep the title clear of the wider button. */
+  .chats__row .chats__item {
+    padding-right: 42px;
+  }
+}
+
 .chats__pin {
   flex-shrink: 0;
   color: var(--muted);
@@ -1267,6 +1289,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* CHAT_MENU_FLIP: same menu, anchored above its row — for the chats at the bottom of the list,
+   where opening downwards would push it past the sidebar's scroll box. */
+.chats__menu--up {
+  top: auto;
+  bottom: calc(100% + 4px);
 }
 
 .chats__menu-item {

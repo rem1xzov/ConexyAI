@@ -165,6 +165,18 @@ function kindFromServer(kind: string | null | undefined): ChatSessionKind {
   return kind === 'projects' || kind === 'students' ? kind : 'chat';
 }
 
+// CHAT_SHARE: `#/chat/<id>` — ссылка, которую выдаёт «Поделиться». Это hash-маршрут, поэтому он не
+// требует правил переписывания на сервере, и открыть чат по нему может только его владелец:
+// история читается строго по UserId, у остальных просто нет такого чата.
+function chatIdFromHash(hash: string): string | null {
+  const match = /^#\/chat\/([0-9a-fA-F-]{36})$/.exec(hash);
+  return match ? match[1] : null;
+}
+
+function chatLink(id: string): string {
+  return `${window.location.origin}${window.location.pathname}#/chat/${id}`;
+}
+
 // CHAT_SYNC: добавлено 2026-09-23
 /**
  * Builds a local session from a server chat list entry plus its stored transcript. Used for chats
@@ -1338,15 +1350,38 @@ export default function App() {
     }
   }
 
+  // CHAT_SHARE: на телефоне — системная шторка через Web Share API, на десктопе — ссылка в
+  // буфер обмена. Раньше кнопка просто копировала весь текст диалога с англоязычным тостом.
   async function handleShareSession(session: ChatSession) {
-    const text = session.messages
-      .map((m) => `${m.role === 'user' ? 'User' : 'ConexyAI'}: ${m.content || '(attachment)'}`)
-      .join('\n\n');
+    // Черновик и инкогнито-чат на сервере не существуют — ссылке некуда вести.
+    if (session.incognito || !session.remote || !GUID_LIKE.test(session.id)) {
+      showToast(t('sidebar.shareUnavailable'));
+      return;
+    }
+
+    const url = chatLink(session.id);
+    const title = session.title || t('chat.shareTitleFallback');
+
+    // navigator.share есть и в части десктопных браузеров — тогда системная шторка предпочтительнее.
+    if (navigator.share) {
+      try {
+        await navigator.share({ title, text: title, url });
+      } catch (e) {
+        // AbortError — пользователь закрыл шторку, ничего не выбрав. Это не сбой.
+        if ((e as { name?: string })?.name !== 'AbortError') {
+          console.warn('[ChatShare] native share failed', { id: session.id, error: String(e) });
+          showToast(t('sidebar.shareFailed'));
+        }
+      }
+      return;
+    }
+
     try {
-      await navigator.clipboard.writeText(text);
-      showToast('Copied to clipboard');
-    } catch {
-      showToast('Failed to copy');
+      await navigator.clipboard.writeText(url);
+      showToast(t('sidebar.shareLinkCopied'));
+    } catch (e) {
+      console.warn('[ChatShare] could not copy the link', { id: session.id, error: String(e) });
+      showToast(t('sidebar.shareFailed'));
     }
   }
 
@@ -1740,6 +1775,24 @@ export default function App() {
     else root.removeAttribute('data-incognito');
     return () => root.removeAttribute('data-incognito');
   }, [incognitoActive]);
+
+  // CHAT_SHARE: открыть чат, пришедший ссылкой. Ждём, пока синхронизация подтянет список, —
+  // на первом рендере чата ещё нет, а ссылку без него открыть нечем. Если чат так и не появился
+  // (ссылка от чужого аккаунта), ничего не делаем: текущий экран остаётся на месте.
+  const openedLinkRef = useRef<string | null>(null);
+  useEffect(() => {
+    const linked = chatIdFromHash(route);
+    if (!linked || openedLinkRef.current === linked) return;
+
+    const session = sessions.find((s) => s.id === linked);
+    if (!session) return;
+
+    openedLinkRef.current = linked;
+    setActiveId(linked);
+    setActiveTab(session.kind ?? 'chat');
+    setIncognito(false);
+    if (isMobile) setSidebarOpen(false);
+  }, [route, sessions, isMobile]);
 
   // ADMIN_HOOKS_ORDER: возвраты для админки обязаны стоять ПОСЛЕ самого последнего хука этого
   // компонента. Раньше они были выше useEffect'а инкогнито, и переход на `#/admin` (без F5)

@@ -61,7 +61,8 @@
     "defaultName": "Commander",
     "deleteFailed": "Could not delete the chat on the server — it is still in the list. Try again.",
     "renameFailed": "Could not save the name on the server — the chat was not renamed.",
-    "pinFailed": "Could not pin the chat on the server — the order was not changed."
+    "pinFailed": "Could not pin the chat on the server — the order was not changed.",
+    "shareTitleFallback": "A ConexyAI conversation"
   },
   "sidebar": {
     "login": "Log in",
@@ -80,7 +81,11 @@
     "listLabelAgent": "Agent",
     "listLabelStudents": "Students",
     "noSessions": "No sessions yet",
+    "sessionMenu": "Chat menu",
     "share": "Share",
+    "shareLinkCopied": "Chat link copied to the clipboard",
+    "shareFailed": "Could not share the chat",
+    "shareUnavailable": "This chat is not stored on the server yet, so there is no link to share",
     "pin": "Pin",
     "unpin": "Unpin",
     "rename": "Rename",

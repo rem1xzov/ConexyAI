@@ -81,6 +81,9 @@ export function Sidebar(props: SidebarProps) {
   } = props;
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  // CHAT_MENU_FLIP: направление открытия меню пересчитывается при каждом клике — иначе меню
+  // последнего чата в списке уезжает за нижнюю границу и обрезается боковой панелью.
+  const [menuUp, setMenuUp] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
@@ -126,6 +129,26 @@ export function Sidebar(props: SidebarProps) {
     setEditingId(s.id);
     setEditValue(s.title);
     setOpenMenuId(null);
+  }
+
+  // CHAT_MENU_FLIP: меню открывается вниз, если под кнопкой есть место, и вверх — если его нет.
+  // Высота — грубая оценка содержимого (4 пункта + отступы): точное измерение потребовало бы
+  // рендера меню до решения о направлении.
+  const MENU_HEIGHT_PX = 200;
+
+  function toggleMenu(id: string, button: HTMLElement) {
+    if (openMenuId === id) {
+      setOpenMenuId(null);
+      return;
+    }
+
+    const rect = button.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    // Вверх уходим только тогда, когда снизу действительно тесно, а сверху просторнее — иначе
+    // меню у первого чата списка просто вылезло бы за верхнюю границу панели.
+    setMenuUp(spaceBelow < MENU_HEIGHT_PX && spaceAbove > spaceBelow);
+    setOpenMenuId(id);
   }
 
   function commitRename() {
@@ -212,14 +235,15 @@ export function Sidebar(props: SidebarProps) {
 
                     <button
                       className="chats__menu-btn"
-                      onClick={() => setOpenMenuId((prev) => (prev === s.id ? null : s.id))}
-                      aria-label="Session menu"
+                      onClick={(e) => toggleMenu(s.id, e.currentTarget)}
+                      aria-label={t('sidebar.sessionMenu')}
+                      aria-expanded={openMenuId === s.id}
                     >
                       <ThreeDotsIcon size={16} />
                     </button>
 
                     {openMenuId === s.id && (
-                      <div className="chats__menu" ref={menuRef}>
+                      <div className={`chats__menu ${menuUp ? 'chats__menu--up' : ''}`} ref={menuRef}>
                         <button
                           className="chats__menu-item"
                           onClick={() => {
