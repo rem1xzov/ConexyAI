@@ -12,6 +12,7 @@ using ConexyAI.Hub;
 using ConexyAI.Model;
 using ConexyAI.Repository;
 using ConexyAI.Service;
+using ConexyAI.Service.Office;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -65,6 +66,9 @@ await RunAsync("worker startup: tasks orphaned by a dead process are closed", Te
 await RunAsync("cowork: its own charter and model id, same agent pipeline", TestCoworkModeRoutingAsync);
 await RunAsync("context: a new chat sees the user's other chats, never its own or incognito", TestCrossChatDigestAsync);
 await RunAsync("context: memory is extracted after the first message of a chat", TestMemoryExtractedAfterFirstMessageAsync);
+await RunAsync("office: .docx/.xlsx/.pptx written from Markdown read back intact", TestOfficeRoundTripAsync);
+await RunAsync("office: document attachments reach the model as text, in every mode", TestAttachmentTextComposedAsync);
+await RunAsync("office: agents create and read documents in the workspace", TestAgentDocumentToolsAsync);
 await RunAsync("cowork: writes documents, never runs bash, skips the code auditor", TestCoworkToolsAndNoCodeAuditAsync);
 await RunAsync("sandbox sessions: per-session state directory + idle expiry", TestSandboxSessionStateAsync);
 await RunAsync("ide files: create -> content -> save -> rename -> delete", TestIdeFileCrudAsync);
@@ -1169,6 +1173,116 @@ async Task TestMemoryExtractedAfterFirstMessageAsync()
     Assert(memory.Extractions == 1, "the second message is between batches");
     await service.PersistTurnAsync(turn with { UserMessage = "третье" }, "ок", TurnOutcome.Completed);
     Assert(memory.Extractions == 2, $"every BatchingThreshold-th message is extracted, got {memory.Extractions}");
+}
+
+// OFFICE_FORMATS: добавлено 2026-09-23
+const string OfficeSampleMarkdown = """
+# Отчёт по кофейням
+
+Краткая **сводка** по рынку.
+
+## Цены
+| Кофейня | Капучино | Код |
+|---|---|---|
+| Бодрость | 250 | 007 |
+| Утро | 1 290,50 | 2026-09-23 |
+
+- Рынок растёт на 12%
+1. Первый шаг
+""";
+
+Task TestOfficeRoundTripAsync()
+{
+    var docx = DocumentParser.Parse(OfficeDocumentWriter.Create(OfficeFormat.Docx, OfficeSampleMarkdown), "r.docx");
+    Assert(docx.Contains("Отчёт по кофейням") && docx.Contains("| Бодрость | 250 | 007 |") && docx.Contains("Рынок растёт"),
+        $"docx must keep headings, tables and lists, got: {docx}");
+    Assert(docx.Contains("Краткая сводка по рынку.\n"), "docx paragraphs must stay separate lines, not one run-on string");
+
+    var xlsx = DocumentParser.Parse(OfficeDocumentWriter.Create(OfficeFormat.Xlsx, OfficeSampleMarkdown), "r.xlsx");
+    Assert(xlsx.Contains("Лист: Цены"), $"a table becomes a sheet named after its heading, got: {xlsx}");
+    Assert(xlsx.Contains("| Утро | 1290.5 | 2026-09-23 |"), "numbers become numbers, dates stay text");
+    Assert(xlsx.Contains("| Бодрость | 250 | 007 |"), "identifiers with leading zeros stay text");
+
+    var csv = DocumentParser.Parse(OfficeDocumentWriter.Create(OfficeFormat.Xlsx, "Имя;Город\nАня;\"Москва; центр\""), "c.xlsx");
+    Assert(csv.Contains("| Аня | Москва; центр |"), $"plain CSV text becomes a sheet, got: {csv}");
+
+    var pptx = DocumentParser.Parse(OfficeDocumentWriter.Create(OfficeFormat.Pptx, OfficeSampleMarkdown, "Deck"), "r.pptx");
+    Assert(pptx.Contains("## Слайд 1\nОтчёт по кофейням") && pptx.Contains("## Слайд 2\nЦены"),
+        $"every #/## heading starts a slide, got: {pptx}");
+
+    var longDeck = "## Пункты\n" + string.Join("\n", Enumerable.Range(1, 11).Select(i => $"- п{i}"));
+    var slides = DocumentParser.Parse(OfficeDocumentWriter.Create(OfficeFormat.Pptx, longDeck), "l.pptx");
+    Assert(slides.Contains("Пункты (продолжение)") && slides.Contains("п11"), "an overfull slide continues on the next one");
+
+    foreach (var format in new[] { OfficeFormat.Docx, OfficeFormat.Xlsx, OfficeFormat.Pptx })
+    {
+        // Control characters from model output must not produce an unreadable file.
+        var bytes = OfficeDocumentWriter.Create(format, "# Заголовок\u0001\n| a | b\u0007 |\n|---|---|\n| 1 | 2 |");
+        var readBack = DocumentParser.Parse(bytes, "x" + OfficeDocumentWriter.Extension(format));
+        var expected = format == OfficeFormat.Xlsx ? "| 1 | 2 |" : "Заголовок";
+        Assert(readBack.Contains(expected), $"{format} must stay valid XML with control characters in the text, got: {readBack}");
+    }
+    return Task.CompletedTask;
+}
+
+Task TestAttachmentTextComposedAsync()
+{
+    TaskAttachment Attach(string name, string contentType, byte[] bytes) => new(name, Convert.ToBase64String(bytes), contentType);
+
+    var docx = Attach("plan.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        OfficeDocumentWriter.Create(OfficeFormat.Docx, "# План\nОткрыть кофейню в марте."));
+    var xlsx = Attach("budget.xlsx", "application/octet-stream",
+        OfficeDocumentWriter.Create(OfficeFormat.Xlsx, "| Статья | Сумма |\n|---|---|\n| Аренда | 90000 |"));
+    var legacy = Attach("old.doc", "application/msword", new byte[] { 0xD0, 0xCF, 0x11, 0xE0 });
+    var image = Attach("photo.png", "image/png", new byte[] { 1, 2, 3 });
+
+    var message = AttachmentText.ComposeUserMessage("Что в файлах?", new List<TaskAttachment> { docx, xlsx, legacy, image });
+    Assert(message.StartsWith("Что в файлах?"), "the user's own text comes first");
+    Assert(message.Contains("Открыть кофейню в марте.") && message.Contains("| Аренда | 90000 |"),
+        $"document text must be in the message the model receives, got: {message}");
+    Assert(message.Contains("«old.doc»") && message.Contains("не извлекается"), "a legacy binary format is named, not dumped as garbage");
+    Assert(!message.Contains("photo.png"), "images keep going to the model as images");
+
+    var big = Attach("big.txt", "text/plain", System.Text.Encoding.UTF8.GetBytes(new string('я', AttachmentText.MaxCharsPerAttachment + 500)));
+    var capped = AttachmentText.ComposeUserMessage("?", new List<TaskAttachment> { big });
+    Assert(capped.Contains("показаны первые"), "an oversized document is truncated with an explicit note");
+    Assert(AttachmentText.ComposeUserMessage("без вложений", null) == "без вложений", "no attachments, no change");
+    return Task.CompletedTask;
+}
+
+async Task TestAgentDocumentToolsAsync()
+{
+    var root = CreateTempWorkspaceRoot();
+    try
+    {
+        var llm = new ScriptedAgentLlm
+        {
+            FirstTurnCalls = new()
+            {
+                new("call_doc", "function", new LlmFunctionCall("create_document",
+                    "{\"path\":\"otchet.docx\",\"content\":\"# Отчёт\\n- пункт один\"}")),
+                new("call_read", "function", new LlmFunctionCall("read_document_file", "{\"path\":\"otchet.docx\"}")),
+            },
+            FinalText = "Готово: otchet.docx.",
+        };
+        var hub = new RecordingHubContext();
+        var (runner, job, context) = CreateAgentRunner(root, llm, hub, 30, ConexyModelType.ConexyCowork, CreateEditorService(root));
+
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var result = await runner.RunLoopAsync(job, context, guard.Token);
+
+        Assert(llm.AdvertisedTools.Contains("create_document") && llm.AdvertisedTools.Contains("read_document_file"),
+            "Cowork must be offered the document tools");
+        var file = Path.Combine(CreateWorkspaceService(root).GetTaskWorkspacePath(job.ChatId), "otchet.docx");
+        Assert(File.Exists(file), "create_document must write the file into the workspace");
+        Assert(DocumentParser.Parse(File.ReadAllBytes(file), file).Contains("пункт один"), "the file must be a real .docx");
+        Assert(result.Contains("otchet.docx"), "the created document is listed in the final answer");
+        Assert(llm.AuditCalls == 0, "a binary document is never sent to the code auditor");
+    }
+    finally
+    {
+        DeleteDirBestEffort(root);
+    }
 }
 
 // COWORK_MODE: добавлено 2026-09-23 — Cowork отличается от Coder только промптом и инструментами;

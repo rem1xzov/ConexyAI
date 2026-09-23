@@ -133,3 +133,6 @@ public class PendingActionEvent
     /// <summary>True when the command matched the dangerous-command classifier (accent styling).</summary>
     public bool IsDangerous { get; set; }
 }
+
+// OFFICE_FORMATS: добавлено 2026-09-23 — "download the answer as .docx/.xlsx/.pptx".
+public record ExportDocumentRequest(string Format, string Markdown, string? FileName = null);

@@ -1,6 +1,27 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CheckIcon, CopyIcon, PlayIcon, RefreshIcon, ThumbsDownIcon, ThumbsUpIcon } from './Icons';
+import { exportDocument, type OfficeFormat } from '../api/conexyApi';
+import { triggerDownload } from '../utils/download';
+import { CheckIcon, CopyIcon, DownloadIcon, PlayIcon, RefreshIcon, ThumbsDownIcon, ThumbsUpIcon } from './Icons';
+
+// OFFICE_FORMATS: добавлено 2026-09-23 — every model's answer can be saved as an office file.
+const EXPORT_FORMATS: { format: OfficeFormat; labelKey: string }[] = [
+  { format: 'docx', labelKey: 'message.exportDocx' },
+  { format: 'xlsx', labelKey: 'message.exportXlsx' },
+  { format: 'pptx', labelKey: 'message.exportPptx' },
+];
+
+/** File name from the answer's first heading or line, safe for every OS. */
+function exportFileName(content: string): string {
+  const firstLine = content.split('\n').find((l) => l.trim().length > 0) ?? '';
+  const cleaned = firstLine
+    .replace(/^#+\s*/, '')
+    .replace(/[*_`#[\]()<>:"/\\|?]/g, '')
+    .trim()
+    .slice(0, 60)
+    .trim();
+  return cleaned || 'conexy-answer';
+}
 
 interface MessageActionsProps {
   content: string;
@@ -20,6 +41,23 @@ export function MessageActions({ content, onRegenerate, onContinue }: MessageAct
   const { t } = useTranslation();
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [copied, setCopied] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState<OfficeFormat | null>(null);
+  const [exportFailed, setExportFailed] = useState(false);
+
+  async function exportAs(format: OfficeFormat) {
+    setExporting(format);
+    setExportFailed(false);
+    try {
+      const name = exportFileName(content);
+      triggerDownload(await exportDocument(format, content, name), `${name}.${format}`);
+      setExportOpen(false);
+    } catch {
+      setExportFailed(true);
+    } finally {
+      setExporting(null);
+    }
+  }
 
   async function copy() {
     try {
@@ -79,6 +117,30 @@ export function MessageActions({ content, onRegenerate, onContinue }: MessageAct
           <span>{t('message.continue')}</span>
         </button>
       )}
+      <button
+        type="button"
+        className={`message-actions__btn ${exportOpen ? 'message-actions__btn--active' : ''}`}
+        onClick={() => setExportOpen((o) => !o)}
+        title={t('message.export')}
+        aria-label={t('message.export')}
+        aria-expanded={exportOpen}
+      >
+        <DownloadIcon size={15} />
+      </button>
+      {exportOpen &&
+        EXPORT_FORMATS.map(({ format, labelKey }) => (
+          <button
+            key={format}
+            type="button"
+            className="message-actions__btn message-actions__btn--continue"
+            onClick={() => void exportAs(format)}
+            disabled={exporting !== null}
+            title={t('message.export')}
+          >
+            <span>{exporting === format ? '…' : t(labelKey)}</span>
+          </button>
+        ))}
+      {exportFailed && <span className="message-actions__error">{t('message.exportFailed')}</span>}
       {onRegenerate && (
         <button
           type="button"

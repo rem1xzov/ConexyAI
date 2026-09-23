@@ -303,7 +303,12 @@
     "continueBusy": "Wait for the current generation to finish, then press Continue again",
     "continueNoPrompt": "Couldn't find the prompt this answer belongs to",
     "resend": "Resend",
-    "edit": "Edit"
+    "edit": "Edit",
+    "export": "Download as a document",
+    "exportDocx": "Word",
+    "exportXlsx": "Excel",
+    "exportPptx": "PowerPoint",
+    "exportFailed": "Could not create the file"
   },
   "statusbar": {
     "connected": "Connected",
@@ -391,7 +396,8 @@
     "menuSave": "Save",
     "menuDownloadZip": "Download ZIP",
     "menuView": "View",
-    "menuToggleExplorer": "Toggle File Explorer"
+    "menuToggleExplorer": "Toggle File Explorer",
+    "downloadFile": "Download file"
   },
   "errors": {
     "serviceUnavailable": "The service is restarting right now. Try again in a few seconds.",

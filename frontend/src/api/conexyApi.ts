@@ -175,6 +175,24 @@ export async function downloadWorkspaceZip(sessionId: string): Promise<Blob> {
   return data;
 }
 
+// OFFICE_FORMATS: добавлено 2026-09-23
+export type OfficeFormat = 'docx' | 'xlsx' | 'pptx';
+
+/** Any model's answer as a Word / Excel / PowerPoint file, rendered server-side from its Markdown. */
+export async function exportDocument(format: OfficeFormat, markdown: string, fileName?: string): Promise<Blob> {
+  const { data } = await http.post<Blob>('/conexy/export', { format, markdown, fileName }, { responseType: 'blob' });
+  return data;
+}
+
+/** A single workspace file as-is — binary documents cannot go through the text endpoint. */
+export async function downloadWorkspaceRaw(sessionId: string, path: string): Promise<Blob> {
+  const { data } = await http.get<Blob>(`/conexy/workspace/${sessionId}/raw`, {
+    params: { path },
+    responseType: 'blob',
+  });
+  return data;
+}
+
 /** Uploads a ZIP archive that gets extracted into the session workspace. */
 export async function uploadWorkspaceZip(sessionId: string, file: File): Promise<void> {
   const formData = new FormData();

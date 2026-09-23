@@ -175,7 +175,9 @@ public class ConexyBackgroundWorker : BackgroundService
                 ChatId: job.ChatId,
                 UserId: job.UserId,
                 SystemPrompt: isAgent ? runner.GetSystemPrompt(job.ModelType) : BuildChatSystemPrompt(job),
-                UserMessage: job.Prompt,
+                // OFFICE_FORMATS: document attachments are read into the message for every mode (the
+                // model never saw them before), and the same text lands in the history.
+                UserMessage: AttachmentText.ComposeUserMessage(job.Prompt, job.Attachments),
                 Incognito: job.Incognito,
                 Attachments: job.Attachments,
                 AssistantPrefix: job.AssistantPrefix);

@@ -5,6 +5,7 @@ using ConexyAI.Contract;
 using ConexyAI.Hub;
 using ConexyAI.Model;
 using ConexyAI.Repository;
+using ConexyAI.Service.Office;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 
@@ -104,6 +105,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
             WebSearchTool.Name,
             "search_documents",
             "read_document_chunk",
+            "create_document",
+            "read_document_file",
         },
         AuditsCode: false,
         IncludesDate: true);
@@ -132,12 +135,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
         - `search_documents` и `read_document_chunk` — поиск по документам, которые загрузил пользователь. Используй ПЕРВЫМИ, если вопрос касается его файлов, регламентов, договоров.
         - `str_replace_editor` — создание и правка файлов в рабочей области (`create`, `view`, `str_replace`, `insert`, `undo`). `workspace_list_files` — что уже лежит в рабочей области, включая вложения пользователя.
         - `todo_write` — план многошаговой задачи: перед началом перечисли все шаги, затем отмечай прогресс.
+        - `create_document` — готовый файл Word (.docx), Excel (.xlsx) или PowerPoint (.pptx) из Markdown. `read_document_file` — текст .docx/.xlsx/.pptx/.pdf из рабочей области (для них `view` показывает двоичный мусор).
 
         РЕЗУЛЬТАТ В ФАЙЛАХ:
-        - Отчёты, сводки, письма, планы, протоколы — Markdown (`.md`): заголовки, списки, таблицы.
-        - Таблицы и данные — CSV (`.csv`, UTF-8, разделитель запятая, первая строка — заголовки): открывается в Excel и Google Таблицах.
-        - Называй файлы по смыслу и без пробелов (например `svodka-konkurentov.md`, `budget-2026.csv`).
-        - Форматы .docx, .xlsx и .pptx пока не поддерживаются: сделай Markdown или CSV и скажи об этом.
+        - Отчёты, сводки, письма, планы, протоколы — Word (`.docx`) через `create_document`: заголовки, списки, таблицы. Черновики можно держать в Markdown (`.md`).
+        - Таблицы и расчёты — Excel (`.xlsx`) через `create_document`: каждая Markdown-таблица становится листом, числа пиши без единиц измерения в ячейке, чтобы их можно было считать.
+        - Презентации — PowerPoint (`.pptx`) через `create_document`: каждый заголовок `#`/`##` — слайд, под ним 3–6 коротких пунктов.
+        - Называй файлы по смыслу и без пробелов (например `svodka-konkurentov.docx`, `budget-2026.xlsx`).
+        - Вложения пользователя уже приходят тебе текстом в сообщении; файлы, загруженные раньше, читай через `read_document_file`.
 
         ФОРМАТ ОТВЕТА В ЧАТЕ:
         После выполнения — короткое резюме: главные выводы (3–7 пунктов), какие файлы созданы, что осталось непроверенным. Не пересказывай весь файл в чате.
@@ -163,6 +168,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         ИНСТРУМЕНТЫ:
         Ты работаешь инструментами: `str_replace_editor` (view/create/str_replace/insert/undo), `bash`, `web_search` (поиск актуальной информации в интернете) и системная память задачи (todo-список).
+        Для документов: `create_document` создаёт .docx/.xlsx/.pptx из Markdown, `read_document_file` читает текст .docx/.xlsx/.pptx/.pdf (не открывай их через `view` — это двоичные файлы).
 
         ## Правила использования инструментов
 
@@ -752,6 +758,46 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     return new ConexyToolResult(toolCall.Id, res.Success ? $"Patched '{path}'." : res.Error!, !res.Success);
                 }
 
+                // OFFICE_FORMATS: добавлено 2026-09-23
+                case "create_document":
+                {
+                    var path = GetString(root, "path");
+                    if (string.IsNullOrWhiteSpace(path) || !OfficeDocumentWriter.TryParseFormat(Path.GetExtension(path), out var format))
+                        return new ConexyToolResult(toolCall.Id, "create_document requires 'path' ending in .docx, .xlsx or .pptx.", true);
+                    var content = GetString(root, "content");
+                    if (string.IsNullOrWhiteSpace(content))
+                        return new ConexyToolResult(toolCall.Id, "create_document requires non-empty 'content' (Markdown).", true);
+
+                    await SendAgentStatusAsync(taskId, "writing", $"Создаю документ {Path.GetFileName(path)}...", file: path, ct: ct);
+                    var bytes = OfficeDocumentWriter.Create(format, content, Optional(root, "title") ?? Path.GetFileNameWithoutExtension(path));
+                    var res = await _workspaceService.WriteBytesAsync(chatId, path, bytes, ct);
+                    if (res.Success)
+                    {
+                        await SendFileCreatedAsync(taskId, path, ct);
+                    }
+                    await LogAsync(taskId, $"[Document Created] {path}", ct);
+                    return new ConexyToolResult(toolCall.Id, res.Success ? $"Document '{path}' created ({bytes.Length} bytes)." : res.Error!, !res.Success);
+                }
+
+                case "read_document_file":
+                {
+                    var path = GetString(root, "path");
+                    if (string.IsNullOrWhiteSpace(path))
+                        return new ConexyToolResult(toolCall.Id, "read_document_file requires 'path'.", true);
+                    if (!DocumentParser.CanExtract(path))
+                        return new ConexyToolResult(toolCall.Id, $"Text cannot be extracted from '{Path.GetFileName(path)}'. Supported: .docx, .xlsx, .pptx, .pdf and text files.", true);
+
+                    var res = await _workspaceService.ReadBytesAsync(chatId, path, ct);
+                    if (!res.Success)
+                        return new ConexyToolResult(toolCall.Id, res.Error!, true);
+
+                    var text = DocumentParser.Parse(res.Content!, path).Trim();
+                    return new ConexyToolResult(
+                        toolCall.Id,
+                        text.Length == 0 ? $"No text found in '{path}' (it may be a scan or an empty document)." : Truncate(text, 60_000),
+                        false);
+                }
+
                 case "workspace_list_files":
                 {
                     var relativeDirectory = Optional(root, "path") ?? string.Empty;
@@ -1309,6 +1355,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var reviewedFiles = 0;
             foreach (var file in changedFiles.Take(AuditMaxFiles))
             {
+                // OFFICE_FORMATS: .docx/.xlsx/.pptx are zip files — read as text they are only noise.
+                if (OfficeDocumentWriter.TryParseFormat(Path.GetExtension(file), out _))
+                {
+                    continue;
+                }
+
                 var read = await _workspaceService.ReadFileAsync(chatId, file, auditCts.Token);
                 if (!read.Success || string.IsNullOrWhiteSpace(read.Content))
                 {
@@ -1493,6 +1545,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             {
                 case "file_write":
                 case "file_patch":
+                case "create_document":
                 {
                     var path = GetString(root, "path");
                     if (!string.IsNullOrEmpty(path))
@@ -1681,6 +1734,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 chunk_index = new { type = "integer", description = "Индекс конкретного фрагмента (если не указан — вернётся полный текст документа)" }
             }, required = new[] { "document_id" } }),
         WebSearchTool.Schema(),
+        // OFFICE_FORMATS: добавлено 2026-09-23
+        Function("create_document", "Create a Word (.docx), Excel (.xlsx) or PowerPoint (.pptx) file in the workspace from Markdown; the format comes from the path extension. .docx: headings, paragraphs, bullet/numbered lists, tables and **bold**. .xlsx: every Markdown table becomes a sheet named after the heading above it (numbers are stored as numbers); plain CSV text also works. .pptx: every '#'/'##' heading starts a slide and the lines under it become its body (overlong slides continue automatically).",
+            new { type = "object", properties = new {
+                path = new { type = "string", description = "Relative path ending in .docx, .xlsx or .pptx" },
+                content = new { type = "string", description = "Document content in Markdown" },
+                title = new { type = "string", description = "Optional title, used when the content has no heading" }
+            }, required = new[] { "path", "content" } }),
+        Function("read_document_file", "Read the text of a document in the workspace: .docx, .xlsx (every sheet as a table), .pptx (every slide), .pdf or any text file. Use it for files the user attached or uploaded; str_replace_editor 'view' shows these formats as binary.",
+            new { type = "object", properties = new {
+                path = new { type = "string", description = "Relative path to the file" }
+            }, required = new[] { "path" } }),
         };
 
         if (includeScreenshot)

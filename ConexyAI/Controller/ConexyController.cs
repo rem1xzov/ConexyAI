@@ -2,6 +2,7 @@
 using ConexyAI.Contract;
 using ConexyAI.Extensions;
 using ConexyAI.Service;
+using ConexyAI.Service.Office;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -144,6 +145,31 @@ public class ConexyController : ControllerBase
         return Ok(new WorkspaceFileContent(path, Path.GetFileName(path), read.Content!));
     }
 
+    // OFFICE_FORMATS: добавлено 2026-09-23 — documents the agents create (.docx/.xlsx/.pptx) are binary:
+    // the editor shows "binary file" for them, so they need a plain download.
+    /// <summary>Streams a single workspace file as-is.</summary>
+    [HttpGet("workspace/{sessionId}/raw")]
+    public async Task<IActionResult> DownloadWorkspaceFile(string sessionId, [FromQuery] string path, CancellationToken ct)
+    {
+        if (!TryGetUserId(out _))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        if (!TryParseWorkspaceId(sessionId, out var chatId, out var error))
+            return error;
+
+        if (string.IsNullOrWhiteSpace(path))
+            return BadRequest(new { error = "Query parameter 'path' is required." });
+
+        var read = await _workspaceService.ReadBytesAsync(chatId, path, ct);
+        if (!read.Success)
+            return NotFound(new { error = read.Error });
+
+        var contentType = OfficeDocumentWriter.TryParseFormat(Path.GetExtension(path), out var format)
+            ? OfficeDocumentWriter.ContentType(format)
+            : Path.GetExtension(path).Equals(".pdf", StringComparison.OrdinalIgnoreCase) ? "application/pdf" : "application/octet-stream";
+        return File(read.Content!, contentType, Path.GetFileName(path));
+    }
+
     /// <summary>Saves manual edits made in the Workspace code editor.</summary>
     [HttpPut("workspace/{sessionId}/file")]
     public async Task<IActionResult> SaveWorkspaceFile(string sessionId, [FromBody] SaveFileDto? dto, CancellationToken ct)
@@ -182,6 +208,37 @@ public class ConexyController : ControllerBase
             return NotFound(new { error = res.Error });
 
         return Ok(new { success = true });
+    }
+
+    // OFFICE_FORMATS: добавлено 2026-09-23
+    /// <summary>
+    /// Any model's answer (flash, pro, students, coder, cowork) as .docx / .xlsx / .pptx. The chat
+    /// models have no tools, so this is how every mode gets office output, not only the agents.
+    /// </summary>
+    [HttpPost("export")]
+    [RequestSizeLimit(4_000_000)]
+    public IActionResult ExportDocument([FromBody] ExportDocumentRequest request)
+    {
+        if (!TryGetUserId(out _))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        if (!OfficeDocumentWriter.TryParseFormat(request.Format, out var format))
+            return BadRequest(new { error = "Format must be docx, xlsx or pptx." });
+
+        if (string.IsNullOrWhiteSpace(request.Markdown))
+            return BadRequest(new { error = "Nothing to export." });
+
+        var name = ExportFileName(request.FileName);
+        var bytes = OfficeDocumentWriter.Create(format, request.Markdown, name);
+        return File(bytes, OfficeDocumentWriter.ContentType(format), name + OfficeDocumentWriter.Extension(format));
+    }
+
+    private static string ExportFileName(string? requested)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string((requested ?? string.Empty).Where(c => !invalid.Contains(c) && !char.IsControl(c)).ToArray()).Trim();
+        if (cleaned.Length > 80) cleaned = cleaned[..80].Trim();
+        return cleaned.Length == 0 ? "conexy-answer" : cleaned;
     }
 
     /// <summary>Zips the session workspace and streams it back as a download.</summary>

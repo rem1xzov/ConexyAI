@@ -303,7 +303,12 @@
     "continueBusy": "Дождитесь завершения текущей генерации и нажмите «Продолжить» ещё раз",
     "continueNoPrompt": "Не удалось найти исходный запрос этого ответа",
     "resend": "Отправить снова",
-    "edit": "Редактировать"
+    "edit": "Редактировать",
+    "export": "Скачать как документ",
+    "exportDocx": "Word",
+    "exportXlsx": "Excel",
+    "exportPptx": "PowerPoint",
+    "exportFailed": "Не удалось создать файл"
   },
   "statusbar": {
     "connected": "Подключено",
@@ -391,7 +396,8 @@
     "menuSave": "Сохранить",
     "menuDownloadZip": "Скачать ZIP",
     "menuView": "Вид",
-    "menuToggleExplorer": "Переключить проводник файлов"
+    "menuToggleExplorer": "Переключить проводник файлов",
+    "downloadFile": "Скачать файл"
   },
   "errors": {
     "serviceUnavailable": "Сервис сейчас перезапускается. Попробуйте ещё раз через несколько секунд.",

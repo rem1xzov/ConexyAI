@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import {
   createIdeFile,
   deleteWorkspaceFile,
+  downloadWorkspaceRaw,
   downloadWorkspaceZip,
   getIdeFileContent,
   getWorkspaceFiles,
@@ -15,6 +16,7 @@ import type { TodoItem } from '../types/signalr';
 import { signalrService } from '../services/signalrService';
 import { changedLineNumbers } from '../utils/diff';
 import { humanError } from '../utils/humanError';
+import { triggerDownload } from '../utils/download';
 import { CodeEditor } from './CodeEditor';
 import { TodoPanel } from './TodoPanel';
 import { FileTypeIcon } from './FileTypeIcon';
@@ -79,16 +81,6 @@ function fileName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-function triggerDownload(blob: Blob, fileNameValue: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileNameValue;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
 
 /** Branded empty state for the Monaco editor area (right pane) when no file is open. */
 function EditorEmptyState({ title, text }: { title: string; text: string }) {
@@ -706,7 +698,23 @@ export function WorkspacePanel({
           <div className="workspace__editor-body">
             {activeTab ? (
               activeTab.isBinary ? (
-                <div className="workspace__hint workspace__hint--center">{t('workspace.binaryFile')}</div>
+                <div className="workspace__hint workspace__hint--center">
+                  {t('workspace.binaryFile')}
+                  {/* OFFICE_FORMATS: documents the agent creates are binary — let them be downloaded. */}
+                  {sessionId && (
+                    <button
+                      type="button"
+                      className="workspace__conflict-btn"
+                      onClick={() => {
+                        void downloadWorkspaceRaw(sessionId, activeTab.path)
+                          .then((blob) => triggerDownload(blob, fileName(activeTab.path)))
+                          .catch((e: unknown) => notify(humanError(e, t)));
+                      }}
+                    >
+                      {t('workspace.downloadFile')}
+                    </button>
+                  )}
+                </div>
               ) : (
                 <CodeEditor
                   path={activeTab.path}

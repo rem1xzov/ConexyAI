@@ -16,6 +16,9 @@ public interface IConexyWorkspaceService
     string ValidateWorkspacePath(string fullPath);
     Task<FileReadResult> ReadFileAsync(Guid chatId, string relativePath, CancellationToken ct = default);
     Task<FileWriteResult> WriteFileAsync(Guid chatId, string relativePath, string content, CancellationToken ct = default);
+    // OFFICE_FORMATS: добавлено 2026-09-23 — same path jail as the text methods, for binary documents.
+    Task<FileBytesResult> ReadBytesAsync(Guid chatId, string relativePath, CancellationToken ct = default);
+    Task<FileWriteResult> WriteBytesAsync(Guid chatId, string relativePath, byte[] content, CancellationToken ct = default);
     Task<FileWriteResult> DeleteFileAsync(Guid chatId, string relativePath, CancellationToken ct = default);
     Task<FilePatchResult> PatchFileAsync(Guid chatId, string relativePath, string searchBlock, string replaceBlock, CancellationToken ct = default);
     Task<FileListResult> ListFilesAsync(Guid chatId, string relativeDirectory = "", CancellationToken ct = default);

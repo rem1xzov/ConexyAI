@@ -86,6 +86,44 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         }
     }
 
+    // OFFICE_FORMATS: добавлено 2026-09-23
+    public async Task<FileBytesResult> ReadBytesAsync(Guid chatId, string relativePath, CancellationToken ct = default)
+    {
+        try
+        {
+            var resolvedPath = ResolveSafePath(chatId, relativePath);
+            if (!File.Exists(resolvedPath))
+                return new FileBytesResult(false, null, $"File '{relativePath}' not found.");
+
+            return new FileBytesResult(true, await File.ReadAllBytesAsync(resolvedPath, ct), null);
+        }
+        catch (Exception ex)
+        {
+            return new FileBytesResult(false, null, ex.Message);
+        }
+    }
+
+    // OFFICE_FORMATS: добавлено 2026-09-23
+    public async Task<FileWriteResult> WriteBytesAsync(Guid chatId, string relativePath, byte[] content, CancellationToken ct = default)
+    {
+        try
+        {
+            var resolvedPath = ResolveSafePath(chatId, relativePath);
+            var dir = Path.GetDirectoryName(resolvedPath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            await File.WriteAllBytesAsync(resolvedPath, content, ct);
+            return new FileWriteResult(true, relativePath, null);
+        }
+        catch (Exception ex)
+        {
+            return new FileWriteResult(false, relativePath, ex.Message);
+        }
+    }
+
     public async Task<FilePatchResult> PatchFileAsync(Guid chatId, string relativePath, string searchBlock, string replaceBlock, CancellationToken ct = default)
     {
         try
