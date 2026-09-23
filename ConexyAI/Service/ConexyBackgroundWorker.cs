@@ -180,7 +180,9 @@ public class ConexyBackgroundWorker : BackgroundService
                 UserMessage: AttachmentText.ComposeUserMessage(job.Prompt, job.Attachments),
                 Incognito: job.Incognito,
                 Attachments: job.Attachments,
-                AssistantPrefix: job.AssistantPrefix);
+                AssistantPrefix: job.AssistantPrefix,
+                // CHAT_KIND_SYNC: добавлено 2026-09-23 — режим чата доезжает до записи истории.
+                ChatKind: job.ChatKind);
 
             var outcome = TurnOutcome.Completed;
             var result = string.Empty;

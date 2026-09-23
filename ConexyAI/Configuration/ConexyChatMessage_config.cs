@@ -26,6 +26,11 @@ public class ConexyChatMessage_config : IEntityTypeConfiguration<ConexyChatMessa
         builder.Property(x => x.Content)
             .IsRequired();
 
+        // CHAT_KIND_SYNC: добавлено 2026-09-23 — режим чата ("chat" | "projects" | "students").
+        // Nullable: строки, записанные до появления колонки, остаются валидными.
+        builder.Property(x => x.Kind)
+            .HasMaxLength(20);
+
         builder.Property(x => x.CreatedAt)
             .IsRequired();
 

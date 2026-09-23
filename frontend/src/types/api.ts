@@ -1,3 +1,7 @@
+// CHAT_KIND_SYNC: добавлено 2026-09-23 — тип вкладки берётся из types/chat, чтобы не заводить
+// второй источник правды (импорт type-only, поэтому цикл chat.ts ↔ api.ts безвреден).
+import type { ChatSessionKind } from './chat';
+
 // COWORK_MODE: добавлено 2026-09-23 — conexy-cowork: агент для нетехнических задач (вкладка «Агент»).
 export type ConexyModel = 'ConexyV1-flash' | 'ConexyV1-pro' | 'conexy-coder' | 'conexy-cowork';
 
@@ -36,6 +40,10 @@ export interface ConexyRequest {
   // CONTINUE_GENERATION: добавлено 2026-09-21
   /** Already-generated answer text; the model resumes from here instead of starting over. */
   assistantPrefix?: string;
+  // CHAT_KIND_SYNC: добавлено 2026-09-23
+  /** The tab this chat belongs to ('chat' | 'projects' | 'students'), persisted with the history so
+   *  a chat synced to another device reopens in the same tab instead of the generic chat list. */
+  chatKind?: ChatSessionKind;
 }
 
 export interface ConexyResponse {

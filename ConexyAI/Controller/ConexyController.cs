@@ -144,12 +144,21 @@ public class ConexyController : ControllerBase
     /// </summary>
     private ChatSummaryDto ToChatSummary(ChatListSummary chat)
     {
-        var isAgentChat = _workspaceService.GetTaskWorkspacePathIfExists(chat.ChatId) is not null;
+        // CHAT_KIND_SYNC: сначала сохранённый режим — он точен для всех трёх вкладок (включая
+        // «учеников», которые иначе неопределимы). Фолбэк по workspace нужен только для строк,
+        // записанных до появления колонки: у агентских чатов на диске есть workspace, у остальных нет.
+        var kind = chat.Kind;
+        if (string.IsNullOrEmpty(kind))
+        {
+            kind = _workspaceService.GetTaskWorkspacePathIfExists(chat.ChatId) is not null
+                ? "projects"
+                : "chat";
+        }
 
         return new ChatSummaryDto(
             chat.ChatId,
             ForPreview(chat.FirstUserMessage),
-            isAgentChat ? "projects" : "chat",
+            kind,
             chat.LastActivityAt,
             chat.MessageCount,
             ForPreview(chat.LastAssistantMessage));

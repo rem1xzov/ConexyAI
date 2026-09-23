@@ -22,5 +22,8 @@ public record ConexyJob(
     // CONTINUE_GENERATION: добавлено 2026-09-21
     // Partial answer to resume from. The model receives it as its own truncated turn plus a
     // continue instruction, so it finishes the sentence instead of regenerating the reply.
-    string? AssistantPrefix = null
+    string? AssistantPrefix = null,
+    // CHAT_KIND_SYNC: добавлено 2026-09-23 — режим чата ("chat" | "projects" | "students");
+    // едет в ConversationContext и записывается вместе с ходом в историю.
+    string? ChatKind = null
 );

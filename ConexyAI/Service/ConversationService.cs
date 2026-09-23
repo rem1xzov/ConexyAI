@@ -43,6 +43,10 @@ public enum TurnOutcome
 /// <param name="Attachments">Files travelling with the current user turn.</param>
 /// <param name="AssistantPrefix">Partial answer being resumed, if any.</param>
 /// <param name="HistoryDepth">Optional per-path override of <see cref="ConversationOptions.HistoryDepth"/>.</param>
+/// <param name="ChatKind">
+/// CHAT_KIND_SYNC: the tab this chat was created in ("chat" | "projects" | "students"), stored
+/// with the turn so a chat synced to another device reopens in the same tab.
+/// </param>
 public sealed record ConversationContext(
     Guid TaskId,
     Guid ChatId,
@@ -52,7 +56,8 @@ public sealed record ConversationContext(
     bool Incognito = false,
     List<TaskAttachment>? Attachments = null,
     string? AssistantPrefix = null,
-    int? HistoryDepth = null
+    int? HistoryDepth = null,
+    string? ChatKind = null
 );
 
 public interface IConversationService
@@ -216,9 +221,12 @@ public class ConversationService : IConversationService
         else
         {
             // User text is stored as plain text; image attachments are not part of history.
-            await _chatHistory.AppendAsync(context.UserId, context.ChatId, "user", context.UserMessage, ct);
+            // CHAT_KIND_SYNC: режим нормализуется и пишется вместе с ходом — это единственный
+            // путь записи истории, поэтому значение не может разойтись по разным местам.
+            var chatKind = NormalizeChatKind(context.ChatKind);
+            await _chatHistory.AppendAsync(context.UserId, context.ChatId, "user", context.UserMessage, chatKind, ct);
             if (!string.IsNullOrWhiteSpace(stored))
-                await _chatHistory.AppendAsync(context.UserId, context.ChatId, "assistant", stored, ct);
+                await _chatHistory.AppendAsync(context.UserId, context.ChatId, "assistant", stored, chatKind, ct);
         }
 
         _logger.LogInformation(
@@ -244,6 +252,19 @@ public class ConversationService : IConversationService
             _memory.EnqueueExtraction(context.UserId, context.ChatId);
         }
     }
+
+    // CHAT_KIND_SYNC: добавлено 2026-09-23
+    /// <summary>
+    /// Whitelists the chat mode coming from the client. Anything unrecognised becomes null, so a bad
+    /// or outdated value can never end up in the database or misplace a synced chat.
+    /// </summary>
+    private static string? NormalizeChatKind(string? kind) => kind?.Trim().ToLowerInvariant() switch
+    {
+        "chat" => "chat",
+        "projects" => "projects",
+        "students" => "students",
+        _ => null,
+    };
 
     public async Task<IReadOnlyList<ConexyChatMessageEntity>> GetHistoryAsync(
         Guid userId,

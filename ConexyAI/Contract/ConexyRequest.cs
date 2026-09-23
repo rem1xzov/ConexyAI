@@ -25,7 +25,11 @@ public record ConexyRequest(
     // CONTINUE_GENERATION: добавлено 2026-09-21
     // Already-generated answer text (the user pressed stop mid-reply). It is passed to the
     // model as its own assistant turn so it continues from there instead of starting over.
-    string? AssistantPrefix = null
+    string? AssistantPrefix = null,
+    // CHAT_KIND_SYNC: добавлено 2026-09-23
+    // Which tab the client created this chat in ("chat" | "projects" | "students"). Persisted with
+    // the history so a chat synced to another device reopens in the same tab.
+    string? ChatKind = null
 );
 
 /// <summary>An uploaded file/image attachment from the user.</summary>

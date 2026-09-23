@@ -149,6 +149,16 @@ function defaultTitle(kind: ChatSessionKind, t: (key: string) => string): string
   return t('sidebar.newChat');
 }
 
+// CHAT_KIND_SYNC: добавлено 2026-09-23
+/**
+ * The tab a server chat belongs to. The mode is persisted with the history, so a chat synced to a
+ * second device reopens in the same tab — including the students tab, which cannot be inferred from
+ * anything else. Unknown or missing values fall back to the generic chat tab.
+ */
+function kindFromServer(kind: string | null | undefined): ChatSessionKind {
+  return kind === 'projects' || kind === 'students' ? kind : 'chat';
+}
+
 // CHAT_SYNC: добавлено 2026-09-23
 /**
  * Builds a local session from a server chat list entry plus its stored transcript. Used for chats
@@ -160,7 +170,7 @@ function sessionFromServer(
   transcript: ChatTranscript | null,
   fallbackTitle: string,
 ): ChatSession {
-  const kind: ChatSessionKind = chat.kind === 'projects' ? 'projects' : 'chat';
+  const kind = kindFromServer(chat.kind);
 
   const messages: ChatMessage[] = (transcript?.messages ?? [])
     // Only real turns belong in the transcript; tool/system rows are internal plumbing.
@@ -177,8 +187,9 @@ function sessionFromServer(
     id: chat.id,
     title: chat.title || fallbackTitle,
     status: 'Completed',
-    // The agent mode is its own model; for chat sessions the user picks the model per message anyway.
-    model: kind === 'projects' ? 'conexy-coder' : 'ConexyV1-flash',
+    // The agent tab has its own models (the picker remembers which one); students always runs Pro;
+    // in the plain chat tab the model is chosen per message anyway.
+    model: kind === 'projects' ? 'conexy-coder' : kind === 'students' ? 'ConexyV1-pro' : 'ConexyV1-flash',
     kind,
     messages,
     createdAt: messages.length > 0 ? messages[0].createdAt : new Date(chat.lastActivityAt).getTime(),
@@ -503,54 +514,86 @@ export default function App() {
 
   // CHAT_SYNC: добавлено 2026-09-23
   // Список чатов раньше жил только в localStorage этого браузера — отсюда «разные чаты» на ПК и
-  // телефоне под одним аккаунтом. Теперь при появлении токена список сверяется с сервером, и чаты,
-  // которых локально нет (созданные на другом устройстве), подтягиваются вместе с историей.
+  // телефоне под одним аккаунтом. Теперь список сверяется с сервером, и чаты, которых локально нет
+  // (созданные на другом устройстве), подтягиваются вместе с историей.
   // Существующие локальные чаты НЕ перезаписываются: в них больше состояния (шаги агента, вложения,
   // todo), и они свежее, чем то, что успело доехать до истории.
-  const lastSyncedTokenRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!token || lastSyncedTokenRef.current === token) return;
-    lastSyncedTokenRef.current = token;
+  // CHAT_SYNC_FOCUS: добавлено 2026-09-23 — сверка вызывается не только при появлении токена, но и
+  // при возвращении пользователя во вкладку (focus/visibilitychange), с debounce ниже.
+  const chatSyncRef = useRef({ inFlight: false, lastStartedAt: 0, lastToken: null as string | null });
 
-    let cancelled = false;
-    void (async () => {
-      try {
-        const chats = await getChats();
-        const known = new Set(sessionsRef.current.map((s) => s.id));
-        const missing = chats.filter((c) => !known.has(c.id));
-        if (missing.length === 0) return;
+  const syncChats = useCallback(async () => {
+    if (!token) return;
 
-        const restored = await Promise.all(
-          missing.map(async (chat) => {
-            const kind: ChatSessionKind = chat.kind === 'projects' ? 'projects' : 'chat';
-            // A missing transcript must not drop the chat itself from the list.
-            const transcript = await getChatTranscript(chat.id).catch((e: unknown) => {
-              console.warn('[ChatSync] transcript unavailable', { chatId: chat.id, error: String(e) });
-              return null;
-            });
-            return sessionFromServer(chat, transcript, defaultTitle(kind, t));
-          }),
-        );
+    const state = chatSyncRef.current;
+    // Один запрос за раз: параллельные тики (focus + visibilitychange) не должны дублироваться.
+    if (state.inFlight) return;
+    state.inFlight = true;
+    state.lastStartedAt = Date.now();
 
-        if (cancelled) return;
-        let added = 0;
-        setSessions((prev) => {
-          const existing = new Set(prev.map((s) => s.id));
-          const fresh = restored.filter((s) => !existing.has(s.id));
-          added = fresh.length;
-          return fresh.length > 0 ? [...prev, ...fresh] : prev;
-        });
-        console.info('[ChatSync] chat list synced', { fetched: chats.length, added });
-      } catch (e) {
-        // Offline or a failed request must not break the app: the local list stays as it is.
-        console.warn('[ChatSync] could not load the chat list', e);
+    try {
+      const chats = await getChats();
+      const known = new Set(sessionsRef.current.map((s) => s.id));
+      const missing = chats.filter((c) => !known.has(c.id));
+      if (missing.length === 0) {
+        console.info('[ChatSync] chat list checked', { fetched: chats.length, added: 0 });
+        return;
       }
-    })();
 
-    return () => {
-      cancelled = true;
-    };
+      const restored = await Promise.all(
+        missing.map(async (chat) => {
+          // A missing transcript must not drop the chat itself from the list.
+          const transcript = await getChatTranscript(chat.id).catch((e: unknown) => {
+            console.warn('[ChatSync] transcript unavailable', { chatId: chat.id, error: String(e) });
+            return null;
+          });
+          return sessionFromServer(chat, transcript, defaultTitle(kindFromServer(chat.kind), t));
+        }),
+      );
+
+      let added = 0;
+      setSessions((prev) => {
+        const existing = new Set(prev.map((s) => s.id));
+        const fresh = restored.filter((s) => !existing.has(s.id));
+        added = fresh.length;
+        return fresh.length > 0 ? [...prev, ...fresh] : prev;
+      });
+      console.info('[ChatSync] chat list synced', { fetched: chats.length, added });
+    } catch (e) {
+      // Offline or a failed request must not break the app: the local list stays as it is.
+      console.warn('[ChatSync] could not load the chat list', e);
+    } finally {
+      chatSyncRef.current.inFlight = false;
+    }
   }, [token, t]);
+
+  useEffect(() => {
+    if (!token || chatSyncRef.current.lastToken === token) return;
+    chatSyncRef.current.lastToken = token;
+    void syncChats();
+  }, [token, syncChats]);
+
+  // CHAT_SYNC_FOCUS: сверка при возвращении во вкладку. Debounce обязателен: пользователь, который
+  // быстро переключается между окнами, иначе выдал бы по запросу на каждое переключение.
+  const FOCUS_SYNC_MIN_INTERVAL_MS = 12_000;
+  useEffect(() => {
+    const onFocus = () => {
+      if (Date.now() - chatSyncRef.current.lastStartedAt < FOCUS_SYNC_MIN_INTERVAL_MS) return;
+      void syncChats();
+    };
+    const onVisibility = () => {
+      // visibilitychange срабатывает и на скрытие вкладки — реагируем только на возвращение.
+      if (document.visibilityState !== 'visible') return;
+      onFocus();
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [syncChats]);
 
   // SUBSCRIPTION_TIERS: добавлено 2026-09-17
   async function refreshUsage() {
@@ -1202,6 +1245,9 @@ export default function App() {
         incognito: live.incognitoActive || live.sessionIncognito,
         // CONTINUE_GENERATION: the partial answer is handed back so the model finishes it.
         assistantPrefix: continueFrom?.trim() ? continueFrom : undefined,
+        // CHAT_KIND_SYNC: режим вкладки сохраняется вместе с историей, чтобы на другом устройстве
+        // чат учеников открылся в «Учениках», а не в общем чате.
+        chatKind: live.sessions.find((s) => s.id === sessionId)?.kind ?? live.activeTab,
       });
 
       setSessions((prev) => updateSession(prev, sessionId, (s) => ({ ...s, taskId: res.id })));

@@ -72,6 +72,7 @@ await RunAsync("office: agents create and read documents in the workspace", Test
 await RunAsync("cowork: writes documents, never runs bash, skips the code auditor", TestCoworkToolsAndNoCodeAuditAsync);
 await RunAsync("sandbox sessions: per-session state directory + idle expiry", TestSandboxSessionStateAsync);
 await RunAsync("chat sync: chat list + transcript are scoped to the owner", TestChatSyncScopingAsync);
+await RunAsync("chat kind: the tab mode round-trips and junk is dropped", TestChatKindPersistsAsync);
 await RunAsync("ide files: create -> content -> save -> rename -> delete", TestIdeFileCrudAsync);
 await RunAsync("ide files: path traversal is blocked (shared validator)", TestIdeFilePathTraversalBlockedAsync);
 await RunAsync("ide files: manual save invalidates agent undo stack", TestManualSaveInvalidatesEditorUndoAsync);
@@ -1176,6 +1177,37 @@ async Task TestChatSyncScopingAsync()
     Assert(!strangerChats.Any(c => c.ChatId == ownerChat), "the chat list must not leak other users' chats");
 }
 
+// CHAT_KIND_SYNC: добавлено 2026-09-23 — режим вкладки должен переживать запись и возвращаться в
+// списке чатов, иначе синхронизированный чат учеников уедет в общий чат. Заодно проверяем, что
+// мусор от клиента не попадает в базу.
+async Task TestChatKindPersistsAsync()
+{
+    await using var context = CreateContext("chatkind_" + Guid.NewGuid().ToString("N"));
+    var (service, _, _) = CreateConversationService(context);
+    var userId = Guid.NewGuid();
+
+    var studentsChat = Guid.NewGuid();
+    await service.PersistTurnAsync(
+        new ConversationContext(Guid.NewGuid(), studentsChat, userId, "SYSTEM", "объясни теорему", ChatKind: "students"),
+        "Вот объяснение.",
+        TurnOutcome.Completed);
+
+    var students = (await service.GetChatsAsync(userId, 50)).Single(c => c.ChatId == studentsChat);
+    Assert(students.Kind == "students", $"the chat kind must round-trip through the history (got '{students.Kind}')");
+    Assert(students.FirstUserMessage == "объясни теорему", "the title still comes from the first user message");
+
+    // Неизвестное значение (старый клиент, опечатка, подделка) должно превратиться в null,
+    // а не осесть в базе и не сломать раскладку по вкладкам.
+    var oddChat = Guid.NewGuid();
+    await service.PersistTurnAsync(
+        new ConversationContext(Guid.NewGuid(), oddChat, userId, "SYSTEM", "привет", ChatKind: "definitely-not-a-tab"),
+        "Ответ.",
+        TurnOutcome.Completed);
+
+    var odd = (await service.GetChatsAsync(userId, 50)).Single(c => c.ChatId == oddChat);
+    Assert(odd.Kind is null, $"an unknown kind must be dropped, not stored (got '{odd.Kind}')");
+}
+
 async Task TestCrossChatDigestAsync()
 {
     await using var context = CreateContext("crosschat_" + Guid.NewGuid().ToString("N"));
@@ -1239,7 +1271,11 @@ Task TestOfficeRoundTripAsync()
     var docx = DocumentParser.Parse(OfficeDocumentWriter.Create(OfficeFormat.Docx, OfficeSampleMarkdown), "r.docx");
     Assert(docx.Contains("Отчёт по кофейням") && docx.Contains("| Бодрость | 250 | 007 |") && docx.Contains("Рынок растёт"),
         $"docx must keep headings, tables and lists, got: {docx}");
-    Assert(docx.Contains("Краткая сводка по рынку.\n"), "docx paragraphs must stay separate lines, not one run-on string");
+    // OFFICE_TEST_PORTABILITY: добавлено 2026-09-23 — парсер склеивает абзацы через Environment.NewLine,
+    // поэтому на Windows это \r\n, а не \n. Раньше ассерт на \n проходил только на Linux/CI и падал
+    // на Windows по причине, не связанной ни с писателем, ни с парсером. Нормализуем переносы.
+    Assert(docx.Replace("\r\n", "\n").Contains("Краткая сводка по рынку.\n"),
+        "docx paragraphs must stay separate lines, not one run-on string");
 
     var xlsx = DocumentParser.Parse(OfficeDocumentWriter.Create(OfficeFormat.Xlsx, OfficeSampleMarkdown), "r.xlsx");
     Assert(xlsx.Contains("Лист: Цены"), $"a table becomes a sheet named after its heading, got: {xlsx}");
@@ -1250,7 +1286,8 @@ Task TestOfficeRoundTripAsync()
     Assert(csv.Contains("| Аня | Москва; центр |"), $"plain CSV text becomes a sheet, got: {csv}");
 
     var pptx = DocumentParser.Parse(OfficeDocumentWriter.Create(OfficeFormat.Pptx, OfficeSampleMarkdown, "Deck"), "r.pptx");
-    Assert(pptx.Contains("## Слайд 1\nОтчёт по кофейням") && pptx.Contains("## Слайд 2\nЦены"),
+    // Same portability fix as the docx assertion above: the parsed text uses Environment.NewLine.
+    Assert(pptx.Replace("\r\n", "\n").Contains("## Слайд 1\nОтчёт по кофейням") && pptx.Replace("\r\n", "\n").Contains("## Слайд 2\nЦены"),
         $"every #/## heading starts a slide, got: {pptx}");
 
     var longDeck = "## Пункты\n" + string.Join("\n", Enumerable.Range(1, 11).Select(i => $"- п{i}"));

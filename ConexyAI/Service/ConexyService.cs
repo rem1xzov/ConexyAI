@@ -125,7 +125,7 @@ public class ConexyService : IConexyService
 
         // Ставим задачу в фоновую очередь (GitHub-токен не сохраняется в БД, а передаётся только в памяти).
         // Идемпотентная постановка: дубликат с тем же SessionId не создаёт вторую задачу.
-        await _queueGuard.EnqueueIfNotInFlightAsync(new ConexyJob(entity.Id, chatId, userId, modelType, request.Prompt, request.GitHubToken, request.GitHubRepo, request.Attachments, request.Thinking, request.ReasoningEffort, request.StudentsMode, request.SmartSearch, request.Incognito, request.AssistantPrefix), ct);
+        await _queueGuard.EnqueueIfNotInFlightAsync(new ConexyJob(entity.Id, chatId, userId, modelType, request.Prompt, request.GitHubToken, request.GitHubRepo, request.Attachments, request.Thinking, request.ReasoningEffort, request.StudentsMode, request.SmartSearch, request.Incognito, request.AssistantPrefix, request.ChatKind), ct);
 
         return ToResponse(entity);
     }

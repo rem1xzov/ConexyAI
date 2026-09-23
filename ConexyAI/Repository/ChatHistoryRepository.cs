@@ -22,14 +22,17 @@ public class ChatHistoryRepository : IChatHistoryRepository
             .ToListAsync(ct);
     }
 
-    public async Task AppendAsync(Guid userId, Guid chatId, string role, string content, CancellationToken ct = default)
+    public async Task AppendAsync(Guid userId, Guid chatId, string role, string content, string? kind = null, CancellationToken ct = default)
     {
         _context.ChatMessages.Add(new ConexyChatMessageEntity
         {
             ChatId = chatId,
             UserId = userId,
             Role = role,
-            Content = content
+            Content = content,
+            // CHAT_KIND_SYNC: режим пишется вместе с сообщением, чтобы список чатов мог вернуть его
+            // без отдельной таблицы метаданных и без join’а.
+            Kind = kind
         });
         await _context.SaveChangesAsync(ct);
     }
@@ -65,7 +68,7 @@ public class ChatHistoryRepository : IChatHistoryRepository
         var rows = await QueryChatSummariesAsync(userId, excludeChatId: null, limit, ct);
         return rows
             .Select(r => new ChatListSummary(
-                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant))
+                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind))
             .ToList();
     }
 
@@ -103,6 +106,9 @@ public class ChatHistoryRepository : IChatHistoryRepository
                     .OrderByDescending(m => m.CreatedAt)
                     .Select(m => m.Content)
                     .FirstOrDefault(),
+                // CHAT_KIND_SYNC: строки до появления колонки имеют Kind = null; Max выдаёт
+                // единственное непустое значение, а если их нет — null.
+                Kind = g.Max(m => m.Kind),
             })
             .OrderByDescending(c => c.LastActivityAt)
             .Take(limit)
@@ -110,7 +116,7 @@ public class ChatHistoryRepository : IChatHistoryRepository
 
         return rows
             .Select(r => new ChatSummaryRow(
-                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant))
+                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind))
             .ToList();
     }
 
@@ -119,5 +125,6 @@ public class ChatHistoryRepository : IChatHistoryRepository
         DateTime LastActivityAt,
         int MessageCount,
         string? FirstUser,
-        string? LastAssistant);
+        string? LastAssistant,
+        string? Kind);
 }

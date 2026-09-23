@@ -19,7 +19,11 @@ public interface IChatHistoryRepository
     Task<IReadOnlyList<ConexyChatMessageEntity>> GetMessagesAsync(Guid userId, Guid chatId, CancellationToken ct = default);
 
     /// <summary>Appends a single user/assistant message to the chat history.</summary>
-    Task AppendAsync(Guid userId, Guid chatId, string role, string content, CancellationToken ct = default);
+    /// <param name="kind">
+    /// CHAT_KIND_SYNC: the chat's mode ("chat" | "projects" | "students"), so a chat synced to
+    /// another device reopens in the tab it was created in. Null keeps the row mode-less.
+    /// </param>
+    Task AppendAsync(Guid userId, Guid chatId, string role, string content, string? kind = null, CancellationToken ct = default);
 
     // SUBSCRIPTION_TIERS: добавлено 2026-09-17
     /// <summary>Counts user messages in a chat (used for the memory extraction batching).</summary>
@@ -55,4 +59,6 @@ public sealed record ChatListSummary(
     DateTime LastActivityAt,
     int MessageCount,
     string? FirstUserMessage,
-    string? LastAssistantMessage);
+    string? LastAssistantMessage,
+    // CHAT_KIND_SYNC: режим чата, если он был записан (иначе null — вызывающий использует фолбэк).
+    string? Kind);
