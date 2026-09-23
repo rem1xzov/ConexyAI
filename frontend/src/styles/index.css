@@ -2515,6 +2515,51 @@ body {
   line-height: 1.35;
 }
 
+/* ---------- TABLES_GFM: GFM tables (2026-09-23) ---------- */
+/* Colours go through the theme variables (not Tailwind neutrals/blue) so tables stay readable in
+   the light and incognito palettes as well. */
+.markdown a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.markdown a:hover {
+  text-decoration: underline;
+}
+
+/* The wrapper owns the horizontal scroll, so a wide table never stretches the message column. */
+.markdown__table {
+  margin: 16px 0;
+  overflow-x: auto;
+}
+
+.markdown__table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+  text-align: left;
+}
+
+.markdown__table thead th {
+  padding: 10px 14px;
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  /* A heading must not wrap mid-phrase — the column widens and the wrapper scrolls instead. */
+  white-space: nowrap;
+}
+
+.markdown__table tbody td {
+  padding: 12px 14px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.markdown__table tbody tr:last-child td {
+  border-bottom: none;
+}
+
 /* ---------- Fenced code blocks ---------- */
 .code-block {
   margin: 10px 0;

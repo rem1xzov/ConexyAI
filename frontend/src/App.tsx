@@ -544,6 +544,11 @@ export default function App() {
   // CHAT_PIN: то же самое для закрепления — иначе ответ синхронизации, ушедший до переключения,
   // вернул бы старый флаг и чат «отклеился» бы на глазах.
   const recentPinsRef = useRef(new Map<string, { isPinned: boolean; at: number }>());
+  // CHAT_PIN_PENDING: закрепления, которые сервер ещё не знает (у чата нет ни одной строки истории:
+  // `remote` ставится сразу после отправки задачи, а история пишется в конце хода). Такой пин
+  // остаётся локальным и повторяется при следующей сверке — иначе сервер вернул бы false и
+  // закрепление молча пропадало бы.
+  const pendingPinsRef = useRef(new Map<string, boolean>());
 
   const syncChats = useCallback(async () => {
     if (!token) return;
@@ -609,7 +614,9 @@ export default function App() {
 
           const serverPin = serverPins.get(s.id);
           const recentPin = recentPinsRef.current.get(s.id);
+          // Пока пин не подтверждён сервером, локальное значение важнее серверного.
           const pinWins = serverPin !== undefined && serverPin !== (s.isPinned ?? false)
+            && pendingPinsRef.current.get(s.id) === undefined
             && !(recentPin && recentPin.at > syncStartedAt);
 
           if (!titleWins && !pinWins) return s;
@@ -638,7 +645,25 @@ export default function App() {
         if (entry.at <= syncStartedAt) recentPinsRef.current.delete(chatId);
       }
 
-      console.info('[ChatSync] chat list synced', { fetched: chats.length, added, pruned, retitled, repinned });
+      // CHAT_PIN_PENDING: ход уже сохранён, значит у чата появились строки — досылаем закрепления,
+      // которые в момент клика сервер ещё не знал (см. pendingPinsRef выше).
+      let replayedPins = 0;
+      for (const [chatId, desired] of pendingPinsRef.current) {
+        if (!serverIds.has(chatId)) continue;
+        try {
+          await setChatPinned(chatId, desired);
+          pendingPinsRef.current.delete(chatId);
+          recentPinsRef.current.set(chatId, { isPinned: desired, at: Date.now() });
+          replayedPins += 1;
+        } catch (e) {
+          // Оставляем в pending: следующая сверка попробует снова.
+          console.warn('[ChatPin] could not re-apply a pending pin', { chatId, error: String(e) });
+        }
+      }
+
+      console.info('[ChatSync] chat list synced', {
+        fetched: chats.length, added, pruned, retitled, repinned, replayedPins,
+      });
     } catch (e) {
       // Offline or a failed request must not break the app: the local list stays as it is.
       console.warn('[ChatSync] could not load the chat list', e);
@@ -1225,16 +1250,22 @@ export default function App() {
       await setChatPinned(id, next);
       // Отмечаем время переключения, чтобы синхронизация, ушедшая до него, не вернула старый флаг.
       recentPinsRef.current.set(id, { isPinned: next, at: Date.now() });
+      pendingPinsRef.current.delete(id);
     } catch (e) {
       const status = (e as { response?: { status?: number } })?.response?.status;
-      // 404 = сервер такого чата у этого пользователя не знает: локальный флаг всё равно корректно
-      // применён. Любая другая ошибка — откатываем оптимистичное изменение, иначе состояние
+      // 404 = у чата ещё нет ни одной строки истории (ход не дописан), поэтому пин некуда сохранить.
+      // Не откатываем и не теряем его: запоминаем как неподтверждённый и досылаем в syncChats, как
+      // только сервер начнёт отдавать этот чат. Любая другая ошибка — откат, иначе состояние
       // разойдётся с сервером и следующий sync молча вернёт старый порядок.
-      if (status !== 404) {
-        console.warn('[ChatPin] could not pin the chat on the server', { id, status, error: String(e) });
-        showToast(t('chat.pinFailed'));
-        setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, isPinned: !next } : s)));
+      if (status === 404) {
+        console.warn('[ChatPin] the chat is not stored yet; pin kept locally', { id });
+        pendingPinsRef.current.set(id, next);
+        return;
       }
+
+      console.warn('[ChatPin] could not pin the chat on the server', { id, status, error: String(e) });
+      showToast(t('chat.pinFailed'));
+      setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, isPinned: !next } : s)));
     }
   }
 
@@ -1679,23 +1710,6 @@ export default function App() {
     }
   }
 
-  // ADMIN_PANEL: добавлено 2026-09-19 — render the admin page as a full-screen view.
-  // ADMIN_PANEL_FIX: добавлено 2026-09-23 — сначала отдаём явный исход для «профиль неизвестен»
-  // и «нет прав», и только потом саму панель.
-  if (adminView) {
-    return adminView;
-  }
-
-  // ADMIN_ERROR_BOUNDARY: добавлено 2026-09-23 — на самой панели рендер отделён от приложения,
-  // поэтому любая ошибка внутри даёт читаемый экран с выходом, а не пустой чёрный фон.
-  if (isAdminRoute && user?.isAdmin) {
-    return (
-      <ErrorBoundary backLabel={t('admin.backToChat')} onBack={() => { window.location.hash = ''; }}>
-        <AdminPanel onBack={() => { window.location.hash = ''; }} onToast={showToast} />
-      </ErrorBoundary>
-    );
-  }
-
   // INCOGNITO_CHAT: добавлено 2026-09-20
   // Rendered in the chat header: an active switch while the chat is still empty, a passive
   // badge afterwards (the mode is locked, but the user must not forget it is on).
@@ -1726,6 +1740,28 @@ export default function App() {
     else root.removeAttribute('data-incognito');
     return () => root.removeAttribute('data-incognito');
   }, [incognitoActive]);
+
+  // ADMIN_HOOKS_ORDER: возвраты для админки обязаны стоять ПОСЛЕ самого последнего хука этого
+  // компонента. Раньше они были выше useEffect'а инкогнито, и переход на `#/admin` (без F5)
+  // рендерил App с на один хук меньше — React падал с #300 «Rendered fewer hooks than expected».
+  // Правило на будущее: любой новый хук добавляй ВЫШЕ этого блока, а не после возврата чата.
+  //
+  // ADMIN_PANEL: добавлено 2026-09-19 — render the admin page as a full-screen view.
+  // ADMIN_PANEL_FIX: добавлено 2026-09-23 — сначала отдаём явный исход для «профиль неизвестен»
+  // и «нет прав», и только потом саму панель.
+  if (adminView) {
+    return adminView;
+  }
+
+  // ADMIN_ERROR_BOUNDARY: добавлено 2026-09-23 — на самой панели рендер отделён от приложения,
+  // поэтому любая ошибка внутри даёт читаемый экран с выходом, а не пустой чёрный фон.
+  if (isAdminRoute && user?.isAdmin) {
+    return (
+      <ErrorBoundary backLabel={t('admin.backToChat')} onBack={() => { window.location.hash = ''; }}>
+        <AdminPanel onBack={() => { window.location.hash = ''; }} onToast={showToast} />
+      </ErrorBoundary>
+    );
+  }
 
   return (
     <>

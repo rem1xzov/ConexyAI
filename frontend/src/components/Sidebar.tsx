@@ -46,6 +46,13 @@ const TABS: { key: ChatSessionKind; labelKey: string }[] = [
   { key: 'students', labelKey: 'sidebar.tabs.students' },
 ];
 
+// CHAT_PIN: порядок в сайдбаре — сначала закреплённые, затем по последней активности
+// (последнее сообщение, а если его ещё нет — время создания чата). Без второго ключа порядок
+// зависел бы от порядка массива sessions, то есть от того, в каком порядке чаты подтянулись.
+function lastActiveAt(s: ChatSession): number {
+  return s.messages.length > 0 ? s.messages[s.messages.length - 1].createdAt : s.createdAt;
+}
+
 export function Sidebar(props: SidebarProps) {
   const { t } = useTranslation();
   const {
@@ -93,7 +100,11 @@ export function Sidebar(props: SidebarProps) {
   const filtered = [...sessions]
     .filter((s) => (s.kind ?? 'chat') === activeTab)
     .filter((s) => !search.trim() || s.title.toLowerCase().includes(search.trim().toLowerCase()))
-    .sort((a, b) => Number(b.isPinned ?? false) - Number(a.isPinned ?? false));
+    .sort(
+      (a, b) =>
+        Number(b.isPinned ?? false) - Number(a.isPinned ?? false) ||
+        lastActiveAt(b) - lastActiveAt(a),
+    );
 
   const newLabel = t(
     activeTab === 'students'
