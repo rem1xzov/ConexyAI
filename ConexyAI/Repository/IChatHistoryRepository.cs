@@ -43,6 +43,18 @@ public interface IChatHistoryRepository
     /// a second device: the client's chat list used to exist only in that browser's localStorage.
     /// </summary>
     Task<IReadOnlyList<ChatListSummary>> GetChatsAsync(Guid userId, int limit, CancellationToken ct = default);
+
+    // CHAT_DELETE: добавлено 2026-09-23
+    /// <summary>
+    /// Physically deletes every stored message of one chat, for its owner only, and returns how many
+    /// rows were removed.
+    /// <para>
+    /// The return value is the ownership proof callers need: a chat id belonging to somebody else
+    /// deletes zero rows, so a caller must not touch anything else (such as the on-disk workspace,
+    /// which is keyed by chat id and is NOT user-scoped) unless this is greater than zero.
+    /// </para>
+    /// </summary>
+    Task<int> DeleteChatAsync(Guid userId, Guid chatId, CancellationToken ct = default);
 }
 
 // CROSS_CHAT_CONTEXT: добавлено 2026-09-23

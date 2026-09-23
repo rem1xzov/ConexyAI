@@ -5226,6 +5226,90 @@ body {
   padding: 0;
 }
 
+/* ADMIN_PANEL_FIX: «Повторить» и «Вернуться в чат» рядом. */
+.admin__error-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* ADMIN_ERROR_BOUNDARY: добавлено 2026-09-23
+   Экраны маршрута админки (загрузка профиля / нет доступа) и экран пойманной ошибки рендера.
+   Раньше здесь использовался .feed без родителя-flex: контейнер схлопывался по высоте, и
+   пользователь видел пустой тёмный фон вместо сообщения. Теперь у обоих экранов явная высота. */
+.route-fallback,
+.crash-screen {
+  min-height: 100vh;
+  min-height: 100dvh;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  background: var(--bg-main);
+  color: var(--text);
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.route-fallback__text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.route-fallback__spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: toolSpin 0.7s linear infinite;
+}
+
+.crash-screen__box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 640px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.crash-screen__title {
+  margin: 0;
+  font-size: 18px;
+}
+
+.crash-screen__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.crash-screen__detail {
+  margin: 0;
+  padding: 10px 12px;
+  max-width: 100%;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--code-bg);
+  color: var(--danger);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* ---------- SUPPORT: добавлено 2026-09-19 ---------- */
 .support-chat {
   width: min(460px, 94vw);

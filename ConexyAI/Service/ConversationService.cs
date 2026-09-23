@@ -96,6 +96,14 @@ public interface IConversationService
     /// </para>
     /// </summary>
     Task<IReadOnlyList<ChatListSummary>> GetChatsAsync(Guid userId, int limit, CancellationToken ct = default);
+
+    // CHAT_DELETE: добавлено 2026-09-23
+    /// <summary>
+    /// Physically removes one chat's stored messages for its owner and reports how many rows went
+    /// away. Zero means "nothing was owned by this user" — the caller must treat that as a refusal
+    /// and not delete anything else on the back of it.
+    /// </summary>
+    Task<int> DeleteChatAsync(Guid userId, Guid chatId, CancellationToken ct = default);
 }
 
 public class ConversationService : IConversationService
@@ -297,6 +305,10 @@ public class ConversationService : IConversationService
     public Task<IReadOnlyList<ChatListSummary>> GetChatsAsync(
         Guid userId, int limit, CancellationToken ct = default) =>
         _chatHistory.GetChatsAsync(userId, limit, ct);
+
+    // CHAT_DELETE: добавлено 2026-09-23
+    public Task<int> DeleteChatAsync(Guid userId, Guid chatId, CancellationToken ct = default) =>
+        _chatHistory.DeleteChatAsync(userId, chatId, ct);
 
     // CONTEXT_DIAGNOSTICS: moved out of the agent runner so every path logs the same shape. Without
     // it there is no way to tell "history was lost" from "the model ignored it".

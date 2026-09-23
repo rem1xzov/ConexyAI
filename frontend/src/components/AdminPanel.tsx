@@ -58,9 +58,12 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
     setError(null);
     try {
       const res = await getAdminUsers(p, PAGE_SIZE);
-      setUsers(res.users);
-      setTotal(res.totalCount);
-      setPage(res.page);
+      // ADMIN_PANEL_FIX: добавлено 2026-09-23 — ответ не той формы не должен ронять весь рендер.
+      // Раньше `res.users` без проверки уходил в state, и следующий `users.map(...)` бросал
+      // TypeError, из-за которого React размонтировал всё дерево — тот самый чёрный экран.
+      setUsers(Array.isArray(res?.users) ? res.users : []);
+      setTotal(Number.isFinite(res?.totalCount) ? res.totalCount : 0);
+      setPage(Number.isFinite(res?.page) ? res.page : p);
     } catch (e) {
       const status = (e as { response?: { status?: number } })?.response?.status;
       setError(status === 403 ? t('admin.noAccess') : humanError(e, t));
@@ -157,9 +160,14 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
       ) : error ? (
         <div className="admin__error-block">
           <p className="admin__error">{error}</p>
-          <button className="admin-btn" type="button" onClick={retry}>
-            {t('admin.retry')}
-          </button>
+          <div className="admin__error-actions">
+            <button className="admin-btn" type="button" onClick={retry}>
+              {t('admin.retry')}
+            </button>
+            <button className="admin-btn" type="button" onClick={onBack}>
+              {t('admin.backToChat')}
+            </button>
+          </div>
         </div>
       ) : (
         <div className="admin__list">

@@ -73,6 +73,7 @@ await RunAsync("cowork: writes documents, never runs bash, skips the code audito
 await RunAsync("sandbox sessions: per-session state directory + idle expiry", TestSandboxSessionStateAsync);
 await RunAsync("chat sync: chat list + transcript are scoped to the owner", TestChatSyncScopingAsync);
 await RunAsync("chat kind: the tab mode round-trips and junk is dropped", TestChatKindPersistsAsync);
+await RunAsync("chat delete: physical, owner-scoped, idempotent", TestChatDeleteAsync);
 await RunAsync("ide files: create -> content -> save -> rename -> delete", TestIdeFileCrudAsync);
 await RunAsync("ide files: path traversal is blocked (shared validator)", TestIdeFilePathTraversalBlockedAsync);
 await RunAsync("ide files: manual save invalidates agent undo stack", TestManualSaveInvalidatesEditorUndoAsync);
@@ -1208,6 +1209,38 @@ async Task TestChatKindPersistsAsync()
     Assert(odd.Kind is null, $"an unknown kind must be dropped, not stored (got '{odd.Kind}')");
 }
 
+// CHAT_DELETE: добавлено 2026-09-23 — удаление обязано быть физическим и только для владельца.
+// До этого чат исчезал лишь в браузере, а строки оставались в базе и возвращались следующим синком.
+async Task TestChatDeleteAsync()
+{
+    await using var context = CreateContext("chatdelete_" + Guid.NewGuid().ToString("N"));
+    var (service, _, _) = CreateConversationService(context);
+    var owner = Guid.NewGuid();
+    var stranger = Guid.NewGuid();
+    var chatId = Guid.NewGuid();
+
+    await service.PersistTurnAsync(
+        new ConversationContext(Guid.NewGuid(), chatId, owner, "SYSTEM", "привет"),
+        "ответ",
+        TurnOutcome.Completed);
+    Assert((await service.GetChatsAsync(owner, 50)).Any(c => c.ChatId == chatId), "the chat should exist before the test");
+
+    // A chat id belonging to somebody else must delete nothing: the workspace directory is keyed by
+    // chat id alone, so the caller gates its cleanup on this count being non-zero.
+    Assert(await service.DeleteChatAsync(stranger, chatId) == 0, "a foreign chat id must delete nothing");
+    Assert((await service.GetChatsAsync(owner, 50)).Any(c => c.ChatId == chatId), "the owner's chat must survive a foreign delete");
+
+    // The owner deletes it for real: the user turn and the assistant turn both go away.
+    var deleted = await service.DeleteChatAsync(owner, chatId);
+    Assert(deleted == 2, $"both stored rows must be removed (got {deleted})");
+    Assert(!(await service.GetChatsAsync(owner, 50)).Any(c => c.ChatId == chatId), "the chat must leave the list");
+    Assert((await service.GetHistoryAsync(owner, chatId, incognito: false, depth: null)).Count == 0,
+        "the transcript must be physically empty after deletion");
+
+    // Deleting twice is not an error, but it must not report a deletion either.
+    Assert(await service.DeleteChatAsync(owner, chatId) == 0, "a second delete must report nothing removed");
+}
+
 async Task TestCrossChatDigestAsync()
 {
     await using var context = CreateContext("crosschat_" + Guid.NewGuid().ToString("N"));
@@ -1766,6 +1799,10 @@ sealed class StaticConversationService : IConversationService
     public Task<IReadOnlyList<ChatListSummary>> GetChatsAsync(
         Guid userId, int limit, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<ChatListSummary>>(Array.Empty<ChatListSummary>());
+
+    // CHAT_DELETE: удаления у стаба тоже нет — он не владеет историей.
+    public Task<int> DeleteChatAsync(Guid userId, Guid chatId, CancellationToken ct = default) =>
+        Task.FromResult(0);
 }
 
 sealed class FakeHttpMessageHandler : HttpMessageHandler

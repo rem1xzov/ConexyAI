@@ -127,4 +127,24 @@ public class ChatHistoryRepository : IChatHistoryRepository
         string? FirstUser,
         string? LastAssistant,
         string? Kind);
+
+    // CHAT_DELETE: добавлено 2026-09-23
+    public async Task<int> DeleteChatAsync(Guid userId, Guid chatId, CancellationToken ct = default)
+    {
+        // Load-and-remove instead of ExecuteDeleteAsync: the in-memory provider used by the test
+        // suite does not support ExecuteDelete, and one chat's rows are a bounded set anyway. The
+        // WHERE clause is the security boundary — a foreign chat id matches nothing here.
+        var rows = await _context.ChatMessages
+            .Where(m => m.ChatId == chatId && m.UserId == userId)
+            .ToListAsync(ct);
+
+        if (rows.Count == 0)
+        {
+            return 0;
+        }
+
+        _context.ChatMessages.RemoveRange(rows);
+        await _context.SaveChangesAsync(ct);
+        return rows.Count;
+    }
 }

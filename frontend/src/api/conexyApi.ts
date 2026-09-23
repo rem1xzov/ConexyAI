@@ -171,6 +171,15 @@ export async function getChatTranscript(chatId: string): Promise<ChatTranscript>
   return data;
 }
 
+// CHAT_DELETE: добавлено 2026-09-23
+/**
+ * Permanently deletes a chat on the server (history rows + its workspace). 404 means the chat does
+ * not belong to this user — the caller must keep it locally rather than pretending it was deleted.
+ */
+export async function deleteChat(chatId: string): Promise<void> {
+  await http.delete(`/conexy/chats/${chatId}`);
+}
+
 export async function getWorkspaceFiles(sessionId: string): Promise<WorkspaceListing> {
   const { data } = await http.get<WorkspaceListing>(`/conexy/workspace/${sessionId}/files`);
   return data;

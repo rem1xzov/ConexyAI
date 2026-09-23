@@ -136,6 +136,36 @@ public class ConexyController : ControllerBase
             messages.Select(m => new ChatTranscriptMessageDto(m.Role, m.Content, m.CreatedAt)).ToList()));
     }
 
+    // CHAT_DELETE: добавлено 2026-09-23
+    /// <summary>
+    /// Permanently deletes a chat: its stored messages and, when the caller really owned it, its
+    /// workspace directory. Without this the chat only vanished from the browser that deleted it and
+    /// came straight back on the next sync — the row was still in the database.
+    /// </summary>
+    [HttpDelete("chats/{chatId:guid}")]
+    public async Task<IActionResult> DeleteChat(Guid chatId, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        var deletedRows = await _conversation.DeleteChatAsync(userId, chatId, ct);
+        if (deletedRows == 0)
+        {
+            // Nothing was owned by this user: either the chat never existed or it belongs to someone
+            // else. Answer 404 instead of pretending to delete, and — critically — do NOT touch the
+            // workspace, which is keyed by chat id alone and is not user-scoped.
+            return NotFound(new { error = "Chat not found." });
+        }
+
+        // Only reached for a chat this user actually owned, so its workspace belongs to them too.
+        await _workspaceService.CleanupWorkspaceAsync(chatId, ct);
+
+        _logger.LogInformation(
+            "Chat {ChatId} deleted by user {UserId}: {Rows} history row(s) removed, workspace cleaned.",
+            chatId, userId, deletedRows);
+        return NoContent();
+    }
+
     /// <summary>
     /// Chat list projection. The chat <em>kind</em> is inferred from the workspace: a chat that has
     /// one on disk is a conexy-coder (agent) chat, because the workspace is keyed by the chat id and

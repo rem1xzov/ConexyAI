@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
-import { getChats, getChatTranscript, getSubscriptionUsage, getTaskStatus, runTask } from './api/conexyApi';
+import { getChats, getChatTranscript, deleteChat, getSubscriptionUsage, getTaskStatus, runTask } from './api/conexyApi';
 import { signalrService } from './services/signalrService';
 import { useAuth } from './hooks/useAuth';
 import { useIsMobile } from './hooks/useMediaQuery';
@@ -25,6 +25,8 @@ import { UsageIndicator } from './components/UsageIndicator';
 import { UpgradeModal } from './components/UpgradeModal';
 // ADMIN_PANEL: добавлено 2026-09-19
 import { AdminPanel } from './components/AdminPanel';
+// ADMIN_ERROR_BOUNDARY: добавлено 2026-09-23
+import { ErrorBoundary } from './components/ErrorBoundary';
 // SUPPORT: добавлено 2026-09-19
 import { SupportChat } from './components/SupportChat';
 // EMAIL_AUTH: добавлено 2026-09-19
@@ -42,6 +44,10 @@ import { toMessageAttachment } from './utils/attachments';
 import { humanError } from './utils/humanError';
 
 const STORAGE_KEY = 'conexy_sessions';
+
+// CHAT_DELETE: маршрут удаления объявлен как {chatId:guid}, поэтому запрос на не-UUID id чата
+// смысла не имеет (старые локальные сессии).
+const GUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function uid(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -187,6 +193,9 @@ function sessionFromServer(
     id: chat.id,
     title: chat.title || fallbackTitle,
     status: 'Completed',
+    // CHAT_DELETE: чат пришёл с сервера, поэтому его можно и удалять локально, если сервер
+    // перестанет его отдавать (см. prune в syncChats).
+    remote: true,
     // The agent tab has its own models (the picker remembers which one); students always runs Pro;
     // in the plain chat tab the model is chosen per message anyway.
     model: kind === 'projects' ? 'conexy-coder' : kind === 'students' ? 'ConexyV1-pro' : 'ConexyV1-flash',
@@ -242,6 +251,10 @@ export default function App() {
   // Every visit starts on a fresh, empty chat with the default model instead of restoring
   // the last opened session. Previous chats stay available from the sidebar.
   const [activeId, setActiveId] = useState<string | null>(() => uid());
+  // CHAT_DELETE: тот же приём для активного чата — синхронизация должна знать, какой чат сейчас
+  // открыт, чтобы не выдернуть его из-под пользователя при прунинге.
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
   const [toast, setToast] = useState<string | null>(null);
   const [fileCreatedEvent, setFileCreatedEvent] = useState<{ path: string; name: string } | null>(null);
   // AGENT_FEED_ZED: добавлено 2026-09-23 — запрос «открой этот файл» из ленты шагов агента.
@@ -483,10 +496,11 @@ export default function App() {
 
     if (!user) {
       return (
-        <div className="feed feed--empty">
-          <p className="muted">{t('common.loading')}</p>
+        <div className="route-fallback">
+          <span className="route-fallback__spinner" aria-hidden="true" />
+          <p className="route-fallback__text">{t('common.loading')}</p>
           <button className="admin-btn" type="button" onClick={() => { window.location.hash = ''; }}>
-            {t('common.back')}
+            {t('admin.backToChat')}
           </button>
         </div>
       );
@@ -494,10 +508,10 @@ export default function App() {
 
     if (!user.isAdmin) {
       return (
-        <div className="feed feed--empty">
-          <p className="muted">{t('admin.noAccess')}</p>
+        <div className="route-fallback">
+          <p className="route-fallback__text">{t('admin.noAccess')}</p>
           <button className="admin-btn" type="button" onClick={() => { window.location.hash = ''; }}>
-            {t('common.back')}
+            {t('admin.backToChat')}
           </button>
         </div>
       );
@@ -533,32 +547,47 @@ export default function App() {
 
     try {
       const chats = await getChats();
+      const serverIds = new Set(chats.map((c) => c.id));
       const known = new Set(sessionsRef.current.map((s) => s.id));
       const missing = chats.filter((c) => !known.has(c.id));
-      if (missing.length === 0) {
-        console.info('[ChatSync] chat list checked', { fetched: chats.length, added: 0 });
-        return;
-      }
 
-      const restored = await Promise.all(
-        missing.map(async (chat) => {
-          // A missing transcript must not drop the chat itself from the list.
-          const transcript = await getChatTranscript(chat.id).catch((e: unknown) => {
-            console.warn('[ChatSync] transcript unavailable', { chatId: chat.id, error: String(e) });
-            return null;
-          });
-          return sessionFromServer(chat, transcript, defaultTitle(kindFromServer(chat.kind), t));
-        }),
-      );
+      // Ничего нового нет, но могли удалить что-то на другом устройстве — прунинг всё равно нужен.
+      const restored = missing.length === 0
+        ? []
+        : await Promise.all(
+            missing.map(async (chat) => {
+              // A missing transcript must not drop the chat itself from the list.
+              const transcript = await getChatTranscript(chat.id).catch((e: unknown) => {
+                console.warn('[ChatSync] transcript unavailable', { chatId: chat.id, error: String(e) });
+                return null;
+              });
+              return sessionFromServer(chat, transcript, defaultTitle(kindFromServer(chat.kind), t));
+            }),
+          );
 
       let added = 0;
+      let pruned = 0;
       setSessions((prev) => {
         const existing = new Set(prev.map((s) => s.id));
         const fresh = restored.filter((s) => !existing.has(s.id));
+        // CHAT_DELETE: для чатов, которые были на сервере, источник правды — сервер. Локальная
+        // сессия, помеченная `remote`, которой больше нет в списке, была удалена (возможно с
+        // другого устройства) — убираем и здесь, иначе удалённые чаты «воскресают» в сайдбаре.
+        // Не трогаем: локальные черновики (нет серверной записи), активный чат (не выдёргиваем
+        // открытый экран) и чат с идущим прогоном (его история ещё не записана).
+        const kept = prev.filter((s) => {
+          if (s.incognito || !s.remote) return true;
+          if (s.id === activeIdRef.current) return true;
+          if (streamingRef.current?.sessionId === s.id) return true;
+          return serverIds.has(s.id);
+        });
+
         added = fresh.length;
-        return fresh.length > 0 ? [...prev, ...fresh] : prev;
+        pruned = prev.length - kept.length;
+        if (fresh.length === 0 && pruned === 0) return prev;
+        return [...kept, ...fresh];
       });
-      console.info('[ChatSync] chat list synced', { fetched: chats.length, added });
+      console.info('[ChatSync] chat list synced', { fetched: chats.length, added, pruned });
     } catch (e) {
       // Offline or a failed request must not break the app: the local list stays as it is.
       console.warn('[ChatSync] could not load the chat list', e);
@@ -1136,13 +1165,37 @@ export default function App() {
     setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
   }
 
-  function handleDeleteSession(id: string) {
+  // CHAT_DELETE: добавлено 2026-09-23
+  // Удаление теперь физическое: сначала сервер (история + рабочая область), и только потом
+  // локальный список. Раньше чат исчезал только в этом браузере, а следующий sync возвращал его из
+  // базы обратно.
+  async function handleDeleteSession(id: string) {
     // Clear every reference to the deleted chat so it can never be re-opened:
     // the session list, the active id, and any in-flight stream still targeting
     // it (whose late SignalR deltas could otherwise re-attach messages).
     if (streamingRef.current?.sessionId === id) {
       streamingRef.current = null;
     }
+
+    const session = sessionsRef.current.find((s) => s.id === id);
+    // A chat that never reached the server (draft, incognito) has nothing to delete there.
+    const shouldAskServer = Boolean(session) && !session!.incognito && GUID_LIKE.test(id);
+
+    if (shouldAskServer) {
+      try {
+        await deleteChat(id);
+      } catch (e) {
+        const status = (e as { response?: { status?: number } })?.response?.status;
+        // 404 means the server has no such chat for this user: it is safe (and correct) to drop the
+        // local copy anyway. Any other failure must NOT pretend the delete happened.
+        if (status !== 404) {
+          console.warn('[ChatDelete] could not delete the chat on the server', { id, status, error: String(e) });
+          showToast(t('chat.deleteFailed'));
+          return;
+        }
+      }
+    }
+
     setSessions((prev) => prev.filter((s) => s.id !== id));
     if (activeId === id) {
       setActiveId(uid());
@@ -1250,7 +1303,7 @@ export default function App() {
         chatKind: live.sessions.find((s) => s.id === sessionId)?.kind ?? live.activeTab,
       });
 
-      setSessions((prev) => updateSession(prev, sessionId, (s) => ({ ...s, taskId: res.id })));
+      setSessions((prev) => updateSession(prev, sessionId, (s) => ({ ...s, taskId: res.id, remote: true })));
       streamingRef.current = { sessionId, messageId: assistantMsg.id, taskId: res.id };
       // AGENT_EVENT_GROUPS: добавлено 2026-09-22 — бэкенд вещает в ДВЕ разные группы:
       //   * task_{taskId}  — раннер и воркер (OnAgentStatus, pending_confirmation, OnCompleted…);
@@ -1530,8 +1583,14 @@ export default function App() {
     return adminView;
   }
 
+  // ADMIN_ERROR_BOUNDARY: добавлено 2026-09-23 — на самой панели рендер отделён от приложения,
+  // поэтому любая ошибка внутри даёт читаемый экран с выходом, а не пустой чёрный фон.
   if (isAdminRoute && user?.isAdmin) {
-    return <AdminPanel onBack={() => { window.location.hash = ''; }} onToast={showToast} />;
+    return (
+      <ErrorBoundary backLabel={t('admin.backToChat')} onBack={() => { window.location.hash = ''; }}>
+        <AdminPanel onBack={() => { window.location.hash = ''; }} onToast={showToast} />
+      </ErrorBoundary>
+    );
   }
 
   // INCOGNITO_CHAT: добавлено 2026-09-20

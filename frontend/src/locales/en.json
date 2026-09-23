@@ -58,7 +58,8 @@
     "scrollToBottom": "Jump to the latest message",
     "heroTitle": "Your move, {{name}}",
     "heroSubtitle": "What can I build for you today?",
-    "defaultName": "Commander"
+    "defaultName": "Commander",
+    "deleteFailed": "Could not delete the chat on the server — it is still in the list. Try again."
   },
   "sidebar": {
     "login": "Log in",
@@ -99,6 +100,7 @@
     "supportTab": "Support requests",
     "userCount": "{{count}} users",
     "noAccess": "No access to the admin panel. Sign in as an administrator.",
+    "backToChat": "Back to chat",
     "retry": "Retry",
     "loadError": "Failed to load users",
     "since": "since {{date}}",
@@ -402,6 +404,8 @@
     "downloadFile": "Download file"
   },
   "errors": {
+    "renderTitle": "This screen could not be rendered",
+    "renderHint": "This is a UI error, not data loss. Go back to the chat and try again; if it keeps happening, send the text below to support.",
     "serviceUnavailable": "The service is restarting right now. Try again in a few seconds.",
     "network": "No connection to the server. Check your network and try again.",
     "httpStatus": "Request failed. Status:",

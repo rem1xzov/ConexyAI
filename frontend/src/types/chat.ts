@@ -81,6 +81,13 @@ export interface ChatSession {
   messages: ChatMessage[];
   createdAt: number;
   isPinned?: boolean;
+  // CHAT_DELETE: добавлено 2026-09-23
+  /**
+   * True once this chat exists on the server (it was created by a sync, or a turn of it was
+   * persisted). Only such chats may be pruned when the server no longer lists them — a local draft
+   * that was never sent has no server row at all and must never be swept away.
+   */
+  remote?: boolean;
   // INCOGNITO_CHAT: добавлено 2026-09-20
   /** Local-only chat: hidden from the sidebar and never written to localStorage. */
   incognito?: boolean;
