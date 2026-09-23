@@ -80,6 +80,17 @@ public interface IConversationService
         bool incognito,
         int? depth,
         CancellationToken ct = default);
+
+    // CHAT_SYNC: добавлено 2026-09-23
+    /// <summary>
+    /// The user's chats, newest activity first, for rebuilding the sidebar on any device.
+    /// <para>
+    /// This lives here — and not in a controller reaching into the repository — because history is
+    /// owned by exactly one service (see the note on <see cref="IChatHistoryRepository"/>). This is a
+    /// read-only projection: it writes nothing and never touches the model.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<ChatListSummary>> GetChatsAsync(Guid userId, int limit, CancellationToken ct = default);
 }
 
 public class ConversationService : IConversationService
@@ -260,6 +271,11 @@ public class ConversationService : IConversationService
 
         return history;
     }
+
+    // CHAT_SYNC: добавлено 2026-09-23
+    public Task<IReadOnlyList<ChatListSummary>> GetChatsAsync(
+        Guid userId, int limit, CancellationToken ct = default) =>
+        _chatHistory.GetChatsAsync(userId, limit, ct);
 
     // CONTEXT_DIAGNOSTICS: moved out of the agent runner so every path logs the same shape. Without
     // it there is no way to tell "history was lost" from "the model ignored it".

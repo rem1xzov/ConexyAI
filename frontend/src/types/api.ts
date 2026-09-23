@@ -49,6 +49,32 @@ export interface ConexyResponse {
   finishedAt?: string | null;
 }
 
+// CHAT_SYNC: добавлено 2026-09-23
+/** One chat in the user's list, as returned by `GET /api/conexy/chats`. */
+export interface ChatSummary {
+  id: string;
+  /** First user message; null for a chat that has no user turn yet. */
+  title?: string | null;
+  /** "chat" or "projects" (the agent mode) — inferred server-side from the chat's workspace. */
+  kind: string;
+  lastActivityAt: string;
+  messageCount: number;
+  lastMessage?: string | null;
+}
+
+/** One stored turn inside a chat transcript. */
+export interface ChatTranscriptMessage {
+  role: string;
+  content: string;
+  createdAt: string;
+}
+
+/** Full stored transcript of one chat, oldest first. */
+export interface ChatTranscript {
+  id: string;
+  messages: ChatTranscriptMessage[];
+}
+
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 export interface SubscriptionUsage {
   tier: string;

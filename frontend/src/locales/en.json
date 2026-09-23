@@ -98,6 +98,8 @@
     "usersTab": "Users",
     "supportTab": "Support requests",
     "userCount": "{{count}} users",
+    "noAccess": "No access to the admin panel. Sign in as an administrator.",
+    "retry": "Retry",
     "loadError": "Failed to load users",
     "since": "since {{date}}",
     "protected": "Protected",

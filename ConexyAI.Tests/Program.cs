@@ -71,6 +71,7 @@ await RunAsync("office: document attachments reach the model as text, in every m
 await RunAsync("office: agents create and read documents in the workspace", TestAgentDocumentToolsAsync);
 await RunAsync("cowork: writes documents, never runs bash, skips the code auditor", TestCoworkToolsAndNoCodeAuditAsync);
 await RunAsync("sandbox sessions: per-session state directory + idle expiry", TestSandboxSessionStateAsync);
+await RunAsync("chat sync: chat list + transcript are scoped to the owner", TestChatSyncScopingAsync);
 await RunAsync("ide files: create -> content -> save -> rename -> delete", TestIdeFileCrudAsync);
 await RunAsync("ide files: path traversal is blocked (shared validator)", TestIdeFilePathTraversalBlockedAsync);
 await RunAsync("ide files: manual save invalidates agent undo stack", TestManualSaveInvalidatesEditorUndoAsync);
@@ -1133,6 +1134,48 @@ async Task TestAgentAuditorReviewsOnlyChangedFilesAsync()
     return (service, memory, history);
 }
 
+// CHAT_SYNC: добавлено 2026-09-23 — список чатов и транскрипт возвращаются КЛИЕНТУ, поэтому
+// фильтрация по владельцу здесь — это граница безопасности, а не удобство. Тест проверяет и
+// синхронизацию, и то, что чужой chatId ничего не отдаёт.
+async Task TestChatSyncScopingAsync()
+{
+    await using var context = CreateContext("chatsync_" + Guid.NewGuid().ToString("N"));
+    var (service, _, history) = CreateConversationService(context);
+
+    var owner = Guid.NewGuid();
+    var stranger = Guid.NewGuid();
+    var ownerChat = Guid.NewGuid();
+    var sharedChat = Guid.NewGuid();
+
+    await history.AppendAsync(owner, ownerChat, "user", "первый вопрос");
+    await history.AppendAsync(owner, ownerChat, "assistant", "первый ответ");
+    await history.AppendAsync(owner, sharedChat, "user", "моя реплика");
+    await history.AppendAsync(stranger, sharedChat, "user", "чужая реплика");
+
+    // The sidebar list is rebuilt from this call on a second device.
+    var chats = await service.GetChatsAsync(owner, 50);
+    Assert(chats.Any(c => c.ChatId == ownerChat), "the owner must see their own chat");
+
+    var summary = chats.Single(c => c.ChatId == ownerChat);
+    Assert(summary.MessageCount == 2, $"the summary must count only this user's rows (got {summary.MessageCount})");
+    Assert(summary.FirstUserMessage == "первый вопрос", "the title must come from the first user message");
+    Assert(summary.LastAssistantMessage == "первый ответ", "the preview must come from the last assistant message");
+
+    // IDOR guard: even with a chat id that another user also has rows in, only the owner's rows count.
+    var shared = chats.Single(c => c.ChatId == sharedChat);
+    Assert(shared.MessageCount == 1, "another user's messages must never be counted");
+
+    // The transcript endpoint reads history directly, so it needs the same guarantee.
+    var ownerTranscript = await service.GetHistoryAsync(owner, ownerChat, incognito: false, depth: null);
+    Assert(ownerTranscript.Count == 2, "the owner must get their full transcript");
+
+    var stolen = await service.GetHistoryAsync(stranger, ownerChat, incognito: false, depth: null);
+    Assert(stolen.Count == 0, "a foreign chat id must return an empty transcript");
+
+    var strangerChats = await service.GetChatsAsync(stranger, 50);
+    Assert(!strangerChats.Any(c => c.ChatId == ownerChat), "the chat list must not leak other users' chats");
+}
+
 async Task TestCrossChatDigestAsync()
 {
     await using var context = CreateContext("crosschat_" + Guid.NewGuid().ToString("N"));
@@ -1681,6 +1724,11 @@ sealed class StaticConversationService : IConversationService
         int? depth,
         CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<ConexyChatMessageEntity>>(Array.Empty<ConexyChatMessageEntity>());
+
+    // CHAT_SYNC: список чатов этому стабу не нужен — он подменяет собой обращение к модели.
+    public Task<IReadOnlyList<ChatListSummary>> GetChatsAsync(
+        Guid userId, int limit, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<ChatListSummary>>(Array.Empty<ChatListSummary>());
 }
 
 sealed class FakeHttpMessageHandler : HttpMessageHandler

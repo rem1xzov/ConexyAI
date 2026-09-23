@@ -3,6 +3,8 @@ import axios from 'axios';
 import type {
   AdminSupportTicket,
   AdminUsersResponse,
+  ChatSummary,
+  ChatTranscript,
   ConexyRequest,
   ConexyResponse,
   DevTokenResponse,
@@ -153,6 +155,19 @@ export async function getSubscriptionUsage(): Promise<SubscriptionUsage> {
 
 export async function getTaskStatus(id: string): Promise<ConexyResponse> {
   const { data } = await http.get<ConexyResponse>(`/conexy/${id}`);
+  return data;
+}
+
+// CHAT_SYNC: добавлено 2026-09-23
+/** The signed-in user's chats, newest activity first (server-side list, not localStorage). */
+export async function getChats(limit = 50): Promise<ChatSummary[]> {
+  const { data } = await http.get<ChatSummary[]>('/conexy/chats', { params: { limit } });
+  return data;
+}
+
+/** The stored transcript of one chat; the backend scopes it to the token's user. */
+export async function getChatTranscript(chatId: string): Promise<ChatTranscript> {
+  const { data } = await http.get<ChatTranscript>(`/conexy/chats/${chatId}/messages`);
   return data;
 }
 

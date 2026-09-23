@@ -32,11 +32,27 @@ public interface IChatHistoryRepository
     /// </summary>
     Task<IReadOnlyList<RecentChatSummary>> GetRecentChatsAsync(
         Guid userId, Guid excludeChatId, int limit, CancellationToken ct = default);
+
+    // CHAT_SYNC: добавлено 2026-09-23
+    /// <summary>
+    /// EVERY chat this user owns, newest activity first. This is what lets the sidebar be rebuilt on
+    /// a second device: the client's chat list used to exist only in that browser's localStorage.
+    /// </summary>
+    Task<IReadOnlyList<ChatListSummary>> GetChatsAsync(Guid userId, int limit, CancellationToken ct = default);
 }
 
 // CROSS_CHAT_CONTEXT: добавлено 2026-09-23
 public sealed record RecentChatSummary(
     Guid ChatId,
     DateTime LastActivityAt,
+    string? FirstUserMessage,
+    string? LastAssistantMessage);
+
+// CHAT_SYNC: добавлено 2026-09-23
+/// <summary>One chat as a chat list needs it (see <see cref="IChatHistoryRepository.GetChatsAsync"/>).</summary>
+public sealed record ChatListSummary(
+    Guid ChatId,
+    DateTime LastActivityAt,
+    int MessageCount,
     string? FirstUserMessage,
     string? LastAssistantMessage);

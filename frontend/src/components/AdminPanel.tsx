@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { deleteUser, getAdminUsers, makeAdmin, revokeAdmin } from '../api/conexyApi';
 import type { AdminUser } from '../types/api';
+import { humanError } from '../utils/humanError';
 import { ConfirmDialog } from './Dialog';
 import { ShieldIcon } from './Icons';
 import { AdminSupport } from './AdminSupport';
@@ -49,6 +50,9 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
     return t('admin.roles.user');
   }
 
+  // ADMIN_PANEL_FIX: добавлено 2026-09-23 — ошибка загрузки должна быть и понятной, и
+  // преодолимой: 403 означает «не админ» (а не сломанные данные), а кнопка «Повторить» убирает
+  // необходимость перезагружать страницу, если запрос упал по сети.
   async function load(p: number) {
     setLoading(true);
     setError(null);
@@ -57,11 +61,16 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
       setUsers(res.users);
       setTotal(res.totalCount);
       setPage(res.page);
-    } catch {
-      setError(t('admin.loadError'));
+    } catch (e) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      setError(status === 403 ? t('admin.noAccess') : humanError(e, t));
     } finally {
       setLoading(false);
     }
+  }
+
+  function retry() {
+    void load(page);
   }
 
   useEffect(() => {
@@ -146,7 +155,12 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
       {loading ? (
         <p className="muted admin__empty">{t('common.loading')}</p>
       ) : error ? (
-        <p className="admin__error">{error}</p>
+        <div className="admin__error-block">
+          <p className="admin__error">{error}</p>
+          <button className="admin-btn" type="button" onClick={retry}>
+            {t('admin.retry')}
+          </button>
+        </div>
       ) : (
         <div className="admin__list">
           {users.map((u) => (

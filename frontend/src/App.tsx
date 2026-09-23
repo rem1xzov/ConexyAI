@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
-import { getSubscriptionUsage, getTaskStatus, runTask } from './api/conexyApi';
+import { getChats, getChatTranscript, getSubscriptionUsage, getTaskStatus, runTask } from './api/conexyApi';
 import { signalrService } from './services/signalrService';
 import { useAuth } from './hooks/useAuth';
 import { useIsMobile } from './hooks/useMediaQuery';
@@ -33,7 +33,7 @@ import type { AuthMode } from './components/AuthModal';
 import { SettingsModal } from './components/SettingsModal';
 import { getStoredTheme, setTheme, type Theme } from './theme';
 import { setLanguage } from './i18n';
-import type { ConexyModel, LimitExceededInfo, ReasoningEffort, SendOutcome, SubscriptionUsage, TaskAttachment } from './types/api';
+import type { ConexyModel, LimitExceededInfo, ReasoningEffort, SendOutcome, SubscriptionUsage, TaskAttachment, ChatSummary, ChatTranscript } from './types/api';
 import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep } from './types/chat';
 import type { PendingActionPayload } from './types/signalr';
 // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
@@ -44,9 +44,18 @@ import { humanError } from './utils/humanError';
 const STORAGE_KEY = 'conexy_sessions';
 
 function uid(): string {
-  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+
+  // CHAT_SYNC: fallback обязателен именно в форме UUID. Идентификатор чата уезжает на сервер как
+  // `chatId`, и история диалога пишется под ним же; если он не парсится как Guid, бэкенд молча
+  // подменяет chatId на taskId — и такой чат потом невозможно ни синхронизировать, ни найти.
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
 // AGENT_TIMELINE: добавлено 2026-09-22
@@ -140,6 +149,42 @@ function defaultTitle(kind: ChatSessionKind, t: (key: string) => string): string
   return t('sidebar.newChat');
 }
 
+// CHAT_SYNC: добавлено 2026-09-23
+/**
+ * Builds a local session from a server chat list entry plus its stored transcript. Used for chats
+ * this device has never seen (created on another device), which is what makes the sidebar no longer
+ * device-local.
+ */
+function sessionFromServer(
+  chat: ChatSummary,
+  transcript: ChatTranscript | null,
+  fallbackTitle: string,
+): ChatSession {
+  const kind: ChatSessionKind = chat.kind === 'projects' ? 'projects' : 'chat';
+
+  const messages: ChatMessage[] = (transcript?.messages ?? [])
+    // Only real turns belong in the transcript; tool/system rows are internal plumbing.
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({
+      id: uid(),
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+      status: 'complete' as const,
+      createdAt: new Date(m.createdAt).getTime(),
+    }));
+
+  return {
+    id: chat.id,
+    title: chat.title || fallbackTitle,
+    status: 'Completed',
+    // The agent mode is its own model; for chat sessions the user picks the model per message anyway.
+    model: kind === 'projects' ? 'conexy-coder' : 'ConexyV1-flash',
+    kind,
+    messages,
+    createdAt: messages.length > 0 ? messages[0].createdAt : new Date(chat.lastActivityAt).getTime(),
+  };
+}
+
 // LOGO_SWEEP: добавлено 2026-09-20 — time-of-day greeting for the start screen.
 // TABS_UNIFIED: each tab has its own full sentence, so translators get a complete string
 // instead of a concatenation.
@@ -180,6 +225,9 @@ export default function App() {
   const [ideCollapsed, setIdeCollapsed] = useState(false);
 
   const [sessions, setSessions] = useState<ChatSession[]>(loadSessions);
+  // CHAT_SYNC: добавлено 2026-09-23 — снимок списка чатов для синхронизации с сервером.
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   // Every visit starts on a fresh, empty chat with the default model instead of restoring
   // the last opened session. Previous chats stay available from the sidebar.
   const [activeId, setActiveId] = useState<string | null>(() => uid());
@@ -413,18 +461,96 @@ export default function App() {
 
   const isAdminRoute = route.startsWith('#/admin');
 
-  // Redirect non-admins away from the admin route.
-  useEffect(() => {
-    if (isAdminRoute && user && !user.isAdmin) {
-      window.location.hash = '';
+  // ADMIN_PANEL_FIX: добавлено 2026-09-23 — маршрут админки решается ЯВНО.
+  // Раньше при `user === null` (профиль ещё не приехал или /auth/me упал) не выполнялось ни одно из
+  // условий: админка не рендерилась, авторедирект не срабатывал (он требует непустого user), и
+  // клик по пункту меню выглядел как «ничего не произошло». Плюс авторедирект молча менял хеш, так
+  // что пользователь не понимал, почему экран не открылся. Теперь на `#/admin` всегда есть
+  // определённый исход: загрузка (пока профиль неизвестен), явное «нет доступа» или сама панель.
+  const adminView = (() => {
+    if (!isAdminRoute) return null;
+
+    if (!user) {
+      return (
+        <div className="feed feed--empty">
+          <p className="muted">{t('common.loading')}</p>
+          <button className="admin-btn" type="button" onClick={() => { window.location.hash = ''; }}>
+            {t('common.back')}
+          </button>
+        </div>
+      );
     }
-  }, [isAdminRoute, user]);
+
+    if (!user.isAdmin) {
+      return (
+        <div className="feed feed--empty">
+          <p className="muted">{t('admin.noAccess')}</p>
+          <button className="admin-btn" type="button" onClick={() => { window.location.hash = ''; }}>
+            {t('common.back')}
+          </button>
+        </div>
+      );
+    }
+
+    return null; // admin and authenticated -> the panel is rendered below
+  })();
 
   useEffect(() => {
     // INCOGNITO_CHAT: добавлено 2026-09-20 — incognito chats stay in memory for the current
     // visit only, so they are filtered out of the persisted list (and the sidebar).
     saveSessions(sessions.filter((s) => !s.incognito));
   }, [sessions]);
+
+  // CHAT_SYNC: добавлено 2026-09-23
+  // Список чатов раньше жил только в localStorage этого браузера — отсюда «разные чаты» на ПК и
+  // телефоне под одним аккаунтом. Теперь при появлении токена список сверяется с сервером, и чаты,
+  // которых локально нет (созданные на другом устройстве), подтягиваются вместе с историей.
+  // Существующие локальные чаты НЕ перезаписываются: в них больше состояния (шаги агента, вложения,
+  // todo), и они свежее, чем то, что успело доехать до истории.
+  const lastSyncedTokenRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!token || lastSyncedTokenRef.current === token) return;
+    lastSyncedTokenRef.current = token;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const chats = await getChats();
+        const known = new Set(sessionsRef.current.map((s) => s.id));
+        const missing = chats.filter((c) => !known.has(c.id));
+        if (missing.length === 0) return;
+
+        const restored = await Promise.all(
+          missing.map(async (chat) => {
+            const kind: ChatSessionKind = chat.kind === 'projects' ? 'projects' : 'chat';
+            // A missing transcript must not drop the chat itself from the list.
+            const transcript = await getChatTranscript(chat.id).catch((e: unknown) => {
+              console.warn('[ChatSync] transcript unavailable', { chatId: chat.id, error: String(e) });
+              return null;
+            });
+            return sessionFromServer(chat, transcript, defaultTitle(kind, t));
+          }),
+        );
+
+        if (cancelled) return;
+        let added = 0;
+        setSessions((prev) => {
+          const existing = new Set(prev.map((s) => s.id));
+          const fresh = restored.filter((s) => !existing.has(s.id));
+          added = fresh.length;
+          return fresh.length > 0 ? [...prev, ...fresh] : prev;
+        });
+        console.info('[ChatSync] chat list synced', { fetched: chats.length, added });
+      } catch (e) {
+        // Offline or a failed request must not break the app: the local list stays as it is.
+        console.warn('[ChatSync] could not load the chat list', e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, t]);
 
   // SUBSCRIPTION_TIERS: добавлено 2026-09-17
   async function refreshUsage() {
@@ -1352,6 +1478,12 @@ export default function App() {
   }
 
   // ADMIN_PANEL: добавлено 2026-09-19 — render the admin page as a full-screen view.
+  // ADMIN_PANEL_FIX: добавлено 2026-09-23 — сначала отдаём явный исход для «профиль неизвестен»
+  // и «нет прав», и только потом саму панель.
+  if (adminView) {
+    return adminView;
+  }
+
   if (isAdminRoute && user?.isAdmin) {
     return <AdminPanel onBack={() => { window.location.hash = ''; }} onToast={showToast} />;
   }

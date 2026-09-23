@@ -49,14 +49,52 @@ public class ChatHistoryRepository : IChatHistoryRepository
         if (limit <= 0)
             return Array.Empty<RecentChatSummary>();
 
-        var rows = await _context.ChatMessages
+        var rows = await QueryChatSummariesAsync(userId, excludeChatId, limit, ct);
+        return rows
+            .Select(r => new RecentChatSummary(r.ChatId, r.LastActivityAt, r.FirstUser, r.LastAssistant))
+            .ToList();
+    }
+
+    // CHAT_SYNC: добавлено 2026-09-23
+    public async Task<IReadOnlyList<ChatListSummary>> GetChatsAsync(
+        Guid userId, int limit, CancellationToken ct = default)
+    {
+        if (limit <= 0)
+            return Array.Empty<ChatListSummary>();
+
+        var rows = await QueryChatSummariesAsync(userId, excludeChatId: null, limit, ct);
+        return rows
+            .Select(r => new ChatListSummary(
+                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Shared shape of both chat-summary queries: one round trip, grouped per chat, ordered by the
+    /// most recent message. <paramref name="excludeChatId"/> is only used by cross-chat context,
+    /// which must not include the chat it is collecting context for.
+    /// </summary>
+    private async Task<List<ChatSummaryRow>> QueryChatSummariesAsync(
+        Guid userId, Guid? excludeChatId, int limit, CancellationToken ct)
+    {
+        var query = _context.ChatMessages
             .AsNoTracking()
-            .Where(m => m.UserId == userId && m.ChatId != excludeChatId)
+            .Where(m => m.UserId == userId);
+
+        if (excludeChatId is { } excluded)
+        {
+            query = query.Where(m => m.ChatId != excluded);
+        }
+
+        // The projection stays anonymous on purpose: EF translates that shape, but a constructor call
+        // inside the grouped Select fails translation outright.
+        var rows = await query
             .GroupBy(m => m.ChatId)
             .Select(g => new
             {
                 ChatId = g.Key,
                 LastActivityAt = g.Max(m => m.CreatedAt),
+                MessageCount = g.Count(),
                 FirstUser = g.Where(m => m.Role == "user")
                     .OrderBy(m => m.CreatedAt)
                     .Select(m => m.Content)
@@ -71,7 +109,15 @@ public class ChatHistoryRepository : IChatHistoryRepository
             .ToListAsync(ct);
 
         return rows
-            .Select(r => new RecentChatSummary(r.ChatId, r.LastActivityAt, r.FirstUser, r.LastAssistant))
+            .Select(r => new ChatSummaryRow(
+                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant))
             .ToList();
     }
+
+    private sealed record ChatSummaryRow(
+        Guid ChatId,
+        DateTime LastActivityAt,
+        int MessageCount,
+        string? FirstUser,
+        string? LastAssistant);
 }

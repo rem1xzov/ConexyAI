@@ -1,6 +1,7 @@
 ﻿using System.IO.Compression;
 using ConexyAI.Contract;
 using ConexyAI.Extensions;
+using ConexyAI.Repository;
 using ConexyAI.Service;
 using ConexyAI.Service.Office;
 using Microsoft.AspNetCore.Authorization;
@@ -16,15 +17,19 @@ public class ConexyController : ControllerBase
 {
     private readonly IConexyService _conexyService;
     private readonly IConexyWorkspaceService _workspaceService;
+    // CHAT_SYNC: добавлено 2026-09-23 — история читается только через свой владелец-сервис.
+    private readonly IConversationService _conversation;
     private readonly ILogger<ConexyController> _logger;
 
     public ConexyController(
         IConexyService conexyService,
         IConexyWorkspaceService workspaceService,
+        IConversationService conversation,
         ILogger<ConexyController> logger)
     {
         _conexyService = conexyService;
         _workspaceService = workspaceService;
+        _conversation = conversation;
         _logger = logger;
     }
 
@@ -98,6 +103,66 @@ public class ConexyController : ControllerBase
         var response = await _conexyService.GetByIdAsync(id, userId, ct);
         if (response == null) return NotFound();
         return Ok(response);
+    }
+
+    /// <summary>
+    /// The signed-in user's chats, newest activity first, so the sidebar can be rebuilt on any
+    /// device. Scoped to the token's user id — there is no way to ask for someone else's list.
+    /// </summary>
+    [HttpGet("chats")]
+    public async Task<ActionResult<IReadOnlyList<ChatSummaryDto>>> GetChats(
+        [FromQuery] int limit = 50, CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        var chats = await _conversation.GetChatsAsync(userId, Math.Clamp(limit, 1, 200), ct);
+        return Ok(chats.Select(ToChatSummary).ToList());
+    }
+
+    /// <summary>Full stored transcript of one chat, oldest first, for its owner only.</summary>
+    [HttpGet("chats/{chatId:guid}/messages")]
+    public async Task<ActionResult<ChatTranscriptDto>> GetChatMessages(Guid chatId, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        // depth: null -> the whole stored transcript. Ownership is enforced by the repository query
+        // (WHERE UserId = current), so asking for someone else's chat id returns an empty transcript.
+        var messages = await _conversation.GetHistoryAsync(userId, chatId, incognito: false, depth: null, ct);
+
+        return Ok(new ChatTranscriptDto(
+            chatId,
+            messages.Select(m => new ChatTranscriptMessageDto(m.Role, m.Content, m.CreatedAt)).ToList()));
+    }
+
+    /// <summary>
+    /// Chat list projection. The chat <em>kind</em> is inferred from the workspace: a chat that has
+    /// one on disk is a conexy-coder (agent) chat, because the workspace is keyed by the chat id and
+    /// only the agent path creates it. Without this a synced agent chat would land in the wrong
+    /// sidebar tab. (Students mode is not recoverable here — it is not stored anywhere.)
+    /// </summary>
+    private ChatSummaryDto ToChatSummary(ChatListSummary chat)
+    {
+        var isAgentChat = _workspaceService.GetTaskWorkspacePathIfExists(chat.ChatId) is not null;
+
+        return new ChatSummaryDto(
+            chat.ChatId,
+            ForPreview(chat.FirstUserMessage),
+            isAgentChat ? "projects" : "chat",
+            chat.LastActivityAt,
+            chat.MessageCount,
+            ForPreview(chat.LastAssistantMessage));
+    }
+
+    /// <summary>Collapses a stored message into a single-line, bounded preview.</summary>
+    private static string? ForPreview(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+
+        var line = text.ReplaceLineEndings(" ").Trim();
+        if (line.Length == 0) return null;
+        return line.Length > 120 ? line[..120] + "…" : line;
     }
 
     /// <summary>Lists the files (flat paths + nested tree) created by the agent in a session workspace.</summary>
