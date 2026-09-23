@@ -31,5 +31,18 @@ public class ConexyChatMessageEntity
     /// </summary>
     public string? Kind { get; set; }
 
+    // CHAT_RENAME: добавлено 2026-09-23
+    /// <summary>
+    /// User-chosen chat name, when one was given. Null means "derive the title from the first user
+    /// message", which is what the chat list does by default.
+    /// <para>
+    /// Stored on the history rows for the same reason as <see cref="Kind"/>: this is the only table
+    /// keyed by the chat id, so a rename needs no second table and no join. A rename updates every
+    /// existing row of the chat, and later rows are written with null and therefore never override
+    /// it (the list takes the single non-null value).
+    /// </para>
+    /// </summary>
+    public string? Title { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

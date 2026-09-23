@@ -74,6 +74,7 @@ await RunAsync("sandbox sessions: per-session state directory + idle expiry", Te
 await RunAsync("chat sync: chat list + transcript are scoped to the owner", TestChatSyncScopingAsync);
 await RunAsync("chat kind: the tab mode round-trips and junk is dropped", TestChatKindPersistsAsync);
 await RunAsync("chat delete: physical, owner-scoped, idempotent", TestChatDeleteAsync);
+await RunAsync("chat rename: owner-scoped and survives later turns", TestChatRenameAsync);
 await RunAsync("ide files: create -> content -> save -> rename -> delete", TestIdeFileCrudAsync);
 await RunAsync("ide files: path traversal is blocked (shared validator)", TestIdeFilePathTraversalBlockedAsync);
 await RunAsync("ide files: manual save invalidates agent undo stack", TestManualSaveInvalidatesEditorUndoAsync);
@@ -1241,6 +1242,44 @@ async Task TestChatDeleteAsync()
     Assert(await service.DeleteChatAsync(owner, chatId) == 0, "a second delete must report nothing removed");
 }
 
+// CHAT_RENAME: добавлено 2026-09-23 — имя чата живёт на сервере и доступно только владельцу.
+async Task TestChatRenameAsync()
+{
+    await using var context = CreateContext("chatrename_" + Guid.NewGuid().ToString("N"));
+    var (service, _, _) = CreateConversationService(context);
+    var owner = Guid.NewGuid();
+    var stranger = Guid.NewGuid();
+    var chatId = Guid.NewGuid();
+
+    await service.PersistTurnAsync(
+        new ConversationContext(Guid.NewGuid(), chatId, owner, "SYSTEM", "первый вопрос"),
+        "ответ",
+        TurnOutcome.Completed);
+
+    // Until a name is chosen the list falls back to the first user message (that projection lives in
+    // the controller), so the stored title is still empty here.
+    var before = (await service.GetChatsAsync(owner, 50)).Single(c => c.ChatId == chatId);
+    Assert(before.Title is null, "no user-chosen name is stored yet");
+    Assert(before.FirstUserMessage == "первый вопрос", "the fallback name comes from the first user message");
+
+    // A foreign user must not be able to rename somebody else's chat.
+    Assert(await service.RenameChatAsync(stranger, chatId, "чужое имя") == 0, "a foreign rename must change nothing");
+    Assert((await service.GetChatsAsync(owner, 50)).Single(c => c.ChatId == chatId).Title is null,
+        "the owner's chat must keep its name after a foreign rename attempt");
+
+    Assert(await service.RenameChatAsync(owner, chatId, "Мои расчёты") == 2, "both stored rows must carry the new name");
+    var renamed = (await service.GetChatsAsync(owner, 50)).Single(c => c.ChatId == chatId);
+    Assert(renamed.Title == "Мои расчёты", $"the chosen name must win (got '{renamed.Title}')");
+
+    // Later turns are written without a title, so they must not wipe the chosen one.
+    await service.PersistTurnAsync(
+        new ConversationContext(Guid.NewGuid(), chatId, owner, "SYSTEM", "второй вопрос"),
+        "второй ответ",
+        TurnOutcome.Completed);
+    Assert((await service.GetChatsAsync(owner, 50)).Single(c => c.ChatId == chatId).Title == "Мои расчёты",
+        "a new turn must not overwrite the chosen name");
+}
+
 async Task TestCrossChatDigestAsync()
 {
     await using var context = CreateContext("crosschat_" + Guid.NewGuid().ToString("N"));
@@ -1802,6 +1841,10 @@ sealed class StaticConversationService : IConversationService
 
     // CHAT_DELETE: удаления у стаба тоже нет — он не владеет историей.
     public Task<int> DeleteChatAsync(Guid userId, Guid chatId, CancellationToken ct = default) =>
+        Task.FromResult(0);
+
+    // CHAT_RENAME: и переименования тоже — история не у него.
+    public Task<int> RenameChatAsync(Guid userId, Guid chatId, string title, CancellationToken ct = default) =>
         Task.FromResult(0);
 }
 

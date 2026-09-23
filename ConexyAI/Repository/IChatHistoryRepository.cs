@@ -55,6 +55,13 @@ public interface IChatHistoryRepository
     /// </para>
     /// </summary>
     Task<int> DeleteChatAsync(Guid userId, Guid chatId, CancellationToken ct = default);
+
+    // CHAT_RENAME: добавлено 2026-09-23
+    /// <summary>
+    /// Stores a user-chosen name for one chat, for its owner only, and returns how many rows were
+    /// updated. Zero means "no such chat for this user" — same ownership gate as the delete path.
+    /// </summary>
+    Task<int> RenameChatAsync(Guid userId, Guid chatId, string title, CancellationToken ct = default);
 }
 
 // CROSS_CHAT_CONTEXT: добавлено 2026-09-23
@@ -73,4 +80,7 @@ public sealed record ChatListSummary(
     string? FirstUserMessage,
     string? LastAssistantMessage,
     // CHAT_KIND_SYNC: режим чата, если он был записан (иначе null — вызывающий использует фолбэк).
-    string? Kind);
+    string? Kind,
+    // CHAT_RENAME: пользовательское имя чата, если его задавали (иначе null — берётся из первого
+    // сообщения пользователя).
+    string? Title);

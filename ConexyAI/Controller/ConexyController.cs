@@ -166,6 +166,41 @@ public class ConexyController : ControllerBase
         return NoContent();
     }
 
+    // CHAT_RENAME: добавлено 2026-09-23
+    /// <summary>
+    /// Renames one chat. The name is stored with the chat's history rows, under the caller's user id,
+    /// so it travels to every device with the rest of the chat list.
+    /// </summary>
+    [HttpPatch("chats/{chatId:guid}")]
+    public async Task<IActionResult> RenameChat(Guid chatId, [FromBody] ChatRenameDto? dto, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        var title = dto?.Title?.Trim();
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return BadRequest(new { error = "A non-empty 'title' is required." });
+        }
+
+        // The column is varchar(200); reject instead of silently truncating what the user typed.
+        if (title.Length > MaxChatTitleLength)
+        {
+            return BadRequest(new { error = $"The title must be at most {MaxChatTitleLength} characters." });
+        }
+
+        var updatedRows = await _conversation.RenameChatAsync(userId, chatId, title, ct);
+        if (updatedRows == 0)
+        {
+            // Same ownership gate as delete: no rows of this user means no such chat for them.
+            return NotFound(new { error = "Chat not found." });
+        }
+
+        _logger.LogInformation(
+            "Chat {ChatId} renamed by user {UserId} ({Rows} row(s) updated).", chatId, userId, updatedRows);
+        return Ok(new { id = chatId, title });
+    }
+
     /// <summary>
     /// Chat list projection. The chat <em>kind</em> is inferred from the workspace: a chat that has
     /// one on disk is a conexy-coder (agent) chat, because the workspace is keyed by the chat id and
@@ -174,25 +209,29 @@ public class ConexyController : ControllerBase
     /// </summary>
     private ChatSummaryDto ToChatSummary(ChatListSummary chat)
     {
-        // CHAT_KIND_SYNC: сначала сохранённый режим — он точен для всех трёх вкладок (включая
-        // «учеников», которые иначе неопределимы). Фолбэк по workspace нужен только для строк,
-        // записанных до появления колонки: у агентских чатов на диске есть workspace, у остальных нет.
-        var kind = chat.Kind;
-        if (string.IsNullOrEmpty(kind))
-        {
-            kind = _workspaceService.GetTaskWorkspacePathIfExists(chat.ChatId) is not null
-                ? "projects"
-                : "chat";
-        }
-
         return new ChatSummaryDto(
             chat.ChatId,
-            ForPreview(chat.FirstUserMessage),
-            kind,
+            // CHAT_RENAME: имя, заданное пользователем, важнее выведенного из первого сообщения.
+            !string.IsNullOrWhiteSpace(chat.Title) ? chat.Title : ForPreview(chat.FirstUserMessage),
+            ResolveChatKind(chat.ChatId, chat.Kind),
             chat.LastActivityAt,
             chat.MessageCount,
             ForPreview(chat.LastAssistantMessage));
     }
+
+    /// <summary>
+    /// The tab a chat belongs to: the stored mode when one was persisted, otherwise a guess from the
+    /// filesystem (agent chats are the only ones with a workspace). The guess only matters for rows
+    /// written before the mode column existed.
+    /// </summary>
+    private string ResolveChatKind(Guid chatId, string? storedKind)
+    {
+        if (!string.IsNullOrEmpty(storedKind)) return storedKind;
+        return _workspaceService.GetTaskWorkspacePathIfExists(chatId) is not null ? "projects" : "chat";
+    }
+
+    /// <summary>Upper bound that matches the column length in the database.</summary>
+    private const int MaxChatTitleLength = 200;
 
     /// <summary>Collapses a stored message into a single-line, bounded preview.</summary>
     private static string? ForPreview(string? text)

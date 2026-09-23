@@ -24,5 +24,9 @@ public record ChatSummaryDto(
 /// <summary>One stored turn. Only what the transcript needs: role, text and when it was stored.</summary>
 public record ChatTranscriptMessageDto(string Role, string Content, DateTime CreatedAt);
 
-/// <summary>The full stored transcript of one chat, oldest first.</summary>
+/// <summary>Full stored transcript of one chat, oldest first.</summary>
 public record ChatTranscriptDto(Guid Id, IReadOnlyList<ChatTranscriptMessageDto> Messages);
+
+// CHAT_RENAME: добавлено 2026-09-23
+/// <summary>Body of <c>PATCH /api/conexy/chats/{id}</c>: the new name for one chat.</summary>
+public record ChatRenameDto(string? Title);

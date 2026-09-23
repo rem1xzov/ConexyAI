@@ -31,6 +31,10 @@ public class ConexyChatMessage_config : IEntityTypeConfiguration<ConexyChatMessa
         builder.Property(x => x.Kind)
             .HasMaxLength(20);
 
+        // CHAT_RENAME: добавлено 2026-09-23 — пользовательское имя чата (nullable).
+        builder.Property(x => x.Title)
+            .HasMaxLength(200);
+
         builder.Property(x => x.CreatedAt)
             .IsRequired();
 

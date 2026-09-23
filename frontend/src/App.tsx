@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
-import { getChats, getChatTranscript, deleteChat, getSubscriptionUsage, getTaskStatus, runTask } from './api/conexyApi';
+import { getChats, getChatTranscript, deleteChat, renameChat, getSubscriptionUsage, getTaskStatus, runTask } from './api/conexyApi';
 import { signalrService } from './services/signalrService';
 import { useAuth } from './hooks/useAuth';
 import { useIsMobile } from './hooks/useMediaQuery';
@@ -535,6 +535,10 @@ export default function App() {
   // CHAT_SYNC_FOCUS: добавлено 2026-09-23 — сверка вызывается не только при появлении токена, но и
   // при возвращении пользователя во вкладку (focus/visibilitychange), с debounce ниже.
   const chatSyncRef = useRef({ inFlight: false, lastStartedAt: 0, lastToken: null as string | null });
+  // CHAT_RENAME: имена, переименованные локально, вместе со временем. Ответ синхронизации, ушедший
+  // на сервер ДО переименования, содержит старое имя — без этой защиты он откатил бы только что
+  // введённое название обратно.
+  const recentRenamesRef = useRef(new Map<string, { title: string; at: number }>());
 
   const syncChats = useCallback(async () => {
     if (!token) return;
@@ -546,8 +550,11 @@ export default function App() {
     state.lastStartedAt = Date.now();
 
     try {
+      const syncStartedAt = Date.now();
       const chats = await getChats();
       const serverIds = new Set(chats.map((c) => c.id));
+      // CHAT_RENAME: серверные имена — для актуализации тех чатов, что уже есть локально.
+      const serverTitles = new Map(chats.map((c) => [c.id, c.title ?? null]));
       const known = new Set(sessionsRef.current.map((s) => s.id));
       const missing = chats.filter((c) => !known.has(c.id));
 
@@ -567,6 +574,7 @@ export default function App() {
 
       let added = 0;
       let pruned = 0;
+      let retitled = 0;
       setSessions((prev) => {
         const existing = new Set(prev.map((s) => s.id));
         const fresh = restored.filter((s) => !existing.has(s.id));
@@ -580,14 +588,32 @@ export default function App() {
           if (s.id === activeIdRef.current) return true;
           if (streamingRef.current?.sessionId === s.id) return true;
           return serverIds.has(s.id);
+        // CHAT_RENAME: имя тоже берём с сервера — так переименование, сделанное на телефоне,
+        // доезжает до этого устройства, а у чатов, которым имя не задавали, в сайдбаре появляется
+        // реальный первый вопрос вместо «Новый чат».
+        }).map((s) => {
+          const serverTitle = serverTitles.get(s.id);
+          if (!serverTitle || serverTitle === s.title) return s;
+          // Наш rename новее этого ответа — он и побеждает.
+          const recent = recentRenamesRef.current.get(s.id);
+          if (recent && recent.at > syncStartedAt) return s;
+          retitled += 1;
+          return { ...s, title: serverTitle };
         });
 
         added = fresh.length;
+        // map длины не меняет, поэтому длина kept и есть число оставленных чатов.
         pruned = prev.length - kept.length;
-        if (fresh.length === 0 && pruned === 0) return prev;
+        if (fresh.length === 0 && pruned === 0 && retitled === 0) return prev;
         return [...kept, ...fresh];
       });
-      console.info('[ChatSync] chat list synced', { fetched: chats.length, added, pruned });
+
+      // Записи о переименованиях нужны только против ответов, ушедших до них.
+      for (const [chatId, entry] of recentRenamesRef.current) {
+        if (entry.at <= syncStartedAt) recentRenamesRef.current.delete(chatId);
+      }
+
+      console.info('[ChatSync] chat list synced', { fetched: chats.length, added, pruned, retitled });
     } catch (e) {
       // Offline or a failed request must not break the app: the local list stays as it is.
       console.warn('[ChatSync] could not load the chat list', e);
@@ -1161,8 +1187,34 @@ export default function App() {
     setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, isPinned: !s.isPinned } : s)));
   }
 
-  function handleRenameSession(id: string, title: string) {
-    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
+  // CHAT_RENAME: добавлено 2026-09-23 — имя сохраняется на сервере, чтобы приехать на другое устройство.
+  async function handleRenameSession(id: string, title: string) {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+
+    const session = sessionsRef.current.find((s) => s.id === id);
+    // Черновик и инкогнито-чат на сервере не существуют — переименование останется локальным.
+    const shouldAskServer = Boolean(session) && !session!.incognito && session!.remote && GUID_LIKE.test(id);
+
+    if (shouldAskServer) {
+      try {
+        await renameChat(id, trimmed);
+      } catch (e) {
+        const status = (e as { response?: { status?: number } })?.response?.status;
+        // 404 = сервер такого чата у этого пользователя не знает: локальное имя всё равно корректно.
+        // Любая другая ошибка — не применяем, иначе имя разойдётся с сервером и будет перезаписано
+        // ближайшей синхронизацией.
+        if (status !== 404) {
+          console.warn('[ChatRename] could not rename the chat on the server', { id, status, error: String(e) });
+          showToast(t('chat.renameFailed'));
+          return;
+        }
+      }
+    }
+
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title: trimmed } : s)));
+    // Отмечаем время переименования, чтобы синхронизация, ушедшая до него, не вернула старое имя.
+    recentRenamesRef.current.set(id, { title: trimmed, at: Date.now() });
   }
 
   // CHAT_DELETE: добавлено 2026-09-23

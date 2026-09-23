@@ -5310,6 +5310,15 @@ body {
   word-break: break-word;
 }
 
+/* GLOBAL_ERROR_BOUNDARY: кнопки восстановления на экране пойманной ошибки. */
+.crash-screen__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
 /* ---------- SUPPORT: добавлено 2026-09-19 ---------- */
 .support-chat {
   width: min(460px, 94vw);

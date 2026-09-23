@@ -180,6 +180,15 @@ export async function deleteChat(chatId: string): Promise<void> {
   await http.delete(`/conexy/chats/${chatId}`);
 }
 
+// CHAT_RENAME: добавлено 2026-09-23
+/**
+ * Renames a chat on the server, so the new name reaches every device.
+ * 404 means the chat is not this user's (or was never persisted) — the caller keeps its local name.
+ */
+export async function renameChat(chatId: string, title: string): Promise<void> {
+  await http.patch(`/conexy/chats/${chatId}`, { title });
+}
+
 export async function getWorkspaceFiles(sessionId: string): Promise<WorkspaceListing> {
   const { data } = await http.get<WorkspaceListing>(`/conexy/workspace/${sessionId}/files`);
   return data;

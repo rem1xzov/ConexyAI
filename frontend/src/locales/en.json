@@ -59,7 +59,8 @@
     "heroTitle": "Your move, {{name}}",
     "heroSubtitle": "What can I build for you today?",
     "defaultName": "Commander",
-    "deleteFailed": "Could not delete the chat on the server — it is still in the list. Try again."
+    "deleteFailed": "Could not delete the chat on the server — it is still in the list. Try again.",
+    "renameFailed": "Could not save the name on the server — the chat was not renamed."
   },
   "sidebar": {
     "login": "Log in",
@@ -405,7 +406,10 @@
   },
   "errors": {
     "renderTitle": "This screen could not be rendered",
-    "renderHint": "This is a UI error, not data loss. Go back to the chat and try again; if it keeps happening, send the text below to support.",
+    "renderHint": "This is a UI error, not data loss. Start with Reload; if it keeps happening, Reset session clears the chat list stored in this browser (you stay signed in).",
+    "reload": "Reload",
+    "resetSession": "Reset session",
+    "resetSessionHint": "Clears the locally stored chat list in this browser. Server-side chats and your sign-in stay as they are.",
     "serviceUnavailable": "The service is restarting right now. Try again in a few seconds.",
     "network": "No connection to the server. Check your network and try again.",
     "httpStatus": "Request failed. Status:",

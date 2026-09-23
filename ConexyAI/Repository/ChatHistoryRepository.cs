@@ -68,7 +68,7 @@ public class ChatHistoryRepository : IChatHistoryRepository
         var rows = await QueryChatSummariesAsync(userId, excludeChatId: null, limit, ct);
         return rows
             .Select(r => new ChatListSummary(
-                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind))
+                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind, r.Title))
             .ToList();
     }
 
@@ -109,6 +109,9 @@ public class ChatHistoryRepository : IChatHistoryRepository
                 // CHAT_KIND_SYNC: строки до появления колонки имеют Kind = null; Max выдаёт
                 // единственное непустое значение, а если их нет — null.
                 Kind = g.Max(m => m.Kind),
+                // CHAT_RENAME: то же для пользовательского имени: переименование обновляет все
+                // строки чата, а новые пишутся с null и потому его не перебивают.
+                Title = g.Max(m => m.Title),
             })
             .OrderByDescending(c => c.LastActivityAt)
             .Take(limit)
@@ -116,7 +119,7 @@ public class ChatHistoryRepository : IChatHistoryRepository
 
         return rows
             .Select(r => new ChatSummaryRow(
-                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind))
+                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind, r.Title))
             .ToList();
     }
 
@@ -126,7 +129,8 @@ public class ChatHistoryRepository : IChatHistoryRepository
         int MessageCount,
         string? FirstUser,
         string? LastAssistant,
-        string? Kind);
+        string? Kind,
+        string? Title);
 
     // CHAT_DELETE: добавлено 2026-09-23
     public async Task<int> DeleteChatAsync(Guid userId, Guid chatId, CancellationToken ct = default)
@@ -144,6 +148,29 @@ public class ChatHistoryRepository : IChatHistoryRepository
         }
 
         _context.ChatMessages.RemoveRange(rows);
+        await _context.SaveChangesAsync(ct);
+        return rows.Count;
+    }
+
+    // CHAT_RENAME: добавлено 2026-09-23
+    public async Task<int> RenameChatAsync(Guid userId, Guid chatId, string title, CancellationToken ct = default)
+    {
+        // Every row of the chat carries the name, so one UPDATE covers the whole conversation and the
+        // ownership check is the same filtered read the rest of this repository uses.
+        var rows = await _context.ChatMessages
+            .Where(m => m.ChatId == chatId && m.UserId == userId)
+            .ToListAsync(ct);
+
+        if (rows.Count == 0)
+        {
+            return 0;
+        }
+
+        foreach (var row in rows)
+        {
+            row.Title = title;
+        }
+
         await _context.SaveChangesAsync(ct);
         return rows.Count;
     }
