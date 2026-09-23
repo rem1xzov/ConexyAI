@@ -17,6 +17,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -58,6 +59,9 @@ await RunAsync("todo_write: full replacement", TestTodoFullReplacementAsync);
 await RunAsync("todo_write: clear on session end", TestTodoClearAsync);
 await RunAsync("web_search: JSON SEO response is parsed into results", TestJsonSeoSearchParsingAsync);
 await RunAsync("llm: non-streaming message.content is extracted as text", TestNonStreamingMessageContentExtractionAsync);
+await RunAsync("agent: a hung auditor cannot keep a delivered answer running", TestAgentHungAuditorDoesNotHoldTaskAsync);
+await RunAsync("agent: auditor reviews only the files the agent changed", TestAgentAuditorReviewsOnlyChangedFilesAsync);
+await RunAsync("worker startup: tasks orphaned by a dead process are closed", TestWorkerStartupClosesOrphanedTasksAsync);
 await RunAsync("sandbox sessions: per-session state directory + idle expiry", TestSandboxSessionStateAsync);
 await RunAsync("ide files: create -> content -> save -> rename -> delete", TestIdeFileCrudAsync);
 await RunAsync("ide files: path traversal is blocked (shared validator)", TestIdeFilePathTraversalBlockedAsync);
@@ -962,6 +966,169 @@ Task TestSandboxSessionStateAsync()
     }
 }
 
+// AUDITOR_BUDGET: добавлено 2026-09-23 — агент, которому для сборки оставлены только те зависимости,
+// что лежат на пути «написал файл → сдал ответ → аудит». Остальные не достижимы в этом сценарии.
+(ConexyAgentRunner Runner, ConexyJob Job, ConversationContext Context) CreateAgentRunner(
+    string workspaceRoot,
+    ScriptedAgentLlm llm,
+    IHubContext<ConexyHub> hub,
+    int auditTimeoutSeconds)
+{
+    var runner = new ConexyAgentRunner(
+        CreateWorkspaceService(workspaceRoot),
+        new UnavailableVisionService(),
+        llm,
+        githubService: null!,
+        editorService: null!,
+        bashService: null!,
+        todoService: null!,
+        webSearchService: null!,
+        hub,
+        dangerousCommandClassifier: null!,
+        commandApproval: null!,
+        pendingActionService: null!,
+        new FakeSubscriptionService(),
+        new StaticConversationService(),
+        NullLogger<ConexyAgentRunner>.Instance,
+        documentService: null!,
+        Options.Create(new AgentOptions { MaxIterations = 5, AuditTimeoutSeconds = auditTimeoutSeconds }));
+
+    var job = new ConexyJob(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), ConexyModelType.ConexyCoder, "Создай app.js");
+    var context = new ConversationContext(job.TaskId, job.ChatId, job.UserId, runner.SystemPrompt, job.Prompt);
+    return (runner, job, context);
+}
+
+bool HasLog(RecordingHubContext hub, string fragment) =>
+    hub.Sent.Any(m => m.Method == "OnLog" && m.Args.Length > 0 && (m.Args[0] as string ?? "").Contains(fragment));
+
+// AUDITOR_BUDGET: инцидент ec69edc4 — финальный текст уже в чате, а задача остаётся running, пока
+// аудитор ждёт модель. Здесь upstream аудитора не отвечает вовсе: прогон обязан закончиться за
+// бюджет аудита и вернуть уже доставленный ответ, а не висеть (до фикса — до таймаута guard) и не
+// падать в Failed.
+async Task TestAgentHungAuditorDoesNotHoldTaskAsync()
+{
+    var root = CreateTempWorkspaceRoot();
+    try
+    {
+        var llm = new ScriptedAgentLlm { HangAudit = true };
+        var hub = new RecordingHubContext();
+        var (runner, job, context) = CreateAgentRunner(root, llm, hub, auditTimeoutSeconds: 1);
+
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var stopwatch = Stopwatch.StartNew();
+        var result = await runner.RunLoopAsync(job, context, guard.Token);
+        stopwatch.Stop();
+
+        Assert(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"the run must end within the audit budget, took {stopwatch.Elapsed}");
+        Assert(llm.AuditCalls == 1, $"the auditor must be asked exactly once, was {llm.AuditCalls}");
+        Assert(result.Contains("app.js готов."), "the answer already delivered to the chat must be the task result");
+        Assert(HasLog(hub, "[Auditor] Skipped"), "a skipped review must be visible in the agent log");
+    }
+    finally
+    {
+        DeleteDirBestEffort(root);
+    }
+}
+
+// AUDITOR_BUDGET: раньше аудитор брал первые 60 файлов РЕКУРСИВНОГО списка всего воркспейса — после
+// `npm install` это node_modules. Промпт раздувался мусором, и вызов модели становился медленным.
+async Task TestAgentAuditorReviewsOnlyChangedFilesAsync()
+{
+    var root = CreateTempWorkspaceRoot();
+    try
+    {
+        var llm = new ScriptedAgentLlm();
+        var hub = new RecordingHubContext();
+        var (runner, job, context) = CreateAgentRunner(root, llm, hub, auditTimeoutSeconds: 30);
+
+        // A dependency tree the agent did not write (what `npm install` leaves behind).
+        var workspace = CreateWorkspaceService(root);
+        var junk = Path.Combine(workspace.GetTaskWorkspacePath(job.ChatId), "node_modules", "left-pad", "index.js");
+        Directory.CreateDirectory(Path.GetDirectoryName(junk)!);
+        await File.WriteAllTextAsync(junk, "module.exports = 'JUNK_FROM_NODE_MODULES';");
+
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await runner.RunLoopAsync(job, context, guard.Token);
+
+        Assert(llm.AuditCalls == 1, $"the auditor must be asked exactly once, was {llm.AuditCalls}");
+        Assert(llm.AuditPrompt.Contains("### app.js") && llm.AuditPrompt.Contains("console.log('app');"),
+            "the file the agent wrote must be reviewed");
+        Assert(!llm.AuditPrompt.Contains("JUNK_FROM_NODE_MODULES"), "files the agent did not touch must not reach the reviewer");
+        Assert(HasLog(hub, "[Auditor] APPROVED"), "an approved review keeps its log line");
+    }
+    finally
+    {
+        DeleteDirBestEffort(root);
+    }
+}
+
+// TASK_ORPHAN_RECOVERY: добавлено 2026-09-23 — рестарт бэкенда посреди задачи оставлял строку Running
+// навсегда: очередь в памяти умерла вместе с процессом, закрыть задачу было некому, а сторож на клиенте
+// бесконечно видел `running`. При старте воркер обязан закрыть такие строки, не трогая завершённые.
+async Task TestWorkerStartupClosesOrphanedTasksAsync()
+{
+    var databaseRoot = new Microsoft.EntityFrameworkCore.Storage.InMemoryDatabaseRoot();
+    var dbName = "orphans_" + Guid.NewGuid().ToString("N");
+    var services = new ServiceCollection();
+    services.AddDbContext<DbConexy>(o => o.UseInMemoryDatabase(dbName, databaseRoot));
+    services.AddScoped<IConexyRepository, ConexyRepository>();
+    await using var provider = services.BuildServiceProvider();
+
+    var ids = new Dictionary<ConexyStatus, Guid>();
+    await using (var scope = provider.CreateAsyncScope())
+    {
+        var db = scope.ServiceProvider.GetRequiredService<DbConexy>();
+        foreach (var status in Enum.GetValues<ConexyStatus>())
+        {
+            ids[status] = Guid.NewGuid();
+            db.Conexy.Add(new ConexyEntity
+            {
+                Id = ids[status],
+                UserId = Guid.NewGuid(),
+                Model = "conexy-coder",
+                Prompt = "p",
+                Status = status,
+                Result = status == ConexyStatus.Completed ? "done" : null
+            });
+        }
+        await db.SaveChangesAsync();
+    }
+
+    // Only the start-up path is exercised: the queue is empty, so no job ever reaches the other deps.
+    var worker = new ConexyBackgroundWorker(
+        new ConexyQueue(),
+        queueGuard: null!,
+        cancellations: null!,
+        todoService: null!,
+        pendingActions: null!,
+        provider.GetRequiredService<IServiceScopeFactory>(),
+        new FakeHubContext(),
+        workspaceService: null!,
+        NullLogger<ConexyBackgroundWorker>.Instance);
+
+    await worker.StartAsync(CancellationToken.None);
+    await worker.StopAsync(CancellationToken.None);
+
+    await using (var scope = provider.CreateAsyncScope())
+    {
+        var db = scope.ServiceProvider.GetRequiredService<DbConexy>();
+        foreach (var status in new[] { ConexyStatus.Pending, ConexyStatus.Running })
+        {
+            var task = await db.Conexy.AsNoTracking().SingleAsync(x => x.Id == ids[status]);
+            Assert(task.Status == ConexyStatus.Failed, $"a {status} task left by a dead process must be closed, was {task.Status}");
+            Assert(task.Result?.Contains("перезапуск") == true, "the client must be told why the task ended");
+            Assert(task.FinishedAt is not null, "a closed task must carry FinishedAt");
+        }
+
+        var completed = await db.Conexy.AsNoTracking().SingleAsync(x => x.Id == ids[ConexyStatus.Completed]);
+        Assert(completed.Status == ConexyStatus.Completed && completed.Result == "done", "finished tasks must stay untouched");
+        var cancelled = await db.Conexy.AsNoTracking().SingleAsync(x => x.Id == ids[ConexyStatus.Cancelled]);
+        Assert(cancelled.Status == ConexyStatus.Cancelled, "cancelled tasks must stay untouched");
+        var failed = await db.Conexy.AsNoTracking().SingleAsync(x => x.Id == ids[ConexyStatus.Failed]);
+        Assert(failed.Status == ConexyStatus.Failed && failed.Result is null, "failed tasks keep their own error");
+    }
+}
+
 sealed class FakeQueue : IConexyQueue
 {
     public List<ConexyJob> Enqueued { get; } = new();
@@ -1114,6 +1281,87 @@ sealed class RecordingClientProxy : IClientProxy
         _hub.Sent.Enqueue((method, args));
         return Task.CompletedTask;
     }
+}
+
+// AUDITOR_BUDGET: добавлено 2026-09-23 — модель агента, которая за два хода пишет app.js и сдаёт
+// ответ, и аудитор, который либо отвечает сразу, либо молчит до отмены (как зависший upstream).
+sealed class ScriptedAgentLlm : IConexyLlmClient
+{
+    private int _turn;
+
+    public bool HangAudit { get; init; }
+    public string AuditReply { get; init; } = "{\"verdict\":\"APPROVED\"}";
+    public int AuditCalls { get; private set; }
+    public string AuditPrompt { get; private set; } = string.Empty;
+
+    public async Task<LlmChatResult> SendChatAsync(
+        ConexyModelType modelType,
+        List<ChatMessage> messages,
+        List<object> tools,
+        string? reasoningEffort = null,
+        Guid? taskId = null,
+        CancellationToken ct = default)
+    {
+        AuditCalls++;
+        AuditPrompt = messages.LastOrDefault()?.Text ?? string.Empty;
+        if (HangAudit)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+        }
+
+        return new LlmChatResult(new ChatMessage("assistant", AuditReply), 10);
+    }
+
+    public async IAsyncEnumerable<StreamDelta> StreamChatAsync(
+        List<ChatMessage> messages,
+        ConexyModelType modelType,
+        string? reasoningEffort = null,
+        List<object>? tools = null,
+        string? toolChoice = null,
+        Guid? taskId = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await Task.Yield();
+        if (Interlocked.Increment(ref _turn) == 1)
+        {
+            yield return new StreamDelta(ToolCalls: new List<LlmToolCall>
+            {
+                new("call_1", "function", new LlmFunctionCall("file_write", "{\"path\":\"app.js\",\"content\":\"console.log('app');\"}"))
+            });
+            yield break;
+        }
+
+        yield return new StreamDelta(Content: "app.js готов.");
+    }
+}
+
+sealed class UnavailableVisionService : IConexyVisionService
+{
+    public Task<bool> IsAvailableAsync(CancellationToken ct = default) => Task.FromResult(false);
+
+    public Task<string> CaptureScreenshotBase64Async(
+        string targetUrlOrPath,
+        int viewportWidth = 1280,
+        int viewportHeight = 800,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException("Chromium is not available in tests.");
+}
+
+sealed class StaticConversationService : IConversationService
+{
+    public Task<List<ChatMessage>> BuildRequestAsync(ConversationContext context, CancellationToken ct = default) =>
+        Task.FromResult(new List<ChatMessage> { new("system", context.SystemPrompt), new("user", context.UserMessage) });
+
+    public Task PersistTurnAsync(ConversationContext context, string assistantText, TurnOutcome outcome, CancellationToken ct = default) =>
+        Task.CompletedTask;
+
+    public Task<IReadOnlyList<ConexyChatMessageEntity>> GetHistoryAsync(
+        Guid userId,
+        Guid chatId,
+        bool incognito,
+        int? depth,
+        CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<ConexyChatMessageEntity>>(Array.Empty<ConexyChatMessageEntity>());
 }
 
 sealed class FakeHttpMessageHandler : HttpMessageHandler

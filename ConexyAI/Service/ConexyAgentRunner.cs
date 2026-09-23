@@ -44,6 +44,19 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly int _maxIterations;
     private const int MaxSelfRepairAttempts = 3;
 
+    // AUDITOR_BUDGET: добавлено 2026-09-23 — у аудитора не было НИКАКОЙ собственной границы, хотя он
+    // идёт уже ПОСЛЕ того, как финальный текст улетел в чат. Единственным пределом был таймаут
+    // HTTP-клиента: 180 с на попытку и до 3 повторов на 429/5xx, то есть до ~12 минут «ответ готов, а
+    // задача running», после чего исключение ещё и роняло уже законченную задачу в Failed.
+    private readonly TimeSpan _auditTimeout;
+
+    // AUDITOR_BUDGET: аудитор смотрит только файлы, которые менял агент. Раньше он брал первые 60
+    // файлов из РЕКУРСИВНОГО списка всего воркспейса — после `npm install` это node_modules и .git,
+    // то есть огромный промпт из мусора, который и делал вызов модели медленным.
+    private const int AuditMaxFiles = 40;
+    private const int AuditMaxCharsPerFile = 6000;
+    private const int AuditMaxPromptChars = 80_000;
+
     /// <inheritdoc />
     public string SystemPrompt => WorkerSystemPrompt;
 
@@ -220,6 +233,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         var configured = agentOptions.Value.MaxIterations;
         _maxIterations = configured <= 0 ? 15 : configured;
+
+        var auditSeconds = agentOptions.Value.AuditTimeoutSeconds;
+        _auditTimeout = TimeSpan.FromSeconds(auditSeconds <= 0 ? 90 : auditSeconds);
     }
 
     public async Task<string> RunLoopAsync(ConexyJob job, ConversationContext context, CancellationToken ct = default)
@@ -335,7 +351,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     await SendAgentStatusAsync(taskId, "thinking", "Проверяю изменения (аудитор)…", ct: ct);
                     await group.SendAsync("OnLog", "[Auditor] Reviewing the workspace changes…", ct);
 
-                    var audit = await ReviewWorkspaceAsync(chatId, job.Prompt, ct);
+                    var audit = await ReviewWorkspaceAsync(chatId, job.Prompt, changedFiles, ct);
                     if (!audit.Approved)
                     {
                         auditReworks++;
@@ -349,7 +365,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         continue;
                     }
 
-                    await group.SendAsync("OnLog", "[Auditor] APPROVED — applying changes.", ct);
+                    await group.SendAsync(
+                        "OnLog",
+                        audit.SkipReason is null
+                            ? "[Auditor] APPROVED — applying changes."
+                            : $"[Auditor] Skipped ({audit.SkipReason}) — finalizing without review.",
+                        ct);
                 }
                 else if (changedFiles.Count > 0)
                 {
@@ -1152,40 +1173,94 @@ public class ConexyAgentRunner : IConexyAgentRunner
     /// If you are looking at this because history handling "looks missing" here — it is not
     /// missing, it is intentional. Do not route it through the conversation service.
     /// </para>
+    /// <para>
+    /// AUDITOR_BUDGET: добавлено 2026-09-23. The audit is post-processing of an answer the user has
+    /// already seen, so it is bounded as a whole by <see cref="_auditTimeout"/> and it never fails
+    /// the task: a timeout or an upstream error finalizes the answer without review (the same
+    /// fail-open rule <see cref="ParseAuditVerdict"/> already applies to a malformed verdict).
+    /// Only a stop by the user or the host still propagates.
+    /// </para>
     /// </summary>
-    private async Task<AuditVerdict> ReviewWorkspaceAsync(Guid chatId, string taskPrompt, CancellationToken ct)
+    private async Task<AuditVerdict> ReviewWorkspaceAsync(
+        Guid chatId,
+        string taskPrompt,
+        IReadOnlyCollection<string> changedFiles,
+        CancellationToken ct)
     {
-        var files = await _workspaceService.ListFilesAsync(chatId, "", ct);
-        if (!files.Success || files.Files.Count == 0)
-        {
-            return AuditVerdict.ApprovedVerdict;
-        }
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        using var auditCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        auditCts.CancelAfter(_auditTimeout);
 
-        var builder = new StringBuilder();
-        builder.AppendLine("## Task");
-        builder.AppendLine(taskPrompt);
-        builder.AppendLine();
-        builder.AppendLine("## Workspace changes");
-        foreach (var file in files.Files.Take(60))
+        try
         {
-            builder.AppendLine($"### {file}");
-            var read = await _workspaceService.ReadFileAsync(chatId, file, ct);
-            if (read.Success && !string.IsNullOrWhiteSpace(read.Content))
+            var builder = new StringBuilder();
+            builder.AppendLine("## Task");
+            builder.AppendLine(taskPrompt);
+            builder.AppendLine();
+            builder.AppendLine("## Workspace changes");
+
+            var reviewedFiles = 0;
+            foreach (var file in changedFiles.Take(AuditMaxFiles))
             {
-                builder.AppendLine(Truncate(read.Content, 6000));
+                var read = await _workspaceService.ReadFileAsync(chatId, file, auditCts.Token);
+                if (!read.Success || string.IsNullOrWhiteSpace(read.Content))
+                {
+                    // Deleted or emptied since it was written — nothing to review.
+                    continue;
+                }
+
+                var snippet = Truncate(read.Content, AuditMaxCharsPerFile);
+                if (reviewedFiles > 0 && builder.Length + snippet.Length > AuditMaxPromptChars)
+                {
+                    break;
+                }
+
+                builder.AppendLine($"### {file}");
+                builder.AppendLine(snippet);
+                reviewedFiles++;
             }
+
+            if (reviewedFiles == 0)
+            {
+                return AuditVerdict.ApprovedVerdict;
+            }
+
+            _logger.LogInformation(
+                "Agent auditor: started task={TaskId} files={Reviewed}/{Changed} promptChars={Chars} timeout={Timeout}s",
+                _job.TaskId, reviewedFiles, changedFiles.Count, builder.Length, _auditTimeout.TotalSeconds);
+
+            var messages = new List<ChatMessage>
+            {
+                new("system", CriticSystemPrompt),
+                new("user", builder.ToString())
+            };
+
+            var response = await _llmClient.SendChatAsync(ConexyModelType.ConexyV1Pro, messages, new List<object>(), _job.ReasoningEffort, _job.TaskId, auditCts.Token);
+            // SUBSCRIPTION_TIERS: добавлено 2026-09-17 — critic tokens count toward the agent budget.
+            await _subscriptionService.RecordAgentTokensAsync(_job.UserId, response.TotalTokens, ct);
+            var verdict = ParseAuditVerdict(response.Message.Text ?? string.Empty);
+
+            _logger.LogInformation(
+                "Agent auditor: verdict={Verdict} issues={Issues} elapsedMs={Elapsed} task={TaskId}",
+                verdict.Approved ? "APPROVED" : "REJECT", verdict.Issues.Count, stopwatch.ElapsedMilliseconds, _job.TaskId);
+            return verdict;
         }
-
-        var messages = new List<ChatMessage>
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            new("system", CriticSystemPrompt),
-            new("user", builder.ToString())
-        };
-
-        var response = await _llmClient.SendChatAsync(ConexyModelType.ConexyV1Pro, messages, new List<object>(), _job.ReasoningEffort, _job.TaskId, ct);
-        // SUBSCRIPTION_TIERS: добавлено 2026-09-17 — critic tokens count toward the agent budget.
-        await _subscriptionService.RecordAgentTokensAsync(_job.UserId, response.TotalTokens, ct);
-        return ParseAuditVerdict(response.Message.Text ?? string.Empty);
+            // Stop by the user or the host must still end the run.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var reason = auditCts.IsCancellationRequested
+                ? $"no verdict within {_auditTimeout.TotalSeconds:0}s"
+                : "reviewer unavailable";
+            _logger.LogWarning(
+                ex,
+                "Agent auditor: {Reason} after {Elapsed}ms; finalizing the delivered answer without review. task={TaskId}",
+                reason, stopwatch.ElapsedMilliseconds, _job.TaskId);
+            return AuditVerdict.Skipped(reason);
+        }
     }
 
     private static AuditVerdict ParseAuditVerdict(string text)
@@ -1418,9 +1493,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
         return sb.ToString().Trim();
     }
 
-    private record AuditVerdict(bool Approved, IReadOnlyList<string> Issues)
+    private record AuditVerdict(bool Approved, IReadOnlyList<string> Issues, string? SkipReason = null)
     {
         public static AuditVerdict ApprovedVerdict { get; } = new(true, Array.Empty<string>());
+
+        // AUDITOR_BUDGET: the review did not happen (timeout / upstream error); the answer stands.
+        public static AuditVerdict Skipped(string reason) => new(true, Array.Empty<string>(), reason);
     }
 
     private static List<object> BuildToolSchemas(bool includeScreenshot)

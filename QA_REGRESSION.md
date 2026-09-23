@@ -70,6 +70,31 @@ Agent iteration <step>/<max> task=<taskId> toolCalls=<k> contentChars=<n> ...
 - Есть `finished; broadcasting OnCompleted`, а UI всё ещё «думает» → проблема на клиенте, смотреть
   консоль браузера (`[Resync] turn finalized from server state`).
 
+**Текст в чате уже целиком, а сторож видит `running` (инцидент ec69edc4, 2026-09-22).** Между
+последним токеном и `Completed` у агента есть только аудит изменений. Теперь он ограничен
+`Agent:AuditTimeoutSeconds` (по умолчанию 90 с), смотрит только файлы, которые менял агент, и при
+таймауте/ошибке не роняет задачу, а закрывает её с уже доставленным ответом:
+
+```
+Agent auditor: started task=<taskId> files=<k>/<n> promptChars=<c> timeout=90s
+Agent auditor: verdict=APPROVED issues=0 elapsedMs=<ms> task=<taskId>
+Agent auditor: no verdict within 90s after <ms>ms; finalizing the delivered answer without review. task=<taskId>
+Agent loop finished at step <s>/<max> task=<taskId> ...
+```
+
+Разрыв «последний токен → `Agent loop finished`» не может быть больше таймаута аудита. Если строки
+`Agent loop finished` нет вовсе, а в консоли браузера был обрыв `1006` + 502 от Cloudflare — бэкенд
+перезапустился посреди задачи. Такая задача закрывается при следующем старте процесса:
+
+```
+Recovered <N> task(s) left Pending/Running by the previous process; marked Failed: [<taskId>, ...]
+```
+
+и сторож на клиенте показывает «Задача прервана перезапуском сервера» вместо вечного спиннера.
+Проверка: запустить длинную агентскую задачу и посреди неё перезапустить бэкенд
+(`docker compose -f docker-compose.prod.yml restart backend`). После переподключения сообщение должно
+закрыться само, в пределах одного-двух тиков сторожа (5–10 с).
+
 ---
 
 ## 3. Устойчивость соединения

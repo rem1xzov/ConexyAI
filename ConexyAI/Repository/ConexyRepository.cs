@@ -93,4 +93,26 @@ public class ConexyRepository : IConexyRepository
     {
         await _context.SaveChangesAsync(ct);
     }
+
+    public async Task<IReadOnlyList<Guid>> FailUnfinishedAsync(string reason, CancellationToken ct = default)
+    {
+        var unfinished = await _context.Conexy
+            .Where(x => x.Status == ConexyStatus.Pending || x.Status == ConexyStatus.Running)
+            .ToListAsync(ct);
+        if (unfinished.Count == 0)
+        {
+            return Array.Empty<Guid>();
+        }
+
+        var now = DateTime.UtcNow;
+        foreach (var task in unfinished)
+        {
+            task.Status = ConexyStatus.Failed;
+            task.Result = reason;
+            task.FinishedAt = now;
+        }
+
+        await _context.SaveChangesAsync(ct);
+        return unfinished.Select(x => x.Id).ToList();
+    }
 }

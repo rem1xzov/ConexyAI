@@ -87,6 +87,47 @@ public class ConexyBackgroundWorker : BackgroundService
     // ConversationOptions.HistoryDepth и ConversationService.ContinueInstruction, одни на все пути.
     private const int MaxSearchRounds = 3;
 
+    // TASK_ORPHAN_RECOVERY: добавлено 2026-09-23 — текст для задачи, которую оборвал рестарт процесса.
+    internal const string InterruptedByRestartMessage =
+        "Задача прервана перезапуском сервера. Отправьте запрос ещё раз.";
+
+    // TASK_ORPHAN_RECOVERY: добавлено 2026-09-23
+    //
+    // Очередь живёт в памяти процесса. Если бэкенд перезапускается посреди задачи (деплой, падение,
+    // OOM, рестарт контейнера), её строка навсегда остаётся Running/Pending: закрыть её больше некому,
+    // сторож на клиенте честно видит `running` и опрашивает бесконечно, а «Стоп» на сервере ничего не
+    // находит («no active generation»). Это ровно инцидент ec69edc4: 1006 + 502 от Cloudflare («Host:
+    // Error») в 19:24:39–41, после переподключения сервер отвечает `running` без результата.
+    //
+    // StartAsync хостед-сервисов ожидается ДО того, как Kestrel начнёт принимать запросы, поэтому в
+    // этот момент ни одна Pending/Running строка не может принадлежать живому прогону.
+    public override async Task StartAsync(CancellationToken cancellationToken)
+    {
+        await RecoverOrphanedTasksAsync(cancellationToken);
+        await base.StartAsync(cancellationToken);
+    }
+
+    private async Task RecoverOrphanedTasksAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var repository = scope.ServiceProvider.GetRequiredService<IConexyRepository>();
+            var recovered = await repository.FailUnfinishedAsync(InterruptedByRestartMessage, ct);
+            if (recovered.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Recovered {Count} task(s) left Pending/Running by the previous process; marked Failed: [{TaskIds}]",
+                    recovered.Count, string.Join(", ", recovered));
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Recovery must never block startup: the worker still has to serve new tasks.
+            _logger.LogError(ex, "Failed to recover tasks left unfinished by the previous process.");
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await foreach (var job in _queue.ReadAllAsync(stoppingToken))
@@ -196,6 +237,25 @@ public class ConexyBackgroundWorker : BackgroundService
             {
                 outcome = TurnOutcome.Stopped;
                 _logger.LogInformation("Task {TaskId} aborted due to host shutdown.", job.TaskId);
+
+                // TASK_ORPHAN_RECOVERY: добавлено 2026-09-23 — раньше эта ветка только писала лог, и
+                // строка задачи оставалась Running навсегда. Закрываем её здесь; жёсткое убийство
+                // процесса (SIGKILL/OOM) эту ветку не пройдёт — его подбирает RecoverOrphanedTasksAsync.
+                entity.Status = ConexyStatus.Failed;
+                entity.Result = InterruptedByRestartMessage;
+                entity.FinishedAt = DateTime.UtcNow;
+                await repository.SaveChangesAsync(CancellationToken.None);
+
+                try
+                {
+                    await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnError", InterruptedByRestartMessage);
+                }
+                catch (Exception notifyEx)
+                {
+                    // Connections are usually already closed at this point; the client's watchdog
+                    // reads the status from the task record after it reconnects.
+                    _logger.LogDebug(notifyEx, "Could not notify task {TaskId} about the shutdown.", job.TaskId);
+                }
             }
             catch (OperationCanceledException) when (taskToken.IsCancellationRequested)
             {
