@@ -142,6 +142,18 @@ public class ConversationService : IConversationService
                 systemPrompt += "\n" + memoryBlock;
         }
 
+        // CROSS_CHAT_CONTEXT: добавлено 2026-09-23 — the other chats, for every mode at once. Until now
+        // a new chat knew nothing about the previous ones except extracted facts, and those only
+        // appeared after the 7th message of a chat. Incognito neither reads nor feeds this.
+        if (!context.Incognito && _options.RecentChatsInContext > 0)
+        {
+            var recentChats = await _chatHistory.GetRecentChatsAsync(
+                context.UserId, context.ChatId, _options.RecentChatsInContext, ct);
+            var recentBlock = BuildRecentChatsBlock(recentChats);
+            if (!string.IsNullOrEmpty(recentBlock))
+                systemPrompt += "\n" + recentBlock;
+        }
+
         var messages = new List<ChatMessage> { new("system", systemPrompt) };
 
         var depth = context.HistoryDepth ?? _options.HistoryDepth;
@@ -211,10 +223,12 @@ public class ConversationService : IConversationService
         if (context.Incognito)
             return;
 
-        // Memory extraction batching: run after every N-th user message in this chat. Applied
-        // uniformly, so a stopped turn counts exactly like a completed one.
+        // Memory extraction batching: run after the first user message of a chat (CROSS_CHAT_CONTEXT:
+        // «меня зовут…» usually comes right away, and short chats used to leave nothing behind) and
+        // then after every N-th one. Applied uniformly, so a stopped turn counts like a completed one.
         var userMessageCount = await _chatHistory.CountUserMessagesAsync(context.UserId, context.ChatId, ct);
-        if (userMessageCount > 0 && userMessageCount % _memoryOptions.Value.BatchingThreshold == 0)
+        var threshold = Math.Max(1, _memoryOptions.Value.BatchingThreshold);
+        if (userMessageCount == 1 || (userMessageCount > 0 && userMessageCount % threshold == 0))
         {
             _memory.EnqueueExtraction(context.UserId, context.ChatId);
         }
@@ -275,6 +289,48 @@ public class ConversationService : IConversationService
                 " role=" + entry.Role +
                 " preview=\"" + Preview(entry.Content) + "\"");
         }
+    }
+
+    // CROSS_CHAT_CONTEXT: добавлено 2026-09-23
+    private const int RecentChatStartChars = 200;
+    private const int RecentChatAnswerChars = 400;
+
+    /// <summary>
+    /// The "other chats" block of the system prompt. Kept short on purpose: it tells the model what
+    /// the other conversations were about, and that it may use them only when the user refers to
+    /// them — otherwise answers start mixing unrelated chats.
+    /// </summary>
+    internal static string BuildRecentChatsBlock(IReadOnlyList<RecentChatSummary> chats)
+    {
+        var useful = chats.Where(c => !string.IsNullOrWhiteSpace(c.FirstUserMessage)).ToList();
+        if (useful.Count == 0)
+            return string.Empty;
+
+        var sb = new StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine("Другие недавние чаты этого пользователя (справка из прошлых разговоров, не текущий чат; " +
+                      "опирайся на них, когда пользователь ссылается на прошлые разговоры или это явно помогает ответу):");
+        for (var i = 0; i < useful.Count; i++)
+        {
+            var chat = useful[i];
+            sb.Append($"{i + 1}. [{chat.LastActivityAt:yyyy-MM-dd}] Начало: «{Shorten(chat.FirstUserMessage, RecentChatStartChars)}»");
+            if (!string.IsNullOrWhiteSpace(chat.LastAssistantMessage))
+            {
+                sb.Append($" Последний ответ: «{Shorten(chat.LastAssistantMessage, RecentChatAnswerChars)}»");
+            }
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    private static string Shorten(string? content, int maxChars)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return string.Empty;
+
+        var flat = string.Join(' ', content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return flat.Length <= maxChars ? flat : flat[..maxChars] + "…";
     }
 
     private static string Preview(string? content)

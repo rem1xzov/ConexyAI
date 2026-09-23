@@ -24,4 +24,19 @@ public interface IChatHistoryRepository
     // SUBSCRIPTION_TIERS: добавлено 2026-09-17
     /// <summary>Counts user messages in a chat (used for the memory extraction batching).</summary>
     Task<int> CountUserMessagesAsync(Guid userId, Guid chatId, CancellationToken ct = default);
+
+    // CROSS_CHAT_CONTEXT: добавлено 2026-09-23
+    /// <summary>
+    /// The user's most recently active chats other than <paramref name="excludeChatId"/>, newest
+    /// first: how each started (first user message) and where it ended (last assistant reply).
+    /// </summary>
+    Task<IReadOnlyList<RecentChatSummary>> GetRecentChatsAsync(
+        Guid userId, Guid excludeChatId, int limit, CancellationToken ct = default);
 }
+
+// CROSS_CHAT_CONTEXT: добавлено 2026-09-23
+public sealed record RecentChatSummary(
+    Guid ChatId,
+    DateTime LastActivityAt,
+    string? FirstUserMessage,
+    string? LastAssistantMessage);

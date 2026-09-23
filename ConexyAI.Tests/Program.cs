@@ -63,6 +63,8 @@ await RunAsync("agent: a hung auditor cannot keep a delivered answer running", T
 await RunAsync("agent: auditor reviews only the files the agent changed", TestAgentAuditorReviewsOnlyChangedFilesAsync);
 await RunAsync("worker startup: tasks orphaned by a dead process are closed", TestWorkerStartupClosesOrphanedTasksAsync);
 await RunAsync("cowork: its own charter and model id, same agent pipeline", TestCoworkModeRoutingAsync);
+await RunAsync("context: a new chat sees the user's other chats, never its own or incognito", TestCrossChatDigestAsync);
+await RunAsync("context: memory is extracted after the first message of a chat", TestMemoryExtractedAfterFirstMessageAsync);
 await RunAsync("cowork: writes documents, never runs bash, skips the code auditor", TestCoworkToolsAndNoCodeAuditAsync);
 await RunAsync("sandbox sessions: per-session state directory + idle expiry", TestSandboxSessionStateAsync);
 await RunAsync("ide files: create -> content -> save -> rename -> delete", TestIdeFileCrudAsync);
@@ -1111,6 +1113,64 @@ async Task TestAgentAuditorReviewsOnlyChangedFilesAsync()
     }
 }
 
+// CROSS_CHAT_CONTEXT: добавлено 2026-09-23 — сквозной прогон показал, что новый чат не знал о
+// прошлых ничего: из других чатов приходили только факты памяти, и те — лишь после 7-го сообщения.
+(ConversationService Service, RecordingMemoryService Memory, ChatHistoryRepository History) CreateConversationService(DbConexy context)
+{
+    var history = new ChatHistoryRepository(context);
+    var memory = new RecordingMemoryService();
+    var service = new ConversationService(
+        history,
+        new IncognitoChatStore(),
+        memory,
+        Options.Create(new MemoryOptions()),
+        Options.Create(new ConversationOptions()),
+        NullLogger<ConversationService>.Instance);
+    return (service, memory, history);
+}
+
+async Task TestCrossChatDigestAsync()
+{
+    await using var context = CreateContext("crosschat_" + Guid.NewGuid().ToString("N"));
+    var (service, _, history) = CreateConversationService(context);
+    var userId = Guid.NewGuid();
+    var otherUser = Guid.NewGuid();
+    var planChat = Guid.NewGuid();
+    var current = Guid.NewGuid();
+
+    await history.AppendAsync(userId, planChat, "user", "Обсудим план запуска кофейни на Лесной");
+    await history.AppendAsync(userId, planChat, "assistant", "План: аренда, оборудование, найм бариста.");
+    await history.AppendAsync(userId, current, "user", "ТЕКУЩИЙ чат, первое сообщение");
+    await history.AppendAsync(otherUser, Guid.NewGuid(), "user", "ЧУЖОЙ чат другого пользователя");
+
+    var request = await service.BuildRequestAsync(
+        new ConversationContext(Guid.NewGuid(), current, userId, "SYSTEM", "О чём мы говорили в прошлом чате?"));
+    var system = request[0].Text ?? "";
+    Assert(system.Contains("кофейни на Лесной") && system.Contains("найм бариста"),
+        "the other chat's start and last answer must reach the model");
+    Assert(!system.Contains("ТЕКУЩИЙ чат"), "the current chat is history, not an \"other chat\"");
+    Assert(!system.Contains("ЧУЖОЙ"), "another user's chats must never leak in");
+
+    var incognito = await service.BuildRequestAsync(
+        new ConversationContext(Guid.NewGuid(), Guid.NewGuid(), userId, "SYSTEM", "вопрос", Incognito: true));
+    Assert(!(incognito[0].Text ?? "").Contains("кофейни"), "an incognito chat must not read other chats");
+}
+
+async Task TestMemoryExtractedAfterFirstMessageAsync()
+{
+    await using var context = CreateContext("memfirst_" + Guid.NewGuid().ToString("N"));
+    var (service, memory, _) = CreateConversationService(context);
+    var turn = new ConversationContext(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "SYSTEM", "Меня зовут Артём");
+
+    await service.PersistTurnAsync(turn, "Приятно познакомиться", TurnOutcome.Completed);
+    Assert(memory.Extractions == 1, $"the first message must be extracted, got {memory.Extractions}");
+
+    await service.PersistTurnAsync(turn with { UserMessage = "второе" }, "ок", TurnOutcome.Completed);
+    Assert(memory.Extractions == 1, "the second message is between batches");
+    await service.PersistTurnAsync(turn with { UserMessage = "третье" }, "ок", TurnOutcome.Completed);
+    Assert(memory.Extractions == 2, $"every BatchingThreshold-th message is extracted, got {memory.Extractions}");
+}
+
 // COWORK_MODE: добавлено 2026-09-23 — Cowork отличается от Coder только промптом и инструментами;
 // всё остальное (очередь, раннер, лимит токенов агента) обязано быть общим.
 async Task TestCoworkModeRoutingAsync()
@@ -1468,6 +1528,16 @@ sealed class ScriptedAgentLlm : IConexyLlmClient
 
         yield return new StreamDelta(Content: FinalText);
     }
+}
+
+// CROSS_CHAT_CONTEXT: memory stand-in that counts extraction requests and injects no facts.
+sealed class RecordingMemoryService : IUserMemoryService
+{
+    public int Extractions { get; private set; }
+    public Task<IReadOnlyList<string>> GetFactsAsync(Guid userId, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+    public void EnqueueExtraction(Guid userId, Guid chatId) => Extractions++;
+    public Task<string> BuildPromptBlockAsync(Guid userId, CancellationToken ct = default) => Task.FromResult(string.Empty);
 }
 
 sealed class UnavailableVisionService : IConexyVisionService
