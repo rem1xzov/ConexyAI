@@ -66,6 +66,7 @@ await RunAsync("sandbox sessions: per-session state directory + idle expiry", Te
 await RunAsync("ide files: create -> content -> save -> rename -> delete", TestIdeFileCrudAsync);
 await RunAsync("ide files: path traversal is blocked (shared validator)", TestIdeFilePathTraversalBlockedAsync);
 await RunAsync("ide files: manual save invalidates agent undo stack", TestManualSaveInvalidatesEditorUndoAsync);
+await RunAsync("run: refused outside development, no backend shell is spawned", TestRunRefusedWithoutBackendShellAsync);
 await RunOrSkipAsync(
     "ide terminal: start reuses pty and streams output",
     TestTerminalReuseAndOutputAsync,
@@ -823,7 +824,12 @@ async Task TestTerminalReuseAndOutputAsync()
     var sessionId = Guid.NewGuid();
     var workspace = CreateWorkspaceService(root);
     var hub = new RecordingHubContext();
-    var terminal = new IdeTerminalService(workspace, hub, NullLogger<IdeTerminalService>.Instance);
+    // RUN_CRASH: the backend shell is development-only now; this suite exercises it explicitly.
+    var terminal = new IdeTerminalService(
+        workspace,
+        hub,
+        Options.Create(new SandboxOptions { AllowBackendShell = true }),
+        NullLogger<IdeTerminalService>.Instance);
 
     try
     {
@@ -963,6 +969,45 @@ Task TestSandboxSessionStateAsync()
     finally
     {
         if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+    }
+}
+
+// RUN_CRASH: добавлено 2026-09-23 — «Запустить» печатал команду в шелл ВНУТРИ контейнера бэкенда:
+// managed fork ронял весь процесс (502), а сам шелл получал секреты бэкенда и docker-socket-proxy.
+// В проде кнопка обязана вернуть понятную ошибку и не создать ни одного шелла.
+async Task TestRunRefusedWithoutBackendShellAsync()
+{
+    var root = CreateTempWorkspaceRoot();
+    try
+    {
+        var workspace = CreateWorkspaceService(root);
+        var chatId = Guid.NewGuid();
+        // A detectable project, so the refusal cannot be mistaken for "no run command found".
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.GetTaskWorkspacePath(chatId), "package.json"),
+            "{\"scripts\":{\"start\":\"node server.js\"}}");
+
+        var hub = new RecordingHubContext();
+        var production = Options.Create(new SandboxOptions { AllowBackendShell = false });
+        var terminal = new IdeTerminalService(workspace, hub, production, NullLogger<IdeTerminalService>.Instance);
+        var run = new ConexyRunService(workspace, terminal, hub, production, NullLogger<ConexyRunService>.Instance);
+
+        var result = await run.RunAsync(chatId);
+        Assert(!result.NeedsManualConfig, "the user must not be asked for a command that will not run");
+        Assert(result.Error?.Contains("песочниц") == true, $"the refusal must explain itself, got '{result.Error}'");
+        Assert(terminal.ActiveSessionCount == 0, "no backend shell may be spawned");
+
+        var manual = await run.RunAsync(chatId, "npm start");
+        Assert(manual.Error is not null && terminal.ActiveSessionCount == 0, "a manual command is refused the same way");
+
+        var refused = false;
+        try { await terminal.StartAsync(chatId); }
+        catch (InvalidOperationException) { refused = true; }
+        Assert(refused && terminal.ActiveSessionCount == 0, "StartTerminal from the hub must be refused too");
+    }
+    finally
+    {
+        DeleteDirBestEffort(root);
     }
 }
 

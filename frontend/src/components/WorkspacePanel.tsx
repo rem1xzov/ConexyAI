@@ -428,6 +428,9 @@ export function WorkspacePanel({
         });
       } else if (res.error) {
         setRunError(res.error);
+        // RUN_CRASH: the toolbar truncates the error to one short line; the refusal explains what
+        // to do instead, so it is shown in full once.
+        notify(res.error);
       } else if (res.launchedInSeparateWindow) {
         onRunInSeparateWindow?.();
       }
@@ -600,7 +603,7 @@ export function WorkspacePanel({
             <PlayIcon size={15} />
             {runBusy ? t('workspace.running') : t('workspace.run')}
           </button>
-          {runError && <span className="workspace__run-error">{runError}</span>}
+          {runError && <span className="workspace__run-error" title={runError}>{runError}</span>}
           {activeTab && (
             <span className={`workspace__save-status workspace__save-status--${saveStatus}`}>
               {saveStatus === 'saving' && t('workspace.saving')}

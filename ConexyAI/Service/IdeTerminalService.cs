@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Text;
+using ConexyAI.Configuration;
 using ConexyAI.Contract;
 using ConexyAI.Hub;
 using ConexyAI.Service.Pty;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Options;
 
 namespace ConexyAI.Service;
 
@@ -38,6 +40,8 @@ public class IdeTerminalService : IIdeTerminalService
     private readonly IConexyWorkspaceService _workspaceService;
     private readonly IHubContext<ConexyHub> _hubContext;
     private readonly ILogger<IdeTerminalService> _logger;
+    // RUN_CRASH: добавлено 2026-09-23 — шелл живёт вне песочницы, поэтому только для разработки.
+    private readonly bool _allowBackendShell;
 
     private readonly ConcurrentDictionary<Guid, TerminalSession> _sessions = new();
 
@@ -46,17 +50,35 @@ public class IdeTerminalService : IIdeTerminalService
     public IdeTerminalService(
         IConexyWorkspaceService workspaceService,
         IHubContext<ConexyHub> hubContext,
+        IOptions<SandboxOptions> sandboxOptions,
         ILogger<IdeTerminalService> logger)
     {
         _workspaceService = workspaceService;
         _hubContext = hubContext;
+        _allowBackendShell = sandboxOptions.Value.AllowBackendShell;
         _logger = logger;
     }
+
+    /// <summary>
+    /// RUN_CRASH: shown when the backend shell is disabled (see <see cref="SandboxOptions.AllowBackendShell"/>).
+    /// </summary>
+    public const string BackendShellDisabledMessage =
+        "Интерактивный терминал отключён: он выполняется вне песочницы, на самом сервере.";
 
     public int ActiveSessionCount => _sessions.Count;
 
     public Task StartAsync(Guid sessionId, CancellationToken ct = default)
     {
+        // RUN_CRASH: добавлено 2026-09-23 — хаб-метод StartTerminal доступен любому вошедшему
+        // пользователю (без проверки владельца sessionId), а шелл получает окружение бэкенда и
+        // доступ к docker-socket-proxy. В проде такой шелл — это захват хоста, поэтому он закрыт.
+        // SendInput/Resize без сессии ничего не делают, так что закрыть достаточно здесь.
+        if (!_allowBackendShell)
+        {
+            _logger.LogWarning("Refused to start a backend shell for session {SessionId}: Sandbox:AllowBackendShell is off.", sessionId);
+            throw new InvalidOperationException(BackendShellDisabledMessage);
+        }
+
         // Reconnect after a page reload: reuse the existing shell instead of spawning another.
         if (_sessions.TryGetValue(sessionId, out var existing) && !existing.IsStopped)
         {

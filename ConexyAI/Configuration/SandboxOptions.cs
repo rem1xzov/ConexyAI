@@ -15,6 +15,17 @@ public class SandboxOptions
     /// <summary>Hard execution timeout (seconds).</summary>
     public int TimeoutSeconds { get; set; } = 30;
 
+    // RUN_CRASH: добавлено 2026-09-23
+    /// <summary>
+    /// Allows the interactive shell behind the IDE terminal and the "Run" button. That shell is NOT
+    /// sandboxed: it runs as the backend itself, in the backend's container, with the backend's
+    /// environment (API keys, DB credentials, JWT signing key) and its access to the Docker socket
+    /// proxy — i.e. anything typed there can take over the host. It is therefore meant only for local
+    /// development (appsettings.Development.json). In production "Run" returns an explicit error
+    /// instead, until projects run inside the sandbox.
+    /// </summary>
+    public bool AllowBackendShell { get; set; }
+
     /// <summary>Container memory limit (Docker <c>--memory</c>).</summary>
     /// <remarks>Per-tier (Free/Pro/ProMax) limits are a future enhancement; keep a shared value for now.</remarks>
     public string MemoryLimit { get; set; } = "512m";

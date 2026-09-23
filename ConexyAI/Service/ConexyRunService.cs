@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Text.Json;
+using ConexyAI.Configuration;
 using ConexyAI.Contract;
 using ConexyAI.Hub;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Options;
 
 namespace ConexyAI.Service;
 
@@ -29,21 +31,42 @@ public class ConexyRunService : IConexyRunService
     private readonly IIdeTerminalService _terminalService;
     private readonly IHubContext<ConexyHub> _hubContext;
     private readonly ILogger<ConexyRunService> _logger;
+    private readonly bool _allowBackendShell;
+
+    // RUN_CRASH: добавлено 2026-09-23
+    // Why "Run" is refused in production. It used to type the command into a shell INSIDE the backend
+    // container: that shell crashed the whole backend (managed fork, see UnixPtyConnection) — the 502
+    // on "Run" — and even when it started, the backend image has neither Node.js nor the .NET SDK, and
+    // the UI has had no terminal to show its output since the Terminal tab was removed.
+    internal const string RunUnavailableMessage =
+        "Запуск проекта из рабочей области пока недоступен: раньше он выполнялся не в песочнице, а на " +
+        "самом сервере, где нет Node.js и .NET SDK. Чтобы проверить проект, попросите агента собрать " +
+        "или запустить его — команды агента выполняются в песочнице.";
 
     public ConexyRunService(
         IConexyWorkspaceService workspaceService,
         IIdeTerminalService terminalService,
         IHubContext<ConexyHub> hubContext,
+        IOptions<SandboxOptions> sandboxOptions,
         ILogger<ConexyRunService> logger)
     {
         _workspaceService = workspaceService;
         _terminalService = terminalService;
         _hubContext = hubContext;
+        _allowBackendShell = sandboxOptions.Value.AllowBackendShell;
         _logger = logger;
     }
 
     public async Task<RunProjectResult> RunAsync(Guid chatId, string? manualCommand = null, CancellationToken ct = default)
     {
+        // Checked before command detection: otherwise the UI would first ask for a run command and
+        // only then refuse to run it.
+        if (!_allowBackendShell)
+        {
+            _logger.LogInformation("Run refused for chat {ChatId}: Sandbox:AllowBackendShell is off.", chatId);
+            return new RunProjectResult { NeedsManualConfig = false, Error = RunUnavailableMessage };
+        }
+
         string? command = manualCommand;
         if (string.IsNullOrWhiteSpace(command))
         {
