@@ -7,6 +7,8 @@ import { isForbiddenJoinError, signalrService } from './services/signalrService'
 import { TurnRegistry, type TurnContext } from './services/turnRegistry';
 import { useAuth } from './hooks/useAuth';
 import { useIsMobile } from './hooks/useMediaQuery';
+// FILE_DROP: добавлено 2026-09-24 (L11)
+import { useFileDropZone, usePreventWindowFileDrop } from './hooks/useFileDrop';
 import { Sidebar } from './components/Sidebar';
 import { ChatFeed } from './components/ChatFeed';
 import { InputBar } from './components/InputBar';
@@ -258,6 +260,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   // LOCAL_STORAGE_BUDGET: добавлено 2026-09-24 — переписка открытого чата догружается с сервера.
   const [transcriptLoad, setTranscriptLoad] = useState<{ id: string; failed: boolean } | null>(null);
+  // FILE_DROP: добавлено 2026-09-24 (L11) — файлы, брошенные на колонку чата, уходят в композер.
+  const [droppedFiles, setDroppedFiles] = useState<{ files: File[]; nonce: number } | null>(null);
+  const dropNonceRef = useRef(0);
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
   // const [isLiveOpen, setIsLiveOpen] = useState(false);
 
@@ -1428,6 +1433,13 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, activeSession?.id, activeSession?.needsTranscript]);
 
+  // FILE_DROP: добавлено 2026-09-24 (L11) — файл, брошенный мимо колонки чата, не уводит вкладку.
+  usePreventWindowFileDrop();
+  const dropZone = useFileDropZone((files) => {
+    dropNonceRef.current += 1;
+    setDroppedFiles({ files, nonce: dropNonceRef.current });
+  }, Boolean(token));
+
   const mode: 'chat' | 'code' = activeTab === 'projects' ? 'code' : 'chat';
   // TURN_SCOPE (H6/L8): «идёт генерация» — это состояние ОТКРЫТОГО чата, а не глобальный флаг.
   const activeStreaming = isSessionStreaming(activeSession);
@@ -2366,9 +2378,16 @@ export default function App() {
       <main className="main" ref={mainRef}>
         <div className={isAgent ? 'main__body main__body--ide' : 'main__body'}>
           <div
-            className={isAgent && !ideCollapsed && !isMobile ? 'ide-chat' : 'ide-chat--single'}
+            className={`${isAgent && !ideCollapsed && !isMobile ? 'ide-chat' : 'ide-chat--single'} chat-drop-target`}
             style={isAgent && !ideCollapsed && !isMobile ? { flex: `0 0 ${100 - workspaceWidth}%` } : undefined}
+            {...dropZone.handlers}
           >
+            {/* FILE_DROP: добавлено 2026-09-24 (L11) — подсказка поверх колонки чата. */}
+            {dropZone.active && (
+              <div className="chat-drop-overlay" aria-hidden="true">
+                <span className="chat-drop-overlay__text">{t('sync.dropFiles')}</span>
+              </div>
+            )}
             {/* Mobile: the model picker lives in the chat header. */}
             {isMobile && (
               <div className="chat-header">
@@ -2515,6 +2534,7 @@ export default function App() {
                     // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
                     // onOpenLive={() => setIsLiveOpen(true)}
                     onSend={handleSend}
+                    externalFiles={droppedFiles}
                   />
                 </>
               }

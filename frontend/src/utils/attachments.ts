@@ -33,6 +33,38 @@ const ALLOWED_EXTENSIONS = new Set([
   'zip',
 ]);
 
+// ATTACHMENT_SIZE_LIMIT: изменено 2026-09-24 (M24)
+// Сервер принимает тело `POST /api/conexy/run` до 55 000 000 байт ([RequestSizeLimit] на
+// контроллере), а файлы едут внутри JSON в base64 (+1/3 к размеру). Сырые 40 МБ дают ~53.3 МБ
+// base64 — с запасом на текст запроса и JSON. Прежний лимит в 45 МБ сырых байт превращался в
+// ~60 МБ тела и получал 413 уже ПОСЛЕ полной загрузки.
+/** Raw (not base64) bytes of every file of one message together. */
+export const MAX_TOTAL_ATTACHMENT_BYTES = 40_000_000;
+/** Estimated request body the client allows itself — safely below the server's 55 MB. */
+export const MAX_REQUEST_BYTES = 54_000_000;
+
+/** Raw size of the attached files (decoded from their base64 length). */
+export function attachmentBytes(attachments: TaskAttachment[]): number {
+  return attachments.reduce((sum, a) => sum + Math.floor((a.contentBase64.length * 3) / 4), 0);
+}
+
+/**
+ * Upper estimate of the JSON body of a run request: base64 as is, file names, the prompt at the
+ * worst-case UTF-8/escaping cost, and a fixed allowance for the remaining fields.
+ */
+export function estimateRequestBytes(attachments: TaskAttachment[], prompt: string): number {
+  const files = attachments.reduce(
+    (sum, a) => sum + a.contentBase64.length + a.fileName.length * 6 + a.contentType.length + 64,
+    0,
+  );
+  return files + prompt.length * 6 + 4_096;
+}
+
+/** "12.3" — megabytes with one decimal, as shown in the size messages. */
+export function formatMegabytes(bytes: number): string {
+  return (bytes / 1_000_000).toFixed(1).replace(/\.0$/, '');
+}
+
 function extensionOf(fileName?: string): string {
   if (!fileName) return '';
   const dot = fileName.lastIndexOf('.');

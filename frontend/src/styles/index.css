@@ -5904,3 +5904,29 @@ body {
   color: var(--danger, #ef4444);
   align-self: center;
 }
+
+/* FILE_DROP: добавлено 2026-09-24 (L11) — подсветка колонки чата, когда над ней тащат файлы. */
+.chat-drop-target {
+  position: relative;
+}
+
+.chat-drop-overlay {
+  position: absolute;
+  inset: 8px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent);
+  border-radius: 16px;
+  background: var(--bg-overlay);
+  pointer-events: none;
+}
+
+.chat-drop-overlay__text {
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: var(--surface-solid);
+  color: var(--text);
+  font-size: 15px;
+}
