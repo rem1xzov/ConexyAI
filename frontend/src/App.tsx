@@ -37,6 +37,8 @@ import { SupportChat } from './components/SupportChat';
 import { AuthModal } from './components/AuthModal';
 import type { AuthMode } from './components/AuthModal';
 import { SettingsModal } from './components/SettingsModal';
+// WORKSPACE_DIRTY: добавлено 2026-09-24
+import { ConfirmDialog } from './components/Dialog';
 import { getStoredTheme, setTheme, type Theme } from './theme';
 import { setLanguage } from './i18n';
 import type { ChatSummary, ConexyModel, LimitExceededInfo, ReasoningEffort, SendOutcome, SubscriptionUsage, TaskAttachment } from './types/api';
@@ -263,6 +265,10 @@ export default function App() {
   // FILE_DROP: добавлено 2026-09-24 (L11) — файлы, брошенные на колонку чата, уходят в композер.
   const [droppedFiles, setDroppedFiles] = useState<{ files: File[]; nonce: number } | null>(null);
   const dropNonceRef = useRef(0);
+  // WORKSPACE_DIRTY: добавлено 2026-09-24 — в редакторе рабочей области есть несохранённые вкладки;
+  // смена/создание/удаление открытого чата сначала спрашивает подтверждение.
+  const [workspaceDirty, setWorkspaceDirty] = useState(false);
+  const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
   // const [isLiveOpen, setIsLiveOpen] = useState(false);
 
@@ -1581,10 +1587,25 @@ export default function App() {
     else setModel('ConexyV1-flash');
   }, []);
 
+  // WORKSPACE_DIRTY: добавлено 2026-09-24 — несохранённые вкладки редактора подтверждаются ДО того,
+  // как открытый чат сменится: после смены WorkspacePanel уже перезагрузит вкладки нового чата.
+  const workspaceShown = isAgent && !isMobile && !ideCollapsed;
+  function guardLeave(action: () => void) {
+    if (workspaceShown && workspaceDirty) {
+      setPendingLeave(() => action);
+      return;
+    }
+    action();
+  }
+  const guardLeaveRef = useRef(guardLeave);
+  guardLeaveRef.current = guardLeave;
+  // Passed as a spread: the prop exists on WorkspacePanel once the workspace stream's change is in.
+  const workspaceDirtyProps: Record<string, unknown> = { onDirtyChange: setWorkspaceDirty };
+
   // NEW_CHAT_LOGO: добавлено 2026-09-20
   /** Starts a fresh conversation in the current tab (used by the mark under a reply). */
   const handleNewChat = useCallback(() => {
-    handleTabChange(liveRef.current.activeTab);
+    guardLeaveRef.current(() => handleTabChange(liveRef.current.activeTab));
   }, [handleTabChange]);
 
   function handleModelChange(next: ConexyModel) {
@@ -2336,20 +2357,20 @@ export default function App() {
         sessions={visibleSessions}
         activeId={activeId}
         onToggle={() => setSidebarOpen((o) => !o)}
-        onTabChange={(tab) => {
+        onTabChange={(tab) => guardLeave(() => {
           handleTabChange(tab);
           if (isMobile) setSidebarOpen(false);
-        }}
-        onNewSession={(kind) => {
+        })}
+        onNewSession={(kind) => guardLeave(() => {
           handleNewSession(kind);
           if (isMobile) setSidebarOpen(false);
-        }}
-        onSelectSession={openSession}
+        })}
+        onSelectSession={(id) => (id === activeId ? openSession(id) : guardLeave(() => openSession(id)))}
         onSearchChange={setSearch}
         onShareSession={handleShareSession}
         onPinSession={handlePinSession}
         onRenameSession={handleRenameSession}
-        onDeleteSession={handleDeleteSession}
+        onDeleteSession={(id) => (id === activeId ? guardLeave(() => void handleDeleteSession(id)) : void handleDeleteSession(id))}
         user={user}
         onLogin={() => setAuthModal('login')}
         onRegister={() => setAuthModal('register')}
@@ -2557,6 +2578,7 @@ export default function App() {
                 onRunInSeparateWindow={() => showToast(t('toast.runProject'))}
                 hideRun={model === 'conexy-cowork'}
                 style={{ flex: `0 0 ${workspaceWidth}%` }}
+                {...workspaceDirtyProps}
               />
             </>
           )}
@@ -2599,6 +2621,23 @@ export default function App() {
           onSubmit={handleAuthSubmit}
           onSwitchMode={() => setAuthModal(authModal === 'login' ? 'register' : 'login')}
           onClose={() => setAuthModal(null)}
+        />
+      )}
+
+      {/* WORKSPACE_DIRTY: добавлено 2026-09-24 — подтверждение ухода из чата с несохранёнными файлами. */}
+      {pendingLeave && (
+        <ConfirmDialog
+          title={t('workspace.unsavedChanges')}
+          message={t('sync.leaveChatUnsaved')}
+          confirmLabel={t('sync.leaveWithoutSaving')}
+          danger
+          onConfirm={() => {
+            const action = pendingLeave;
+            setPendingLeave(null);
+            setWorkspaceDirty(false);
+            action();
+          }}
+          onCancel={() => setPendingLeave(null)}
         />
       )}
 
