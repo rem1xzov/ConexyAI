@@ -30,6 +30,8 @@ public class JsonSeoSearchService : IWebSearchService
         _logger = logger;
     }
 
+    // H3/INCOGNITO: изменено 2026-09-24 — текст запроса и тело ответа провайдера больше не пишутся в
+    // лог: запрос повторяет слова пользователя (в том числе из инкогнито-чата). Только метаданные.
     public async Task<WebSearchResult> SearchAsync(string query, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(query))
@@ -58,20 +60,23 @@ public class JsonSeoSearchService : IWebSearchService
 
             if (response.StatusCode == HttpStatusCode.PaymentRequired)
             {
-                _logger.LogError("JSON SEO: insufficient balance for query '{Query}'", query);
+                _logger.LogError("JSON SEO: insufficient balance (query length {Length})", query.Length);
                 return new WebSearchResult { Success = false, Output = "Search provider balance exhausted.", Error = "payment_required" };
             }
 
             if (response.StatusCode == (HttpStatusCode)429)
             {
-                _logger.LogWarning("JSON SEO: rate limit exceeded for query '{Query}'", query);
+                _logger.LogWarning("JSON SEO: rate limit exceeded (query length {Length})", query.Length);
                 return new WebSearchResult { Success = false, Output = "Search rate limit exceeded, try again shortly.", Error = "rate_limited" };
             }
 
             if (!response.IsSuccessStatusCode)
             {
+                // Тело ошибки провайдера помогает понять причину (ключ, лимит), но в логе только его начало.
                 var body = await response.Content.ReadAsStringAsync(timeoutCts.Token);
-                _logger.LogError("JSON SEO search failed: {Status} {Body}", response.StatusCode, body);
+                _logger.LogError(
+                    "JSON SEO search failed: HTTP {Status} (query length {Length}) {Body}",
+                    (int)response.StatusCode, query.Length, body.Length <= 300 ? body : body[..300] + "…");
                 return new WebSearchResult { Success = false, Output = $"Search provider returned HTTP {(int)response.StatusCode}.", Error = $"http_{(int)response.StatusCode}" };
             }
 
@@ -80,12 +85,12 @@ public class JsonSeoSearchService : IWebSearchService
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            _logger.LogWarning("JSON SEO search timed out for query '{Query}'", query);
+            _logger.LogWarning("JSON SEO search timed out (query length {Length})", query.Length);
             return new WebSearchResult { Success = false, Output = "Search request timed out.", Error = "timeout" };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "JSON SEO search failed unexpectedly for query '{Query}'", query);
+            _logger.LogError(ex, "JSON SEO search failed unexpectedly (query length {Length})", query.Length);
             return new WebSearchResult { Success = false, Output = $"Web search failed: {ex.Message}", Error = "unavailable" };
         }
     }
