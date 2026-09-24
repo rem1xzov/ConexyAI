@@ -42,6 +42,23 @@ interface MessageBubbleProps {
   chatId?: string;
 }
 
+// TURN_TIMER: добавлено 2026-09-24 (ревью L3)
+// «Продолжить» оживляет то же сообщение, и его createdAt остаётся временем исходного ответа, так
+// что секундомер сразу показывал «10м 3с». Момент, когда сообщение (снова) перешло в streaming,
+// запоминаем здесь; карта живёт на уровне модуля, поэтому переживает переключение чатов, когда
+// пузырь размонтируется и монтируется заново.
+const turnStartedAt = new Map<string, number>();
+
+function useTurnStart(messageId: string, status: ChatMessage['status'], createdAt: number): number {
+  const [prevStatus, setPrevStatus] = useState(status);
+  if (prevStatus !== status) {
+    setPrevStatus(status);
+    if (status === 'streaming') turnStartedAt.set(messageId, Date.now());
+  }
+  const recorded = turnStartedAt.get(messageId);
+  return recorded !== undefined && recorded > createdAt ? recorded : createdAt;
+}
+
 function MessageBubbleBase({
   message,
   onRegenerate,
@@ -60,6 +77,7 @@ function MessageBubbleBase({
   const [draft, setDraft] = useState('');
 
   const isUser = message.role === 'user';
+  const turnStart = useTurnStart(message.id, message.status, message.createdAt);
 
   const content = message.content ?? '';
   const thinking = message.thinking ?? '';
@@ -228,7 +246,7 @@ function MessageBubbleBase({
       {showGeneratingLogo && (
         <div className="msg-generating">
           <ConexyLogo size={24} active />
-          <DurationBadge startedAt={message.createdAt} className="thinking-timer" />
+          <DurationBadge startedAt={turnStart} className="thinking-timer" />
         </div>
       )}
 

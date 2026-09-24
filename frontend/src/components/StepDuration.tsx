@@ -1,4 +1,7 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
+import i18n from '../i18n';
 
 // AGENT_TIMELINE: добавлено 2026-09-22
 // Таймер шага. Раньше один счётчик показывался под всей задачей и был привязан к createdAt
@@ -7,14 +10,18 @@ import { useEffect, useState } from 'react';
 // который привязан к startedAt ИМЕННО этого шага и очищается, как только шаг закрыт (endedAt).
 
 /**
- * Formats elapsed time: `12с` under a minute, `1м 5с` above it. Exported for reuse and tests.
+ * Formats elapsed time: `12с` / `12s` under a minute, `1м 5с` / `1m 5s` above it. Exported for
+ * reuse and tests.
+ *
+ * I18N_L2: добавлено 2026-09-24 — единицы «с»/«м» были зашиты в код и оставались русскими в
+ * английском интерфейсе; теперь это ключи render.durationSeconds / render.durationMinutes.
  */
-export function formatDuration(totalSeconds: number): string {
+export function formatDuration(totalSeconds: number, t: TFunction = i18n.t.bind(i18n)): string {
   const safe = Math.max(0, Math.floor(totalSeconds));
-  if (safe < 60) return `${safe}с`;
+  if (safe < 60) return t('render.durationSeconds', { s: safe });
   const minutes = Math.floor(safe / 60);
   const seconds = safe % 60;
-  return `${minutes}м ${seconds}с`;
+  return t('render.durationMinutes', { m: minutes, s: seconds });
 }
 
 interface DurationBadgeProps {
@@ -30,6 +37,7 @@ interface DurationBadgeProps {
  * alive at a time and finished steps can never drift or fight over the same counter.
  */
 export function DurationBadge({ startedAt, endedAt, className }: DurationBadgeProps) {
+  const { t } = useTranslation();
   const running = endedAt === undefined;
   const [elapsed, setElapsed] = useState(() => secondsBetween(startedAt, endedAt));
 
@@ -45,7 +53,7 @@ export function DurationBadge({ startedAt, endedAt, className }: DurationBadgePr
 
   return (
     <span className={`step-duration ${className ?? ''}`.trim()} aria-hidden="true">
-      {formatDuration(elapsed)}
+      {formatDuration(elapsed, t)}
     </span>
   );
 }

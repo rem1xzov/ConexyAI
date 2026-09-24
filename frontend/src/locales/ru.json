@@ -482,6 +482,11 @@
     "fileMarkdown": "Markdown",
     "fileText": "Текст",
     "fileGeneric": "Файл",
-    "openInWorkspace": "Открыть в рабочей области"
+    "openInWorkspace": "Открыть в рабочей области",
+    "durationSeconds": "{{s}}с",
+    "durationMinutes": "{{m}}м {{s}}с",
+    "sizeBytes": "{{n}} Б",
+    "sizeKilobytes": "{{n}} КБ",
+    "sizeMegabytes": "{{n}} МБ"
   }
 }
