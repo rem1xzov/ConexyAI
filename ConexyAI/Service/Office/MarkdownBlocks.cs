@@ -442,15 +442,54 @@ internal static partial class MarkdownBlocks
         return runs;
     }
 
+    /// <remarks>
+    /// Closers are found in constant or logarithmic time (brackets and parentheses matched once up
+    /// front, backtick runs indexed by length, failed emphasis searches remembered): text such as
+    /// "*a *a *a …" or "[[[[…" from a 2 MB export would otherwise take quadratic time.
+    /// </remarks>
     private sealed class InlineParser
     {
         private readonly string _s;
         private readonly List<MdRun> _runs;
+        private readonly Dictionary<int, int> _closingBracket = new();
+        private readonly Dictionary<int, int> _closingParenthesis = new();
+        private readonly Dictionary<int, List<int>> _backtickRuns = new();
+        private readonly Dictionary<(char Delimiter, int Length, int End), int> _noCloserFrom = new();
 
         public InlineParser(string s, List<MdRun> runs)
         {
             _s = s;
             _runs = runs;
+
+            var brackets = new Stack<int>();
+            var parentheses = new Stack<int>();
+            for (var i = 0; i < s.Length; i++)
+            {
+                switch (s[i])
+                {
+                    case '\\':
+                        i++;
+                        break;
+                    case '[':
+                        brackets.Push(i);
+                        break;
+                    case ']' when brackets.Count > 0:
+                        _closingBracket[brackets.Pop()] = i;
+                        break;
+                    case '(':
+                        parentheses.Push(i);
+                        break;
+                    case ')' when parentheses.Count > 0:
+                        _closingParenthesis[parentheses.Pop()] = i;
+                        break;
+                    case '`':
+                        var length = RunLength(i, s.Length, '`');
+                        if (!_backtickRuns.TryGetValue(length, out var starts)) _backtickRuns[length] = starts = new List<int>();
+                        starts.Add(i);
+                        i += length - 1;
+                        break;
+                }
+            }
         }
 
         public void Parse(int start, int end, MdRun style, int nesting)
@@ -587,16 +626,15 @@ internal static partial class MarkdownBlocks
             return n;
         }
 
+        /// <summary>The next backtick run of exactly <paramref name="ticks"/> in [from, end), or -1.</summary>
         private int FindBacktickClose(int from, int end, int ticks)
         {
-            for (var j = from; j < end; j++)
-            {
-                if (_s[j] != '`') continue;
-                var n = RunLength(j, end, '`');
-                if (n == ticks) return j;
-                j += n - 1;
-            }
-            return -1;
+            if (!_backtickRuns.TryGetValue(ticks, out var starts)) return -1;
+            var index = starts.BinarySearch(from);
+            if (index < 0) index = ~index;
+            if (index >= starts.Count) return -1;
+            var close = starts[index];
+            return close + ticks <= end ? close : -1;
         }
 
         private bool TryLink(int i, int end, out int textStart, out int textEnd, out string url, out int after)
@@ -604,24 +642,8 @@ internal static partial class MarkdownBlocks
             textStart = textEnd = after = 0;
             url = string.Empty;
             var open = _s[i] == '!' ? i + 1 : i;
-            var depth = 0;
-            var j = open;
-            for (; j < end; j++)
-            {
-                if (_s[j] == '\\') { j++; continue; }
-                if (_s[j] == '[') depth++;
-                else if (_s[j] == ']' && --depth == 0) break;
-            }
-            if (j >= end - 1 || _s[j + 1] != '(') return false;
-
-            var k = j + 2;
-            var parens = 1;
-            for (; k < end; k++)
-            {
-                if (_s[k] == '(') parens++;
-                else if (_s[k] == ')' && --parens == 0) break;
-            }
-            if (k >= end) return false;
+            if (!_closingBracket.TryGetValue(open, out var j) || j >= end - 1 || _s[j + 1] != '(') return false;
+            if (!_closingParenthesis.TryGetValue(j + 1, out var k) || k >= end) return false;
 
             var target = _s[(j + 2)..k].Trim();
             // [text](url "title") — the title is dropped.
@@ -653,6 +675,10 @@ internal static partial class MarkdownBlocks
 
             // Longer runs than the opener (e.g. "****") are literal text.
             if (run > length && c != '~') return false;
+
+            // A search that already failed from an earlier position fails from here too.
+            var key = (c, length, end);
+            if (_noCloserFrom.TryGetValue(key, out var hopeless) && i + length >= hopeless) return false;
 
             for (var j = i + length; j < end; j++)
             {
@@ -701,6 +727,7 @@ internal static partial class MarkdownBlocks
                 // A shorter run belongs to nested emphasis ("**a *b* c**"): skip it.
                 j += closing - 1;
             }
+            _noCloserFrom[key] = Math.Min(i + length, _noCloserFrom.TryGetValue(key, out var earlier) ? earlier : int.MaxValue);
             return false;
         }
     }

@@ -51,6 +51,28 @@ internal static class DocumentTests
         TestRegistry.Add("docs: read_document_chunk returns bounded pages with a next index (L6)", ReadChunkPagesAsync);
         TestRegistry.Add("docs: DELETE /api/documents/{id} removes chunks, row and file, owner only (M9)", DeleteDocumentAsync);
         TestRegistry.Add("docs: a failed or rejected upload leaves no file on disk (M6)", UploadFailureLeavesNoFileAsync);
+        TestRegistry.Add("docs: pathological Markdown is rendered in linear time", PathologicalMarkdownAsync);
+    }
+
+    private static Task PathologicalMarkdownAsync()
+    {
+        // The export endpoint takes up to 2 MB of Markdown from any user; closer searches must not be
+        // quadratic on unmatched delimiters.
+        var inputs = new Dictionary<string, string>
+        {
+            ["unmatched emphasis"] = string.Concat(Enumerable.Repeat("*a _b ~~c **d ", 40_000)),
+            ["open brackets"] = new string('[', 200_000) + "x",
+            ["links without targets"] = string.Concat(Enumerable.Repeat("[a](", 100_000)),
+            ["backtick runs"] = string.Concat(Enumerable.Range(0, 100_000).Select(i => i % 2 == 0 ? "`a " : "``b ")),
+        };
+        foreach (var (name, markdown) in inputs)
+        {
+            var watch = Stopwatch.StartNew();
+            var bytes = OfficeDocumentWriter.Create(OfficeFormat.Docx, markdown);
+            watch.Stop();
+            Assert(bytes.Length > 0 && watch.Elapsed < TimeSpan.FromSeconds(10), $"{name}: rendering took {watch.Elapsed}");
+        }
+        return Task.CompletedTask;
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
