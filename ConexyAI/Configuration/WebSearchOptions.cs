@@ -14,4 +14,17 @@ public class WebSearchOptions
 
     /// <summary>Timeout for the HTTP call to the search provider.</summary>
     public int TimeoutSeconds { get; set; } = 12;
+
+    // AGENT_WEB_TOOLS: добавлено 2026-09-24 — границы инструмента fetch_web_page.
+    /// <summary>
+    /// Whole-fetch budget for <c>fetch_web_page</c>, redirects included. A value &lt;= 0 falls back to
+    /// the default (20).
+    /// </summary>
+    public int FetchTimeoutSeconds { get; set; } = 20;
+
+    /// <summary>
+    /// How many bytes of a page body <c>fetch_web_page</c> reads (after decompression). The rest of a
+    /// larger page is dropped with a note. A value &lt;= 0 falls back to the default (2 MB).
+    /// </summary>
+    public int FetchMaxBodyBytes { get; set; } = 2 * 1024 * 1024;
 }

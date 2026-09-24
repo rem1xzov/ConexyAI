@@ -45,3 +45,37 @@ public static class WebSearchTool
         }
     };
 }
+
+// AGENT_WEB_TOOLS: добавлено 2026-09-24
+/// <summary>
+/// Shared OpenAI-style tool schema for <c>fetch_web_page</c>: reads one public page (typically a
+/// <c>web_search</c> result) as clean text. The agent modes offer it; the backend is
+/// <c>Service.Web.WebPageFetcher</c>.
+/// </summary>
+public static class FetchWebPageTool
+{
+    public const string Name = "fetch_web_page";
+
+    public static object Schema() => new
+    {
+        type = "function",
+        function = new
+        {
+            name = Name,
+            description = "Open a public web page (http/https) and read its text: title, final URL after redirects and the readable content " +
+                          "(headings as Markdown '#', list items as '- ', link text kept; scripts, navigation, headers/footers and forms removed). " +
+                          "Use it to actually read the pages found with web_search — documentation, API references, articles, reports — instead of relying on search snippets. " +
+                          "Supports HTML, plain text, Markdown and JSON; internal/private addresses are refused.",
+            parameters = new
+            {
+                type = "object",
+                properties = new
+                {
+                    url = new { type = "string", description = "Absolute http(s) URL of the page, e.g. a URL from web_search results" },
+                    max_chars = new { type = "integer", description = "Maximum characters of page text to return (default 12000, max 40000)" }
+                },
+                required = new[] { "url" }
+            }
+        }
+    };
+}
