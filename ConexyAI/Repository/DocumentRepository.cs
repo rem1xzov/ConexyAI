@@ -68,6 +68,69 @@ public class DocumentRepository : IDocumentRepository
             .ToListAsync(ct);
     }
 
+    // RAG_DOCUMENTS: добавлено 2026-09-24 (ревью L6)
+    public async Task<int> CountChunksAsync(Guid userId, Guid documentId, CancellationToken ct = default)
+    {
+        return await _context.DocumentChunks
+            .AsNoTracking()
+            .CountAsync(c => c.DocumentId == documentId && c.Document.UserId == userId, ct);
+    }
+
+    public async Task<IReadOnlyList<DocumentChunk>> GetChunkRangeAsync(Guid userId, Guid documentId, int fromIndex, int take, CancellationToken ct = default)
+    {
+        return await _context.DocumentChunks
+            .AsNoTracking()
+            .Where(c => c.DocumentId == documentId && c.Document.UserId == userId && c.ChunkIndex >= fromIndex)
+            .OrderBy(c => c.ChunkIndex)
+            .Take(Math.Clamp(take, 1, 500))
+            .ToListAsync(ct);
+    }
+
+    // RAG_DOCUMENTS: добавлено 2026-09-24 (ревью M9)
+    public async Task<Document?> DeleteDocumentAsync(Guid userId, Guid id, CancellationToken ct = default)
+    {
+        // The owner filter is the security boundary: a foreign id matches nothing.
+        var document = await _context.Documents.FirstOrDefaultAsync(d => d.Id == id && d.UserId == userId, ct);
+        if (document is null)
+            return null;
+
+        await RemoveWithChunksAsync(document, ct);
+        await _context.SaveChangesAsync(ct);
+        return document;
+    }
+
+    public async Task<IReadOnlyList<Document>> DeleteUserDocumentsAsync(Guid userId, CancellationToken ct = default)
+    {
+        var documents = await _context.Documents.Where(d => d.UserId == userId).ToListAsync(ct);
+        foreach (var document in documents)
+        {
+            await RemoveWithChunksAsync(document, ct);
+        }
+        if (documents.Count > 0)
+            await _context.SaveChangesAsync(ct);
+        return documents;
+    }
+
+    /// <summary>
+    /// Marks the document and its chunks deleted. Chunks are removed by key (their text is never
+    /// loaded), and explicitly: the in-memory provider used by the tests has no database-level cascade,
+    /// and ExecuteDelete is not available there.
+    /// </summary>
+    private async Task RemoveWithChunksAsync(Document document, CancellationToken ct)
+    {
+        var chunkIds = await _context.DocumentChunks
+            .Where(c => c.DocumentId == document.Id)
+            .Select(c => c.Id)
+            .ToListAsync(ct);
+        foreach (var chunkId in chunkIds)
+        {
+            var chunk = _context.DocumentChunks.Local.FirstOrDefault(c => c.Id == chunkId)
+                        ?? new DocumentChunk { Id = chunkId, DocumentId = document.Id, Content = string.Empty };
+            _context.DocumentChunks.Remove(chunk);
+        }
+        _context.Documents.Remove(document);
+    }
+
     public async Task<IReadOnlyList<DocumentSearchRow>> SearchAsync(
         Guid userId,
         string query,

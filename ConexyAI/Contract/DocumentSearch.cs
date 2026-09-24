@@ -62,4 +62,22 @@ public class DocumentChunkResult
 
     [JsonPropertyName("content")]
     public string Content { get; set; } = null!;
+
+    // RAG_DOCUMENTS: добавлено 2026-09-24 (ревью L6) — ответ ограничен страницей (~12 000 символов);
+    // эти поля говорят модели, какие фрагменты она получила и как читать дальше.
+
+    /// <summary>Index of the last chunk included in <see cref="Content"/>.</summary>
+    [JsonPropertyName("last_chunk_index")]
+    public int LastChunkIndex { get; set; }
+
+    [JsonPropertyName("total_chunks")]
+    public int TotalChunks { get; set; }
+
+    /// <summary>The <c>chunk_index</c> to pass to read the next page; null at the end of the document.</summary>
+    [JsonPropertyName("next_chunk_index")]
+    public int? NextChunkIndex { get; set; }
+
+    [JsonPropertyName("note")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Note { get; set; }
 }
