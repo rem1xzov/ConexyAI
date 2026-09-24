@@ -20,6 +20,8 @@ public class SpeechKitService : ISpeechKitService
     private const int TtsSampleRate = 48000;
     private const int TtsChannels = 1;
     private const int TtsBitsPerSample = 16;
+    // PRIVACY_LOGS: добавлено 2026-09-24 (ревью H3) — тела ответов апстрима в логах обрезаются.
+    private const int MaxLoggedBodyChars = 300;
 
     private readonly HttpClient _httpClient;
     private readonly SpeechKitOptions _options;
@@ -63,13 +65,16 @@ public class SpeechKitService : ISpeechKitService
         stopwatch.Stop();
 
         var responseBody = await response.Content.ReadAsStringAsync(ct);
-        _logger.LogInformation("Yandex STT responded in {Elapsed} ms with status {Status}: {Body}",
-            stopwatch.ElapsedMilliseconds, (int)response.StatusCode, responseBody);
+        // PRIVACY_LOGS: добавлено 2026-09-24 (ревью H3) — тело успешного ответа STT — это распознанная
+        // речь пользователя; в лог идут только статус, время и длина.
+        _logger.LogInformation("Yandex STT responded in {Elapsed} ms with status {Status} ({BodyLength} chars).",
+            stopwatch.ElapsedMilliseconds, (int)response.StatusCode, responseBody.Length);
 
         if (!response.IsSuccessStatusCode)
         {
-            _logger.LogError("SpeechKit STT failed: {Status} {Body}", (int)response.StatusCode, responseBody);
-            throw new HttpRequestException($"Yandex error [{(int)response.StatusCode}]: {responseBody}", null, response.StatusCode);
+            var errorPreview = Truncate(responseBody);
+            _logger.LogError("SpeechKit STT failed: {Status} {Body}", (int)response.StatusCode, errorPreview);
+            throw new HttpRequestException($"Yandex error [{(int)response.StatusCode}]: {errorPreview}", null, response.StatusCode);
         }
 
         var parsed = JsonSerializer.Deserialize<SttResponse>(responseBody);
@@ -104,10 +109,20 @@ public class SpeechKitService : ISpeechKitService
 
     private async Task<byte[]> SynthesizeChunkAsync(string text, CancellationToken ct)
     {
-        var url = $"{_options.TtsEndpoint.TrimEnd('/')}?lang=ru-RU&voice={Uri.EscapeDataString(_options.TtsVoice)}&format=lpcm&sampleRateHertz={TtsSampleRate}&text={Uri.EscapeDataString(text)}";
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        // SPEECH_HARDENING: добавлено 2026-09-24 (ревью L7) — раньше все параметры, включая сам текст,
+        // шли в query string POST-запроса (URL до ~24 КБ, текст пользователя — в логах прокси/апстрима).
+        // SpeechKit v1 tts:synthesize принимает те же параметры телом application/x-www-form-urlencoded.
+        using var request = new HttpRequestMessage(HttpMethod.Post, _options.TtsEndpoint);
         AddAuthHeaders(request);
+        request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["text"] = text,
+            ["lang"] = "ru-RU",
+            ["voice"] = _options.TtsVoice,
+            ["format"] = "lpcm",
+            ["sampleRateHertz"] = TtsSampleRate.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["folderId"] = _options.FolderId
+        });
 
         HttpResponseMessage response;
         try
@@ -125,13 +140,20 @@ public class SpeechKitService : ISpeechKitService
             if (!response.IsSuccessStatusCode)
             {
                 var body = await response.Content.ReadAsStringAsync(ct);
-                _logger.LogError("SpeechKit TTS failed: {Status} {Body}", (int)response.StatusCode, body);
+                // PRIVACY_LOGS: 2026-09-24 (ревью H3) — тело ошибки может повторять текст; только начало.
+                _logger.LogError("SpeechKit TTS failed: {Status} {Body}", (int)response.StatusCode, Truncate(body));
                 throw new HttpRequestException($"Speech synthesis failed (HTTP {(int)response.StatusCode}).");
             }
 
             return await response.Content.ReadAsByteArrayAsync(ct);
         }
     }
+
+    /// <summary>At most <see cref="MaxLoggedBodyChars"/> characters of an upstream error body, for logs.</summary>
+    private static string Truncate(string? body) =>
+        string.IsNullOrEmpty(body) || body.Length <= MaxLoggedBodyChars
+            ? body ?? string.Empty
+            : body[..MaxLoggedBodyChars] + $"…(+{body.Length - MaxLoggedBodyChars} chars)";
 
     private string? ValidateConfig()
     {
@@ -205,6 +227,9 @@ public class SpeechKitService : ISpeechKitService
 
     private sealed class SttResponse
     {
+        // 2026-09-24: Yandex отвечает {"result": "..."}; без явного имени System.Text.Json
+        // (регистрозависимый по умолчанию) не связывал поле, и распознавание всегда было пустым.
+        [System.Text.Json.Serialization.JsonPropertyName("result")]
         public string? Result { get; set; }
     }
 }

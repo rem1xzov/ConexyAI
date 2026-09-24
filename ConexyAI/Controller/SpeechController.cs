@@ -1,6 +1,8 @@
+using ConexyAI.Extensions;
 using ConexyAI.Service;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace ConexyAI.Controller;
 
@@ -86,20 +88,28 @@ public class SpeechController : ControllerBase
     }
     */
 
+    // SPEECH_HARDENING: добавлено 2026-09-24 (ревью L7) — было до 20 000 символов без лимита частоты,
+    // и текст уезжал в URL запроса к Yandex. Теперь: текст только в теле POST (см. SpeechKitService),
+    // не длиннее MaxTextLength, 10 запросов в минуту на пользователя (политика "speech").
+    public const int MaxTextLength = 2000;
+
     /// <summary>
-    /// Synthesizes speech from text and returns a WAV file (16-bit PCM). Long text is chunked
-    /// server-side and concatenated into a single audio file.
+    /// Synthesizes speech from text (at most <see cref="MaxTextLength"/> characters) and returns a
+    /// WAV file (16-bit PCM).
     /// </summary>
     [HttpPost("synthesize")]
+    [EnableRateLimiting(AuthRateLimitPolicies.Speech)]
+    [RequestSizeLimit(64_000)]
     public async Task<IActionResult> Synthesize([FromBody] SynthesizeRequest request, CancellationToken ct)
     {
         if (request is null || string.IsNullOrWhiteSpace(request.Text))
-            return BadRequest(new { error = "Text is required." });
+            return BadRequest(new { error = "TEXT_REQUIRED" });
 
-        const int MaxTextLength = 20_000;
         if (request.Text.Length > MaxTextLength)
-            return BadRequest(new { error = $"Text exceeds the {MaxTextLength} character limit." });
+            return BadRequest(new { error = "TEXT_TOO_LONG", maxLength = MaxTextLength });
 
+        // ERROR_REDACTION: 2026-09-24 (ревью L12) — клиенту только стабильные коды; подробности
+        // (конфиг, ответ апстрима) остаются в логе.
         try
         {
             var wav = await _speechKit.SynthesizeAsync(request.Text, ct);
@@ -108,12 +118,12 @@ public class SpeechController : ControllerBase
         catch (InvalidOperationException ex)
         {
             _logger.LogWarning("Speech synthesis unavailable: {Error}", ex.Message);
-            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = ex.Message });
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "SPEECH_UNAVAILABLE" });
         }
         catch (HttpRequestException ex)
         {
             _logger.LogError(ex, "Speech synthesis upstream failure.");
-            return StatusCode(StatusCodes.Status502BadGateway, new { error = ex.Message });
+            return StatusCode(StatusCodes.Status502BadGateway, new { error = "SPEECH_UPSTREAM_FAILED" });
         }
     }
 }
