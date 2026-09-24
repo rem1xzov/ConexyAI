@@ -86,6 +86,13 @@ await RunOrSkipAsync(
     skip: OperatingSystem.IsWindows(),
     skipReason: "requires Linux pty path, run in CI/Linux");
 
+// TEST_SUITES: suites kept in their own files (see TestRegistry.cs).
+foreach (var registered in TestRegistry.Tests.OrderBy(t => t.Name, StringComparer.Ordinal))
+{
+    var skipReason = registered.SkipReason?.Invoke();
+    await RunOrSkipAsync(registered.Name, registered.Body, skip: skipReason is not null, skipReason: skipReason ?? string.Empty);
+}
+
 if (failures == 0)
 {
     Console.WriteLine("\n=== ALL TESTS PASSED ===");
