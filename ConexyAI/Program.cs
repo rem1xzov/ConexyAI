@@ -142,9 +142,8 @@ builder.Services.Configure<AdminAccountsOptions>(options =>
 
 // JWT Bearer authentication. The user id is always taken from the token claims.
 var jwtSection = builder.Configuration.GetSection(JwtOptions.SectionName);
-var signingKey = jwtSection["SigningKey"]
-    ?? throw new InvalidOperationException("Jwt:SigningKey is not configured.");
-// TOKEN_REVOCATION (M19) + AUTH_RATE_LIMIT (M20): 2026-09-24, see AuthSecurityExtensions.
+// JWT_KEY_GUARD (L12) + TOKEN_REVOCATION (M19) + AUTH_RATE_LIMIT (M20): 2026-09-24, see AuthSecurityExtensions.
+var signingKey = JwtSigningKeyGuard.Validate(jwtSection["SigningKey"], builder.Environment);
 builder.AddConexyAuthSecurity();
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
