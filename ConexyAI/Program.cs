@@ -212,6 +212,8 @@ builder.Services.AddHostedService<IncognitoCleanupService>();
 builder.Services.AddScoped<IChatAccessService, ChatAccessService>();
 // USER_PREFERENCES: добавлено 2026-09-24 — пользовательские инструкции и переключатель памяти.
 builder.Services.AddScoped<IUserPreferencesService, UserPreferencesService>();
+// USER_DATA_CLEANUP: добавлено 2026-09-24 — ревью M9: файлы пользователя удаляются вместе с ним.
+builder.Services.AddScoped<IUserDataCleanupService, UserDataCleanupService>();
 // RAG: добавлено 2026-09-17
 builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
