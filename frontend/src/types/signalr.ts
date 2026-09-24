@@ -107,30 +107,45 @@ export type CommandDecisionHandler = (
   allowAll: boolean,
 ) => Promise<boolean>;
 
+// STREAM_SCOPE: добавлено 2026-09-24 — контракт C-1. Каждое событие группы `task_{id}` несёт
+// последним аргументом `scopeId` — id этой группы: taskId хода (события хода) или chatId (события
+// рабочей области). Клиент маршрутизирует по нему и отбрасывает то, что не может сопоставить.
+// Аргумент необязателен только ради совместимости со старым бэкендом.
 export interface SignalrCallbacks {
-  onContentToken?: (delta: string) => void;
-  onThinkingToken?: (delta: string) => void;
-  onLog?: (message: string) => void;
-  onScreenshot?: (base64: string) => void;
-  onAgentStatus?: (payload: AgentStatusPayload) => void;
-  onFileCreated?: (payload: FileCreatedPayload) => void;
-  onToolAction?: (event: ToolActionEvent) => void;
-  onTodoUpdate?: (payload: TodoUpdatePayload) => void;
-  onCompleted?: (payload: TaskCompletedPayload) => void;
-  onError?: (error: string) => void;
-  onStopped?: (taskId: string) => void;
+  onContentToken?: (delta: string, scopeId?: string) => void;
+  onThinkingToken?: (delta: string, scopeId?: string) => void;
+  onLog?: (message: string, scopeId?: string) => void;
+  onScreenshot?: (base64: string, scopeId?: string) => void;
+  onAgentStatus?: (payload: AgentStatusPayload, scopeId?: string) => void;
+  onFileCreated?: (payload: FileCreatedPayload, scopeId?: string) => void;
+  onToolAction?: (event: ToolActionEvent, scopeId?: string) => void;
+  onTodoUpdate?: (payload: TodoUpdatePayload, scopeId?: string) => void;
+  onCompleted?: (payload: TaskCompletedPayload, scopeId?: string) => void;
+  onError?: (error: string, scopeId?: string) => void;
+  onStopped?: (taskId: string, scopeId?: string) => void;
   onRunProjectError?: (payload: RunProjectErrorPayload) => void;
-  onSearchStatus?: (payload: SearchStatusPayload) => void;
-  onProblems?: (payload: BuildProblemsPayload) => void;
+  onSearchStatus?: (payload: SearchStatusPayload, scopeId?: string) => void;
+  onProblems?: (payload: BuildProblemsPayload, scopeId?: string) => void;
   // SIGNALR_RESILIENCE: добавлено 2026-09-22 — вызывается после успешного автоматического
   // переподключения, чтобы приложение сверило ход выполнения с сервером (события, которые
   // пришли пока сокет лежал, уже потеряны).
   onReconnected?: () => void;
   // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
-  onPendingActionCreated?: (payload: PendingActionPayload) => void;
+  onPendingActionCreated?: (payload: PendingActionPayload, scopeId?: string) => void;
   // SUPPORT: добавлено 2026-09-19
   onSupportMessageReceived?: (payload: SupportMessagePayload) => void;
+  // CHAT_OWNERSHIP: добавлено 2026-09-24 — контракт C-6: сервер отказал в JoinTask(id), потому что
+  // задача или чат принадлежат другому аккаунту. Повторять такой вход бессмысленно.
+  onJoinForbidden?: (id: string) => void;
 }
+
+// STOP_CONFIRM: добавлено 2026-09-24 — контракт C-5, ответ хаба на StopGeneration(taskId).
+/**
+ * - `stopping`  — a running turn is being cancelled; `OnStopped` follows.
+ * - `cancelled` — the turn was still queued and will never run.
+ * - `not_found` — nothing in flight for that id (already finished or unknown).
+ */
+export type StopGenerationResult = 'stopping' | 'cancelled' | 'not_found';
 
 // SUPPORT: добавлено 2026-09-19
 export interface SupportMessagePayload {
