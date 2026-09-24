@@ -441,6 +441,7 @@
     "open": "Открыть",
     "close": "Закрыть",
     "download": "Скачать",
+    "downloadFailed": "Не удалось скачать",
     "htmlPreviewTitle": "Превью HTML",
     "svgPreviewTitle": "Превью SVG",
     "previewFrameTitle": "Превью: {{title}}",
@@ -467,6 +468,20 @@
     "typeMarkdown": "Документ",
     "typeCode": "Код",
     "taskDone": "Выполнено",
-    "taskTodo": "Не выполнено"
+    "taskTodo": "Не выполнено",
+    "filesTitle": "Файлы",
+    "filesShowMore": "Показать ещё {{count}}",
+    "filesShowLess": "Свернуть",
+    "fileCreated": "создан",
+    "fileEdited": "изменён",
+    "fileWord": "Документ Word",
+    "fileExcel": "Таблица Excel",
+    "filePowerPoint": "Презентация",
+    "filePdf": "PDF-документ",
+    "fileCsv": "Таблица CSV",
+    "fileMarkdown": "Markdown",
+    "fileText": "Текст",
+    "fileGeneric": "Файл",
+    "openInWorkspace": "Открыть в рабочей области"
   }
 }

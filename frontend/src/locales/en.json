@@ -441,6 +441,7 @@
     "open": "Open",
     "close": "Close",
     "download": "Download",
+    "downloadFailed": "Download failed",
     "htmlPreviewTitle": "HTML preview",
     "svgPreviewTitle": "SVG preview",
     "previewFrameTitle": "Preview: {{title}}",
@@ -467,6 +468,20 @@
     "typeMarkdown": "Document",
     "typeCode": "Code",
     "taskDone": "Done",
-    "taskTodo": "Not done"
+    "taskTodo": "Not done",
+    "filesTitle": "Files",
+    "filesShowMore": "Show {{count}} more",
+    "filesShowLess": "Show less",
+    "fileCreated": "created",
+    "fileEdited": "edited",
+    "fileWord": "Word document",
+    "fileExcel": "Excel spreadsheet",
+    "filePowerPoint": "Presentation",
+    "filePdf": "PDF document",
+    "fileCsv": "CSV table",
+    "fileMarkdown": "Markdown",
+    "fileText": "Text",
+    "fileGeneric": "File",
+    "openInWorkspace": "Open in workspace"
   }
 }

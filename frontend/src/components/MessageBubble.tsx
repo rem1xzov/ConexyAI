@@ -4,6 +4,7 @@ import type { ChatMessage } from '../types/chat';
 import type { CommandDecisionHandler } from '../types/signalr';
 import { assistantPhase } from '../utils/assistantPhase';
 import { artifactsToMarkdown } from '../utils/artifacts';
+import { producedFiles } from '../utils/producedFiles';
 import { ConexyLogo } from './ConexyLogo';
 import { VisionGallery } from './VisionGallery';
 import { AttachmentGrid } from './AttachmentGrid';
@@ -11,6 +12,7 @@ import { AgentTimeline } from './AgentTimeline';
 import { DurationBadge } from './StepDuration';
 import { TodoPanel } from './TodoPanel';
 import { AssistantContent } from './artifacts/AssistantContent';
+import { ProducedFiles } from './ProducedFiles';
 import { MessageActions } from './MessageActions';
 import { UserMessageActions } from './UserMessageActions';
 
@@ -35,6 +37,9 @@ interface MessageBubbleProps {
   // AGENT_FEED_ZED: добавлено 2026-09-23
   /** Opens a path mentioned by an agent action row in the workspace editor. */
   onOpenFile?: (path: string) => void;
+  // FILE_CARDS: добавлено 2026-09-24
+  /** Chat (= workspace) id, needed to download files the agent produced. */
+  chatId?: string;
 }
 
 function MessageBubbleBase({
@@ -48,6 +53,7 @@ function MessageBubbleBase({
   onNewChat,
   onContinue,
   onOpenFile,
+  chatId,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
@@ -85,6 +91,12 @@ function MessageBubbleBase({
   const statusPill =
     phase === 'tool_calling' && currentAction ? { label: currentAction.label } : null;
   const showActions = message.status !== 'streaming';
+  // FILE_CARDS: files the agent wrote during this turn, derived from its logs and editor events.
+  const logs = message.logs;
+  const files = useMemo(
+    () => (isUser ? [] : producedFiles({ logs, toolActions: message.toolActions })),
+    [isUser, logs, message.toolActions],
+  );
   // ARTIFACTS: copy / export get ordinary fenced blocks instead of raw <conexy_artifact> markup.
   const exportContent = useMemo(() => (isUser ? content : artifactsToMarkdown(content)), [isUser, content]);
 
@@ -205,6 +217,9 @@ function MessageBubbleBase({
           />
         </div>
       </div>
+
+      {/* FILE_CARDS: добавлено 2026-09-24 — files produced in this turn, with a download button. */}
+      <ProducedFiles files={files} chatId={chatId} onOpenFile={onOpenFile} />
 
       {/* 5. Running light: last element of the message while generating, so it starts directly
           under the timeline and is pushed down as the answer grows. This is the ONLY stopwatch in
