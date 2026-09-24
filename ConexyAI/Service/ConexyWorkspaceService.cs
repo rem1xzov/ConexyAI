@@ -42,6 +42,9 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         MigrateLegacyWorkspaces(logger);
     }
 
+    /// <summary>Upper bound for <see cref="ReadFileAsync"/>: larger files are refused, not truncated.</summary>
+    public const long MaxTextReadBytes = 5L * 1024 * 1024;
+
     public string GetTaskWorkspacePath(Guid chatId)
     {
         var path = Path.Combine(_baseWorkspacesDir, chatId.ToString("N"));
@@ -65,6 +68,11 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             var resolvedPath = ResolveSafePath(chatId, relativePath);
             if (!File.Exists(resolvedPath))
                 return new FileReadResult(false, null, $"File '{relativePath}' not found.");
+
+            // A text read never loads an arbitrarily large file into memory (and into a model prompt).
+            var size = new FileInfo(resolvedPath).Length;
+            if (size > MaxTextReadBytes)
+                return new FileReadResult(false, null, $"File '{relativePath}' is too large to read as text ({size} bytes, limit {MaxTextReadBytes}).");
 
             var content = await WorkspaceJail.ReadAllTextAsync(GetTaskWorkspacePath(chatId), relativePath, ct);
             return new FileReadResult(true, content, null);

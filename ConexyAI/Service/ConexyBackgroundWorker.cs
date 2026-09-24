@@ -528,6 +528,10 @@ public class ConexyBackgroundWorker : BackgroundService
             ? StudentsSystemPrompt
             : ChatSystemPrompt;
 
+        // ARTIFACTS: добавлено 2026-09-24 — ТЗ 2, §1–2: интерактивные артефакты, Mermaid и LaTeX
+        // рендерятся на клиенте во всех режимах чата, поэтому модель знает об этих форматах и здесь.
+        systemPrompt += "\n\n" + Prompts.PromptFragments.Artifacts + "\n\n" + Prompts.PromptFragments.RichFormatting;
+
         // Always inject the current server time so "what day/time is it" questions are
         // answered directly and reliably, without depending on the web search provider.
         systemPrompt += $"\n\nТекущая дата и время (UTC): {DateTime.UtcNow:yyyy-MM-dd HH:mm}.";

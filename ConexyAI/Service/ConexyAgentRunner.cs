@@ -672,6 +672,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     // Остановка пользователем/хостом обязана завершить прогон, а не стать tool-ошибкой.
                     throw;
                 }
+                catch (CommandConfirmationException)
+                {
+                    // CONFIRM_GATE: сломанный гейт подтверждения останавливает прогон (как и задумано в
+                    // DispatchToolAsync), а не превращается в обычную ошибку инструмента, после которой
+                    // агент продолжал бы без возможности что-либо подтвердить.
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(
