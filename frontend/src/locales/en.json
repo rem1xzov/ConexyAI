@@ -429,5 +429,13 @@
     "superadmin_protected": "Superadmin cannot be changed or deleted.",
     "github_auth": "GitHub login error",
     "default": "Authentication error"
+  },
+  "render": {
+    "code": "code",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyCode": "Copy code",
+    "taskDone": "Done",
+    "taskTodo": "Not done"
   }
 }

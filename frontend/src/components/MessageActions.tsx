@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { copyText } from '../utils/clipboard';
 import { exportDocument, type OfficeFormat } from '../api/conexyApi';
 import { triggerDownload } from '../utils/download';
 import { CheckIcon, CopyIcon, DownloadIcon, PlayIcon, RefreshIcon, ThumbsDownIcon, ThumbsUpIcon } from './Icons';
@@ -60,13 +61,10 @@ export function MessageActions({ content, onRegenerate, onContinue }: MessageAct
   }
 
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard may be unavailable (non-secure context); ignore.
-    }
+    // copyText falls back to execCommand when the Clipboard API is missing (plain http).
+    if (!(await copyText(content))) return;
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
   }
 
   function toggle(next: Feedback) {

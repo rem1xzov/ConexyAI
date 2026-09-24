@@ -25,7 +25,24 @@ export function detectLanguageFromExtension(path: string): string {
     go: 'go',
     java: 'java',
     rb: 'ruby',
+    // RENDER_HL: добавлено 2026-09-24 — ещё несколько языков, которые Monaco знает из коробки.
+    kt: 'kotlin',
+    kts: 'kotlin',
+    swift: 'swift',
+    c: 'c',
+    h: 'c',
+    cpp: 'cpp',
+    cc: 'cpp',
+    hpp: 'cpp',
+    ps1: 'powershell',
+    scss: 'scss',
+    less: 'less',
+    ini: 'ini',
+    dockerfile: 'dockerfile',
+    mmd: 'markdown',
   };
+  const name = path.split('/').pop()?.toLowerCase() ?? '';
+  if (name === 'dockerfile' || name.startsWith('dockerfile.')) return 'dockerfile';
   return map[ext] ?? 'plaintext';
 }
 
