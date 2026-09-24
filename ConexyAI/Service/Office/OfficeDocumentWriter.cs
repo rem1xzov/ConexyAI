@@ -21,7 +21,7 @@ public enum OfficeFormat
 /// .docx и .pptx строятся через DocumentFormat.OpenXml, .xlsx — через ClosedXML; каждый результат
 /// проходит OpenXmlValidator без ошибок (см. DocumentTests). Публичный API не менялся.
 /// </remarks>
-public static class OfficeDocumentWriter
+public static partial class OfficeDocumentWriter
 {
     public const int MaxMarkdownChars = 2_000_000;
 
@@ -146,6 +146,55 @@ public static class OfficeDocumentWriter
         }
         return "en-US";
     }
+
+    /// <summary>
+    /// Table column widths summing to <paramref name="total"/>: each column first gets room for its
+    /// longest unbreakable token (no word broken mid-word when that can be avoided), the remaining room
+    /// goes to the columns whose longest line needs more.
+    /// </summary>
+    /// <param name="charWidth">Average character width, in the same unit as <paramref name="total"/>.</param>
+    /// <param name="padding">Cell margins (both sides), in the same unit.</param>
+    /// <param name="fits">False when even the longest tokens do not fit and had to be squeezed.</param>
+    internal static double[] ColumnWidths(MdTable table, double total, double charWidth, double padding, out bool fits)
+    {
+        var columns = table.ColumnCount;
+        var minimum = new double[columns];
+        var desired = new double[columns];
+        var rows = table.Rows;
+        for (var r = 0; r < rows.Count; r++)
+        {
+            // The header is bold, hence a little wider.
+            var scale = r == 0 ? 1.1 : 1.0;
+            for (var c = 0; c < columns && c < rows[r].Count; c++)
+            {
+                var text = rows[r][c];
+                var word = TokenRegex().Matches(text).Select(m => m.Length).DefaultIfEmpty(0).Max();
+                var line = text.Split('\n').Max(l => l.Length);
+                minimum[c] = Math.Max(minimum[c], Math.Min(word, 30) * charWidth * scale + padding);
+                desired[c] = Math.Max(desired[c], Math.Min(line, 60) * charWidth * scale + padding);
+            }
+        }
+        for (var c = 0; c < columns; c++)
+        {
+            minimum[c] = Math.Max(minimum[c], 3 * charWidth + padding);
+            desired[c] = Math.Max(desired[c], minimum[c]);
+        }
+
+        var minimumSum = minimum.Sum();
+        fits = minimumSum <= total;
+        if (!fits) return minimum.Select(m => m * total / minimumSum).ToArray();
+        var desiredSum = desired.Sum();
+        if (desiredSum <= total) return desired.Select(d => d * total / desiredSum).ToArray();
+
+        var spare = total - minimumSum;
+        var wanted = desired.Select((d, i) => d - minimum[i]).ToArray();
+        var wantedSum = wanted.Sum();
+        return minimum.Select((m, i) => m + spare * wanted[i] / wantedSum).ToArray();
+    }
+
+    // A run of non-space characters; spaces between digits ("1 290,50", "+7 999 123") do not break it.
+    [System.Text.RegularExpressions.GeneratedRegex(@"\S+(?:(?<=\d)[  ](?=\d)\S+)*")]
+    private static partial System.Text.RegularExpressions.Regex TokenRegex();
 
     /// <summary>Visible text of a link run: "text (url)" when the target cannot be a real hyperlink.</summary>
     internal static string LinkFallbackText(MdRun run) =>

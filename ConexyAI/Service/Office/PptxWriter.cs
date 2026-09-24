@@ -353,18 +353,10 @@ internal static partial class PptxWriter
 
     private static long[] TableColumnWidths(MdTable table)
     {
-        var columns = table.ColumnCount;
-        var weights = new double[columns];
-        foreach (var row in table.Rows)
-        {
-            for (var c = 0; c < columns && c < row.Count; c++)
-            {
-                weights[c] = Math.Max(weights[c], Math.Clamp(row[c].Length, 4, 40));
-            }
-        }
-        for (var c = 0; c < columns; c++) weights[c] = Math.Max(weights[c], 4);
-        var total = weights.Sum();
-        var widths = weights.Select(w => (long)(ContentWidth * w / total)).ToArray();
+        var charWidth = TableFontSize(table.ColumnCount) / 100.0 * 0.55 * EmuPerPoint;
+        var widths = OfficeDocumentWriter.ColumnWidths(table, ContentWidth, charWidth, padding: 182_880, out _)
+            .Select(w => (long)Math.Floor(w))
+            .ToArray();
         widths[^1] += ContentWidth - widths.Sum();
         return widths;
     }
@@ -504,7 +496,10 @@ internal static partial class PptxWriter
                     properties.Level = line.Depth;
                     break;
                 case LineKind.Numbered:
+                    // "10." is wider than a bullet: a wider hanging indent keeps it off the text.
                     properties.Level = line.Depth;
+                    properties.LeftMargin = 457_200 + 457_200 * line.Depth;
+                    properties.Indent = -457_200;
                     properties.Append(new A.AutoNumberedBullet { Type = A.TextAutoNumberSchemeValues.ArabicPeriod, StartAt = startAt });
                     break;
                 case LineKind.Heading:

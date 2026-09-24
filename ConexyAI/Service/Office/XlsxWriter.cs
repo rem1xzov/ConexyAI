@@ -185,6 +185,14 @@ internal static class XlsxWriter
 
         sheet.SheetView.FreezeRows(1);
         if (rowCount > 1) table.SetAutoFilter();
+
+        // Printing: every column on one page width, the header repeated on each page.
+        sheet.PageSetup.FitToPages(1, 0);
+        sheet.PageSetup.SetRowsToRepeatAtTop(1, 1);
+        if (widths.Sum(w => Math.Clamp(w, MinColumnWidth, MaxColumnWidth)) > 100)
+        {
+            sheet.PageSetup.PageOrientation = XLPageOrientation.Landscape;
+        }
     }
 
     private static string SetText(IXLCell cell, string text)

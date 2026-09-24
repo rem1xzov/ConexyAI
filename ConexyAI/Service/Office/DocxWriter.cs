@@ -219,7 +219,7 @@ internal static class DocxWriter
         private W.Table Table(MdTable table)
         {
             var columns = table.ColumnCount;
-            var widths = ColumnWidths(table, columns);
+            var (widths, fontSize) = FitColumns(table);
 
             var properties = new W.TableProperties
             {
@@ -267,6 +267,15 @@ internal static class DocxWriter
                         _ => (W.JustificationValues?)null,
                     };
                     if (justification is { } jc) paragraph.ParagraphProperties.Justification = new W.Justification { Val = jc };
+                    if (fontSize is not null)
+                    {
+                        foreach (var run in paragraph.Descendants<W.Run>())
+                        {
+                            run.RunProperties ??= new W.RunProperties();
+                            run.RunProperties.FontSize = new W.FontSize { Val = fontSize };
+                            run.RunProperties.FontSizeComplexScript = new W.FontSizeComplexScript { Val = fontSize };
+                        }
+                    }
 
                     row.Append(new W.TableCell(cellProperties, paragraph));
                 }
@@ -323,28 +332,24 @@ internal static class DocxWriter
     private static IReadOnlyList<MdRun> Prepend(string text, IReadOnlyList<MdRun> runs) =>
         runs.Prepend(new MdRun(text)).ToList();
 
-    /// <summary>Column widths in twips, proportional to the longest text of each column.</summary>
-    private static int[] ColumnWidths(MdTable table, int columns)
+    /// <summary>
+    /// Column widths in twips summing to the text width, and the cell font size (half-points; null for
+    /// the normal 11 pt): a table too wide for the page steps down to 9 pt, then 8 pt, before its words
+    /// have to break inside a column.
+    /// </summary>
+    private static (int[] Widths, string? FontSize) FitColumns(MdTable table)
     {
-        var weights = new double[columns];
-        foreach (var row in table.Rows)
+        var sizes = new (string? HalfPoints, double CharWidth)[] { (null, 110), ("18", 90), ("16", 80) };
+        foreach (var (halfPoints, charWidth) in sizes)
         {
-            for (var c = 0; c < columns && c < row.Count; c++)
-            {
-                var longest = row[c].Split('\n').Max(l => l.Length);
-                weights[c] = Math.Max(weights[c], Math.Clamp(longest, 4, 40));
-            }
-        }
-        for (var c = 0; c < columns; c++) weights[c] = Math.Max(weights[c], 4);
+            var exact = OfficeDocumentWriter.ColumnWidths(table, TextWidth, charWidth, padding: 260, out var fits);
+            if (!fits && halfPoints != sizes[^1].HalfPoints) continue;
 
-        var total = weights.Sum();
-        var minimum = Math.Min(700, TextWidth / columns);
-        var widths = weights.Select(w => Math.Max(minimum, (int)(TextWidth * w / total))).ToArray();
-        // Keep the sum equal to the text width despite rounding and minimums.
-        var excess = widths.Sum() - TextWidth;
-        var widest = Array.IndexOf(widths, widths.Max());
-        widths[widest] = Math.Max(minimum, widths[widest] - excess);
-        return widths;
+            var widths = exact.Select(w => (int)Math.Floor(w)).ToArray();
+            widths[Array.IndexOf(widths, widths.Max())] += TextWidth - widths.Sum();
+            return (widths, halfPoints);
+        }
+        throw new InvalidOperationException("unreachable");
     }
 
     private static W.TableBorders TableBorders() => new(

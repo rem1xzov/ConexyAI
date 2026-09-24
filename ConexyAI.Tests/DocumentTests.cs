@@ -209,6 +209,22 @@ internal static class DocumentTests
         Assert(header.Descendants<W.Run>().All(r => r.RunProperties?.Bold is not null), "header text is bold");
         var lastRow = table.Elements<W.TableRow>().Last().Elements<W.TableCell>().ToList();
         Assert(lastRow.Count == 8 && lastRow[0].InnerText == "Итого | всё", "an escaped pipe stays inside its cell");
+        var gridWidth = table.GetFirstChild<W.TableGrid>()!.Elements<W.GridColumn>().Sum(g => int.Parse(g.Width!.Value!));
+        Assert(gridWidth == 9355, $"the columns fill the text width exactly, got {gridWidth}");
+
+        // A table too wide for the page steps its font down instead of breaking every word.
+        var wideMarkdown = "| " + string.Join(" | ", Enumerable.Range(1, 12).Select(i => $"Показатель{i}")) + " |\n|"
+                           + string.Concat(Enumerable.Repeat("---|", 12)) + "\n| " + string.Join(" | ", Enumerable.Range(1, 12).Select(i => $"{i * 1000}")) + " |";
+        using (var wide = WordprocessingDocument.Open(new MemoryStream(OfficeDocumentWriter.Create(OfficeFormat.Docx, wideMarkdown)), false))
+        {
+            var sizes = wide.MainDocumentPart!.Document.Body!.Descendants<W.Run>().Select(r => r.RunProperties?.FontSize?.Val?.Value).Distinct().ToList();
+            Assert(sizes.Count == 1 && sizes[0] is "18" or "16", $"a 12-column table uses a smaller font, got [{string.Join(",", sizes)}]");
+        }
+        using (var narrow = WordprocessingDocument.Open(new MemoryStream(OfficeDocumentWriter.Create(OfficeFormat.Docx, "| a | b |\n|---|---|\n| 1 | 2 |")), false))
+        {
+            Assert(narrow.MainDocumentPart!.Document.Body!.Descendants<W.Run>().All(r => r.RunProperties?.FontSize is null),
+                "a narrow table keeps the body font");
+        }
 
         // Code block: monospace style, one paragraph with line breaks and a tab.
         var code = paragraphs.Single(p => StyleOf(p) == "CodeBlock");
