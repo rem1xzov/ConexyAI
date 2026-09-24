@@ -16,14 +16,48 @@ export function getStoredTheme(): Theme {
   return 'dark';
 }
 
+const LIGHT_QUERY = '(prefers-color-scheme: light)';
+
+function systemQuery(): MediaQueryList | null {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(LIGHT_QUERY) : null;
+}
+
 function effectiveTheme(theme: Theme): 'light' | 'dark' {
   if (theme === 'system') {
-    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    return systemQuery()?.matches ? 'light' : 'dark';
   }
   return theme;
 }
 
+// THEME_SYSTEM_LIVE: добавлено 2026-09-24 (L4) — тема «Системная» раньше вычислялась один раз при
+// применении и дальше не следила за ОС: переключение ОС в тёмный режим (или авто-смена вечером)
+// оставляло приложение в старой теме до перезагрузки. Теперь один общий слушатель matchMedia
+// переприменяет тему, пока выбрана именно «Системная».
+let activeTheme: Theme | null = null;
+let systemListenerAttached = false;
+
+function onSystemThemeChange(): void {
+  if (activeTheme === 'system') {
+    document.documentElement.setAttribute('data-theme', effectiveTheme('system'));
+  }
+}
+
+function ensureSystemListener(): void {
+  if (systemListenerAttached) return;
+  const mql = systemQuery();
+  if (!mql) return;
+  if (typeof mql.addEventListener === 'function') {
+    mql.addEventListener('change', onSystemThemeChange);
+  } else {
+    // Safari < 14 only knows the deprecated API.
+    (mql as MediaQueryList & { addListener: (cb: () => void) => void }).addListener(onSystemThemeChange);
+  }
+  systemListenerAttached = true;
+}
+
 export function applyTheme(theme: Theme): void {
+  activeTheme = theme;
+  ensureSystemListener();
   document.documentElement.setAttribute('data-theme', effectiveTheme(theme));
 }
 
