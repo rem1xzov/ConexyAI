@@ -36,6 +36,9 @@ builder.Services.AddSignalR(options =>
     // Must stay >= 2x KeepAliveInterval; 120s tolerates background-tab timer throttling.
     options.ClientTimeoutInterval = TimeSpan.FromSeconds(120);
 });
+// STREAM_SCOPE_TAG: добавлено 2026-09-24 — ревью H6: каждое событие группы task_{id} несёт {id}
+// последним аргументом, чтобы клиент раскладывал поток по своим ходам (см. ScopeTaggingHubContext).
+builder.Services.AddSingleton<Microsoft.AspNetCore.SignalR.IHubContext<ConexyHub>, ScopeTaggingHubContext>();
 
 // CORS: the production frontend is served from https://conexyai.ru (and www) by nginx and
 // calls the API same-origin via the /api + /hubs proxy, so CORS mainly matters for the local
@@ -203,6 +206,12 @@ builder.Services.AddScoped<IUserMemoryService, UserMemoryService>();
 builder.Services.AddSingleton<IMemoryExtractionQueue, MemoryExtractionQueue>();
 // INCOGNITO_CHAT: добавлено 2026-09-20
 builder.Services.AddSingleton<IIncognitoChatStore, IncognitoChatStore>();
+// INCOGNITO_CHAT: добавлено 2026-09-24 — ревью M7: файлы просроченных инкогнито-тредов удаляются.
+builder.Services.AddHostedService<IncognitoCleanupService>();
+// CHAT_OWNERSHIP: добавлено 2026-09-24 — ревью C1: владелец каждого chat id.
+builder.Services.AddScoped<IChatAccessService, ChatAccessService>();
+// USER_PREFERENCES: добавлено 2026-09-24 — пользовательские инструкции и переключатель памяти.
+builder.Services.AddScoped<IUserPreferencesService, UserPreferencesService>();
 // RAG: добавлено 2026-09-17
 builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
@@ -215,7 +224,11 @@ builder.Services.AddHostedService<SandboxIdleCleanupService>();
 builder.Services.AddScoped<ISupportRepository, SupportRepository>();
 builder.Services.AddScoped<ISupportService, SupportService>();
 
+// WORKSPACE_JAIL: добавлено 2026-09-24 — ревью C2: общий слот команды песочницы на воркспейс.
+builder.Services.AddSingleton<ISandboxActivity, SandboxActivity>();
 builder.Services.AddSingleton<IConexyWorkspaceService, ConexyWorkspaceService>();
+// SANDBOX_TERMINAL: добавлено 2026-09-24 — ТЗ 2, §6: построчный терминал в песочнице.
+builder.Services.AddSingleton<ISandboxTerminalService, SandboxTerminalService>();
 builder.Services.AddSingleton<IWorkspacePathValidator, WorkspacePathValidator>();
 builder.Services.AddSingleton<IConexyEditorStateService, ConexyEditorStateService>();
 builder.Services.AddSingleton<IIdeTerminalService, IdeTerminalService>();

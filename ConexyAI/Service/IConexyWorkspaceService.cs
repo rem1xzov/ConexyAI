@@ -22,7 +22,6 @@ public interface IConexyWorkspaceService
     Task<FileWriteResult> DeleteFileAsync(Guid chatId, string relativePath, CancellationToken ct = default);
     Task<FilePatchResult> PatchFileAsync(Guid chatId, string relativePath, string searchBlock, string replaceBlock, CancellationToken ct = default);
     Task<FileListResult> ListFilesAsync(Guid chatId, string relativeDirectory = "", CancellationToken ct = default);
-    Task<CommandExecResult> ExecuteCommandAsync(Guid chatId, string command, string? workingDirectory = null, CancellationToken ct = default);
 
     /// <summary>Clones a repository into the task workspace using a user-supplied access token.</summary>
     Task<GitOperationResult> GitCloneAsync(Guid chatId, string repoUrl, string token, string? targetFolder = null, string? branch = null, CancellationToken ct = default);

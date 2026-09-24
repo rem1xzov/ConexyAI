@@ -11,22 +11,32 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
 {
     private readonly string _baseWorkspacesDir;
     private readonly ILogger<ConexyWorkspaceService> _logger;
+    // WORKSPACE_JAIL: добавлено 2026-09-24 — git-операции на хосте не должны идти параллельно с
+    // командой песочницы в том же воркспейсе (та могла бы подменить .git/config на симлинк).
+    private readonly ISandboxActivity _sandboxActivity;
 
-    public ConexyWorkspaceService(IOptions<WorkspaceOptions> options, ILogger<ConexyWorkspaceService> logger)
+    public ConexyWorkspaceService(
+        IOptions<WorkspaceOptions> options,
+        ILogger<ConexyWorkspaceService> logger,
+        ISandboxActivity? sandboxActivity = null)
     {
         _logger = logger;
+        _sandboxActivity = sandboxActivity ?? new SandboxActivity();
         var configured = options.Value.RootPath;
 
         // Isolated storage outside the repository. An empty RootPath falls back to a
         // per-user path under %LOCALAPPDATA% so agent artifacts never enter the source tree.
-        _baseWorkspacesDir = string.IsNullOrWhiteSpace(configured)
+        var baseDir = string.IsNullOrWhiteSpace(configured)
             ? Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "ConexyAI",
                 "workspaces")
             : Path.GetFullPath(configured);
 
-        Directory.CreateDirectory(_baseWorkspacesDir);
+        Directory.CreateDirectory(baseDir);
+        // WORKSPACE_JAIL: the base itself may legitimately be a symlink (a mounted volume); every
+        // containment check compares REAL paths, so the base is stored in its real form.
+        _baseWorkspacesDir = WorkspaceJail.GetRealPath(baseDir);
         logger.LogInformation("Agent workspaces root: {WorkspaceRoot}", _baseWorkspacesDir);
 
         MigrateLegacyWorkspaces(logger);
@@ -56,10 +66,10 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             if (!File.Exists(resolvedPath))
                 return new FileReadResult(false, null, $"File '{relativePath}' not found.");
 
-            var content = await File.ReadAllTextAsync(resolvedPath, ct);
+            var content = await WorkspaceJail.ReadAllTextAsync(GetTaskWorkspacePath(chatId), relativePath, ct);
             return new FileReadResult(true, content, null);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return new FileReadResult(false, null, ex.Message);
         }
@@ -69,18 +79,10 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
     {
         try
         {
-            var resolvedPath = ResolveSafePath(chatId, relativePath);
-            var dir = Path.GetDirectoryName(resolvedPath);
-
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-
-            await File.WriteAllTextAsync(resolvedPath, content, ct);
+            await WorkspaceJail.WriteAllTextAsync(GetTaskWorkspacePath(chatId), relativePath, content, ct);
             return new FileWriteResult(true, relativePath, null);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return new FileWriteResult(false, relativePath, ex.Message);
         }
@@ -95,9 +97,9 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             if (!File.Exists(resolvedPath))
                 return new FileBytesResult(false, null, $"File '{relativePath}' not found.");
 
-            return new FileBytesResult(true, await File.ReadAllBytesAsync(resolvedPath, ct), null);
+            return new FileBytesResult(true, await WorkspaceJail.ReadAllBytesAsync(GetTaskWorkspacePath(chatId), relativePath, ct), null);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return new FileBytesResult(false, null, ex.Message);
         }
@@ -108,17 +110,10 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
     {
         try
         {
-            var resolvedPath = ResolveSafePath(chatId, relativePath);
-            var dir = Path.GetDirectoryName(resolvedPath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-
-            await File.WriteAllBytesAsync(resolvedPath, content, ct);
+            await WorkspaceJail.WriteAllBytesAsync(GetTaskWorkspacePath(chatId), relativePath, content, ct);
             return new FileWriteResult(true, relativePath, null);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return new FileWriteResult(false, relativePath, ex.Message);
         }
@@ -135,7 +130,8 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             if (!File.Exists(resolvedPath))
                 return new FilePatchResult(false, relativePath, $"File '{relativePath}' not found.");
 
-            var content = await File.ReadAllTextAsync(resolvedPath, ct);
+            var root = GetTaskWorkspacePath(chatId);
+            var content = await WorkspaceJail.ReadAllTextAsync(root, relativePath, ct);
             var index = content.IndexOf(searchBlock, StringComparison.Ordinal);
             if (index < 0)
                 return new FilePatchResult(false, relativePath, "search_block not found. Patch requires an exact, unambiguous match.");
@@ -146,10 +142,10 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
                 return new FilePatchResult(false, relativePath, "search_block matched multiple locations. Include more surrounding context for a unique match.");
 
             var patched = content.Remove(index, searchBlock.Length).Insert(index, replaceBlock);
-            await File.WriteAllTextAsync(resolvedPath, patched, ct);
+            await WorkspaceJail.WriteAllTextAsync(root, relativePath, patched, ct);
             return new FilePatchResult(true, relativePath, null, 1);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return new FilePatchResult(false, relativePath, ex.Message);
         }
@@ -176,12 +172,15 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
     {
         try
         {
+            var root = GetTaskWorkspacePath(chatId);
             var resolvedPath = ResolveSafePath(chatId, relativeDirectory);
             if (!Directory.Exists(resolvedPath))
                 return Task.FromResult(new FileListResult(false, Array.Empty<string>(), $"Directory '{relativeDirectory}' not found."));
 
-            var files = Directory.EnumerateFiles(resolvedPath, "*", SearchOption.AllDirectories)
-                .Select(f => Path.GetRelativePath(GetTaskWorkspacePath(chatId), f))
+            // WORKSPACE_JAIL: symlinks are neither listed nor followed.
+            var realRoot = WorkspaceJail.GetRealPath(root);
+            var files = Directory.EnumerateFiles(resolvedPath, "*", WorkspaceJail.NoLinks(recursive: true))
+                .Select(f => Path.GetRelativePath(realRoot, f))
                 .ToList();
 
             return Task.FromResult(new FileListResult(true, files, null));
@@ -192,24 +191,23 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         }
     }
 
-    public async Task<CommandExecResult> ExecuteCommandAsync(Guid chatId, string command, string? workingDirectory = null, CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(command))
-            return new CommandExecResult(false, -1, string.Empty, "Command is empty.");
-
-        var dir = string.IsNullOrWhiteSpace(workingDirectory)
-            ? GetTaskWorkspacePath(chatId)
-            : ResolveSafePath(chatId, workingDirectory);
-
-        return await RunShellAsync(command, dir, secret: null, ct);
-    }
+    // WORKSPACE_JAIL: ExecuteCommandAsync удалён 2026-09-24 — он запускал bash прямо на хосте бэкенда
+    // в каталоге воркспейса. Вызывающих не осталось (terminal_exec давно идёт через песочницу), а
+    // сам метод был готовым способом выполнить что угодно вне Docker.
 
     public Task CleanupWorkspaceAsync(Guid chatId, CancellationToken ct = default)
     {
         var path = Path.Combine(_baseWorkspacesDir, chatId.ToString("N"));
         if (Directory.Exists(path))
         {
+            // Directory.Delete removes symlinks themselves and never recurses into their targets.
             Directory.Delete(path, recursive: true);
+        }
+
+        var runConfig = GetRunConfigPath(chatId);
+        if (File.Exists(runConfig))
+        {
+            File.Delete(runConfig);
         }
         return Task.CompletedTask;
     }
@@ -281,7 +279,7 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             var fileName = Path.GetFileName(attachment.FileName);
             if (string.IsNullOrWhiteSpace(fileName))
             {
-                _logger.LogWarning("Skipping attachment with an unusable file name '{FileName}' for chat {ChatId}", attachment.FileName, chatId);
+                _logger.LogWarning("Skipping attachment with an unusable file name for chat {ChatId}", chatId);
                 failed.Add(attachment.FileName ?? "(unnamed)");
                 continue;
             }
@@ -289,7 +287,9 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             try
             {
                 var bytes = Convert.FromBase64String(attachment.ContentBase64?.Trim() ?? string.Empty);
-                await File.WriteAllBytesAsync(Path.Combine(workspaceDir, fileName), bytes, ct);
+                // WORKSPACE_JAIL: an earlier sandbox command may have left a symlink with this very
+                // name; the jail refuses to write through it.
+                await WorkspaceJail.WriteAllBytesAsync(workspaceDir, fileName, bytes, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -298,7 +298,7 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             catch (Exception ex)
             {
                 // Corrupt base64, an illegal name, a full disk — one bad file must not abort the run.
-                _logger.LogError(ex, "Failed to save attachment '{FileName}' for chat {ChatId}", fileName, chatId);
+                _logger.LogError(ex, "Failed to save an attachment for chat {ChatId}", chatId);
                 failed.Add(fileName);
             }
         }
@@ -320,6 +320,15 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         if (string.IsNullOrWhiteSpace(token))
             return new GitOperationResult(false, null, "GitHub token is required.");
 
+        var (owner, repo) = ParseGitHubRepo(repoUrl);
+        if (owner is null || repo is null)
+            return new GitOperationResult(false, null, "Only GitHub repositories (owner/repo) are supported.");
+
+        if (!string.IsNullOrWhiteSpace(branch) && !IsSafeRefName(branch))
+            return new GitOperationResult(false, null, "Invalid branch name.");
+
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
+
         var workspaceDir = GetTaskWorkspacePath(chatId);
         var cloneDir = workspaceDir;
 
@@ -333,13 +342,17 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             return new GitOperationResult(false, null, "Workspace is not empty. Clone into a fresh workspace.");
         }
 
-        if (Directory.Exists(Path.Combine(cloneDir, ".git")))
+        if (Directory.Exists(Path.Combine(cloneDir, ".git")) || File.Exists(Path.Combine(cloneDir, ".git")))
             return new GitOperationResult(false, null, "Target already contains a git repository.");
 
-        var authenticatedUrl = BuildAuthenticatedUrl(repoUrl, token);
-        var args = "clone";
-        if (!string.IsNullOrWhiteSpace(branch)) args += $" --branch {Quote(branch)} --single-branch";
-        args += $" --depth 1 {Quote(authenticatedUrl)} .";
+        // GIT_HARDENING: the token travels as an HTTP header in the process environment, never in the
+        // remote URL — so it is not written into .git/config (review M10).
+        var args = new List<string> { "clone", "--depth", "1" };
+        if (!string.IsNullOrWhiteSpace(branch))
+        {
+            args.AddRange(new[] { "--branch", branch, "--single-branch" });
+        }
+        args.AddRange(new[] { "--", PlainRemoteUrl(owner, repo), "." });
 
         var result = await RunGitAsync(cloneDir, args, token, ct, TimeSpan.FromSeconds(120));
         if (!result.Success)
@@ -352,9 +365,17 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
     {
         if (string.IsNullOrWhiteSpace(branchName))
             return new GitOperationResult(false, null, "Branch name is required.");
+        if (!IsSafeRefName(branchName))
+            return new GitOperationResult(false, null, "Invalid branch name.");
+
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
 
         var workspaceDir = GetTaskWorkspacePath(chatId);
-        var result = await RunGitAsync(workspaceDir, $"checkout -B {Quote(branchName)}", secret: null, ct, TimeSpan.FromSeconds(60));
+        var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
+        if (unsafeRepo is not null)
+            return new GitOperationResult(false, null, unsafeRepo);
+
+        var result = await RunGitAsync(workspaceDir, new[] { "checkout", "-B", branchName }, token: null, ct, TimeSpan.FromSeconds(60));
         if (!result.Success)
             return new GitOperationResult(false, null, result.StdErr);
 
@@ -375,52 +396,69 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
 
         if (string.IsNullOrWhiteSpace(branch))
             return new GitOperationResult(false, null, "Target branch is required.");
+        if (!IsSafeRefName(branch))
+            return new GitOperationResult(false, null, "Invalid branch name.");
 
         if (string.IsNullOrWhiteSpace(token))
             return new GitOperationResult(false, null, "GitHub token is required.");
 
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
+
         var workspaceDir = GetTaskWorkspacePath(chatId);
 
         // Init if the workspace is not yet a repository (agent wrote files without cloning).
-        if (!Directory.Exists(Path.Combine(workspaceDir, ".git")))
+        if (!Directory.Exists(Path.Combine(workspaceDir, ".git")) && !File.Exists(Path.Combine(workspaceDir, ".git")))
         {
-            var init = await RunGitAsync(workspaceDir, "init", secret: null, ct, TimeSpan.FromSeconds(60));
+            var init = await RunGitAsync(workspaceDir, new[] { "init" }, token: null, ct, TimeSpan.FromSeconds(60));
             if (!init.Success) return new GitOperationResult(false, null, init.StdErr);
         }
 
-        var configName = await RunGitAsync(workspaceDir, "config user.name \"Conexy AI Agent\"", secret: null, ct, TimeSpan.FromSeconds(60));
-        var configEmail = await RunGitAsync(workspaceDir, "config user.email \"agent@conexy.ai\"", secret: null, ct, TimeSpan.FromSeconds(60));
+        var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
+        if (unsafeRepo is not null)
+            return new GitOperationResult(false, null, unsafeRepo);
+
+        var configName = await RunGitAsync(workspaceDir, new[] { "config", "user.name", "Conexy AI Agent" }, token: null, ct, TimeSpan.FromSeconds(60));
+        var configEmail = await RunGitAsync(workspaceDir, new[] { "config", "user.email", "agent@conexy.ai" }, token: null, ct, TimeSpan.FromSeconds(60));
         if (!configName.Success || !configEmail.Success)
             return new GitOperationResult(false, null, "Failed to configure git identity.");
 
-        var (owner, repo) = await ResolveRepositoryAsync(chatId, repoUrl, ct);
+        var (owner, repo) = await ResolveRepositoryCoreAsync(workspaceDir, repoUrl, ct);
         if (owner == null || repo == null)
             return new GitOperationResult(false, null, "Could not determine the target GitHub repository. Pass a repo URL or clone a repository first.");
 
-        // Point origin at the authenticated URL (refreshes the token on subsequent pushes).
-        var authenticatedUrl = BuildAuthenticatedUrl($"{owner}/{repo}", token);
-        var hasRemote = await RunGitAsync(workspaceDir, "remote get-url origin", secret: null, ct, TimeSpan.FromSeconds(60));
-        var remoteArgs = hasRemote.Success ? $"remote set-url origin {Quote(authenticatedUrl)}" : $"remote add origin {Quote(authenticatedUrl)}";
-        var remote = await RunGitAsync(workspaceDir, remoteArgs, secret: token, ct, TimeSpan.FromSeconds(60));
+        // GIT_HARDENING: origin is a plain URL; the token is sent per command (review M10).
+        var remoteUrl = PlainRemoteUrl(owner, repo);
+        var hasRemote = await RunGitAsync(workspaceDir, new[] { "remote", "get-url", "origin" }, token: null, ct, TimeSpan.FromSeconds(60));
+        var remoteArgs = hasRemote.Success
+            ? new[] { "remote", "set-url", "origin", remoteUrl }
+            : new[] { "remote", "add", "origin", remoteUrl };
+        var remote = await RunGitAsync(workspaceDir, remoteArgs, token: null, ct, TimeSpan.FromSeconds(60));
         if (!remote.Success) return new GitOperationResult(false, null, remote.StdErr);
 
-        var checkout = await RunGitAsync(workspaceDir, $"checkout -B {Quote(branch)}", secret: null, ct, TimeSpan.FromSeconds(60));
+        var checkout = await RunGitAsync(workspaceDir, new[] { "checkout", "-B", branch }, token: null, ct, TimeSpan.FromSeconds(60));
         if (!checkout.Success) return new GitOperationResult(false, null, checkout.StdErr);
 
-        var status = await RunGitAsync(workspaceDir, "status --porcelain", secret: null, ct, TimeSpan.FromSeconds(60));
+        var status = await RunGitAsync(workspaceDir, new[] { "status", "--porcelain" }, token: null, ct, TimeSpan.FromSeconds(60));
         if (string.IsNullOrWhiteSpace(status.StdOut))
             return new GitOperationResult(true, "No changes to commit.", null);
 
-        var addArgs = changedFiles is { Count: > 0 }
-            ? $"add -- {string.Join(" ", changedFiles.Select(Quote))}"
-            : "add -A";
-        var add = await RunGitAsync(workspaceDir, addArgs, secret: null, ct, TimeSpan.FromSeconds(60));
+        var addArgs = new List<string> { "add" };
+        if (changedFiles is { Count: > 0 })
+        {
+            addArgs.Add("--");
+            addArgs.AddRange(changedFiles);
+        }
+        else
+        {
+            addArgs.Add("-A");
+        }
+        var add = await RunGitAsync(workspaceDir, addArgs, token: null, ct, TimeSpan.FromSeconds(60));
         if (!add.Success) return new GitOperationResult(false, null, add.StdErr);
 
-        var commit = await RunGitAsync(workspaceDir, $"commit -m {Quote(commitMessage)}", secret: null, ct, TimeSpan.FromSeconds(60));
+        var commit = await RunGitAsync(workspaceDir, new[] { "commit", "-m", commitMessage }, token: null, ct, TimeSpan.FromSeconds(60));
         if (!commit.Success) return new GitOperationResult(false, null, commit.StdErr);
 
-        var push = await RunGitAsync(workspaceDir, $"push -u origin {Quote(branch)}", secret: token, ct, TimeSpan.FromSeconds(120));
+        var push = await RunGitAsync(workspaceDir, new[] { "push", "-u", "origin", branch }, token, ct, TimeSpan.FromSeconds(120));
         if (!push.Success) return new GitOperationResult(false, null, push.StdErr);
 
         return new GitOperationResult(true, "Changes pushed successfully.", null);
@@ -433,46 +471,160 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             return ParseGitHubRepo(repoUrl);
         }
 
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
         var workspaceDir = GetTaskWorkspacePath(chatId);
-        var remote = await RunGitAsync(workspaceDir, "remote get-url origin", secret: null, ct, TimeSpan.FromSeconds(60));
+        if (await PrepareRepositoryAsync(workspaceDir, ct) is not null)
+            return (null, null);
+
+        return await ResolveRepositoryCoreAsync(workspaceDir, repoUrl, ct);
+    }
+
+    private async Task<(string? Owner, string? Repo)> ResolveRepositoryCoreAsync(string workspaceDir, string? repoUrl, CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(repoUrl))
+        {
+            return ParseGitHubRepo(repoUrl);
+        }
+
+        var remote = await RunGitAsync(workspaceDir, new[] { "remote", "get-url", "origin" }, token: null, ct, TimeSpan.FromSeconds(60));
         return remote.Success && !string.IsNullOrWhiteSpace(remote.StdOut)
             ? ParseGitHubRepo(remote.StdOut.Trim())
             : (null, null);
     }
 
-    private async Task<CommandExecResult> RunShellAsync(string command, string workingDir, string? secret, CancellationToken ct)
-    {
-        var (fileName, args) = OperatingSystem.IsWindows()
-            ? ("powershell.exe", $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command {Quote(command)}")
-            : ("bash", $"-lc {Quote(command)}");
+    // GIT_HARDENING: добавлено 2026-09-24.
+    //
+    // Git здесь запускается НА ХОСТЕ бэкенда, в каталоге, который агент полностью контролирует изнутри
+    // песочницы. Любой из этих файлов превращал «закоммить изменения» в выполнение кода на хосте с его
+    // окружением (секреты): .git/hooks/pre-commit, core.fsmonitor (выполняется даже на `git status`),
+    // credential.helper, gpg.program, фильтры clean/smudge из .gitattributes, include.path и т.п.
+    // Поэтому: хуки выключены, опасные ключи переопределены конфигом уровня команды, а в
+    // .git/config остаются только ключи из белого списка; .git и .git/config — только настоящие
+    // файлы, не симлинки и не gitdir-указатели.
 
-        return await RunProcessAsync(fileName, args, workingDir, secret, ct, TimeSpan.FromSeconds(60));
+    private static readonly System.Text.RegularExpressions.Regex AllowedRepoConfigKey = new(
+        @"^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks|autocrlf|eol|safecrlf|quotepath|compression|bigfilethreshold)" +
+        @"|remote\..+\.(url|fetch|tagopt|prune)" +
+        @"|branch\..+\.(remote|merge|rebase)" +
+        @"|user\.(name|email)" +
+        @"|init\.defaultbranch" +
+        @"|extensions\.(objectformat|refstorage)" +
+        @"|submodule\..+\.(url|path|active|branch)" +
+        @"|(pull\.(rebase|ff)|push\.default|fetch\.prune|merge\.(ff|conflictstyle)|gc\.auto)" +
+        @"|(advice|color|i18n)\..+)$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Makes a workspace repository safe to run host git in. Returns an error message when the layout
+    /// itself is unsafe (the operation must not run), or null when it is ready.
+    /// </summary>
+    private async Task<string?> PrepareRepositoryAsync(string workspaceDir, CancellationToken ct)
+    {
+        var gitDir = Path.Combine(workspaceDir, ".git");
+        if (File.Exists(gitDir) || new DirectoryInfo(gitDir).LinkTarget is not null)
+            return "Unsafe repository layout: .git must be a regular directory.";
+        if (!Directory.Exists(gitDir))
+            return "The workspace is not a git repository.";
+
+        var configPath = Path.Combine(gitDir, "config");
+        if (new FileInfo(configPath).LinkTarget is not null || Directory.Exists(configPath))
+            return "Unsafe repository layout: .git/config must be a regular file.";
+        if (!File.Exists(configPath))
+            return null;
+
+        var list = await RunGitAsync(workspaceDir, new[] { "config", "--file", configPath, "--name-only", "--list" }, token: null, ct, TimeSpan.FromSeconds(30));
+        if (!list.Success)
+            return "Could not read the repository configuration.";
+
+        foreach (var key in list.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (AllowedRepoConfigKey.IsMatch(key))
+                continue;
+
+            _logger.LogWarning("Removing non-allowlisted git config key '{Key}' from a workspace repository.", key);
+            var unset = await RunGitAsync(workspaceDir, new[] { "config", "--file", configPath, "--unset-all", key }, token: null, ct, TimeSpan.FromSeconds(30));
+            if (!unset.Success)
+                return "Could not sanitize the repository configuration.";
+        }
+
+        // Review M10: older runs stored the token inside remote URLs. Rewrite them credential-free.
+        var urls = await RunGitAsync(workspaceDir, new[] { "config", "--file", configPath, "--get-regexp", @"^remote\..*\.url$" }, token: null, ct, TimeSpan.FromSeconds(30));
+        foreach (var line in urls.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var space = line.IndexOf(' ');
+            if (space <= 0) continue;
+            var key = line[..space];
+            var value = line[(space + 1)..];
+            if (!value.Contains('@')) continue;
+
+            var (owner, repo) = ParseGitHubRepo(value);
+            var replacement = owner is not null && repo is not null ? PlainRemoteUrl(owner, repo) : null;
+            var fix = replacement is not null
+                ? await RunGitAsync(workspaceDir, new[] { "config", "--file", configPath, key, replacement }, token: null, ct, TimeSpan.FromSeconds(30))
+                : await RunGitAsync(workspaceDir, new[] { "config", "--file", configPath, "--unset-all", key }, token: null, ct, TimeSpan.FromSeconds(30));
+            if (!fix.Success)
+                return "Could not sanitize the repository remote.";
+        }
+
+        return null;
     }
 
-    private async Task<CommandExecResult> RunGitAsync(string workingDir, string arguments, string? secret, CancellationToken ct, TimeSpan? timeout = null)
-    {
-        return await RunProcessAsync("git", arguments, workingDir, secret, ct, timeout);
-    }
-
-    private async Task<CommandExecResult> RunProcessAsync(
-        string fileName,
-        string arguments,
+    private async Task<CommandExecResult> RunGitAsync(
         string workingDir,
-        string? secret,
+        IReadOnlyList<string> arguments,
+        string? token,
         CancellationToken ct,
         TimeSpan? timeout = null)
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = fileName,
-            Arguments = arguments,
+            FileName = "git",
             WorkingDirectory = workingDir,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        // GIT_HARDENING: no system/global config, no prompts, no helpers that could run programs.
         startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+        startInfo.Environment["GIT_CONFIG_GLOBAL"] = OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
+        startInfo.Environment["GIT_ASKPASS"] = OperatingSystem.IsWindows() ? "cmd /c exit 1" : "false";
+        startInfo.Environment["SSH_ASKPASS"] = OperatingSystem.IsWindows() ? "cmd /c exit 1" : "false";
+        startInfo.Environment["GIT_EDITOR"] = OperatingSystem.IsWindows() ? "cmd /c exit 0" : "true";
+        startInfo.Environment["GIT_PAGER"] = "cat";
+        startInfo.Environment["GIT_ALLOW_PROTOCOL"] = "https";
+
+        // Command-scope configuration outranks anything left in the repository's own config.
+        var config = new List<(string Key, string Value)>
+        {
+            ("core.hooksPath", OperatingSystem.IsWindows() ? "NUL" : "/dev/null"),
+            ("core.fsmonitor", "false"),
+            ("core.pager", "cat"),
+            ("credential.helper", string.Empty),
+            ("commit.gpgSign", "false"),
+            ("tag.gpgSign", "false"),
+            ("protocol.allow", "never"),
+            ("protocol.https.allow", "always"),
+            ("safe.directory", workingDir),
+        };
+        if (!string.IsNullOrEmpty(token))
+        {
+            var basic = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"x-access-token:{token}"));
+            config.Add(("http.https://github.com/.extraheader", $"AUTHORIZATION: basic {basic}"));
+        }
+
+        startInfo.Environment["GIT_CONFIG_COUNT"] = config.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        for (var i = 0; i < config.Count; i++)
+        {
+            startInfo.Environment[$"GIT_CONFIG_KEY_{i}"] = config[i].Key;
+            startInfo.Environment[$"GIT_CONFIG_VALUE_{i}"] = config[i].Value;
+        }
 
         using var process = new Process { StartInfo = startInfo };
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -490,8 +642,8 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
 
             await process.WaitForExitAsync(timeoutCts.Token);
 
-            var stdOut = Redact(await stdOutTask, secret);
-            var stdErr = Redact(await stdErrTask, secret);
+            var stdOut = Redact(await stdOutTask, token);
+            var stdErr = Redact(await stdErrTask, token);
 
             return new CommandExecResult(
                 Success: process.ExitCode == 0,
@@ -506,7 +658,7 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             var seconds = timeout?.TotalSeconds ?? 60;
             return new CommandExecResult(false, -1, string.Empty, $"Command timed out after {seconds} seconds.");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return new CommandExecResult(false, -1, string.Empty, ex.Message);
         }
@@ -525,38 +677,47 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         return redacted;
     }
 
-    // NOTE: The authenticated URL embeds the token so that `git` can authenticate
-    // without an interactive prompt. The token never appears in logs or client
-    // responses because RunProcessAsync redacts it from stdout/stderr. For a
-    // stricter isolation, a credential helper would keep the token out of argv.
-    private static string BuildAuthenticatedUrl(string repoUrl, string token)
-    {
-        var (owner, repo) = ParseGitHubRepo(repoUrl);
-        return $"https://x-access-token:{Uri.EscapeDataString(token)}@github.com/{owner}/{repo}.git";
-    }
+    private static string PlainRemoteUrl(string owner, string repo) => $"https://github.com/{owner}/{repo}.git";
+
+    private static readonly System.Text.RegularExpressions.Regex GitHubNamePart =
+        new(@"^[A-Za-z0-9_.-]{1,100}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private static (string? Owner, string? Repo) ParseGitHubRepo(string repoUrl)
     {
         var value = repoUrl.Trim();
         if (string.IsNullOrWhiteSpace(value)) return (null, null);
 
-        // Handles: https://github.com/owner/repo(.git), git@github.com:owner/repo.git, owner/repo
-        var path = value
-            .Replace("git@github.com:", "", StringComparison.OrdinalIgnoreCase)
-            .Replace("https://github.com/", "", StringComparison.OrdinalIgnoreCase)
-            .Replace("http://github.com/", "", StringComparison.OrdinalIgnoreCase)
-            .TrimEnd('/');
+        // Handles: https://github.com/owner/repo(.git), https://user:token@github.com/owner/repo,
+        // git@github.com:owner/repo.git, owner/repo
+        var path = value;
+        var at = path.IndexOf("github.com", StringComparison.OrdinalIgnoreCase);
+        if (at >= 0)
+        {
+            path = path[(at + "github.com".Length)..].TrimStart(':', '/');
+        }
 
+        path = path.TrimEnd('/');
         if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
             path = path[..^4];
 
         var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length < 2) return (null, null);
 
-        return (segments[^2], segments[^1]);
+        var owner = segments[^2];
+        var repo = segments[^1];
+        if (!GitHubNamePart.IsMatch(owner) || !GitHubNamePart.IsMatch(repo) || owner.StartsWith('-') || repo.StartsWith('-') || repo is "." or "..")
+            return (null, null);
+
+        return (owner, repo);
     }
 
-    private static string Quote(string value) => $"\"{value.Replace("\"", "\\\"")}\"";
+    /// <summary>A branch name that cannot be mistaken for an option or escape the refs namespace.</summary>
+    private static bool IsSafeRefName(string name) =>
+        name.Length <= 200
+        && !name.StartsWith('-')
+        && !name.Contains("..", StringComparison.Ordinal)
+        && !name.EndsWith(".lock", StringComparison.OrdinalIgnoreCase)
+        && System.Text.RegularExpressions.Regex.IsMatch(name, @"^[A-Za-z0-9._/-]+$");
 
     /// <summary>
     /// One-time migration: if a legacy sandbox folder still exists inside the
@@ -629,32 +790,16 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
     }
 
     // Защита от выхода за пределы рабочей папки задачи (Path Jail).
-    private string ResolveSafePath(Guid chatId, string relativePath)
-    {
-        var root = Path.GetFullPath(GetTaskWorkspacePath(chatId));
-        var fullPath = Path.GetFullPath(Path.Combine(root, relativePath));
-
-        // SANDBOX: добавлено 2026-09-17 — stricter, separator-aware prefix check.
-        var rootWithSeparator = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!fullPath.Equals(root, StringComparison.OrdinalIgnoreCase) &&
-            !fullPath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new UnauthorizedAccessException("Path traversal attempt detected: access outside workspace is prohibited.");
-        }
-
-        return fullPath;
-    }
+    // WORKSPACE_JAIL: изменено 2026-09-24 — ревью C2: проверяется РЕАЛЬНЫЙ путь (симлинки разрешены).
+    private string ResolveSafePath(Guid chatId, string relativePath) =>
+        WorkspaceJail.Resolve(GetTaskWorkspacePath(chatId), relativePath);
 
     // SANDBOX: добавлено 2026-09-17 — validates an already-resolved workspace path before
     // it is mapped into the Docker sandbox (Path Jail).
     public string ValidateWorkspacePath(string fullPath)
     {
-        var root = Path.GetFullPath(_baseWorkspacesDir);
-        var resolved = Path.GetFullPath(fullPath);
-        var rootWithSeparator = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-
-        if (!resolved.Equals(root, StringComparison.OrdinalIgnoreCase) &&
-            !resolved.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
+        var resolved = WorkspaceJail.GetRealPath(fullPath);
+        if (!WorkspaceJail.IsInside(_baseWorkspacesDir, resolved))
         {
             throw new UnauthorizedAccessException("Path traversal attempt detected: access outside workspace is prohibited.");
         }

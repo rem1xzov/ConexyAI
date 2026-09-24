@@ -17,11 +17,21 @@ namespace ConexyAI.Controller;
 public class IdeController : ControllerBase
 {
     private readonly IIdeFileService _fileService;
+    // CHAT_OWNERSHIP: добавлено 2026-09-24 — ревью C1: раньше id пользователя выбрасывался
+    // (TryGetUserId(out _)), и чужой воркспейс читался и правился по одному chatId.
+    private readonly IChatAccessService _chatAccess;
+    private readonly IConexyWorkspaceService _workspace;
     private readonly ILogger<IdeController> _logger;
 
-    public IdeController(IIdeFileService fileService, ILogger<IdeController> logger)
+    public IdeController(
+        IIdeFileService fileService,
+        IChatAccessService chatAccess,
+        IConexyWorkspaceService workspace,
+        ILogger<IdeController> logger)
     {
         _fileService = fileService;
+        _chatAccess = chatAccess;
+        _workspace = workspace;
         _logger = logger;
     }
 
@@ -32,8 +42,15 @@ public class IdeController : ControllerBase
         [FromQuery] string path = "",
         CancellationToken ct = default)
     {
-        if (!TryGetUserId(out _))
+        if (!TryGetUserId(out var userId))
             return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        if (!await _chatAccess.CanReadAsync(userId, sessionId, ct))
+            return Forbidden();
+
+        // Reading never creates the workspace: a brand-new chat simply has no files yet.
+        if (_workspace.GetTaskWorkspacePathIfExists(sessionId) is null)
+            return Ok(Array.Empty<FileNode>());
 
         try
         {
@@ -52,11 +69,17 @@ public class IdeController : ControllerBase
         [FromQuery] string path,
         CancellationToken ct = default)
     {
-        if (!TryGetUserId(out _))
+        if (!TryGetUserId(out var userId))
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
         if (string.IsNullOrWhiteSpace(path))
             return BadRequest(new { error = "Query parameter 'path' is required." });
+
+        if (!await _chatAccess.CanReadAsync(userId, sessionId, ct))
+            return Forbidden();
+
+        if (_workspace.GetTaskWorkspacePathIfExists(sessionId) is null)
+            return NotFound(new { error = $"'{path}' not found." });
 
         try
         {
@@ -80,6 +103,10 @@ public class IdeController : ControllerBase
 
         if (request == null || string.IsNullOrWhiteSpace(request.Path))
             return BadRequest(new { error = "Invalid request body." });
+
+        var denied = await AuthorizeWriteAsync(sessionId, ct);
+        if (denied is not null)
+            return denied;
 
         try
         {
@@ -105,6 +132,10 @@ public class IdeController : ControllerBase
         if (request == null || string.IsNullOrWhiteSpace(request.Path))
             return BadRequest(new { error = "Invalid request body." });
 
+        var denied = await AuthorizeWriteAsync(sessionId, ct);
+        if (denied is not null)
+            return denied;
+
         try
         {
             await _fileService.CreateAsync(sessionId, request.Path, request.IsDirectory, ct);
@@ -128,6 +159,10 @@ public class IdeController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(path))
             return BadRequest(new { error = "Query parameter 'path' is required." });
+
+        var denied = await AuthorizeOwnerAsync(sessionId, ct);
+        if (denied is not null)
+            return denied;
 
         try
         {
@@ -153,6 +188,10 @@ public class IdeController : ControllerBase
         if (request == null || string.IsNullOrWhiteSpace(request.OldPath) || string.IsNullOrWhiteSpace(request.NewPath))
             return BadRequest(new { error = "Invalid request body." });
 
+        var denied = await AuthorizeOwnerAsync(sessionId, ct);
+        if (denied is not null)
+            return denied;
+
         try
         {
             await _fileService.RenameAsync(sessionId, request.OldPath, request.NewPath, ct);
@@ -164,16 +203,45 @@ public class IdeController : ControllerBase
         }
     }
 
+    private ObjectResult Forbidden() =>
+        StatusCode(StatusCodes.Status403Forbidden, new { error = "CHAT_FORBIDDEN" });
+
+    /// <summary>Owner check for writes; a brand-new chat is claimed by the caller.</summary>
+    private async Task<IActionResult?> AuthorizeWriteAsync(Guid chatId, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        try
+        {
+            await _chatAccess.EnsureWritableAsync(userId, chatId, ct: ct);
+            return null;
+        }
+        catch (ChatAccessDeniedException)
+        {
+            return Forbidden();
+        }
+    }
+
+    /// <summary>Owner check for destructive operations on existing content.</summary>
+    private async Task<IActionResult?> AuthorizeOwnerAsync(Guid chatId, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        return await _chatAccess.GetAccessAsync(userId, chatId, ct) == ChatAccessKind.Owner ? null : Forbidden();
+    }
+
     private ActionResult MapError(Exception ex)
     {
         return ex switch
         {
+            // WORKSPACE_JAIL: a command is running in the workspace — retry later.
+            WorkspaceBusyException => Conflict(new { error = "WORKSPACE_BUSY" }),
             UnauthorizedAccessException => BadRequest(new { error = ex.Message }),
             FileNotFoundException => NotFound(new { error = ex.Message }),
             DirectoryNotFoundException => NotFound(new { error = ex.Message }),
             InvalidOperationException => Conflict(new { error = ex.Message }),
             IOException => BadRequest(new { error = ex.Message }),
-            _ => StatusCode(StatusCodes.Status500InternalServerError, new { error = ex.Message })
+            _ => StatusCode(StatusCodes.Status500InternalServerError, new { error = "INTERNAL_ERROR" })
         };
     }
 

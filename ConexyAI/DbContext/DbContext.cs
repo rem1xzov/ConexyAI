@@ -14,6 +14,9 @@ public class DbConexy : Microsoft.EntityFrameworkCore.DbContext
 
     public DbSet<ConexyChatMessageEntity> ChatMessages => Set<ConexyChatMessageEntity>();
 
+    // CHAT_OWNERSHIP: добавлено 2026-09-24 — владелец каждого chat id (ревью C1).
+    public DbSet<ChatEntity> Chats => Set<ChatEntity>();
+
     // GITHUB_OAUTH: добавлено 2026-09-19
     public DbSet<User> Users => Set<User>();
 
@@ -23,6 +26,9 @@ public class DbConexy : Microsoft.EntityFrameworkCore.DbContext
     // SUBSCRIPTION_TIERS: добавлено 2026-09-17
     public DbSet<UserMemoryFactEntity> UserMemoryFacts => Set<UserMemoryFactEntity>();
     public DbSet<UserUsageCounterEntity> UserUsageCounters => Set<UserUsageCounterEntity>();
+
+    // USER_PREFERENCES: добавлено 2026-09-24
+    public DbSet<UserPreferencesEntity> UserPreferences => Set<UserPreferencesEntity>();
 
     // RAG: добавлено 2026-09-17
     public DbSet<Document> Documents => Set<Document>();

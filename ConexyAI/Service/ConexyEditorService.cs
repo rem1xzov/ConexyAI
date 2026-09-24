@@ -100,7 +100,7 @@ public class ConexyEditorService : IConexyEditorService
         if (!File.Exists(fullPath))
             return Fail("file_not_found", $"File '{path}' not found.");
 
-        var bytes = await File.ReadAllBytesAsync(fullPath, ct);
+        var bytes = await WorkspaceJail.ReadAllBytesAsync(Root(taskId), fullPath, ct);
         if (IsBinary(bytes))
             return Fail("io_error", $"File '{path}' appears to be binary and cannot be displayed as text.");
 
@@ -144,11 +144,7 @@ public class ConexyEditorService : IConexyEditorService
         if (File.Exists(fullPath))
             return Fail("io_error", $"File '{path}' already exists. Use str_replace to modify it.");
 
-        var dir = Path.GetDirectoryName(fullPath);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-
-        await File.WriteAllTextAsync(fullPath, fileText, ct);
+        await WorkspaceJail.WriteAllTextAsync(Root(taskId), fullPath, fileText, ct);
         _editorState.PushUndo(taskId, path, new FileSnapshot(path, null, ExistedBefore: false));
         return Ok($"File '{path}' created.");
     }
@@ -162,7 +158,7 @@ public class ConexyEditorService : IConexyEditorService
         if (!File.Exists(fullPath))
             return Fail("file_not_found", $"File '{path}' not found.");
 
-        var bytes = await File.ReadAllBytesAsync(fullPath, ct);
+        var bytes = await WorkspaceJail.ReadAllBytesAsync(Root(taskId), fullPath, ct);
         if (IsBinary(bytes))
             return Fail("io_error", $"File '{path}' appears to be binary and cannot be edited as text.");
 
@@ -184,7 +180,7 @@ public class ConexyEditorService : IConexyEditorService
         var index = occurrences[0];
         var after = before.Remove(index, oldStr.Length).Insert(index, newStr ?? string.Empty);
 
-        await File.WriteAllTextAsync(fullPath, after, ct);
+        await WorkspaceJail.WriteAllTextAsync(Root(taskId), fullPath, after, ct);
         _editorState.PushUndo(taskId, path, new FileSnapshot(path, before, ExistedBefore: true));
 
         return Ok(BuildDiffContext(before, after, index));
@@ -199,7 +195,7 @@ public class ConexyEditorService : IConexyEditorService
         if (!File.Exists(fullPath))
             return Fail("file_not_found", $"File '{path}' not found.");
 
-        var text = await File.ReadAllTextAsync(fullPath, ct);
+        var text = await WorkspaceJail.ReadAllTextAsync(Root(taskId), fullPath, ct);
         if (IsBinary(Encoding.UTF8.GetBytes(text)))
             return Fail("io_error", $"File '{path}' appears to be binary and cannot be edited as text.");
 
@@ -209,7 +205,7 @@ public class ConexyEditorService : IConexyEditorService
             return Fail("invalid_range", $"insert_line {line} is out of range (file has {lineCount} lines).");
 
         var inserted = InsertAfterLine(text, line, newStr);
-        await File.WriteAllTextAsync(fullPath, inserted, ct);
+        await WorkspaceJail.WriteAllTextAsync(Root(taskId), fullPath, inserted, ct);
         _editorState.PushUndo(taskId, path, new FileSnapshot(path, text, ExistedBefore: true));
         return Ok($"Inserted after line {line} in '{path}'.");
     }
@@ -223,7 +219,7 @@ public class ConexyEditorService : IConexyEditorService
 
         if (snapshot.ExistedBefore)
         {
-            File.WriteAllText(fullPath, snapshot.ContentBefore ?? string.Empty);
+            WorkspaceJail.WriteAllTextAsync(Root(taskId), fullPath, snapshot.ContentBefore ?? string.Empty).GetAwaiter().GetResult();
         }
         else if (File.Exists(fullPath))
         {
@@ -252,6 +248,9 @@ public class ConexyEditorService : IConexyEditorService
     // ---- Path safety ----
 
     private string ResolvePath(Guid taskId, string path) => _pathValidator.ResolveSafePath(taskId, path);
+
+    // WORKSPACE_JAIL: добавлено 2026-09-24 — чтение/запись идут через проверенные дескрипторы (ревью C2).
+    private string Root(Guid taskId) => _workspaceService.GetTaskWorkspacePath(taskId);
 
     // ---- Text helpers ----
 
@@ -358,14 +357,15 @@ public class ConexyEditorService : IConexyEditorService
     {
         if (depth >= maxDepth) return;
 
-        foreach (var d in Directory.EnumerateDirectories(dir))
+        // WORKSPACE_JAIL: symlinked directories are not followed (review C2).
+        foreach (var d in Directory.EnumerateDirectories(dir, "*", WorkspaceJail.NoLinks(recursive: false)))
         {
             if (IgnoredDirectories.Contains(Path.GetFileName(d), StringComparer.OrdinalIgnoreCase)) continue;
             entries.Add(Path.GetFileName(d) + "/");
             CollectDirectoryEntries(d, depth + 1, maxDepth, entries);
         }
 
-        foreach (var f in Directory.EnumerateFiles(dir))
+        foreach (var f in Directory.EnumerateFiles(dir, "*", WorkspaceJail.NoLinks(recursive: false)))
         {
             entries.Add(Path.GetFileName(f));
         }

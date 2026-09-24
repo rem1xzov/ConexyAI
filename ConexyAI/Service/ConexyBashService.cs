@@ -29,8 +29,10 @@ public class ConexyBashService : IConexyBashService
     private readonly ILogger<ConexyBashService> _logger;
     // SANDBOX_SESSIONS: добавлено 2026-09-23 — состояние песочницы, живущее между командами.
     private readonly ISandboxSessionStore _sandboxSessions;
-
-    private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _sessionLocks = new();
+    // WORKSPACE_JAIL: добавлено 2026-09-24 — общий (singleton) слот команды на воркспейс. Прежний
+    // словарь семафоров жил в scoped-сервисе, то есть в каждом scope свой, и ничего не сериализовал;
+    // заодно файловый API знает, что в воркспейсе идёт команда (ревью C2).
+    private readonly ISandboxActivity _activity;
 
     private const int MaxTimeoutSeconds = 300;
     private const int DefaultTimeoutSeconds = 30;
@@ -40,8 +42,10 @@ public class ConexyBashService : IConexyBashService
         IDockerSandboxRunner sandbox,
         IHubContext<ConexyHub> hubContext,
         ILogger<ConexyBashService> logger,
-        ISandboxSessionStore sandboxSessions)
+        ISandboxSessionStore sandboxSessions,
+        ISandboxActivity? activity = null)
     {
+        _activity = activity ?? new SandboxActivity();
         _workspaceService = workspaceService;
         _sandbox = sandbox;
         _hubContext = hubContext;
@@ -109,20 +113,12 @@ public class ConexyBashService : IConexyBashService
         // SANDBOX: добавлено 2026-09-17 — Path Jail before mapping the directory into Docker.
         workspacePath = _workspaceService.ValidateWorkspacePath(workspacePath);
 
-        _logger.LogInformation("Executing bash for session {SessionId}: {Command}", sessionId, request.Command);
+        _logger.LogInformation("Executing bash for session {SessionId} ({Chars} chars).", sessionId, request.Command.Length);
 
         var timeout = TimeSpan.FromSeconds(Math.Clamp(request.TimeoutSeconds ?? DefaultTimeoutSeconds, 1, MaxTimeoutSeconds));
 
-        var semaphore = _sessionLocks.GetOrAdd(sessionId, _ => new SemaphoreSlim(1, 1));
-        await semaphore.WaitAsync(ct);
-        try
-        {
-            return await RunProcessAsync(sessionId, request.Command, workspacePath, timeout, ct);
-        }
-        finally
-        {
-            semaphore.Release();
-        }
+        using var slot = await _activity.AcquireAsync(sessionId, ct);
+        return await RunProcessAsync(sessionId, request.Command, workspacePath, timeout, ct);
     }
 
     private async Task<BashToolResult> RunProcessAsync(Guid sessionId, string command, string workingDir, TimeSpan timeout, CancellationToken ct)

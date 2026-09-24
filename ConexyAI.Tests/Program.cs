@@ -149,7 +149,13 @@ DbConexy CreateContext(string dbName)
     var guard = new ConexyQueueGuard(queue, NullLogger<ConexyQueueGuard>.Instance);
     var env = new FakeWebHostEnvironment { EnvironmentName = "Development" };
     // SUBSCRIPTION_TIERS: the service gained a subscription dependency; the stub always allows.
-    return (new ConexyService(repo, guard, env, new FakeSubscriptionService()), queue);
+    // CHAT_OWNERSHIP: and a chat-ownership check over the same context (workspaces in a temp root).
+    var chatAccess = new ChatAccessService(
+        context,
+        CreateWorkspaceService(Path.Combine(Path.GetTempPath(), "conexy-tests-access", Guid.NewGuid().ToString("N"))),
+        new IncognitoChatStore(),
+        NullLogger<ChatAccessService>.Instance);
+    return (new ConexyService(repo, guard, env, new FakeSubscriptionService(), chatAccess), queue);
 }
 
 string AdminConnectionString() => "Host=localhost;Port=5433;Database=postgres;Username=postgres;Password=postgres";
@@ -1854,6 +1860,11 @@ sealed class RecordingMemoryService : IUserMemoryService
         Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
     public void EnqueueExtraction(Guid userId, Guid chatId) => Extractions++;
     public Task<string> BuildPromptBlockAsync(Guid userId, CancellationToken ct = default) => Task.FromResult(string.Empty);
+    // MEMORY_CONTROL: управление памятью этому стабу не нужно.
+    public Task<IReadOnlyList<UserMemoryFactEntity>> GetFactEntriesAsync(Guid userId, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<UserMemoryFactEntity>>(Array.Empty<UserMemoryFactEntity>());
+    public Task<bool> DeleteFactAsync(Guid userId, Guid factId, CancellationToken ct = default) => Task.FromResult(false);
+    public Task ClearAsync(Guid userId, CancellationToken ct = default) => Task.CompletedTask;
 }
 
 sealed class UnavailableVisionService : IConexyVisionService
@@ -1892,6 +1903,10 @@ sealed class StaticConversationService : IConversationService
     // CHAT_DELETE: удаления у стаба тоже нет — он не владеет историей.
     public Task<int> DeleteChatAsync(Guid userId, Guid chatId, CancellationToken ct = default) =>
         Task.FromResult(0);
+
+    // CHAT_SYNC_COMPLETE: и полного списка id тоже.
+    public Task<IReadOnlyList<Guid>> GetChatIdsAsync(Guid userId, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<Guid>>(Array.Empty<Guid>());
 
     // CHAT_RENAME: и переименования тоже — история не у него.
     public Task<int> RenameChatAsync(Guid userId, Guid chatId, string title, CancellationToken ct = default) =>

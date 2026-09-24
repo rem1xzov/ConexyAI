@@ -72,7 +72,9 @@ public class ConexyLlmClient : IConexyLlmClient
         );
 
         var json = JsonSerializer.Serialize(payload, _jsonOptions);
-        _logger.LogInformation("DeepSeek request [task {TaskId}]: {Body}", taskId, json);
+        // PRIVACY_LOGS: изменено 2026-09-24 — ревью H3. Раньше здесь логировалось полное тело запроса:
+        // инкогнито-диалоги, факты памяти, текст вложений, base64-картинки. Теперь — только метаданные.
+        _logger.LogInformation("DeepSeek request [task {TaskId}]: model={Model} bodyBytes={Bytes}", taskId, payload.Model, json.Length);
 
         try
         {
@@ -86,14 +88,16 @@ public class ConexyLlmClient : IConexyLlmClient
 
             if (!response.IsSuccessStatusCode)
             {
-                var responseBody = await response.Content.ReadAsStringAsync(ct);
+                var responseBody = Bounded(await response.Content.ReadAsStringAsync(ct));
                 _logger.LogError("DeepSeek API Error [{StatusCode}]: {Body}", response.StatusCode, responseBody);
                 throw new HttpRequestException($"Upstream LLM error ({response.StatusCode}): {responseBody}");
             }
 
             var body = await response.Content.ReadAsStringAsync(ct);
-            _logger.LogInformation("DeepSeek response body [task {TaskId}]: {Body}", taskId, body);
             var result = JsonSerializer.Deserialize<LlmChatResponse>(body, _jsonOptions);
+            _logger.LogInformation(
+                "DeepSeek response [task {TaskId}]: bodyBytes={Bytes} totalTokens={Tokens}",
+                taskId, body.Length, result?.Usage?.TotalTokens ?? 0);
             var message = result?.Choices.FirstOrDefault()?.Message
                           ?? throw new InvalidOperationException("Invalid empty response from LLM upstream.");
             return new LlmChatResult(message, result?.Usage?.TotalTokens ?? 0);
@@ -185,7 +189,8 @@ public class ConexyLlmClient : IConexyLlmClient
         );
 
         var json = JsonSerializer.Serialize(payload, _jsonOptions);
-        _logger.LogInformation("DeepSeek stream request [task {TaskId}]: {Body}", taskId, json);
+        // PRIVACY_LOGS: ревью H3 — только метаданные, без содержимого.
+        _logger.LogInformation("DeepSeek stream request [task {TaskId}]: model={Model} bodyBytes={Bytes}", taskId, payload.Model, json.Length);
 
         // ResponseHeadersRead makes the stream available as soon as headers arrive —
         // tokens are pushed to SignalR incrementally instead of buffering the whole body.
@@ -210,7 +215,7 @@ public class ConexyLlmClient : IConexyLlmClient
 
             if (!response.IsSuccessStatusCode)
             {
-                var errBody = await response.Content.ReadAsStringAsync(ct);
+                var errBody = Bounded(await response.Content.ReadAsStringAsync(ct));
                 _logger.LogError("DeepSeek API Error [{StatusCode}]: {Body}", response.StatusCode, errBody);
                 throw new HttpRequestException($"Upstream LLM error ({response.StatusCode}): {errBody}");
             }
@@ -323,10 +328,8 @@ public class ConexyLlmClient : IConexyLlmClient
                     // Ignore malformed keep-alive or partial SSE chunks.
                 }
 
-                // TEMP diagnostic: log the raw SSE chunk so content/reasoning/finish_reason
-                // are all observable in the backend logs.
-                _logger.LogInformation("DeepSeek stream chunk [task {TaskId}]: {RawChunk}", taskId, data);
-                _logger.LogInformation("DeepSeek stream parsed [task {TaskId}]: contentLen={ContentLen} reasoningLen={ReasoningLen}", taskId, content?.Length ?? 0, reasoning?.Length ?? 0);
+                // PRIVACY_LOGS: ревью H3 — сырые SSE-чанки (текст ответа) больше не логируются: строка на
+                // каждый чанк раскрывала содержимое, включая инкогнито, и забивала диск.
 
                 if (!string.IsNullOrEmpty(content) || !string.IsNullOrEmpty(reasoning))
                 {
@@ -425,6 +428,9 @@ public class ConexyLlmClient : IConexyLlmClient
             await Task.Delay(delay, ct);
         }
     }
+
+    // PRIVACY_LOGS: тело ошибки upstream может цитировать запрос — в лог и клиенту идёт только начало.
+    private static string Bounded(string text) => text.Length <= 500 ? text : text[..500] + "…";
 
     private static bool IsRetryable(HttpStatusCode status) =>
         status is HttpStatusCode.TooManyRequests

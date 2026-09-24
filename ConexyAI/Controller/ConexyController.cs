@@ -19,17 +19,30 @@ public class ConexyController : ControllerBase
     private readonly IConexyWorkspaceService _workspaceService;
     // CHAT_SYNC: добавлено 2026-09-23 — история читается только через свой владелец-сервис.
     private readonly IConversationService _conversation;
+    // CHAT_OWNERSHIP: добавлено 2026-09-24 — ревью C1: каждый чат-ресурс проверяет владельца.
+    private readonly IChatAccessService _chatAccess;
+    private readonly IIncognitoChatStore _incognito;
+    private readonly ISandboxActivity _sandboxActivity;
+    private readonly IConexyCancellationRegistry _cancellations;
     private readonly ILogger<ConexyController> _logger;
 
     public ConexyController(
         IConexyService conexyService,
         IConexyWorkspaceService workspaceService,
         IConversationService conversation,
+        IChatAccessService chatAccess,
+        IIncognitoChatStore incognito,
+        ISandboxActivity sandboxActivity,
+        IConexyCancellationRegistry cancellations,
         ILogger<ConexyController> logger)
     {
         _conexyService = conexyService;
         _workspaceService = workspaceService;
         _conversation = conversation;
+        _chatAccess = chatAccess;
+        _incognito = incognito;
+        _sandboxActivity = sandboxActivity;
+        _cancellations = cancellations;
         _logger = logger;
     }
 
@@ -56,6 +69,17 @@ public class ConexyController : ControllerBase
             // Enqueue + return 202 immediately; all streaming flows through SignalR.
             var response = await _conexyService.ExecuteAsync(userId, request, ct);
             return AcceptedAtAction(nameof(GetStatus), new { id = response.Id }, response);
+        }
+        catch (ChatAccessDeniedException)
+        {
+            // CHAT_OWNERSHIP: ревью C1 — ход в чужом чате.
+            _logger.LogWarning("Run refused: chat {ChatId} is not owned by user {UserId}.", request.ChatId, userId);
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "CHAT_FORBIDDEN" });
+        }
+        catch (TurnInFlightException)
+        {
+            // TURN_IN_FLIGHT: ревью H6 — ход с этим id ещё идёт.
+            return Conflict(new { error = "TURN_IN_FLIGHT" });
         }
         catch (RateLimitExceededException ex)
         {
@@ -88,7 +112,8 @@ public class ConexyController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unexpected error while running task. Model='{Model}'", request.Model);
-            return StatusCode(StatusCodes.Status500InternalServerError, new { error = ex.Message });
+            // L12: the raw exception text stays in the log, the client gets a stable code.
+            return StatusCode(StatusCodes.Status500InternalServerError, new { error = "INTERNAL_ERROR" });
         }
     }
 
@@ -108,16 +133,23 @@ public class ConexyController : ControllerBase
     /// <summary>
     /// The signed-in user's chats, newest activity first, so the sidebar can be rebuilt on any
     /// device. Scoped to the token's user id — there is no way to ask for someone else's list.
+    /// <para>
+    /// CHAT_SYNC_COMPLETE: изменено 2026-09-24 — ревью H8. Список ограничен лимитом, а клиент считал
+    /// «нет в списке» = «удалён на сервере» и вычищал 51-й и более старые чаты (включая закреплённые)
+    /// со всех устройств. Теперь закреплённые чаты приходят всегда, а <c>allChatIds</c> — полный набор
+    /// id: удалять локально можно только то, чего в нём нет.
+    /// </para>
     /// </summary>
     [HttpGet("chats")]
-    public async Task<ActionResult<IReadOnlyList<ChatSummaryDto>>> GetChats(
-        [FromQuery] int limit = 50, CancellationToken ct = default)
+    public async Task<ActionResult<ChatListDto>> GetChats(
+        [FromQuery] int limit = 200, CancellationToken ct = default)
     {
         if (!TryGetUserId(out var userId))
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
-        var chats = await _conversation.GetChatsAsync(userId, Math.Clamp(limit, 1, 200), ct);
-        return Ok(chats.Select(ToChatSummary).ToList());
+        var chats = await _conversation.GetChatsAsync(userId, Math.Clamp(limit, 1, 500), ct);
+        var allIds = await _conversation.GetChatIdsAsync(userId, ct);
+        return Ok(new ChatListDto(chats.Select(ToChatSummary).ToList(), allIds));
     }
 
     /// <summary>Full stored transcript of one chat, oldest first, for its owner only.</summary>
@@ -141,6 +173,13 @@ public class ConexyController : ControllerBase
     /// Permanently deletes a chat: its stored messages and, when the caller really owned it, its
     /// workspace directory. Without this the chat only vanished from the browser that deleted it and
     /// came straight back on the next sync — the row was still in the database.
+    /// <para>
+    /// CHAT_OWNERSHIP: изменено 2026-09-24. Ревью C1/M7/M8/M9: право решает таблица владельцев (а не
+    /// «удалилась ли хоть одна строка истории» — её можно было создать под чужим chatId); идущий ход
+    /// останавливается, а чат помечается удалённым, чтобы запись хода в finally его не воскресила;
+    /// вместе с историей уходят строки ходов, карточки подтверждения и факты памяти из этого чата;
+    /// инкогнито-чат (только в памяти) тоже удаляется, вместе с файлами на диске.
+    /// </para>
     /// </summary>
     [HttpDelete("chats/{chatId:guid}")]
     public async Task<IActionResult> DeleteChat(Guid chatId, CancellationToken ct)
@@ -148,21 +187,24 @@ public class ConexyController : ControllerBase
         if (!TryGetUserId(out var userId))
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
-        var deletedRows = await _conversation.DeleteChatAsync(userId, chatId, ct);
-        if (deletedRows == 0)
+        var access = await _chatAccess.GetAccessAsync(userId, chatId, ct);
+        if (access != ChatAccessKind.Owner)
         {
-            // Nothing was owned by this user: either the chat never existed or it belongs to someone
-            // else. Answer 404 instead of pretending to delete, and — critically — do NOT touch the
-            // workspace, which is keyed by chat id alone and is not user-scoped.
+            // Foreign, already deleted, or never existed: the same answer, so ids cannot be probed.
             return NotFound(new { error = "Chat not found." });
         }
 
-        // Only reached for a chat this user actually owned, so its workspace belongs to them too.
+        // M8: stop a running turn first, and tombstone the chat before its finally block persists.
+        var cancelled = _cancellations.CancelChat(chatId);
+        await _chatAccess.MarkDeletedAsync(userId, chatId, ct);
+
+        var deletedRows = await _conversation.DeleteChatAsync(userId, chatId, ct);
+        var wasIncognito = _incognito.Clear(chatId, userId);
         await _workspaceService.CleanupWorkspaceAsync(chatId, ct);
 
         _logger.LogInformation(
-            "Chat {ChatId} deleted by user {UserId}: {Rows} history row(s) removed, workspace cleaned.",
-            chatId, userId, deletedRows);
+            "Chat {ChatId} deleted by user {UserId}: {Rows} history row(s) removed, {Cancelled} running turn(s) stopped, incognito={Incognito}, workspace cleaned.",
+            chatId, userId, deletedRows, cancelled, wasIncognito);
         return NoContent();
     }
 
@@ -247,7 +289,9 @@ public class ConexyController : ControllerBase
             chat.MessageCount,
             ForPreview(chat.LastAssistantMessage),
             // CHAT_PIN: закрепление приезжает вместе с чатом, чтобы порядок сайдбара был общим.
-            chat.IsPinned);
+            chat.IsPinned,
+            // CHAT_OWNERSHIP: модель последнего хода — Cowork открывается как Cowork (ревью M18).
+            chat.Model);
     }
 
     /// <summary>
@@ -276,22 +320,28 @@ public class ConexyController : ControllerBase
 
     /// <summary>Lists the files (flat paths + nested tree) created by the agent in a session workspace.</summary>
     [HttpGet("workspace/{sessionId}/files")]
-    public ActionResult<WorkspaceListing> GetWorkspaceFiles(string sessionId)
+    public async Task<ActionResult<WorkspaceListing>> GetWorkspaceFiles(string sessionId, CancellationToken ct)
     {
-        if (!TryGetUserId(out _))
+        if (!TryGetUserId(out var userId))
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
         if (!TryParseWorkspaceId(sessionId, out var chatId, out var error))
             return error;
 
-        // Never 404 for a workspace that has not been created yet: create it (or
-        // fall back to an empty listing) so the Agent IDE always renders cleanly.
-        var root = _workspaceService.GetTaskWorkspacePath(chatId);
+        // CHAT_OWNERSHIP: ревью C1.
+        if (!await _chatAccess.CanReadAsync(userId, chatId, ct))
+            return Forbidden();
 
-        if (!Directory.Exists(root))
+        // Never 404 for a workspace that has not been created yet: an empty listing keeps the Agent
+        // IDE rendering cleanly. Reading no longer creates the directory — only writes do.
+        var root = _workspaceService.GetTaskWorkspacePathIfExists(chatId);
+        if (root is null)
             return Ok(new WorkspaceListing(Array.Empty<string>(), Array.Empty<WorkspaceFileEntry>()));
 
-        var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+        // WORKSPACE_JAIL: ревью C2 — симлинки не показываются и не обходятся (иначе `ln -s / host`
+        // отдавал листинг хоста, а `ln -s . loop` вешал запрос бесконечной рекурсией).
+        root = WorkspaceJail.GetRealPath(root);
+        var files = Directory.EnumerateFiles(root, "*", WorkspaceJail.NoLinks(recursive: true))
             .Select(f => NormalizeSeparators(Path.GetRelativePath(root, f)))
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -303,7 +353,7 @@ public class ConexyController : ControllerBase
     [HttpGet("workspace/{sessionId}/file")]
     public async Task<ActionResult<WorkspaceFileContent>> GetWorkspaceFile(string sessionId, [FromQuery] string path, CancellationToken ct)
     {
-        if (!TryGetUserId(out _))
+        if (!TryGetUserId(out var userId))
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
         if (!TryParseWorkspaceId(sessionId, out var chatId, out var error))
@@ -311,6 +361,12 @@ public class ConexyController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(path))
             return BadRequest(new { error = "Query parameter 'path' is required." });
+
+        if (!await _chatAccess.CanReadAsync(userId, chatId, ct))
+            return Forbidden();
+
+        if (_workspaceService.GetTaskWorkspacePathIfExists(chatId) is null)
+            return NotFound(new { error = $"File '{path}' not found." });
 
         var read = await _workspaceService.ReadFileAsync(chatId, path, ct);
         if (!read.Success)
@@ -325,7 +381,7 @@ public class ConexyController : ControllerBase
     [HttpGet("workspace/{sessionId}/raw")]
     public async Task<IActionResult> DownloadWorkspaceFile(string sessionId, [FromQuery] string path, CancellationToken ct)
     {
-        if (!TryGetUserId(out _))
+        if (!TryGetUserId(out var userId))
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
         if (!TryParseWorkspaceId(sessionId, out var chatId, out var error))
@@ -333,6 +389,12 @@ public class ConexyController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(path))
             return BadRequest(new { error = "Query parameter 'path' is required." });
+
+        if (!await _chatAccess.CanReadAsync(userId, chatId, ct))
+            return Forbidden();
+
+        if (_workspaceService.GetTaskWorkspacePathIfExists(chatId) is null)
+            return NotFound(new { error = $"File '{path}' not found." });
 
         var read = await _workspaceService.ReadBytesAsync(chatId, path, ct);
         if (!read.Success)
@@ -348,7 +410,7 @@ public class ConexyController : ControllerBase
     [HttpPut("workspace/{sessionId}/file")]
     public async Task<IActionResult> SaveWorkspaceFile(string sessionId, [FromBody] SaveFileDto? dto, CancellationToken ct)
     {
-        if (!TryGetUserId(out _))
+        if (!TryGetUserId(out var userId))
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
         if (!TryParseWorkspaceId(sessionId, out var chatId, out var error))
@@ -356,6 +418,10 @@ public class ConexyController : ControllerBase
 
         if (dto == null || string.IsNullOrWhiteSpace(dto.Path) || dto.Path.Contains(".."))
             return BadRequest(new { error = "Invalid path." });
+
+        var denied = await EnsureWritableAsync(userId, chatId, ct);
+        if (denied is not null)
+            return denied;
 
         var res = await _workspaceService.WriteFileAsync(chatId, dto.Path, dto.Content ?? string.Empty, ct);
         if (!res.Success)
@@ -368,7 +434,7 @@ public class ConexyController : ControllerBase
     [HttpDelete("workspace/{sessionId}/file")]
     public async Task<IActionResult> DeleteWorkspaceFile(string sessionId, [FromQuery] string path, CancellationToken ct)
     {
-        if (!TryGetUserId(out _))
+        if (!TryGetUserId(out var userId))
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
         if (!TryParseWorkspaceId(sessionId, out var chatId, out var error))
@@ -376,6 +442,14 @@ public class ConexyController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(path) || path.Contains(".."))
             return BadRequest(new { error = "Invalid path." });
+
+        if (await _chatAccess.GetAccessAsync(userId, chatId, ct) != ChatAccessKind.Owner)
+            return Forbidden();
+
+        // WORKSPACE_JAIL: a delete works on a path, so it never races a running sandbox command.
+        using var slot = _sandboxActivity.TryAcquire(chatId);
+        if (slot is null)
+            return Conflict(new { error = "WORKSPACE_BUSY" });
 
         var res = await _workspaceService.DeleteFileAsync(chatId, path, ct);
         if (!res.Success)
@@ -419,45 +493,61 @@ public class ConexyController : ControllerBase
     [HttpGet("workspace/{sessionId}/download-zip")]
     public async Task<IActionResult> DownloadWorkspaceZip(string sessionId, CancellationToken ct)
     {
-        if (!TryGetUserId(out _))
+        if (!TryGetUserId(out var userId))
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
         if (!TryParseWorkspaceId(sessionId, out var chatId, out var error))
             return error;
 
-        var root = _workspaceService.GetTaskWorkspacePath(chatId);
-        if (!Directory.Exists(root) || !Directory.EnumerateFileSystemEntries(root).Any())
+        if (!await _chatAccess.CanReadAsync(userId, chatId, ct))
+            return Forbidden();
+
+        var root = _workspaceService.GetTaskWorkspacePathIfExists(chatId);
+        if (root is null || !Directory.EnumerateFileSystemEntries(root).Any())
             return NotFound(new { error = "Workspace is empty." });
 
-        var zipPath = Path.Combine(Path.GetTempPath(), $"conexy-{chatId:N}.zip");
-        try
+        // WORKSPACE_JAIL: ревью C2. ZipFile.CreateFromDirectory читал файлы по симлинкам — архив
+        // воркспейса со ссылкой на /proc/self/environ приносил секреты бэкенда. Архив собирается
+        // вручную: симлинки пропускаются, каждый файл читается через проверенный дескриптор.
+        root = WorkspaceJail.GetRealPath(root);
+        using var buffer = new MemoryStream();
+        using (var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
         {
-            if (System.IO.File.Exists(zipPath))
-                System.IO.File.Delete(zipPath);
-
-            ZipFile.CreateFromDirectory(root, zipPath, CompressionLevel.Fastest, includeBaseDirectory: false);
-
-            var bytes = await System.IO.File.ReadAllBytesAsync(zipPath, ct);
-            return new FileContentResult(bytes, "application/zip")
+            foreach (var file in Directory.EnumerateFiles(root, "*", WorkspaceJail.NoLinks(recursive: true)))
             {
-                FileDownloadName = $"workspace-{chatId:N}.zip"
-            };
-        }
-        finally
-        {
-            if (System.IO.File.Exists(zipPath))
-            {
-                try { System.IO.File.Delete(zipPath); } catch { /* best effort */ }
+                var relative = NormalizeSeparators(Path.GetRelativePath(root, file));
+                try
+                {
+                    await using var source = WorkspaceJail.OpenRead(root, relative);
+                    var entry = archive.CreateEntry(relative, CompressionLevel.Fastest);
+                    await using var target = entry.Open();
+                    await source.CopyToAsync(target, ct);
+                }
+                catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+                {
+                    _logger.LogWarning("Skipped '{Path}' while zipping workspace {ChatId}: {Reason}", relative, chatId, ex.Message);
+                }
             }
         }
+
+        return new FileContentResult(buffer.ToArray(), "application/zip")
+        {
+            FileDownloadName = $"workspace-{chatId:N}.zip"
+        };
     }
+
+    // WORKSPACE_JAIL: ревью M11 — лимиты распаковки: без них 50-мегабайтный архив разворачивался в
+    // десятки гигабайт и забивал диск бэкенда.
+    private const long MaxZipUncompressedBytes = 500L * 1024 * 1024;
+    private const int MaxZipEntries = 20_000;
+    private const long MaxZipEntryRatio = 200;
 
     /// <summary>Extracts an uploaded ZIP archive into the session workspace.</summary>
     [HttpPost("workspace/{sessionId}/upload-zip")]
     [RequestSizeLimit(55_000_000)] // ~50MB file + multipart overhead
     public async Task<IActionResult> UploadWorkspaceZip(string sessionId, [FromForm] IFormFile file, CancellationToken ct)
     {
-        if (!TryGetUserId(out _))
+        if (!TryGetUserId(out var userId))
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
         if (!TryParseWorkspaceId(sessionId, out var chatId, out var error))
@@ -470,8 +560,16 @@ public class ConexyController : ControllerBase
         if (file.Length > MaxBytes)
             return BadRequest(new { error = "File exceeds the 50MB limit." });
 
+        var denied = await EnsureWritableAsync(userId, chatId, ct);
+        if (denied is not null)
+            return denied;
+
+        // Extraction works on paths: never while a sandbox command runs in this workspace.
+        using var slot = _sandboxActivity.TryAcquire(chatId);
+        if (slot is null)
+            return Conflict(new { error = "WORKSPACE_BUSY" });
+
         var root = _workspaceService.GetTaskWorkspacePath(chatId);
-        Directory.CreateDirectory(root);
 
         var tempPath = Path.Combine(Path.GetTempPath(), $"conexy-upload-{Guid.NewGuid():N}.zip");
         try
@@ -481,27 +579,62 @@ public class ConexyController : ControllerBase
                 await file.CopyToAsync(fs, ct);
             }
 
-            var rootFull = Path.GetFullPath(root);
-            var rootPrefix = rootFull.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-
             using var archive = ZipFile.OpenRead(tempPath);
+            if (archive.Entries.Count > MaxZipEntries)
+                return BadRequest(new { error = $"ZIP contains more than {MaxZipEntries} entries." });
+
+            long declaredTotal = 0;
+            foreach (var entry in archive.Entries)
+            {
+                declaredTotal += entry.Length;
+                if (entry.Length > 1024 * 1024 && entry.CompressedLength > 0 && entry.Length / entry.CompressedLength > MaxZipEntryRatio)
+                    return BadRequest(new { error = "ZIP contains an entry with a suspicious compression ratio." });
+            }
+            if (declaredTotal > MaxZipUncompressedBytes)
+                return BadRequest(new { error = "ZIP expands beyond the 500MB limit." });
+
+            long written = 0;
             foreach (var entry in archive.Entries)
             {
                 // Skip directory entries (they have no file name).
                 if (string.IsNullOrEmpty(entry.Name))
                     continue;
 
-                var relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
-                var destPath = Path.GetFullPath(Path.Combine(rootFull, relative));
-                if (!destPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+                var relative = entry.FullName.Replace('\\', '/');
+                if (relative.StartsWith('/') || relative.Split('/').Any(part => part == ".."))
                     return BadRequest(new { error = "ZIP contains invalid paths." });
 
-                var dir = Path.GetDirectoryName(destPath);
-                if (!string.IsNullOrEmpty(dir))
-                    Directory.CreateDirectory(dir);
+                // WORKSPACE_JAIL: the destination is resolved with symlinks followed, so a link left
+                // in the workspace cannot redirect the extraction outside it.
+                FileStream target;
+                try
+                {
+                    target = WorkspaceJail.OpenWrite(root, relative);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    return BadRequest(new { error = "ZIP contains invalid paths." });
+                }
 
-                entry.ExtractToFile(destPath, overwrite: true);
+                await using (target)
+                await using (var source = entry.Open())
+                {
+                    // Count real bytes: the sizes in the central directory can lie.
+                    var bufferBytes = new byte[81920];
+                    int read;
+                    while ((read = await source.ReadAsync(bufferBytes, ct)) > 0)
+                    {
+                        written += read;
+                        if (written > MaxZipUncompressedBytes)
+                            return BadRequest(new { error = "ZIP expands beyond the 500MB limit." });
+                        await target.WriteAsync(bufferBytes.AsMemory(0, read), ct);
+                    }
+                }
             }
+        }
+        catch (InvalidDataException)
+        {
+            return BadRequest(new { error = "The file is not a valid ZIP archive." });
         }
         finally
         {
@@ -512,6 +645,24 @@ public class ConexyController : ControllerBase
         }
 
         return Ok(new { extracted = true });
+    }
+
+    /// <summary>403 with a stable code, for chats of another user.</summary>
+    private ObjectResult Forbidden() =>
+        StatusCode(StatusCodes.Status403Forbidden, new { error = "CHAT_FORBIDDEN" });
+
+    /// <summary>Owner check for write paths; claims a brand-new chat for the caller.</summary>
+    private async Task<IActionResult?> EnsureWritableAsync(Guid userId, Guid chatId, CancellationToken ct)
+    {
+        try
+        {
+            await _chatAccess.EnsureWritableAsync(userId, chatId, ct: ct);
+            return null;
+        }
+        catch (ChatAccessDeniedException)
+        {
+            return Forbidden();
+        }
     }
 
     private bool TryParseWorkspaceId(string sessionId, out Guid chatId, out ActionResult error)
@@ -534,13 +685,13 @@ public class ConexyController : ControllerBase
     {
         var entries = new List<WorkspaceFileEntry>();
 
-        foreach (var dir in Directory.EnumerateDirectories(directory).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+        foreach (var dir in Directory.EnumerateDirectories(directory, "*", WorkspaceJail.NoLinks(recursive: false)).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
         {
             var rel = NormalizeSeparators(Path.GetRelativePath(root, dir));
             entries.Add(new WorkspaceFileEntry(Path.GetFileName(dir), rel, true, 0, BuildTree(root, dir)));
         }
 
-        foreach (var file in Directory.EnumerateFiles(directory).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        foreach (var file in Directory.EnumerateFiles(directory, "*", WorkspaceJail.NoLinks(recursive: false)).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
         {
             var rel = NormalizeSeparators(Path.GetRelativePath(root, file));
             long size = 0;

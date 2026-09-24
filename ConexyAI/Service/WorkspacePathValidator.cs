@@ -11,21 +11,10 @@ public class WorkspacePathValidator : IWorkspacePathValidator
         _workspaceService = workspaceService;
     }
 
-    public string ResolveSafePath(Guid chatId, string relativePath)
-    {
-        var root = Path.GetFullPath(_workspaceService.GetTaskWorkspacePath(chatId));
-        var combined = Path.GetFullPath(Path.Combine(root, relativePath));
-        var relative = Path.GetRelativePath(root, combined);
-
-        if (relative == ".." ||
-            relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
-            relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
-        {
-            throw new UnauthorizedAccessException("Path traversal outside the workspace is not allowed.");
-        }
-
-        return combined;
-    }
+    // WORKSPACE_JAIL: изменено 2026-09-24 — ревью C2: общая проверка реального пути (с разрешением
+    // симлинков) вместо сравнения строк. Редактор агента и файловый API IDE идут через неё же.
+    public string ResolveSafePath(Guid chatId, string relativePath) =>
+        WorkspaceJail.Resolve(_workspaceService.GetTaskWorkspacePath(chatId), relativePath);
 }
 
 /// <summary>Shared file-safety helpers reused by the editor and the file explorer API.</summary>

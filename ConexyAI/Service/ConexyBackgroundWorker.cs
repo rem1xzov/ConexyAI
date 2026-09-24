@@ -22,8 +22,16 @@ public class ConexyBackgroundWorker : BackgroundService
     private readonly IHubContext<ConexyHub> _hubContext;
     private readonly IConexyWorkspaceService _workspaceService;
     private readonly ILogger<ConexyBackgroundWorker> _logger;
+    // WORKER_CONCURRENCY: добавлено 2026-09-24 — ревью M13: сколько ходов обрабатывается одновременно.
+    private readonly int _maxConcurrency;
+
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — текст, уже отправленный клиенту в этом ходе.
-    private string _partialChatText = string.Empty;
+    // WORKER_CONCURRENCY: изменено 2026-09-24 — буфер теперь свой у каждого хода: ходы идут
+    // параллельно, и поле синглтона перемешивало бы частичные ответы разных задач.
+    private sealed class TurnBuffer
+    {
+        public string PartialChatText = string.Empty;
+    }
 
     // CONVERSATION_SERVICE: добавлено 2026-09-23 — зависимости IIncognitoChatStore и
     // IOptions<MemoryOptions> убраны отсюда: и история, и батчинг памяти теперь внутри
@@ -38,8 +46,11 @@ public class ConexyBackgroundWorker : BackgroundService
         IServiceScopeFactory scopeFactory,
         IHubContext<ConexyHub> hubContext,
         IConexyWorkspaceService workspaceService,
-        ILogger<ConexyBackgroundWorker> logger)
+        ILogger<ConexyBackgroundWorker> logger,
+        IConfiguration? configuration = null)
     {
+        var configured = configuration?.GetValue<int?>("Worker:MaxConcurrency") ?? 0;
+        _maxConcurrency = configured > 0 ? configured : DefaultMaxConcurrency;
         _queue = queue;
         _queueGuard = queueGuard;
         _cancellations = cancellations;
@@ -131,19 +142,51 @@ public class ConexyBackgroundWorker : BackgroundService
         }
     }
 
+    // WORKER_CONCURRENCY: добавлено 2026-09-24 — ревью M13. Раньше очередь читал один
+    // последовательный цикл: длинный агентский прогон (до ~10 минут) блокировал flash/pro/агента
+    // ВСЕХ пользователей. Теперь задачи идут параллельно с ограничением, а каждая получает свой scope,
+    // свой токен отмены и свой буфер частичного ответа.
+    private const int DefaultMaxConcurrency = 4;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await foreach (var job in _queue.ReadAllAsync(stoppingToken))
+        using var slots = new SemaphoreSlim(_maxConcurrency, _maxConcurrency);
+        var running = new System.Collections.Concurrent.ConcurrentDictionary<Guid, Task>();
+
+        try
         {
-            await ProcessJobAsync(job, stoppingToken);
+            await foreach (var job in _queue.ReadAllAsync(stoppingToken))
+            {
+                await slots.WaitAsync(stoppingToken);
+                var run = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await ProcessJobAsync(job, stoppingToken);
+                    }
+                    finally
+                    {
+                        slots.Release();
+                    }
+                }, CancellationToken.None);
+                running[job.TaskId] = run;
+                _ = run.ContinueWith(_ => running.TryRemove(job.TaskId, out Task? _), TaskScheduler.Default);
+            }
         }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Host shutdown: fall through and let the running turns finish their own shutdown path.
+        }
+
+        await Task.WhenAll(running.Values);
     }
 
     private async Task ProcessJobAsync(ConexyJob job, CancellationToken workerToken)
     {
         // Link the worker's lifetime token with a per-task token so a user-initiated stop
         // cancels just this generation while leaving the queue worker alive.
-        var taskToken = _cancellations.Acquire(job.TaskId, workerToken);
+        var taskToken = _cancellations.Acquire(job.TaskId, workerToken, job.ChatId);
+        var buffer = new TurnBuffer();
         try
         {
             using var scope = _scopeFactory.CreateScope();
@@ -156,15 +199,20 @@ public class ConexyBackgroundWorker : BackgroundService
             // CONVERSATION_SERVICE: добавлено 2026-09-23 — единая сборка контекста и запись хода.
             var conversation = scope.ServiceProvider.GetRequiredService<IConversationService>();
 
+            // STOP_CONFIRM: добавлено 2026-09-24 — ревью M17: «Стоп» для задачи, которая ещё стояла в
+            // очереди, раньше был no-op — задача потом отрабатывала целиком и тратила квоту.
+            if (_cancellations.WasStoppedWhileQueued(job.TaskId))
+            {
+                await MarkStoppedBeforeStartAsync(job);
+                return;
+            }
+
             var entity = await repository.GetByIdAsync(job.TaskId, taskToken);
             if (entity == null) return;
 
             entity.Status = ConexyStatus.Running;
             await repository.SaveChangesAsync(taskToken);
 
-            // PARTIAL_TURN_PERSIST: буферы переиспользуются — воркер singleton и обрабатывает
-            // задачи последовательно, поэтому поля не могут перемешаться между задачами.
-            _partialChatText = string.Empty;
 
             // COWORK_MODE: both agent modes go through the same runner; the runner picks the mode's
             // prompt and tools itself.
@@ -185,7 +233,9 @@ public class ConexyBackgroundWorker : BackgroundService
                 Attachments: job.Attachments,
                 AssistantPrefix: job.AssistantPrefix,
                 // CHAT_KIND_SYNC: добавлено 2026-09-23 — режим чата доезжает до записи истории.
-                ChatKind: job.ChatKind);
+                ChatKind: job.ChatKind,
+                // HISTORY_REPLAY: добавлено 2026-09-24 — ревью M5.
+                Regenerate: job.Regenerate);
 
             var outcome = TurnOutcome.Completed;
             var result = string.Empty;
@@ -194,7 +244,12 @@ public class ConexyBackgroundWorker : BackgroundService
             {
                 // Materialize non-graphical attachments into the sandbox before the loop.
                 // ATTACHMENT_ERRORS: failures are reported instead of being swallowed.
-                var failedAttachments = await _workspaceService.SaveAttachmentsAsync(job.ChatId, job.Attachments, taskToken);
+                // INCOGNITO_CHAT: изменено 2026-09-24 — ревью M7: только для агентов. У чат-моделей нет
+                // инструментов, файлы на диске им не нужны (текст вложений уже в сообщении), а для
+                // инкогнито-чатов эти файлы оставались на диске навсегда.
+                IReadOnlyList<string> failedAttachments = isAgent
+                    ? await _workspaceService.SaveAttachmentsAsync(job.ChatId, job.Attachments, taskToken)
+                    : Array.Empty<string>();
                 if (failedAttachments.Count > 0)
                 {
                     await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync(
@@ -212,7 +267,7 @@ public class ConexyBackgroundWorker : BackgroundService
                 {
                     // Flash/Pro -> streaming dialog (Pro is the reasoning chat model and
                     // also powers the Socratic Students mode).
-                    result = await StreamCompletionAsync(llmClient, conversation, context, webSearch, job, taskToken);
+                    result = await StreamCompletionAsync(llmClient, conversation, context, webSearch, job, buffer, taskToken);
 
                     // SUBSCRIPTION_TIERS: добавлено 2026-09-17
                     // INCOGNITO_CHAT: limits still apply — incognito hides history, it is not a free pass.
@@ -300,7 +355,7 @@ public class ConexyBackgroundWorker : BackgroundService
                 // Именно асимметрия «в одной ветке пишем, в другой забыли» дважды ломала контекст.
                 try
                 {
-                    var assistantText = outcome == TurnOutcome.Completed ? result : PartialAssistantText(runner);
+                    var assistantText = outcome == TurnOutcome.Completed ? result : PartialAssistantText(runner, buffer);
                     await conversation.PersistTurnAsync(context, assistantText, outcome, CancellationToken.None);
                 }
                 catch (Exception persistEx)
@@ -316,9 +371,9 @@ public class ConexyBackgroundWorker : BackgroundService
         }
         catch (OperationCanceledException) when (taskToken.IsCancellationRequested)
         {
-            // Stop requested before processing started — tell the client so its UI finalizes.
+            // Stop requested before processing started — close the row and tell the client.
             _logger.LogInformation("Task {TaskId} stopped before processing started.", job.TaskId);
-            try { await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnStopped", job.TaskId); } catch { }
+            await MarkStoppedBeforeStartAsync(job);
         }
         catch (Exception ex)
         {
@@ -340,12 +395,38 @@ public class ConexyBackgroundWorker : BackgroundService
         }
     }
 
+    // STOP_CONFIRM: добавлено 2026-09-24 — задача остановлена до старта: строка закрывается как
+    // Cancelled (раньше оставалась Pending навсегда), клиент получает OnStopped.
+    private async Task MarkStoppedBeforeStartAsync(ConexyJob job)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var repository = scope.ServiceProvider.GetRequiredService<IConexyRepository>();
+            var entity = await repository.GetByIdAsync(job.TaskId, CancellationToken.None);
+            if (entity is not null && entity.Status is ConexyStatus.Pending or ConexyStatus.Running)
+            {
+                entity.Status = ConexyStatus.Cancelled;
+                entity.Result ??= "Generation stopped.";
+                entity.FinishedAt = DateTime.UtcNow;
+                await repository.SaveChangesAsync(CancellationToken.None);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not close task {TaskId} stopped before it started.", job.TaskId);
+        }
+
+        try { await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnStopped", job.TaskId); } catch { }
+    }
+
     private async Task<string> StreamCompletionAsync(
         IConexyLlmClient llmClient,
         IConversationService conversation,
         ConversationContext context,
         IWebSearchService webSearch,
         ConexyJob job,
+        TurnBuffer buffer,
         CancellationToken ct)
     {
         // web_search is available to flash/pro only when the Smart Search toggle is on.
@@ -408,7 +489,7 @@ public class ConexyBackgroundWorker : BackgroundService
             }
             catch (OperationCanceledException)
             {
-                _partialChatText = builder.ToString();
+                buffer.PartialChatText = builder.ToString();
                 throw;
             }
 
@@ -457,8 +538,8 @@ public class ConexyBackgroundWorker : BackgroundService
     /// The assistant text to store for a turn that did not complete: the chat path keeps its
     /// buffer in a field, the agent path exposes everything it streamed on the runner.
     /// </summary>
-    private string PartialAssistantText(IConexyAgentRunner runner) =>
-        string.IsNullOrWhiteSpace(_partialChatText) ? runner.PartialOutput : _partialChatText;
+    private static string PartialAssistantText(IConexyAgentRunner runner, TurnBuffer buffer) =>
+        string.IsNullOrWhiteSpace(buffer.PartialChatText) ? runner.PartialOutput : buffer.PartialChatText;
 
     private async Task<string> SearchAwareCompletionAsync(
         IConexyLlmClient llmClient,
@@ -537,7 +618,8 @@ public class ConexyBackgroundWorker : BackgroundService
                 if (toolCall.Function.Name != WebSearchTool.Name) continue;
 
                 var query = ParseSearchQuery(toolCall.Function.Arguments);
-                _logger.LogInformation("SearchAware tool_call [task {TaskId}]: name={Name} args={Args} query={Query}", job.TaskId, toolCall.Function.Name, toolCall.Function.Arguments, query);
+                // H3: the query is the user's text — only its length is logged.
+                _logger.LogInformation("SearchAware tool_call [task {TaskId}]: name={Name} queryChars={QueryChars}", job.TaskId, toolCall.Function.Name, query.Length);
 
                 await group.SendAsync("SearchStatus", new SearchStatusEvent { Status = "searching", Query = query }, ct);
                 var result = await webSearch.SearchAsync(query, ct);

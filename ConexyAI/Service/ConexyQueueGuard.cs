@@ -19,6 +19,20 @@ public interface IConexyQueueGuard
 
     /// <summary>Releases the in-flight guard for <paramref name="taskId"/> after its processing finished.</summary>
     void MarkCompleted(Guid taskId);
+
+    // TURN_IN_FLIGHT: добавлено 2026-09-24 — ревью H6.
+    /// <summary>
+    /// Reserves <paramref name="taskId"/> before the caller touches the task row. False when a turn
+    /// with that id is already queued or running — the caller must answer 409 instead of silently
+    /// dropping the request (which used to overwrite the running task's row and return 202).
+    /// </summary>
+    bool TryReserve(Guid taskId);
+
+    /// <summary>Enqueues a job whose id was reserved with <see cref="TryReserve"/>; releases it on failure.</summary>
+    Task EnqueueReservedAsync(ConexyJob job, CancellationToken ct = default);
+
+    /// <summary>True while a turn with this id is queued or running.</summary>
+    bool IsInFlight(Guid taskId);
 }
 
 public class ConexyQueueGuard : IConexyQueueGuard
@@ -57,4 +71,21 @@ public class ConexyQueueGuard : IConexyQueueGuard
     {
         _inFlight.TryRemove(taskId, out _);
     }
+
+    public bool TryReserve(Guid taskId) => _inFlight.TryAdd(taskId, 0);
+
+    public async Task EnqueueReservedAsync(ConexyJob job, CancellationToken ct = default)
+    {
+        try
+        {
+            await _queue.EnqueueAsync(job, ct);
+        }
+        catch
+        {
+            _inFlight.TryRemove(job.TaskId, out _);
+            throw;
+        }
+    }
+
+    public bool IsInFlight(Guid taskId) => _inFlight.ContainsKey(taskId);
 }

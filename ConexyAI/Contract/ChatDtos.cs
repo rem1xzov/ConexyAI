@@ -21,7 +21,18 @@ public record ChatSummaryDto(
     DateTime LastActivityAt,
     int MessageCount,
     string? LastMessage,
-    bool IsPinned);
+    bool IsPinned,
+    // CHAT_OWNERSHIP: добавлено 2026-09-24 — модель последнего хода ("conexy-cowork" и т.п.), чтобы
+    // чат, открытый на другом устройстве, вернулся в свой режим (ревью M18).
+    string? Model = null);
+
+// CHAT_SYNC_COMPLETE: добавлено 2026-09-24 — ревью H8.
+/// <summary>
+/// Body of <c>GET /api/conexy/chats</c>. <see cref="Chats"/> is bounded (all pinned chats + the most
+/// recent ones); <see cref="AllChatIds"/> is the complete set of the user's chat ids, which is the only
+/// safe basis for deciding that a chat was deleted on the server.
+/// </summary>
+public record ChatListDto(IReadOnlyList<ChatSummaryDto> Chats, IReadOnlyList<Guid> AllChatIds);
 
 /// <summary>One stored turn. Only what the transcript needs: role, text and when it was stored.</summary>
 public record ChatTranscriptMessageDto(string Role, string Content, DateTime CreatedAt);

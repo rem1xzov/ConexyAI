@@ -28,14 +28,19 @@ public class IdeFileService : IIdeFileService
     private readonly IConexyEditorStateService _editorState;
     private readonly IHubContext<ConexyHub> _hubContext;
     private readonly ILogger<IdeFileService> _logger;
+    // WORKSPACE_JAIL: добавлено 2026-09-24 — удаление/переименование/создание идут по путям, поэтому
+    // не выполняются, пока в этом воркспейсе работает команда песочницы (она может подменять симлинки).
+    private readonly ISandboxActivity _sandboxActivity;
 
     public IdeFileService(
         IConexyWorkspaceService workspaceService,
         IWorkspacePathValidator pathValidator,
         IConexyEditorStateService editorState,
         IHubContext<ConexyHub> hubContext,
-        ILogger<IdeFileService> logger)
+        ILogger<IdeFileService> logger,
+        ISandboxActivity? sandboxActivity = null)
     {
+        _sandboxActivity = sandboxActivity ?? new SandboxActivity();
         _workspaceService = workspaceService;
         _pathValidator = pathValidator;
         _editorState = editorState;
@@ -46,10 +51,11 @@ public class IdeFileService : IIdeFileService
     public Task<IReadOnlyList<FileNode>> ListAsync(Guid sessionId, string path, CancellationToken ct = default)
     {
         var fullPath = ResolveDirectory(sessionId, path);
-        var root = _workspaceService.GetTaskWorkspacePath(sessionId);
+        var root = WorkspaceJail.GetRealPath(_workspaceService.GetTaskWorkspacePath(sessionId));
 
+        // WORKSPACE_JAIL: symlinks are neither listed nor followed (review C2).
         var nodes = new List<FileNode>();
-        foreach (var dir in Directory.EnumerateDirectories(fullPath).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+        foreach (var dir in Directory.EnumerateDirectories(fullPath, "*", WorkspaceJail.NoLinks(recursive: false)).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
         {
             nodes.Add(new FileNode
             {
@@ -59,7 +65,7 @@ public class IdeFileService : IIdeFileService
             });
         }
 
-        foreach (var file in Directory.EnumerateFiles(fullPath).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        foreach (var file in Directory.EnumerateFiles(fullPath, "*", WorkspaceJail.NoLinks(recursive: false)).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
         {
             var info = new FileInfo(file);
             nodes.Add(new FileNode
@@ -77,8 +83,8 @@ public class IdeFileService : IIdeFileService
 
     public async Task<FileContentResponse> GetContentAsync(Guid sessionId, string path, CancellationToken ct = default)
     {
-        var fullPath = ResolveFile(sessionId, path);
-        var bytes = await File.ReadAllBytesAsync(fullPath, ct);
+        ResolveFile(sessionId, path);
+        var bytes = await WorkspaceJail.ReadAllBytesAsync(_workspaceService.GetTaskWorkspacePath(sessionId), path, ct);
 
         if (WorkspaceFileSafety.IsBinary(bytes))
         {
@@ -98,11 +104,8 @@ public class IdeFileService : IIdeFileService
     public Task SaveAsync(Guid sessionId, string path, string content, CancellationToken ct = default) =>
         _editorState.WithLockAsync(sessionId, path, async () =>
         {
-            var fullPath = _pathValidator.ResolveSafePath(sessionId, path);
-            var dir = Path.GetDirectoryName(fullPath);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-
-            await File.WriteAllTextAsync(fullPath, content ?? string.Empty, ct);
+            // WORKSPACE_JAIL: verified write — never through a symlink out of the workspace.
+            await WorkspaceJail.WriteAllTextAsync(_workspaceService.GetTaskWorkspacePath(sessionId), path, content ?? string.Empty, ct);
 
             // A manual user save supersedes the agent's undo history for this file.
             _editorState.ClearUndo(sessionId, path);
@@ -112,6 +115,7 @@ public class IdeFileService : IIdeFileService
     public Task CreateAsync(Guid sessionId, string path, bool isDirectory, CancellationToken ct = default) =>
         _editorState.WithLockAsync(sessionId, path, async () =>
         {
+            using var slot = _sandboxActivity.TryAcquire(sessionId) ?? throw new WorkspaceBusyException();
             var fullPath = _pathValidator.ResolveSafePath(sessionId, path);
             if (File.Exists(fullPath) || Directory.Exists(fullPath))
                 throw new InvalidOperationException($"'{path}' already exists.");
@@ -122,9 +126,7 @@ public class IdeFileService : IIdeFileService
             }
             else
             {
-                var dir = Path.GetDirectoryName(fullPath);
-                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-                await File.WriteAllTextAsync(fullPath, string.Empty, ct);
+                await WorkspaceJail.WriteAllTextAsync(_workspaceService.GetTaskWorkspacePath(sessionId), path, string.Empty, ct);
             }
 
             await SendUserActionAsync(sessionId, path, "create", isDirectory ? $"Создана директория {Path.GetFileName(path)}" : $"Создан файл {Path.GetFileName(path)}", ct);
@@ -133,6 +135,7 @@ public class IdeFileService : IIdeFileService
     public Task DeleteAsync(Guid sessionId, string path, CancellationToken ct = default) =>
         _editorState.WithLockAsync(sessionId, path, async () =>
         {
+            using var slot = _sandboxActivity.TryAcquire(sessionId) ?? throw new WorkspaceBusyException();
             var fullPath = _pathValidator.ResolveSafePath(sessionId, path);
             if (Directory.Exists(fullPath))
             {
@@ -154,6 +157,7 @@ public class IdeFileService : IIdeFileService
     public Task RenameAsync(Guid sessionId, string oldPath, string newPath, CancellationToken ct = default) =>
         _editorState.WithLockAsync(sessionId, oldPath, async () =>
         {
+            using var slot = _sandboxActivity.TryAcquire(sessionId) ?? throw new WorkspaceBusyException();
             var fullOld = _pathValidator.ResolveSafePath(sessionId, oldPath);
             var fullNew = _pathValidator.ResolveSafePath(sessionId, newPath);
 

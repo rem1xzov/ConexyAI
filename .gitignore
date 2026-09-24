@@ -20,3 +20,6 @@ dist/
 dist-ssr/
 *.local
 .DS_Store
+
+# Local agent worktrees
+.claude/worktrees/

@@ -4,23 +4,23 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace ConexyAI.Configuration;
 
-// SUBSCRIPTION_TIERS: добавлено 2026-09-17
-public class UserMemoryFact_config : IEntityTypeConfiguration<UserMemoryFactEntity>
+// CHAT_OWNERSHIP: добавлено 2026-09-24
+public class Chat_config : IEntityTypeConfiguration<ChatEntity>
 {
-    public void Configure(EntityTypeBuilder<UserMemoryFactEntity> builder)
+    public void Configure(EntityTypeBuilder<ChatEntity> builder)
     {
-        builder.ToTable("user_memory_fact");
+        builder.ToTable("chat");
 
+        // The id comes from the client (it is the chat id), never generated here.
         builder.HasKey(x => x.Id);
+        builder.Property(x => x.Id).ValueGeneratedNever();
 
         builder.Property(x => x.UserId).IsRequired();
-        builder.Property(x => x.FactText).IsRequired();
-        // MEMORY_CONTROL: добавлено 2026-09-24
-        builder.Property(x => x.IsSuppressed).IsRequired().HasDefaultValue(false);
+        builder.Property(x => x.Kind).HasMaxLength(20);
+        builder.Property(x => x.Model).HasMaxLength(50);
         builder.Property(x => x.CreatedAt).IsRequired();
         builder.Property(x => x.UpdatedAt).IsRequired();
 
-        // GITHUB_OAUTH: добавлено 2026-09-19 — real FK to users.
         builder.HasOne<User>()
             .WithMany()
             .HasForeignKey(x => x.UserId)

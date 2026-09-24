@@ -57,7 +57,9 @@ public interface IPendingActionService
     /// <paramref name="approveAll"/> is set on an approval, every later command of the same
     /// task runs without asking again ("allow all for this session").
     /// </summary>
-    Task<bool> ConfirmActionAsync(Guid actionId, bool approved, bool approveAll, CancellationToken ct);
+    /// CHAT_OWNERSHIP: изменено 2026-09-24 — ревью C1: решение принимается только от владельца задачи
+    /// (<paramref name="userId"/>); чужой вызов ничего не меняет и возвращает false.
+    Task<bool> ConfirmActionAsync(Guid actionId, Guid userId, bool approved, bool approveAll, CancellationToken ct);
 
     /// <summary>
     /// True when the user switched the task to "allow all" — the agent then skips the
@@ -86,7 +88,7 @@ public class PendingActionService : IPendingActionService
     private readonly ConcurrentDictionary<Guid, byte> _autoApprovedTasks = new();
 
     /// <summary>A blocking waiter plus the task it belongs to, so "allow all" can be scoped.</summary>
-    private sealed record Waiter(TaskCompletionSource<bool> Tcs, Guid TaskId);
+    private sealed record Waiter(TaskCompletionSource<bool> Tcs, Guid TaskId, Guid UserId);
 
     public PendingActionService(
         IServiceScopeFactory scopeFactory,
@@ -140,7 +142,7 @@ public class PendingActionService : IPendingActionService
         }
 
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_waiters.TryAdd(actionId, new Waiter(tcs, taskId)))
+        if (!_waiters.TryAdd(actionId, new Waiter(tcs, taskId, userId)))
         {
             // Duplicate action id: treat as approved so the loop can proceed rather than hang.
             return true;
@@ -205,8 +207,16 @@ public class PendingActionService : IPendingActionService
         }
     }
 
-    public async Task<bool> ConfirmActionAsync(Guid actionId, bool approved, bool approveAll, CancellationToken ct)
+    public async Task<bool> ConfirmActionAsync(Guid actionId, Guid userId, bool approved, bool approveAll, CancellationToken ct)
     {
+        // CHAT_OWNERSHIP: сначала проверка владельца, потом TryRemove — чужой вызов не должен даже
+        // «съесть» ожидание, иначе он мог бы отменить команду, просто её «подтвердив».
+        if (_waiters.TryGetValue(actionId, out var candidate) && candidate.UserId != userId)
+        {
+            _logger.LogWarning("ConfirmAction for action {ActionId} refused: caller is not the task owner.", actionId);
+            return false;
+        }
+
         if (_waiters.TryRemove(actionId, out var waiter))
         {
             if (approved && approveAll)

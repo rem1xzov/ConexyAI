@@ -29,7 +29,8 @@ public class ChatHistoryRepository : IChatHistoryRepository
             ChatId = chatId,
             UserId = userId,
             Role = role,
-            Content = content,
+            // M6: Postgres rejects \0 inside text — one stray NUL used to lose the whole turn.
+            Content = content.Contains('\0') ? content.Replace("\0", string.Empty) : content,
             // CHAT_KIND_SYNC: режим пишется вместе с сообщением, чтобы список чатов мог вернуть его
             // без отдельной таблицы метаданных и без join’а.
             Kind = kind
@@ -59,6 +60,8 @@ public class ChatHistoryRepository : IChatHistoryRepository
     }
 
     // CHAT_SYNC: добавлено 2026-09-23
+    // CHAT_SYNC_COMPLETE: изменено 2026-09-24 — ревью H8/M18: закреплённые чаты входят в ответ всегда,
+    // даже если по активности они за пределами лимита, и каждый чат несёт модель последнего хода.
     public async Task<IReadOnlyList<ChatListSummary>> GetChatsAsync(
         Guid userId, int limit, CancellationToken ct = default)
     {
@@ -66,10 +69,76 @@ public class ChatHistoryRepository : IChatHistoryRepository
             return Array.Empty<ChatListSummary>();
 
         var rows = await QueryChatSummariesAsync(userId, excludeChatId: null, limit, ct);
+
+        var pinnedIds = await _context.ChatMessages
+            .AsNoTracking()
+            .Where(m => m.UserId == userId && m.IsPinned)
+            .Select(m => m.ChatId)
+            .Distinct()
+            .ToListAsync(ct);
+        var missingPinned = pinnedIds.Except(rows.Select(r => r.ChatId)).ToList();
+        if (missingPinned.Count > 0)
+        {
+            rows.AddRange(await QueryChatSummariesAsync(userId, excludeChatId: null, missingPinned.Count, ct, missingPinned));
+        }
+
+        var ids = rows.Select(r => r.ChatId).ToList();
+        var models = await _context.Chats
+            .AsNoTracking()
+            .Where(c => c.UserId == userId && ids.Contains(c.Id))
+            .Select(c => new { c.Id, c.Model })
+            .ToDictionaryAsync(c => c.Id, c => c.Model, ct);
+
         return rows
+            .OrderByDescending(r => r.LastActivityAt)
             .Select(r => new ChatListSummary(
-                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind, r.Title, r.IsPinned))
+                r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind, r.Title, r.IsPinned,
+                models.GetValueOrDefault(r.ChatId)))
             .ToList();
+    }
+
+    // CHAT_SYNC_COMPLETE: добавлено 2026-09-24
+    public async Task<IReadOnlyList<Guid>> GetChatIdsAsync(Guid userId, CancellationToken ct = default)
+    {
+        return await _context.ChatMessages
+            .AsNoTracking()
+            .Where(m => m.UserId == userId)
+            .Select(m => m.ChatId)
+            .Distinct()
+            .ToListAsync(ct);
+    }
+
+    // HISTORY_REPLAY: добавлено 2026-09-24
+    public async Task<int> RemoveLastTurnAsync(Guid userId, Guid chatId, CancellationToken ct = default)
+    {
+        var rows = await _context.ChatMessages
+            .Where(m => m.ChatId == chatId && m.UserId == userId)
+            .OrderBy(m => m.CreatedAt)
+            .ToListAsync(ct);
+
+        var lastUser = rows.FindLastIndex(m => m.Role == "user");
+        if (lastUser < 0)
+            return 0;
+
+        var doomed = rows.Skip(lastUser).ToList();
+        _context.ChatMessages.RemoveRange(doomed);
+        await _context.SaveChangesAsync(ct);
+        return doomed.Count;
+    }
+
+    // HISTORY_REPLAY: добавлено 2026-09-24
+    public async Task<bool> ReplaceLastAssistantAsync(Guid userId, Guid chatId, string content, CancellationToken ct = default)
+    {
+        var last = await _context.ChatMessages
+            .Where(m => m.ChatId == chatId && m.UserId == userId)
+            .OrderByDescending(m => m.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+        if (last is null || last.Role != "assistant")
+            return false;
+
+        last.Content = content.Contains('\0') ? content.Replace("\0", string.Empty) : content;
+        await _context.SaveChangesAsync(ct);
+        return true;
     }
 
     /// <summary>
@@ -78,11 +147,16 @@ public class ChatHistoryRepository : IChatHistoryRepository
     /// which must not include the chat it is collecting context for.
     /// </summary>
     private async Task<List<ChatSummaryRow>> QueryChatSummariesAsync(
-        Guid userId, Guid? excludeChatId, int limit, CancellationToken ct)
+        Guid userId, Guid? excludeChatId, int limit, CancellationToken ct, IReadOnlyCollection<Guid>? onlyChatIds = null)
     {
         var query = _context.ChatMessages
             .AsNoTracking()
             .Where(m => m.UserId == userId);
+
+        if (onlyChatIds is not null)
+        {
+            query = query.Where(m => onlyChatIds.Contains(m.ChatId));
+        }
 
         if (excludeChatId is { } excluded)
         {
@@ -146,12 +220,28 @@ public class ChatHistoryRepository : IChatHistoryRepository
             .Where(m => m.ChatId == chatId && m.UserId == userId)
             .ToListAsync(ct);
 
-        if (rows.Count == 0)
+        // CHAT_OWNERSHIP: добавлено 2026-09-24 — ревью M9/H5: вместе с историей уходят строки ходов
+        // (промпт и ответ, иначе они оставались доступны по GET /api/conexy/{taskId}), карточки
+        // подтверждения команд и факты памяти, извлечённые из этого чата.
+        var tasks = await _context.Conexy
+            .Where(t => t.ChatId == chatId && t.UserId == userId)
+            .ToListAsync(ct);
+        var actions = await _context.PendingActions
+            .Where(a => a.ChatId == chatId && a.UserId == userId)
+            .ToListAsync(ct);
+        var facts = await _context.UserMemoryFacts
+            .Where(f => f.SourceChatId == chatId && f.UserId == userId)
+            .ToListAsync(ct);
+
+        if (rows.Count + tasks.Count + actions.Count + facts.Count == 0)
         {
             return 0;
         }
 
         _context.ChatMessages.RemoveRange(rows);
+        _context.Conexy.RemoveRange(tasks);
+        _context.PendingActions.RemoveRange(actions);
+        _context.UserMemoryFacts.RemoveRange(facts);
         await _context.SaveChangesAsync(ct);
         return rows.Count;
     }

@@ -132,8 +132,8 @@ public class IdeTerminalService : IIdeTerminalService
         await session.WriteLock.WaitAsync(ct);
         try
         {
-            // TEMP diagnostic: confirm the bytes are actually written to the pty input handle.
-            _logger.LogInformation("PTY write input [{SessionId}] {ByteCount} bytes: {RawInput}", sessionId, bytes.Length, data);
+            // L12: only the size is logged — keystrokes can carry passwords and tokens.
+            _logger.LogDebug("PTY write input [{SessionId}] {ByteCount} bytes", sessionId, bytes.Length);
 
             await session.Connection.InputStream.WriteAsync(bytes, ct);
             // The pty input stream may buffer small writes; flush so keystrokes reach the shell immediately.
@@ -198,9 +198,8 @@ public class IdeTerminalService : IIdeTerminalService
                 var charCount = decoder.GetChars(buffer, 0, read, chars, 0, flush: false);
                 var text = new string(chars, 0, charCount);
 
-                // TEMP diagnostic: log the raw bytes coming out of the pty so we can see
-                // exactly what (if anything) the shell prints. Remove after debugging.
-                _logger.LogInformation("PTY raw output [{SessionId}] {ByteCount} bytes: {RawOutput}", sessionId, read, text);
+                // L12: only the size — terminal output can carry secrets.
+                _logger.LogDebug("PTY output [{SessionId}] {ByteCount} bytes", sessionId, read);
 
                 await _hubContext.Clients.Group($"task_{sessionId}")
                     .SendAsync("TerminalOutput", new TerminalOutputEvent { SessionId = sessionId, Data = text });

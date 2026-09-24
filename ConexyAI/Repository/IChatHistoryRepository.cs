@@ -69,6 +69,23 @@ public interface IChatHistoryRepository
     /// such chat for this user" — the same ownership gate as the rename and delete paths.
     /// </summary>
     Task<int> SetPinnedAsync(Guid userId, Guid chatId, bool isPinned, CancellationToken ct = default);
+
+    // CHAT_SYNC_COMPLETE: добавлено 2026-09-24 — ревью H8.
+    /// <summary>Every chat id the user has stored history for (complete, unbounded — ids only).</summary>
+    Task<IReadOnlyList<Guid>> GetChatIdsAsync(Guid userId, CancellationToken ct = default);
+
+    // HISTORY_REPLAY: добавлено 2026-09-24 — ревью M5.
+    /// <summary>
+    /// Removes the chat's last turn (its last user message and every answer after it) and returns how
+    /// many rows went away. Used when a turn replaces the previous one (regenerate / resend).
+    /// </summary>
+    Task<int> RemoveLastTurnAsync(Guid userId, Guid chatId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Replaces the text of the chat's last assistant message; false when the chat has none. Used by
+    /// Continue, whose partial answer is already stored and must grow instead of being duplicated.
+    /// </summary>
+    Task<bool> ReplaceLastAssistantAsync(Guid userId, Guid chatId, string content, CancellationToken ct = default);
 }
 
 // CROSS_CHAT_CONTEXT: добавлено 2026-09-23
@@ -92,4 +109,6 @@ public sealed record ChatListSummary(
     // сообщения пользователя).
     string? Title,
     // CHAT_PIN: закреплён ли чат наверху сайдбара; сюда же приезжает закрепление с другого устройства.
-    bool IsPinned);
+    bool IsPinned,
+    // CHAT_OWNERSHIP: модель последнего хода (из таблицы chat), null для старых чатов.
+    string? Model = null);
