@@ -1,15 +1,16 @@
-import { memo, useState, type KeyboardEvent } from 'react';
+import { memo, useMemo, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatMessage } from '../types/chat';
 import type { CommandDecisionHandler } from '../types/signalr';
 import { assistantPhase } from '../utils/assistantPhase';
+import { artifactsToMarkdown } from '../utils/artifacts';
 import { ConexyLogo } from './ConexyLogo';
 import { VisionGallery } from './VisionGallery';
 import { AttachmentGrid } from './AttachmentGrid';
 import { AgentTimeline } from './AgentTimeline';
 import { DurationBadge } from './StepDuration';
 import { TodoPanel } from './TodoPanel';
-import { Markdown } from './Markdown';
+import { AssistantContent } from './artifacts/AssistantContent';
 import { MessageActions } from './MessageActions';
 import { UserMessageActions } from './UserMessageActions';
 
@@ -84,6 +85,8 @@ function MessageBubbleBase({
   const statusPill =
     phase === 'tool_calling' && currentAction ? { label: currentAction.label } : null;
   const showActions = message.status !== 'streaming';
+  // ARTIFACTS: copy / export get ordinary fenced blocks instead of raw <conexy_artifact> markup.
+  const exportContent = useMemo(() => (isUser ? content : artifactsToMarkdown(content)), [isUser, content]);
 
   function startEdit() {
     setDraft(content);
@@ -191,10 +194,15 @@ function MessageBubbleBase({
         onOpenPath={onOpenFile}
       />
 
-      {/* 4. Streamed answer. */}
+      {/* 4. Streamed answer (Markdown + artifact cards in place of <conexy_artifact> tags). */}
       <div className="w-full chat-text leading-relaxed">
         <div className="break-words">
-          <Markdown text={content} />
+          <AssistantContent
+            messageId={message.id}
+            createdAt={message.createdAt}
+            content={content}
+            streaming={streaming}
+          />
         </div>
       </div>
 
@@ -218,7 +226,7 @@ function MessageBubbleBase({
 
       {showActions && (
         <MessageActions
-          content={content}
+          content={exportContent}
           onRegenerate={onRegenerate ? () => onRegenerate(message.id) : undefined}
           onContinue={
             message.status === 'stopped' && onContinue ? () => onContinue(message.id) : undefined

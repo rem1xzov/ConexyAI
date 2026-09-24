@@ -1,6 +1,8 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { codeBlockPreviewType } from '../../utils/artifacts';
 import { copyText } from '../../utils/clipboard';
+import { openAdhocArtifact } from '../artifacts/store';
 import { HighlightedCode } from './HighlightedCode';
 
 interface CodeBlockProps {
@@ -38,16 +40,34 @@ export function CopyButton({ text, className }: { text: string; className?: stri
 }
 
 /**
- * Fenced code block: language label, copy button and highlighted code.
+ * Fenced code block: language label, optional "Preview" (```html / ```svg open the artifact
+ * panel), copy button and highlighted code.
  */
 export const CodeBlock = memo(function CodeBlock({ language, code, closed = true }: CodeBlockProps) {
   const { t } = useTranslation();
+  const previewType = closed ? codeBlockPreviewType(language, code) : null;
 
   return (
     <div className="code-block">
       <div className="code-block__header">
         <span className="code-block__lang">{language || t('render.code')}</span>
         <div className="code-block__actions">
+          {previewType && (
+            <button
+              className="code-block__copy"
+              type="button"
+              onClick={() =>
+                openAdhocArtifact({
+                  type: previewType,
+                  title: t(previewType === 'text/html' ? 'render.htmlPreviewTitle' : 'render.svgPreviewTitle'),
+                  language,
+                  content: code,
+                })
+              }
+            >
+              {t('render.preview')}
+            </button>
+          )}
           <CopyButton text={code} />
         </div>
       </div>

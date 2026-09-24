@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { openAdhocArtifact } from '../artifacts/store';
 import { CopyButton } from './CodeBlock';
 import { HighlightedCode } from './HighlightedCode';
 
@@ -208,7 +209,19 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code, closed, varia
         draggable={false}
       />
     );
-    body = <div className="mermaid-diagram__canvas mermaid-diagram__canvas--panel">{img}</div>;
+    body =
+      variant === 'inline' ? (
+        <button
+          type="button"
+          className="mermaid-diagram__canvas"
+          onClick={() => openAdhocArtifact({ type: 'text/mermaid', title: t('render.diagram'), content: code })}
+          title={t('render.openDiagram')}
+        >
+          {img}
+        </button>
+      ) : (
+        <div className="mermaid-diagram__canvas mermaid-diagram__canvas--panel">{img}</div>
+      );
   } else if (state.status === 'error' && !showCode) {
     body = (
       <>
