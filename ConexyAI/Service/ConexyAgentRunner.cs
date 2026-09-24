@@ -2100,10 +2100,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 limit = new { type = "integer", description = "Максимальное количество чанков (по умолчанию 5)" },
                 document_name = new { type = "string", description = "Фильтр по конкретному файлу или расширению (если известно)" }
             }, required = new[] { "query" } }),
-        Function("read_document_chunk", "Возвращает расширенный контекст конкретного фрагмента документа или полный текст документа по его document_id / chunk_index. Используй, если фрагмента из поиска недостаточно для точного ответа.",
+        Function("read_document_chunk", "Читает текст документа постранично (до ~12 000 символов за вызов), начиная с фрагмента chunk_index. Используй, если фрагмента из поиска недостаточно для точного ответа; для продолжения вызови ещё раз с next_chunk_index из ответа.",
             new { type = "object", properties = new {
                 document_id = new { type = "string", description = "ID документа" },
-                chunk_index = new { type = "integer", description = "Индекс конкретного фрагмента (если не указан — вернётся полный текст документа)" }
+                chunk_index = new { type = "integer", description = "С какого фрагмента читать (без него — с начала). Ответ содержит next_chunk_index для продолжения." }
             }, required = new[] { "document_id" } }),
         WebSearchTool.Schema(),
         // AGENT_WEB_TOOLS: добавлено 2026-09-24
@@ -2115,7 +2115,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 limit = new { type = "integer", description = "Maximum number of chats to return (default 5, max 10)" }
             }, required = new[] { "query" } }),
         // OFFICE_FORMATS: добавлено 2026-09-23
-        Function("create_document", "Create a Word (.docx), Excel (.xlsx) or PowerPoint (.pptx) file in the workspace from Markdown; the format comes from the path extension. .docx: headings, paragraphs, bullet/numbered lists, tables and **bold**. .xlsx: every Markdown table becomes a sheet named after the heading above it (numbers are stored as numbers); plain CSV text also works. .pptx: every '#'/'##' heading starts a slide and the lines under it become its body (overlong slides continue automatically).",
+        Function("create_document", "Create a Word (.docx), Excel (.xlsx) or PowerPoint (.pptx) file in the workspace from Markdown; the format comes from the path extension. .docx: headings, paragraphs with **bold**/*italic*/`code`/links, nested bullet/numbered/task lists, tables, code blocks and quotes. .xlsx: every Markdown table becomes a sheet named after the heading above it, with a styled header, filters and fitted columns; cells are typed — numbers (\"1 234,56\", \"12%\", \"1 200 ₽\", \"$1,200\"), dates (2026-09-24, 24.09.2026), booleans and real formulas such as =SUM(B2:B5). .pptx: a leading '#' is the title slide; every '#'/'##' heading (also '## Слайд N: Название') starts a slide, the lines under it become bullets (nested levels allowed) and tables become native tables; overlong slides continue automatically.",
             new { type = "object", properties = new {
                 path = new { type = "string", description = "Relative path ending in .docx, .xlsx or .pptx" },
                 content = new { type = "string", description = "Document content in Markdown" },
