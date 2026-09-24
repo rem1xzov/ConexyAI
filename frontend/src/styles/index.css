@@ -5929,3 +5929,21 @@ body {
 .dialog-btn--danger-outline:hover:not(:disabled) {
   background: rgba(255, 107, 122, 0.1);
 }
+
+/* ---------- WORKSPACE_RACES: agent-edit conflicts, folder actions ---------- */
+.workspace__tab-conflict {
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.file-tree__row--folder:hover .file-tree__action,
+.file-tree__row--folder:focus-within .file-tree__action {
+  opacity: 1;
+}
+
+.file-tree__row--folder:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
