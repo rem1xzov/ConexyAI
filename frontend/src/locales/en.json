@@ -104,6 +104,27 @@
     "langRu": "Русский",
     "langEn": "English"
   },
+  "terminal": {
+    "toggle": "Terminal (Ctrl+`)",
+    "menuToggle": "Toggle Terminal",
+    "close": "Close terminal",
+    "resize": "Resize the bottom panel",
+    "noChat": "Open an agent chat to use the terminal.",
+    "connecting": "Connecting to the terminal…",
+    "unavailableTitle": "Terminal unavailable",
+    "unavailable": "The server cannot start a sandbox right now (Docker is not available), so there is no terminal for this workspace.",
+    "modeError": "Could not connect to the terminal: {{message}}",
+    "retry": "Retry",
+    "sandboxBanner": "Sandbox terminal: commands run in this chat's isolated container, in /workspace (the same files the agent sees). Ctrl+C stops a command, ↑/↓ browse history.",
+    "busy": "Another command is still running in this chat's sandbox — wait for it to finish or press Ctrl+C.",
+    "commandError": "Command failed: {{message}}",
+    "timedOut": "The command took longer than 120 s and was stopped.",
+    "exitCode": "[exit code {{code}}]",
+    "runFailed": "Could not run the command: {{message}}",
+    "forbidden": "This chat belongs to another account — its terminal is not available.",
+    "joinFailed": "Not connected to the chat's live output yet ({{message}}). It will be retried with the next command.",
+    "startFailed": "Could not start the terminal: {{message}}"
+  },
   "admin": {
     "title": "Admin panel",
     "usersTab": "Users",

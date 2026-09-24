@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   createIdeFile,
@@ -31,8 +31,12 @@ import {
   DownloadIcon,
   PlayIcon,
   RefreshIcon,
+  TerminalIcon,
   TrashIcon,
 } from './Icons';
+
+// xterm is only needed once the terminal is opened, so it is loaded on demand (a separate chunk).
+const TerminalPanel = lazy(() => import('./TerminalPanel').then((m) => ({ default: m.TerminalPanel })));
 
 interface WorkspacePanelProps {
   sessionId?: string;
@@ -73,8 +77,9 @@ interface OpenTab {
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 // STATUS_TAB_REMOVED: добавлено 2026-09-22 — вкладка «Статус» удалена целиком: она дублировала
-// ленту чата (те же команды и карточки подтверждения). В нижней панели осталась только «Задачи».
-type BottomTab = 'todo';
+// ленту чата (те же команды и карточки подтверждения).
+// SANDBOX_TERMINAL: добавлено 2026-09-24 — вторая вкладка нижней панели: терминал.
+type BottomTab = 'todo' | 'terminal';
 
 type DialogState =
   | { kind: 'confirm'; title: string; message?: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void }
@@ -139,6 +144,28 @@ async function deleteWorkspaceFolder(chatId: string, path: string): Promise<void
 }
 
 // ---------------------------------------------------------------------------------------------
+
+const BOTTOM_HEIGHT_KEY = 'conexy_ws_bottom_height';
+const BOTTOM_MIN = 120;
+const BOTTOM_DEFAULT = 220;
+const BOTTOM_TERMINAL_DEFAULT = 280;
+
+function readBottomHeight(): number | null {
+  try {
+    const v = Number(localStorage.getItem(BOTTOM_HEIGHT_KEY));
+    return Number.isFinite(v) && v >= BOTTOM_MIN ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeBottomHeight(height: number): void {
+  try {
+    localStorage.setItem(BOTTOM_HEIGHT_KEY, String(Math.round(height)));
+  } catch {
+    // Private mode / blocked storage: the height just is not remembered.
+  }
+}
 
 /** Branded empty state for the Monaco editor area (right pane) when no file is open. */
 function EditorEmptyState({ title, text }: { title: string; text: string }) {
@@ -266,8 +293,10 @@ export function WorkspacePanel({
   const [tabs, setTabs] = useState<OpenTab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
 
-  // STATUS_TAB_REMOVED: добавлено 2026-09-22 — единственная вкладка нижней панели.
   const [bottomTab, setBottomTab] = useState<BottomTab>('todo');
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalFocusNonce, setTerminalFocusNonce] = useState(0);
+  const [bottomHeight, setBottomHeight] = useState<number>(() => readBottomHeight() ?? BOTTOM_DEFAULT);
   // Save state and agent conflicts are per file, so switching tabs never shows another file's state.
   const [saveStatus, setSaveStatus] = useState<Record<string, SaveStatus>>({});
   /** path -> the agent's version of a file the user was editing (waiting for "keep mine / take agent's"). */
@@ -286,6 +315,7 @@ export function WorkspacePanel({
 
   const toastTimer = useRef<number | null>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   // WORKSPACE_RACES: добавлено 2026-09-24 (M14).
   // `tabsRef` — единственный источник правды о вкладках, и обновляется СИНХРОННО (updateTabs):
@@ -488,7 +518,7 @@ export function WorkspacePanel({
     setListing(null);
     setError(null);
     setRunError(null);
-    setBottomTab('todo');
+    if (!terminalOpen) setBottomTab('todo');
     void loadFiles(sessionId);
 
     // Restored tabs may be stale: the agent could have changed those files meanwhile.
@@ -836,10 +866,66 @@ export function WorkspacePanel({
     }
   }
 
-  // Keep a stable reference so the Ctrl+F5 listener always invokes the latest handler.
+  // SANDBOX_TERMINAL: добавлено 2026-09-24 (ТЗ-2 §6) — кнопка на панели инструментов открывает
+  // терминал во вкладке нижней панели и закрывает его повторным нажатием.
+  function toggleTerminal() {
+    if (terminalOpen && bottomTab === 'terminal') {
+      setTerminalOpen(false);
+      setBottomTab('todo');
+      return;
+    }
+    // Like creating a file: a draft agent chat gets materialized so the terminal has a workspace.
+    if (!terminalOpen) onEnsureWorkspace?.();
+    setTerminalOpen(true);
+    setBottomTab('terminal');
+    setTerminalFocusNonce((n) => n + 1);
+    setBottomHeight((h) => Math.max(h, BOTTOM_TERMINAL_DEFAULT));
+  }
+
+  function closeTerminal() {
+    setTerminalOpen(false);
+    setBottomTab('todo');
+  }
+
+  function startBottomResize(e: ReactPointerEvent<HTMLDivElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = bottomHeight;
+    const max = Math.max(BOTTOM_MIN, (rootRef.current?.clientHeight ?? 800) * 0.75);
+    let latest = startHeight;
+    const onMove = (ev: PointerEvent) => {
+      latest = Math.min(max, Math.max(BOTTOM_MIN, startHeight + (startY - ev.clientY)));
+      setBottomHeight(latest);
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      document.body.classList.remove('workspace-resizing');
+      writeBottomHeight(latest);
+    };
+    document.body.classList.add('workspace-resizing');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }
+
+  function onResizerKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    const max = Math.max(BOTTOM_MIN, (rootRef.current?.clientHeight ?? 800) * 0.75);
+    const next = Math.min(max, Math.max(BOTTOM_MIN, bottomHeight + (e.key === 'ArrowUp' ? 24 : -24)));
+    setBottomHeight(next);
+    writeBottomHeight(next);
+  }
+
+  // Keep stable references so the global shortcuts always invoke the latest handlers.
   const runHandlerRef = useRef<() => void>(() => {});
+  const terminalHandlerRef = useRef<() => void>(() => {});
   useEffect(() => {
     runHandlerRef.current = handleRun;
+    terminalHandlerRef.current = toggleTerminal;
   });
 
   useEffect(() => {
@@ -855,8 +941,21 @@ export function WorkspacePanel({
         setPaletteOpen((o) => !o);
       }
     }
+    // Ctrl+` (by key position, so it also works on layouts where that key is "ё"). Listened to in
+    // the capture phase: a focused xterm or Monaco would otherwise swallow the key.
+    function onTerminalShortcut(e: KeyboardEvent) {
+      if (e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Backquote') {
+        e.preventDefault();
+        e.stopPropagation();
+        terminalHandlerRef.current();
+      }
+    }
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onTerminalShortcut, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onTerminalShortcut, true);
+    };
   }, []);
 
   // Refresh the tree when the agent mutates files (create / str_replace / insert).
@@ -958,14 +1057,16 @@ export function WorkspacePanel({
       label: t('workspace.menuView'),
       items: [
         { label: t('workspace.menuToggleExplorer'), action: () => setExplorerVisible((v) => !v) },
+        { label: t('terminal.menuToggle'), shortcut: 'Ctrl+`', action: () => toggleTerminal() },
       ],
     },
   ];
 
   const activeSaveStatus: SaveStatus = (activePath && saveStatus[activePath]) || 'idle';
+  const terminalVisible = terminalOpen && bottomTab === 'terminal';
 
   return (
-    <div className="workspace" style={style}>
+    <div className="workspace" style={style} ref={rootRef}>
       <MenuBar menus={menus} />
       <input
         ref={zipInputRef}
@@ -1005,6 +1106,16 @@ export function WorkspacePanel({
               {activeSaveStatus === 'idle' && (isDirty(activeTab) ? t('workspace.notSaved') : '')}
             </span>
           )}
+          <button
+            className={`icon-btn workspace__terminal-btn ${terminalVisible ? 'workspace__terminal-btn--active' : ''}`}
+            onClick={toggleTerminal}
+            disabled={!sessionId && !onEnsureWorkspace}
+            title={t('terminal.toggle')}
+            aria-label={t('terminal.toggle')}
+            aria-pressed={terminalVisible}
+          >
+            <TerminalIcon size={16} />
+          </button>
           <button className="icon-btn" onClick={() => void loadFiles()} title={t('workspace.refreshFiles')} aria-label={t('workspace.refreshFiles')}>
             <RefreshIcon size={16} />
           </button>
@@ -1154,16 +1265,49 @@ export function WorkspacePanel({
         </section>
       </div>
 
-      <div className="workspace__bottom">
-        <div className="workspace__bottom-tabs">
+      <div className="workspace__bottom" style={{ flexBasis: bottomHeight }}>
+        <div
+          className="workspace__bottom-resizer"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={t('terminal.resize')}
+          tabIndex={0}
+          onPointerDown={startBottomResize}
+          onKeyDown={onResizerKeyDown}
+        />
+        <div className="workspace__bottom-tabs" role="tablist">
           <button
+            role="tab"
+            aria-selected={bottomTab === 'todo'}
             className={`workspace__bottom-tab ${bottomTab === 'todo' ? 'workspace__bottom-tab--active' : ''}`}
             onClick={() => setBottomTab('todo')}
           >
             <CheckIcon size={14} /> {t('workspace.todo')}
           </button>
+          {terminalOpen && (
+            <div
+              className={`workspace__bottom-tab workspace__bottom-tab--closable ${bottomTab === 'terminal' ? 'workspace__bottom-tab--active' : ''}`}
+            >
+              <button
+                role="tab"
+                aria-selected={bottomTab === 'terminal'}
+                className="workspace__bottom-tab-label"
+                onClick={() => setBottomTab('terminal')}
+              >
+                <TerminalIcon size={14} /> {t('workspace.terminal')}
+              </button>
+              <button
+                className="workspace__bottom-tab-close"
+                onClick={closeTerminal}
+                title={t('terminal.close')}
+                aria-label={t('terminal.close')}
+              >
+                <CloseIcon size={11} />
+              </button>
+            </div>
+          )}
         </div>
-        <div className="workspace__bottom-body">
+        <div className="workspace__bottom-body" hidden={bottomTab !== 'todo'}>
           {todos.length > 0 ? (
             <TodoPanel todos={todos} />
           ) : (
@@ -1172,6 +1316,20 @@ export function WorkspacePanel({
             </div>
           )}
         </div>
+        {terminalOpen && (
+          // Hidden rather than unmounted on the Todo tab, so the scrollback survives tab switches.
+          <div className="workspace__bottom-body workspace__bottom-body--terminal" hidden={bottomTab !== 'terminal'}>
+            {sessionId ? (
+              <Suspense fallback={<div className="terminal-notice">{t('terminal.connecting')}</div>}>
+                <TerminalPanel key={sessionId} sessionId={sessionId} autoFocus={terminalFocusNonce > 0} />
+              </Suspense>
+            ) : (
+              <div className="workspace__empty workspace__empty--panel">
+                <div className="workspace__empty-text">{t('terminal.noChat')}</div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <CommandPalette
@@ -1181,6 +1339,7 @@ export function WorkspacePanel({
         onOpenFile={(p) => void openFile(p)}
         onRun={() => void handleRun()}
         onToggleTodo={() => setBottomTab('todo')}
+        onToggleTerminal={toggleTerminal}
         onSave={() => activePath && void saveTab(activePath)}
       />
 

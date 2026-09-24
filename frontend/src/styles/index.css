@@ -5947,3 +5947,129 @@ body {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
+
+/* ---------- SANDBOX_TERMINAL: bottom panel with a terminal tab ---------- */
+.workspace__terminal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.workspace__terminal-btn--active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.workspace__terminal-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.workspace__bottom {
+  position: relative;
+}
+
+.workspace__bottom-resizer {
+  position: absolute;
+  top: -4px;
+  left: 0;
+  right: 0;
+  height: 8px;
+  cursor: row-resize;
+  z-index: 5;
+  touch-action: none;
+}
+
+.workspace__bottom-resizer:hover,
+.workspace__bottom-resizer:focus-visible {
+  outline: none;
+  background: linear-gradient(to bottom, transparent 3px, var(--accent) 3px, var(--accent) 5px, transparent 5px);
+}
+
+body.workspace-resizing {
+  cursor: row-resize;
+  user-select: none;
+}
+
+.workspace__bottom-tab--closable {
+  gap: 2px;
+  padding: 0 4px 0 0;
+}
+
+.workspace__bottom-tab-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 4px 5px 12px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.workspace__bottom-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.workspace__bottom-tab-close:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.workspace__bottom-body--terminal {
+  padding: 0;
+  overflow: hidden;
+}
+
+.workspace__bottom-body--terminal:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-dock__content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--code-bg);
+}
+
+.terminal-dock__content .terminal-panel {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  padding: 6px 4px 4px 10px;
+}
+
+.terminal-dock__content .terminal-panel .xterm {
+  height: 100%;
+}
+
+.terminal-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.terminal-notice__title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.terminal-notice--error {
+  color: var(--danger);
+}
