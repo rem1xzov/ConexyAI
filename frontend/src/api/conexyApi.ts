@@ -52,9 +52,13 @@ export async function login(email: string, password: string): Promise<DevTokenRe
 }
 
 // EMAIL_AUTH: добавлено 2026-09-19
-/** Clears the session cookie on the backend (logout). */
-export async function logout(): Promise<void> {
-  await axios.post('/api/auth/logout');
+// SESSION_REVOKED: изменено 2026-09-24 (M19) — выход отзывает токен на сервере (все устройства),
+// поэтому сам токен передаётся явно, а не только через cookie.
+/** Revokes the session on the backend and clears its cookie (logout). */
+export async function logout(token?: string | null): Promise<void> {
+  await axios.post('/api/auth/logout', null, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
 }
 
 // EMAIL_AUTH: добавлено 2026-09-19
