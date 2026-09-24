@@ -31,5 +31,10 @@ public class User_config : IEntityTypeConfiguration<User>
         // an email can coexist while a populated email/GitHubId is guaranteed unique.
         builder.HasIndex(x => x.Email).IsUnique();
         builder.HasIndex(x => x.GitHubId).IsUnique();
+
+        // --- TOKEN_REVOCATION: добавлено 2026-09-24 (ревью M19) — версия сессий, см. User.TokenVersion.
+        // Миграция добавит NOT NULL-колонку со значением 0 для существующих строк.
+        builder.Property(x => x.TokenVersion).IsRequired();
+        // --- /TOKEN_REVOCATION ---
     }
 }

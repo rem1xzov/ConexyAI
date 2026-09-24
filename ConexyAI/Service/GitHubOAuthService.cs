@@ -25,7 +25,8 @@ public interface IGitHubOAuthService
     Task<GitHubOAuthResult> HandleCallbackAsync(string code, CancellationToken ct = default);
 }
 
-public sealed record GitHubOAuthResult(Guid UserId, bool IsNewUser, bool IsAdmin);
+// TOKEN_REVOCATION: 2026-09-24 — TokenVersion нужен, чтобы выпустить JWT с актуальным claim tv.
+public sealed record GitHubOAuthResult(Guid UserId, bool IsNewUser, bool IsAdmin, int TokenVersion);
 
 public class GitHubOAuthService : IGitHubOAuthService
 {
@@ -77,36 +78,55 @@ public class GitHubOAuthService : IGitHubOAuthService
             userInfo.GitHubId, userInfo.Username, userInfo.Email is not null);
 
         var now = DateTime.UtcNow;
+        // ADMIN_VERIFIED_ONLY: добавлено 2026-09-24 (ревью H1) — админ по ADMIN_ACCOUNTS только через
+        // доверенный канал: GitHub id/username или email, который САМ GitHub отдал как verified.
+        // Проверяется по живому ответу GitHub, а не по сохранённой строке: владелец получает админа,
+        // даже если его email в нашей таблице уже занят чужим (неподтверждённым) аккаунтом.
+        var isSuperAdmin = _adminOptions.Value.MatchesGitHub(userInfo.GitHubId, userInfo.Username)
+            || userInfo.VerifiedEmails.Any(_adminOptions.Value.MatchesVerifiedEmail);
+
         var existing = await _userRepository.GetByGitHubIdAsync(userInfo.GitHubId, ct);
         if (existing is null)
         {
-            var isAdmin = _adminOptions.Value.Matches(userInfo.Email, userInfo.Username);
+            // Email-колонка уникальна. Если этот email уже занят другим аккаунтом (например, кто-то
+            // зарегистрировал email владельца через email/пароль), НЕ привязываемся к тому аккаунту
+            // (его пароль знает регистрант) и не падаем на уникальном индексе — создаём GitHub-аккаунт
+            // без email. Раньше здесь вылетал unique violation, и владелец вообще не мог войти.
+            var email = await EmailIfFreeAsync(userInfo.Email, ownerId: null, ct);
             var user = new User
             {
                 Id = Guid.NewGuid(),
-                Email = userInfo.Email,
-                EmailConfirmed = userInfo.EmailConfirmed,
+                Email = email,
+                EmailConfirmed = email is not null,
                 GitHubId = userInfo.GitHubId,
                 GitHubUsername = userInfo.Username,
-                SubscriptionTier = isAdmin ? SubscriptionTier.Admin : SubscriptionTier.Free,
+                SubscriptionTier = isSuperAdmin ? SubscriptionTier.Admin : SubscriptionTier.Free,
                 // EMAIL_AUTH: добавлено 2026-09-19
-                IsAdmin = isAdmin,
+                IsAdmin = isSuperAdmin,
                 CreatedAt = now,
                 LastLoginAt = now
             };
 
             await _userRepository.AddAsync(user, ct);
-            _logger.LogInformation("GitHub OAuth callback: created new user {UserId}.", user.Id);
-            return new GitHubOAuthResult(user.Id, IsNewUser: true, IsAdmin: user.IsAdmin);
+            _logger.LogInformation(
+                "GitHub OAuth callback: created new user {UserId} (email stored: {EmailStored}).",
+                user.Id, email is not null);
+            return new GitHubOAuthResult(user.Id, IsNewUser: true, IsAdmin: user.IsAdmin, user.TokenVersion);
         }
 
         // Refresh the mutable profile bits and bump the last-login timestamp on every login.
-        existing.Email = userInfo.Email ?? existing.Email;
-        existing.EmailConfirmed = existing.EmailConfirmed || userInfo.EmailConfirmed;
+        // ADMIN_VERIFIED_ONLY 2026-09-24: email обновляется только на verified-адрес GitHub и только
+        // если он не занят другим аккаунтом (иначе логин падал бы на уникальном индексе).
+        var freshEmail = await EmailIfFreeAsync(userInfo.Email, existing.Id, ct);
+        if (freshEmail is not null)
+        {
+            existing.Email = freshEmail;
+            existing.EmailConfirmed = true;
+        }
         existing.GitHubUsername = userInfo.Username;
         // ADMIN_UNLIMITED: добавлено 2026-09-19 — promote ADMIN_ACCOUNTS superadmins on every
         // login, but never demote a make-admin'd user (their IsAdmin lives in the DB).
-        if (_adminOptions.Value.Matches(existing.Email, existing.GitHubUsername))
+        if (isSuperAdmin)
         {
             existing.IsAdmin = true;
             existing.SubscriptionTier = SubscriptionTier.Admin;
@@ -115,7 +135,26 @@ public class GitHubOAuthService : IGitHubOAuthService
         await _userRepository.UpdateAsync(existing, ct);
         _logger.LogInformation("GitHub OAuth callback: updated existing user {UserId} last login.", existing.Id);
 
-        return new GitHubOAuthResult(existing.Id, IsNewUser: false, IsAdmin: existing.IsAdmin);
+        return new GitHubOAuthResult(existing.Id, IsNewUser: false, IsAdmin: existing.IsAdmin, existing.TokenVersion);
+    }
+
+    /// <summary>
+    /// Returns <paramref name="email"/> when no OTHER user holds it (so it can be stored without
+    /// violating the unique index), otherwise <c>null</c>.
+    /// </summary>
+    private async Task<string?> EmailIfFreeAsync(string? email, Guid? ownerId, CancellationToken ct)
+    {
+        if (email is null)
+            return null;
+
+        var holder = await _userRepository.GetByEmailAsync(email, ct);
+        if (holder is null || holder.Id == ownerId)
+            return email;
+
+        _logger.LogWarning(
+            "GitHub OAuth callback: verified GitHub email is already used by another account {HolderId}; not storing it on this GitHub user.",
+            holder.Id);
+        return null;
     }
 
     private async Task<string> ExchangeCodeAsync(string code, CancellationToken ct)
@@ -146,9 +185,9 @@ public class GitHubOAuthService : IGitHubOAuthService
         {
             _logger.LogError(
                 "GitHub token exchange failed with HTTP {StatusCode}: {Body}",
-                response.StatusCode, body);
+                response.StatusCode, Truncate(body));
             throw new InvalidOperationException(
-                $"GitHub token exchange failed ({response.StatusCode}): {body}");
+                $"GitHub token exchange failed ({response.StatusCode}): {Truncate(body)}");
         }
 
         // GITHUB_OAUTH: добавлено 2026-09-19 — GitHub returns HTTP 200 even for OAuth errors
@@ -162,20 +201,20 @@ public class GitHubOAuthService : IGitHubOAuthService
         }
         catch (JsonException ex)
         {
-            _logger.LogError(ex, "GitHub token exchange returned non-JSON body: {Body}", body);
+            _logger.LogError(ex, "GitHub token exchange returned non-JSON body: {Body}", Truncate(body));
         }
 
         if (payload is null || string.IsNullOrWhiteSpace(payload.AccessToken))
         {
             _logger.LogError(
-                "GitHub token exchange returned no access_token. Full response body: {Body}",
-                body);
+                "GitHub token exchange returned no access_token. Response body: {Body}",
+                Truncate(body));
 
             var error = payload?.Error;
             var errorDescription = payload?.ErrorDescription;
             var detail = !string.IsNullOrWhiteSpace(error)
                 ? (string.IsNullOrWhiteSpace(errorDescription) ? error : $"{error}: {errorDescription}")
-                : body;
+                : Truncate(body);
             throw new InvalidOperationException(
                 $"GitHub token exchange returned no access_token ({detail}).");
         }
@@ -189,34 +228,39 @@ public class GitHubOAuthService : IGitHubOAuthService
 
         var profile = await GetJsonAsync<GitHubProfileResponse>(client, _options.UserEndpoint, accessToken, ct);
 
-        var email = profile.Email;
-        var emailConfirmed = !string.IsNullOrWhiteSpace(email);
-
-        // A public profile email is verified; otherwise fall back to /user/emails.
-        if (string.IsNullOrWhiteSpace(email))
+        // ADMIN_VERIFIED_ONLY: добавлено 2026-09-24 (ревью H1) — всегда спрашиваем /user/emails (scope
+        // user:email): только там GitHub говорит, какие адреса ПОДТВЕРЖДЕНЫ. Публичное поле `email`
+        // профиля само по себе ничего о проверке не сообщает, неподтверждённые адреса не храним вовсе.
+        List<GitHubEmailResponse>? emails = null;
+        try
         {
-            var emails = await GetJsonAsync<List<GitHubEmailResponse>>(
-                client, _options.EmailsEndpoint, accessToken, ct);
-
-            var chosen = emails?
-                .Where(e => !string.IsNullOrWhiteSpace(e.Email))
-                .OrderByDescending(e => e.Primary)
-                .ThenByDescending(e => e.Verified)
-                .FirstOrDefault();
-
-            if (chosen is not null)
-            {
-                email = chosen.Email;
-                emailConfirmed = chosen.Verified;
-            }
+            emails = await GetJsonAsync<List<GitHubEmailResponse>>(client, _options.EmailsEndpoint, accessToken, ct);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or JsonException or NotSupportedException)
+        {
+            _logger.LogWarning(ex, "GitHub OAuth: could not load /user/emails; continuing without a verified email.");
         }
 
+        var verified = (emails ?? new List<GitHubEmailResponse>())
+            .Where(e => e.Verified && !string.IsNullOrWhiteSpace(e.Email))
+            .Select(e => new { Email = NormalizeEmail(e.Email!), e.Primary })
+            .ToList();
+
+        // Stored email: the verified primary one; else the verified public profile email; else any verified.
+        var profileEmail = string.IsNullOrWhiteSpace(profile.Email) ? null : NormalizeEmail(profile.Email);
+        var email = verified.FirstOrDefault(e => e.Primary)?.Email
+            ?? verified.FirstOrDefault(e => e.Email == profileEmail)?.Email
+            ?? verified.FirstOrDefault()?.Email;
+
         return new GitHubUserInfo(
-            GitHubId: profile.Id.ToString(),
+            GitHubId: profile.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
             Username: profile.Login,
-            Email: string.IsNullOrWhiteSpace(email) ? null : email,
-            EmailConfirmed: emailConfirmed);
+            Email: email,
+            VerifiedEmails: verified.Select(e => e.Email).Distinct().ToList());
     }
+
+    // Emails are stored lower-cased (as EmailAuthService does), so uniqueness checks line up.
+    private static string NormalizeEmail(string email) => email.Trim().ToLowerInvariant();
 
     private static async Task<T> GetJsonAsync<T>(
         HttpClient client, string url, string accessToken, CancellationToken ct)
@@ -230,7 +274,7 @@ public class GitHubOAuthService : IGitHubOAuthService
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct);
-            throw new InvalidOperationException($"GitHub API request to {url} failed ({response.StatusCode}): {body}");
+            throw new InvalidOperationException($"GitHub API request to {url} failed ({response.StatusCode}): {Truncate(body)}");
         }
 
         var result = await response.Content.ReadFromJsonAsync<T>(cancellationToken: ct);
@@ -242,11 +286,13 @@ public class GitHubOAuthService : IGitHubOAuthService
         return result;
     }
 
+    /// <param name="Email">The verified email to store (primary first), or <c>null</c>.</param>
+    /// <param name="VerifiedEmails">Every address GitHub reports as verified for this account.</param>
     private sealed record GitHubUserInfo(
         string GitHubId,
         string Username,
         string? Email,
-        bool EmailConfirmed);
+        IReadOnlyList<string> VerifiedEmails);
 
     private sealed class GitHubTokenResponse
     {
@@ -289,6 +335,10 @@ public class GitHubOAuthService : IGitHubOAuthService
         [JsonPropertyName("verified")]
         public bool Verified { get; set; }
     }
+
+    // PRIVACY_LOGS: добавлено 2026-09-24 (ревью H3) — тела ответов GitHub в логах/исключениях обрезаются.
+    private static string Truncate(string? body) =>
+        string.IsNullOrEmpty(body) || body.Length <= 300 ? body ?? string.Empty : body[..300] + "…";
 
     /// <summary>First 8 characters of the code (or a marker), for debug logging only.</summary>
     private static string CodePrefix(string? code) =>

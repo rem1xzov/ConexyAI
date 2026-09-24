@@ -1,5 +1,6 @@
 using ConexyAI.DbContext;
 using ConexyAI.Entity;
+using ConexyAI.Service.Auth;
 using Microsoft.EntityFrameworkCore;
 
 namespace ConexyAI.Repository;
@@ -8,10 +9,14 @@ namespace ConexyAI.Repository;
 public class UserRepository : IUserRepository
 {
     private readonly DbConexy _context;
+    // TOKEN_REVOCATION: добавлено 2026-09-24 — любая запись/удаление пользователя сбрасывает его
+    // запись в кэше проверки токена, чтобы логаут/разжалование/удаление действовали сразу.
+    private readonly IUserAuthStateCache? _authStateCache;
 
-    public UserRepository(DbConexy context)
+    public UserRepository(DbConexy context, IUserAuthStateCache? authStateCache = null)
     {
         _context = context;
+        _authStateCache = authStateCache;
     }
 
     public async Task<User?> GetByGitHubIdAsync(string gitHubId, CancellationToken ct = default)
@@ -45,16 +50,20 @@ public class UserRepository : IUserRepository
     public async Task UpdateAsync(User user, CancellationToken ct = default)
     {
         var local = _context.Users.Local.FirstOrDefault(e => e.Id == user.Id);
+        var entry = local != null ? _context.Entry(local) : _context.Users.Update(user);
         if (local != null)
         {
-            _context.Entry(local).CurrentValues.SetValues(user);
-        }
-        else
-        {
-            _context.Users.Update(user);
+            entry.CurrentValues.SetValues(user);
         }
 
+        // TOKEN_REVOCATION: добавлено 2026-09-24 — обычное обновление (логин, смена тарифа, make-admin)
+        // пишет строку целиком из копии, прочитанной раньше. Если между чтением и записью случился
+        // логаут, старая копия вернула бы прежний TokenVersion и «оживила» отозванные токены.
+        // Поэтому версия меняется только атомарным BumpTokenVersionAsync.
+        entry.Property(u => u.TokenVersion).IsModified = false;
+
         await _context.SaveChangesAsync(ct);
+        _authStateCache?.Invalidate(user.Id);
     }
 
     public async Task EnsureExistsAsync(Guid userId, CancellationToken ct = default)
@@ -88,5 +97,48 @@ public class UserRepository : IUserRepository
 
         _context.Users.Remove(user);
         await _context.SaveChangesAsync(ct);
+        _authStateCache?.Invalidate(id);
+    }
+
+    // TOKEN_REVOCATION: добавлено 2026-09-24 (ревью M19)
+    public async Task<UserAuthState?> GetAuthStateAsync(Guid userId, CancellationToken ct = default)
+    {
+        return await _context.Users
+            .AsNoTracking()
+            .Where(u => u.Id == userId)
+            .Select(u => new UserAuthState(u.TokenVersion, u.IsAdmin))
+            .FirstOrDefaultAsync(ct);
+    }
+
+    // TOKEN_REVOCATION: добавлено 2026-09-24 (ревью M19)
+    public async Task<bool> BumpTokenVersionAsync(Guid userId, CancellationToken ct = default)
+    {
+        bool found;
+        if (_context.Database.IsRelational())
+        {
+            // Один UPDATE ... SET "TokenVersion" = "TokenVersion" + 1: без гонки чтение-запись.
+            var rows = await _context.Users
+                .Where(u => u.Id == userId)
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.TokenVersion, u => u.TokenVersion + 1), ct);
+            found = rows > 0;
+        }
+        else
+        {
+            // Нерелейционный провайдер (InMemory в тестах) не умеет ExecuteUpdate.
+            var local = _context.Users.Local.FirstOrDefault(u => u.Id == userId);
+            if (local != null)
+                await _context.Entry(local).ReloadAsync(ct);
+
+            var user = local ?? await _context.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+            found = user is not null && _context.Entry(user).State != EntityState.Detached;
+            if (found)
+            {
+                user!.TokenVersion++;
+                await _context.SaveChangesAsync(ct);
+            }
+        }
+
+        _authStateCache?.Invalidate(userId);
+        return found;
     }
 }

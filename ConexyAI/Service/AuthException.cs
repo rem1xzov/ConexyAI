@@ -8,13 +8,28 @@ namespace ConexyAI.Service;
 /// </summary>
 public class AuthException : Exception
 {
+    // LOGIN_LOCKOUT: добавлено 2026-09-24 (ревью M20)
+    /// <summary>Code of the lockout error; the controller answers it with HTTP 429.</summary>
+    public const string TooManyAttemptsCode = "too_many_attempts";
+
     public string Code { get; }
     public int StatusCode { get; }
 
-    public AuthException(string code, string message, int statusCode = 400)
+    /// <summary>Seconds the client should wait before retrying (lockout only), else <c>null</c>.</summary>
+    public int? RetryAfterSeconds { get; }
+
+    public AuthException(string code, string message, int statusCode = 400, int? retryAfterSeconds = null)
         : base(message)
     {
         Code = code;
         StatusCode = statusCode;
+        RetryAfterSeconds = retryAfterSeconds;
     }
+
+    /// <summary>The per-account lockout error (HTTP 429).</summary>
+    public static AuthException TooManyAttempts(TimeSpan retryAfter) => new(
+        TooManyAttemptsCode,
+        "Слишком много попыток входа. Попробуйте позже.",
+        StatusCodes.Status429TooManyRequests,
+        Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)));
 }

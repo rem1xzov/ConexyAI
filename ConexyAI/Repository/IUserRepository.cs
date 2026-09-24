@@ -1,4 +1,5 @@
 using ConexyAI.Entity;
+using ConexyAI.Service.Auth;
 
 namespace ConexyAI.Repository;
 
@@ -23,4 +24,14 @@ public interface IUserRepository
     /// the development dev-token endpoint so the new FK constraints remain satisfiable.
     /// </summary>
     Task EnsureExistsAsync(Guid userId, CancellationToken ct = default);
+
+    // TOKEN_REVOCATION: добавлено 2026-09-24 (ревью M19)
+    /// <summary>Loads just the fields the per-request token check needs; <c>null</c> when the user is gone.</summary>
+    Task<UserAuthState?> GetAuthStateAsync(Guid userId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomically increments <see cref="User.TokenVersion"/>, revoking every JWT issued to the user
+    /// so far. Returns <c>false</c> when the user does not exist.
+    /// </summary>
+    Task<bool> BumpTokenVersionAsync(Guid userId, CancellationToken ct = default);
 }

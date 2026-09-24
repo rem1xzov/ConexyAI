@@ -1,9 +1,11 @@
 using System.Text;
 using ConexyAI.Configuration;
 using ConexyAI.DbContext;
+using ConexyAI.Extensions;
 using ConexyAI.Hub;
 using ConexyAI.Repository;
 using ConexyAI.Service;
+using ConexyAI.Service.Auth;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -143,8 +145,9 @@ builder.Services.Configure<AdminAccountsOptions>(options =>
 
 // JWT Bearer authentication. The user id is always taken from the token claims.
 var jwtSection = builder.Configuration.GetSection(JwtOptions.SectionName);
-var signingKey = jwtSection["SigningKey"]
-    ?? throw new InvalidOperationException("Jwt:SigningKey is not configured.");
+// JWT_KEY_GUARD (L12) + TOKEN_REVOCATION (M19) + AUTH_RATE_LIMIT (M20): 2026-09-24, see AuthSecurityExtensions.
+var signingKey = JwtSigningKeyGuard.Validate(jwtSection["SigningKey"], builder.Environment);
+builder.AddConexyAuthSecurity();
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -172,7 +175,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                     context.Token = accessToken;
                 }
                 return Task.CompletedTask;
-            }
+            },
+            OnTokenValidated = AuthSecurityExtensions.OnTokenValidatedAsync
         };
     });
 
@@ -270,6 +274,8 @@ _ = app.Services.GetRequiredService<IConexyWorkspaceService>();
 
 LogEnvironmentPrerequisites(app);
 
+app.UseConexyForwardedHeaders();
+
 // ATTACHMENT_SIZE_LIMIT: Kestrel обрывает чтение тела на лимите и бросает BadHttpRequestException
 // со статусом 413. Без этого клиент видит только пустое "413 Request Entity Too Large", поэтому
 // отдаём понятный JSON-маркер, по которому SPA показывает человеческое сообщение.
@@ -294,6 +300,7 @@ app.UseHttpsRedirection();
 app.UseCors("AllowFrontend");
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseConexyRateLimiter();
 
 if (app.Environment.IsDevelopment())
 {
