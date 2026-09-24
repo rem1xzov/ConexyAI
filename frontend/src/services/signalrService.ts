@@ -473,6 +473,15 @@ class SignalrService {
       this.startInFlight -= 1;
     }
   }
+
+  // SANDBOX_TERMINAL: добавлено 2026-09-24 — хаб-методы терминала песочницы (контракт C-8:
+  // GetTerminalMode / RunSandboxCommand / CancelSandboxCommand) вызываются из services/terminalHub.ts
+  // через этот общий вызов, чтобы не расширять сервис под каждый новый метод.
+  /** Invokes a hub method once the connection is up and returns its result. */
+  async invokeHub<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
+    await this.ensureConnected();
+    return await this.connection!.invoke<T>(method, ...args);
+  }
 }
 
 export const signalrService = new SignalrService();

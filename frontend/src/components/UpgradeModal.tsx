@@ -5,7 +5,8 @@ import { CheckIcon, CloseIcon } from './Icons';
 interface Plan {
   id: string;
   name: string;
-  price: string;
+  /** Monthly price in rubles; 0 = free. */
+  priceRub: number;
   ctaKey: string | null;
   featureKeys: string[];
   highlight?: boolean;
@@ -15,14 +16,14 @@ const PLANS: Plan[] = [
   {
     id: 'Free',
     name: 'Free',
-    price: '0 ₽',
+    priceRub: 0,
     ctaKey: null,
     featureKeys: ['upgrade.features.free1', 'upgrade.features.free2', 'upgrade.features.free3'],
   },
   {
     id: 'Pro',
     name: 'Pro',
-    price: '990 ₽/мес',
+    priceRub: 990,
     ctaKey: 'upgrade.buyPro',
     highlight: true,
     featureKeys: ['upgrade.features.pro1', 'upgrade.features.pro2', 'upgrade.features.pro3'],
@@ -30,11 +31,26 @@ const PLANS: Plan[] = [
   {
     id: 'ProMax',
     name: 'ProMax',
-    price: '1 590 ₽/мес',
+    priceRub: 1590,
     ctaKey: 'upgrade.buyProMax',
     featureKeys: ['upgrade.features.proMax1', 'upgrade.features.proMax2', 'upgrade.features.proMax3'],
   },
 ];
+
+// I18N_FORMAT: добавлено 2026-09-24 — цена форматируется Intl по языку интерфейса («990 ₽» / «₽990»),
+// а «/мес» берётся из перевода, а не зашит по-русски.
+function formatRub(amount: number, lang: string): string {
+  try {
+    return new Intl.NumberFormat(lang, {
+      style: 'currency',
+      currency: 'RUB',
+      currencyDisplay: 'narrowSymbol',
+      maximumFractionDigits: 0,
+    }).format(amount);
+  } catch {
+    return `${amount} ₽`;
+  }
+}
 
 interface UpgradeModalProps {
   limitInfo: LimitExceededInfo | null;
@@ -49,7 +65,8 @@ interface UpgradeModalProps {
  * stubs until real payment is wired up.
  */
 export function UpgradeModal({ limitInfo, onClose, onBuy }: UpgradeModalProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? i18n.language;
 
   return (
     <div className="dialog-overlay" role="dialog" aria-modal="true" onMouseDown={onClose}>
@@ -67,7 +84,11 @@ export function UpgradeModal({ limitInfo, onClose, onBuy }: UpgradeModalProps) {
           {PLANS.map((plan) => (
             <div key={plan.id} className={`upgrade-plan ${plan.highlight ? 'upgrade-plan--highlight' : ''}`}>
               <div className="upgrade-plan__name">{plan.name}</div>
-              <div className="upgrade-plan__price">{plan.price}</div>
+              <div className="upgrade-plan__price">
+                {plan.priceRub > 0
+                  ? t('upgrade.perMonth', { price: formatRub(plan.priceRub, lang) })
+                  : formatRub(0, lang)}
+              </div>
               <ul className="upgrade-plan__features">
                 {plan.featureKeys.map((key) => (
                   <li key={key} className="upgrade-plan__feature">

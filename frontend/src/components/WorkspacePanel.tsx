@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   createIdeFile,
@@ -11,13 +11,14 @@ import {
   saveIdeFileContent,
   uploadWorkspaceZip,
 } from '../api/conexyApi';
+import http from '../api/client';
 import type { WorkspaceFileEntry, WorkspaceListing } from '../types/api';
 import type { TodoItem } from '../types/signalr';
 import { signalrService } from '../services/signalrService';
 import { changedLineNumbers } from '../utils/diff';
 import { humanError } from '../utils/humanError';
 import { triggerDownload } from '../utils/download';
-import { CodeEditor } from './CodeEditor';
+import { CodeEditor, disposeEditorModels, editorModelUri } from './CodeEditor';
 import { TodoPanel } from './TodoPanel';
 import { FileTypeIcon } from './FileTypeIcon';
 import { Breadcrumbs } from './Breadcrumbs';
@@ -30,8 +31,12 @@ import {
   DownloadIcon,
   PlayIcon,
   RefreshIcon,
+  TerminalIcon,
   TrashIcon,
 } from './Icons';
+
+// xterm is only needed once the terminal is opened, so it is loaded on demand (a separate chunk).
+const TerminalPanel = lazy(() => import('./TerminalPanel').then((m) => ({ default: m.TerminalPanel })));
 
 interface WorkspacePanelProps {
   sessionId?: string;
@@ -51,25 +56,30 @@ interface WorkspacePanelProps {
   onRunInSeparateWindow?: () => void;
   // COWORK_MODE: Cowork produces documents, not programs — there is nothing to "Run".
   hideRun?: boolean;
+  // WORKSPACE_RACES: добавлено 2026-09-24 — сообщает, есть ли в открытом чате несохранённые файлы,
+  // чтобы родитель мог спросить подтверждение ДО переключения чата. Без него панель сама спрашивает
+  // сразу после переключения (правки к этому моменту уже отложены в памяти, ничего не теряется).
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface OpenTab {
   path: string;
   name: string;
   content: string;
+  /** What we believe is on disk: the text last loaded from or saved to the server. */
   savedContent: string;
   isBinary: boolean;
+  /** Bumped on every local edit, so a finished save can tell whether newer edits exist. */
+  version: number;
+  /** Bumped when the text is replaced from outside the editor (agent edit, "take the agent's version"). */
+  rev: number;
 }
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 // STATUS_TAB_REMOVED: добавлено 2026-09-22 — вкладка «Статус» удалена целиком: она дублировала
-// ленту чата (те же команды и карточки подтверждения). В нижней панели осталась только «Задачи».
-type BottomTab = 'todo';
-
-interface PendingConflict {
-  path: string;
-  incomingContent: string;
-}
+// ленту чата (те же команды и карточки подтверждения).
+// SANDBOX_TERMINAL: добавлено 2026-09-24 — вторая вкладка нижней панели: терминал.
+type BottomTab = 'todo' | 'terminal';
 
 type DialogState =
   | { kind: 'confirm'; title: string; message?: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void }
@@ -81,6 +91,81 @@ function fileName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
+function isDirty(tab: OpenTab): boolean {
+  return !tab.isBinary && tab.content !== tab.savedContent;
+}
+
+function underPath(candidate: string, path: string, isDirectory: boolean): boolean {
+  return candidate === path || (isDirectory && candidate.startsWith(`${path.replace(/\/+$/, '')}/`));
+}
+
+// ---------------------------------------------------------------------------------------------
+// WORKSPACE_RACES: добавлено 2026-09-24 (M14) — вкладки чата, из которого ушли, не выбрасываются:
+// они откладываются здесь (в памяти страницы) и возвращаются, когда пользователь снова открывает
+// этот чат. Несохранённые правки при уходе вызывают вопрос «Сохранить / Не сохранять / Позже».
+// Хранилище модульное, потому что панель размонтируется при переходе в обычный чат.
+// ---------------------------------------------------------------------------------------------
+
+interface StashedTabs {
+  tabs: OpenTab[];
+  activePath: string | null;
+  /** Ask "save / discard / later" about this chat's unsaved edits. */
+  needsPrompt: boolean;
+  at: number;
+}
+
+const tabStash = new Map<string, StashedTabs>();
+const STASH_CLEAN_LIMIT = 20;
+
+function stashTabs(chatId: string, tabs: OpenTab[], activePath: string | null): void {
+  if (tabs.length === 0) {
+    tabStash.delete(chatId);
+    return;
+  }
+  tabStash.set(chatId, { tabs, activePath, needsPrompt: tabs.some(isDirty), at: Date.now() });
+  // Bound memory: forget the oldest chats whose tabs hold nothing unsaved.
+  const clean = [...tabStash.entries()].filter(([, e]) => !e.tabs.some(isDirty)).sort((a, b) => a[1].at - b[1].at);
+  while (clean.length > STASH_CLEAN_LIMIT) {
+    const [id] = clean.shift()!;
+    tabStash.delete(id);
+  }
+}
+
+function hasUnsavedAnywhere(currentTabs: OpenTab[]): boolean {
+  if (currentTabs.some(isDirty)) return true;
+  for (const entry of tabStash.values()) if (entry.tabs.some(isDirty)) return true;
+  return false;
+}
+
+// The workspace-file endpoint of conexyApi removes files only; the IDE endpoint also removes a
+// folder with everything inside it.
+async function deleteWorkspaceFolder(chatId: string, path: string): Promise<void> {
+  await http.delete(`/sessions/${chatId}/files`, { params: { path } });
+}
+
+// ---------------------------------------------------------------------------------------------
+
+const BOTTOM_HEIGHT_KEY = 'conexy_ws_bottom_height';
+const BOTTOM_MIN = 120;
+const BOTTOM_DEFAULT = 220;
+const BOTTOM_TERMINAL_DEFAULT = 280;
+
+function readBottomHeight(): number | null {
+  try {
+    const v = Number(localStorage.getItem(BOTTOM_HEIGHT_KEY));
+    return Number.isFinite(v) && v >= BOTTOM_MIN ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeBottomHeight(height: number): void {
+  try {
+    localStorage.setItem(BOTTOM_HEIGHT_KEY, String(Math.round(height)));
+  } catch {
+    // Private mode / blocked storage: the height just is not remembered.
+  }
+}
 
 /** Branded empty state for the Monaco editor area (right pane) when no file is open. */
 function EditorEmptyState({ title, text }: { title: string; text: string }) {
@@ -104,21 +189,51 @@ interface TreeNodeProps {
   activePath: string | null;
   dirtyPaths?: Set<string>;
   onOpenFile: (path: string) => void;
-  onDelete: (path: string) => void;
+  onDelete: (path: string, isDirectory: boolean) => void;
 }
 
 function TreeNode({ node, depth, activePath, dirtyPaths, onOpenFile, onDelete }: TreeNodeProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(depth === 0);
   const indent = { paddingLeft: `${depth * 14 + 8}px` };
+
+  const deleteButton = (
+    <button
+      className="file-tree__action file-tree__action--danger"
+      title={t('workspace.deleteItem', { name: node.name })}
+      aria-label={t('workspace.deleteItem', { name: node.name })}
+      onClick={(e) => {
+        e.stopPropagation();
+        onDelete(node.path, node.isDirectory);
+      }}
+    >
+      <TrashIcon size={13} />
+    </button>
+  );
 
   if (node.isDirectory) {
     return (
       <div>
-        <button className="file-tree__row" style={indent} onClick={() => setOpen((o) => !o)} title={node.path}>
+        <div
+          className="file-tree__row file-tree__row--folder"
+          style={indent}
+          onClick={() => setOpen((o) => !o)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setOpen((o) => !o);
+            }
+          }}
+          role="button"
+          tabIndex={0}
+          aria-expanded={open}
+          title={node.path}
+        >
           <span className={`file-tree__chevron ${open ? 'file-tree__chevron--open' : ''}`}>▸</span>
           <FileTypeIcon path={node.path} isFolder size={14} />
           <span className="file-tree__name">{node.name}</span>
-        </button>
+          {deleteButton}
+        </div>
         {open &&
           node.children.map((child) => (
             <TreeNode
@@ -145,18 +260,12 @@ function TreeNode({ node, depth, activePath, dirtyPaths, onOpenFile, onDelete }:
       <span className="file-tree__chevron file-tree__chevron--spacer" />
       <FileTypeIcon path={node.path} size={14} />
       <span className="file-tree__name">{node.name}</span>
-      {dirtyPaths?.has(node.path) && <span className="file-tree__dirty" title="Unsaved changes">M</span>}
-      <button
-        className="file-tree__action"
-        title={`Delete ${node.name}`}
-        aria-label={`Delete ${node.name}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete(node.path);
-        }}
-      >
-        <TrashIcon size={13} />
-      </button>
+      {dirtyPaths?.has(node.path) && (
+        <span className="file-tree__dirty" title={t('workspace.unsavedChanges')}>
+          M
+        </span>
+      )}
+      {deleteButton}
     </div>
   );
 }
@@ -174,6 +283,7 @@ export function WorkspacePanel({
   onCursorChange,
   onRunInSeparateWindow,
   hideRun,
+  onDirtyChange,
 }: WorkspacePanelProps) {
   const { t } = useTranslation();
   const [listing, setListing] = useState<WorkspaceListing | null>(null);
@@ -183,23 +293,84 @@ export function WorkspacePanel({
   const [tabs, setTabs] = useState<OpenTab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
 
-  // STATUS_TAB_REMOVED: добавлено 2026-09-22 — единственная вкладка нижней панели.
   const [bottomTab, setBottomTab] = useState<BottomTab>('todo');
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
-  const [conflict, setConflict] = useState<PendingConflict | null>(null);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalFocusNonce, setTerminalFocusNonce] = useState(0);
+  const [bottomHeight, setBottomHeight] = useState<number>(() => readBottomHeight() ?? BOTTOM_DEFAULT);
+  // Save state and agent conflicts are per file, so switching tabs never shows another file's state.
+  const [saveStatus, setSaveStatus] = useState<Record<string, SaveStatus>>({});
+  /** path -> the agent's version of a file the user was editing (waiting for "keep mine / take agent's"). */
+  const [conflicts, setConflicts] = useState<Record<string, string>>({});
   const [zipping, setZipping] = useState(false);
   const [runBusy, setRunBusy] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
-  const [highlight, setHighlight] = useState<{ lines: number[]; nonce: number } | null>(null);
+  const [highlight, setHighlight] = useState<{ path: string; lines: number[]; nonce: number } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [isWindows, setIsWindows] = useState(false);
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [leavePrompt, setLeavePrompt] = useState<{ chatId: string; files: string[] } | null>(null);
+  const [leaveBusy, setLeaveBusy] = useState(false);
   const [explorerVisible, setExplorerVisible] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
 
-  const tabsRef = useRef<OpenTab[]>([]);
   const toastTimer = useRef<number | null>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // WORKSPACE_RACES: добавлено 2026-09-24 (M14).
+  // `tabsRef` — единственный источник правды о вкладках, и обновляется СИНХРОННО (updateTabs):
+  // решение «файл грязный → конфликт, чистый → подменить» принимается по актуальным данным, а не
+  // по снимку до await, из-за которого правка агента затирала только что набранный текст.
+  const tabsRef = useRef<OpenTab[]>([]);
+  const activePathRef = useRef<string | null>(null);
+  // Чат, который показан сейчас. Каждый асинхронный запрос запоминает свой чат и после await
+  // сверяется с ним: ответ, начатый в чате A, никогда не попадает во вкладки чата B.
+  const chatIdRef = useRef<string | undefined>(sessionId);
+  const prevChatRef = useRef<string | undefined>(undefined);
+  // Monotonic token used to ignore out-of-order file-tree responses.
+  const loadSeqRef = useRef(0);
+  const openSeqRef = useRef(0);
+  const saveSeqRef = useRef(new Map<string, number>());
+  const reloadSeqRef = useRef(new Map<string, number>());
+  const mountedRef = useRef(false);
+
+  useLayoutEffect(() => {
+    chatIdRef.current = sessionId;
+  }, [sessionId]);
+
+  useLayoutEffect(() => {
+    activePathRef.current = activePath;
+  }, [activePath]);
+
+  const updateTabs = useCallback((fn: (prev: OpenTab[]) => OpenTab[]) => {
+    const next = fn(tabsRef.current);
+    if (next === tabsRef.current) return;
+    tabsRef.current = next;
+    setTabs(next);
+  }, []);
+
+  function isCurrentChat(chatId: string | undefined): chatId is string {
+    return !!chatId && chatIdRef.current === chatId;
+  }
+
+  /**
+   * Disposes a chat's editor models (all of them, or those of the given paths) on the next tick —
+   * after the editor let go of them — unless by then the panel shows that chat (and those files)
+   * again, e.g. after React's StrictMode remount or a quick A→B→A switch.
+   */
+  function disposeModelsLater(chatId: string, paths?: string[]) {
+    window.setTimeout(() => {
+      const showing = mountedRef.current && chatIdRef.current === chatId;
+      if (!paths) {
+        if (!showing) disposeEditorModels(chatId);
+        return;
+      }
+      for (const path of paths) {
+        const reopened = showing && tabsRef.current.some((tab) => tab.path === path);
+        if (!reopened) disposeEditorModels(chatId, path);
+      }
+    }, 0);
+  }
 
   function notify(message: string) {
     setToast(message);
@@ -207,14 +378,18 @@ export function WorkspacePanel({
     toastTimer.current = window.setTimeout(() => setToast(null), 2600);
   }
 
-  useEffect(() => {
-    tabsRef.current = tabs;
-  }, [tabs]);
+  function setPathStatus(path: string, status: SaveStatus) {
+    setSaveStatus((s) => (s[path] === status ? s : { ...s, [path]: status }));
+  }
 
-  // Monotonic token used to ignore out-of-order file-tree responses when the user
-  // switches between agent chats quickly (otherwise a slow response from the previous
-  // chat can overwrite the new chat's listing).
-  const loadSeqRef = useRef(0);
+  function clearConflict(path: string) {
+    setConflicts((c) => {
+      if (!(path in c)) return c;
+      const next = { ...c };
+      delete next[path];
+      return next;
+    });
+  }
 
   // Detect the backend host OS once so Run can adapt (Windows => visible console window).
   useEffect(() => {
@@ -228,71 +403,250 @@ export function WorkspacePanel({
 
   const activeTab = tabs.find((t) => t.path === activePath) ?? null;
   const hasFiles = (listing?.files.length ?? 0) > 0;
-  const dirtyPaths = new Set(tabs.filter((t) => t.content !== t.savedContent).map((t) => t.path));
+  const dirtyPaths = new Set(tabs.filter(isDirty).map((t) => t.path));
+  const hasDirtyTabs = dirtyPaths.size > 0;
+  const activeConflict = activePath ? conflicts[activePath] : undefined;
 
-  async function loadFiles() {
-    if (!sessionId) return;
+  useEffect(() => {
+    onDirtyChange?.(hasDirtyTabs);
+  }, [hasDirtyTabs, onDirtyChange]);
+
+  // Closing or reloading the page with unsaved edits (here or parked for another chat) asks first.
+  useEffect(() => {
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      if (!hasUnsavedAnywhere(tabsRef.current)) return;
+      e.preventDefault();
+      e.returnValue = '';
+    }
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
+
+  async function loadFiles(chatId: string | undefined = chatIdRef.current) {
+    if (!chatId) return;
     const seq = ++loadSeqRef.current;
     setLoading(true);
     setError(null);
     try {
-      const data = await getWorkspaceFiles(sessionId);
-      if (seq !== loadSeqRef.current) return; // stale response from a previous chat
+      const data = await getWorkspaceFiles(chatId);
+      if (seq !== loadSeqRef.current || !isCurrentChat(chatId)) return; // stale response
       setListing(data);
     } catch (e) {
-      if (seq !== loadSeqRef.current) return;
+      if (seq !== loadSeqRef.current || !isCurrentChat(chatId)) return;
       setError(humanError(e, t));
     } finally {
       if (seq === loadSeqRef.current) setLoading(false);
     }
   }
 
+  /**
+   * Re-reads an open file after someone else (the agent, a ZIP upload) may have changed it on disk.
+   * A clean tab takes the new text; a tab with unsaved edits is never overwritten — the user gets a
+   * "keep mine / take the agent's" choice instead.
+   */
+  async function reloadFromDisk(path: string, flash = true) {
+    const chatId = chatIdRef.current;
+    if (!chatId || !tabsRef.current.some((tab) => tab.path === path)) return;
+    const seq = (reloadSeqRef.current.get(path) ?? 0) + 1;
+    reloadSeqRef.current.set(path, seq);
+
+    let res: Awaited<ReturnType<typeof getIdeFileContent>>;
+    try {
+      res = await getIdeFileContent(chatId, path);
+    } catch {
+      return; // The file may have been deleted; the next tree refresh reconciles.
+    }
+    if (!isCurrentChat(chatId) || reloadSeqRef.current.get(path) !== seq) return;
+
+    // Decide on the CURRENT tab state (tabsRef is updated synchronously), not on a snapshot taken
+    // before the request: the user may have typed while it was in flight.
+    const tab = tabsRef.current.find((x) => x.path === path);
+    if (!tab) return;
+    if (res.content === tab.savedContent && res.isBinary === tab.isBinary) return; // nothing new on disk
+
+    if (isDirty(tab)) {
+      if (res.content === tab.content) {
+        // The disk now holds exactly the user's text — nothing to resolve.
+        updateTabs((prev) => prev.map((x) => (x.path === path ? { ...x, savedContent: res.content } : x)));
+        clearConflict(path);
+        return;
+      }
+      setConflicts((c) => ({ ...c, [path]: res.content }));
+      return;
+    }
+
+    const lines = changedLineNumbers(tab.content, res.content);
+    updateTabs((prev) =>
+      prev.map((x) =>
+        x.path === path
+          ? { ...x, content: res.content, savedContent: res.content, isBinary: res.isBinary, version: x.version + 1, rev: x.rev + 1 }
+          : x,
+      ),
+    );
+    clearConflict(path);
+    // Flash the touched lines only in the file that is on screen.
+    if (flash && lines.length > 0 && activePathRef.current === path) {
+      setHighlight({ path, lines, nonce: Date.now() });
+    }
+  }
+
   useEffect(() => {
-    // Switching chats must immediately drop the previous chat's tree and any open
-    // tabs, then fetch the new chat's files from scratch — never showing stale files.
-    setActivePath(null);
-    setTabs([]);
-    setConflict(null);
-    setBottomTab('todo');
+    const prev = prevChatRef.current;
+    prevChatRef.current = sessionId;
+
+    // Park the chat we are leaving (its tabs come back when the user returns to it).
+    if (prev && prev !== sessionId) {
+      stashTabs(prev, tabsRef.current, activePathRef.current);
+      // Its editor models go: restored tabs recreate them from the parked text.
+      disposeModelsLater(prev);
+    }
+
+    // Switching chats must immediately drop the previous chat's tree and tabs, then fetch the new
+    // chat's files from scratch — never showing (or saving into) the wrong chat.
+    const restored = sessionId ? tabStash.get(sessionId) : undefined;
+    if (sessionId) tabStash.delete(sessionId);
+    const nextTabs = restored?.tabs ?? [];
+    tabsRef.current = nextTabs;
+    setTabs(nextTabs);
+    const nextActive = restored ? (restored.activePath ?? nextTabs[0]?.path ?? null) : null;
+    activePathRef.current = nextActive;
+    setActivePath(nextActive);
+    setConflicts({});
+    setSaveStatus({});
+    setHighlight(null);
     setDialog(null);
     setListing(null);
     setError(null);
-    void loadFiles();
+    setRunError(null);
+    if (!terminalOpen) setBottomTab('todo');
+    void loadFiles(sessionId);
+
+    // Restored tabs may be stale: the agent could have changed those files meanwhile.
+    for (const tab of nextTabs) if (!tab.isBinary) void reloadFromDisk(tab.path, false);
+
+    // Ask about unsaved edits left behind in another chat.
+    const pending = [...tabStash.entries()].find(([id, e]) => id !== sessionId && e.needsPrompt && e.tabs.some(isDirty));
+    setLeavePrompt(pending ? { chatId: pending[0], files: pending[1].tabs.filter(isDirty).map((x) => x.path) } : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
+  // The panel itself goes away (IDE hidden, switched to a plain chat): park the tabs the same way.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const chatId = chatIdRef.current;
+      if (!chatId) return;
+      stashTabs(chatId, tabsRef.current, activePathRef.current);
+      disposeModelsLater(chatId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function nextLeavePrompt() {
+    const current = chatIdRef.current;
+    const pending = [...tabStash.entries()].find(([id, e]) => id !== current && e.needsPrompt && e.tabs.some(isDirty));
+    setLeavePrompt(pending ? { chatId: pending[0], files: pending[1].tabs.filter(isDirty).map((x) => x.path) } : null);
+  }
+
+  function keepLeftEditsForLater(chatId: string) {
+    const entry = tabStash.get(chatId);
+    if (entry) entry.needsPrompt = false;
+    nextLeavePrompt();
+  }
+
+  function discardLeftEdits(chatId: string) {
+    const entry = tabStash.get(chatId);
+    if (entry) {
+      entry.tabs = entry.tabs.map((tab) =>
+        isDirty(tab) ? { ...tab, content: tab.savedContent, version: tab.version + 1, rev: tab.rev + 1 } : tab,
+      );
+      entry.needsPrompt = false;
+    }
+    nextLeavePrompt();
+  }
+
+  async function saveLeftEdits(chatId: string) {
+    const entry = tabStash.get(chatId);
+    if (!entry) {
+      nextLeavePrompt();
+      return;
+    }
+    setLeaveBusy(true);
+    const dirty = entry.tabs.filter(isDirty);
+    const results = await Promise.allSettled(
+      dirty.map(async (tab) => {
+        await saveIdeFileContent(chatId, tab.path, tab.content);
+        return { path: tab.path, sent: tab.content };
+      }),
+    );
+    const saved = new Map<string, string>();
+    let failed = 0;
+    for (const r of results) {
+      if (r.status === 'fulfilled') saved.set(r.value.path, r.value.sent);
+      else failed += 1;
+    }
+    const markSaved = (list: OpenTab[]) =>
+      list.map((tab) => (saved.has(tab.path) ? { ...tab, savedContent: saved.get(tab.path)! } : tab));
+    // The tabs may still be parked, or already restored because the user went back meanwhile.
+    const parked = tabStash.get(chatId);
+    if (parked) {
+      parked.tabs = markSaved(parked.tabs);
+      parked.needsPrompt = false;
+    }
+    if (isCurrentChat(chatId)) updateTabs(markSaved);
+    setLeaveBusy(false);
+    notify(failed > 0 ? t('workspace.leaveSaveFailed', { count: failed }) : t('workspace.leaveSaved', { count: saved.size }));
+    nextLeavePrompt();
+  }
+
   async function openFile(path: string) {
-    if (!sessionId) return;
-    const existing = tabsRef.current.find((t) => t.path === path);
-    if (existing) {
+    const chatId = chatIdRef.current;
+    if (!chatId) return;
+    const request = ++openSeqRef.current;
+    if (tabsRef.current.some((tab) => tab.path === path)) {
       setActivePath(path);
       return;
     }
 
     try {
-      const res = await getIdeFileContent(sessionId, path);
-      setTabs((prev) => [
-        ...prev,
-        { path, name: fileName(path), content: res.content, savedContent: res.content, isBinary: res.isBinary },
-      ]);
-      setActivePath(path);
-      setSaveStatus('idle');
+      const res = await getIdeFileContent(chatId, path);
+      // The user switched chats meanwhile: this file belongs to the other chat's workspace.
+      if (!isCurrentChat(chatId)) return;
+      // Two opens of the same path can race (agent event + click); keep a single tab.
+      if (!tabsRef.current.some((tab) => tab.path === path)) {
+        updateTabs((prev) => [
+          ...prev,
+          {
+            path,
+            name: fileName(path),
+            content: res.content,
+            savedContent: res.content,
+            isBinary: res.isBinary,
+            version: 0,
+            rev: 0,
+          },
+        ]);
+      }
+      // Only the most recent open request steals focus.
+      if (request === openSeqRef.current) setActivePath(path);
     } catch (e) {
-      setError(humanError(e, t));
+      if (isCurrentChat(chatId)) setError(humanError(e, t));
     }
   }
 
   async function doCreateFile(path: string) {
     // Materialize the draft chat on first file creation so the workspace (and its chatId)
     // exists on disk and in the sidebar list before the agent ever runs.
-    const id = onEnsureWorkspace?.() ?? sessionId;
+    const id = onEnsureWorkspace?.() ?? chatIdRef.current;
     if (!id) return;
     try {
       await createIdeFile(id, path, false);
-      await loadFiles();
+      if (!isCurrentChat(id)) return;
+      await loadFiles(id);
       await openFile(path);
     } catch (e) {
-      setError(humanError(e, t));
+      if (isCurrentChat(id)) setError(humanError(e, t));
     }
   }
 
@@ -306,69 +660,133 @@ export function WorkspacePanel({
   }
 
   function handleEditorChange(path: string, value: string) {
-    setTabs((prev) => prev.map((t) => (t.path === path ? { ...t, content: value } : t)));
-    setSaveStatus('idle');
+    let changed = false;
+    updateTabs((prev) =>
+      prev.map((tab) => {
+        if (tab.path !== path || tab.content === value) return tab;
+        changed = true;
+        return { ...tab, content: value, version: tab.version + 1 };
+      }),
+    );
+    if (changed) setPathStatus(path, 'idle');
   }
 
   async function saveTab(path: string) {
-    if (!sessionId) return;
-    const tab = tabsRef.current.find((t) => t.path === path);
-    if (!tab || tab.isBinary) return;
+    const chatId = chatIdRef.current;
+    const tab = tabsRef.current.find((x) => x.path === path);
+    if (!chatId || !tab || tab.isBinary) return;
 
-    setSaveStatus('saving');
+    // Exactly this snapshot is sent, and only this snapshot is marked as saved afterwards: text
+    // typed while the request is in flight stays "unsaved" instead of being silently lost.
+    const snapshot = tab.content;
+    const version = tab.version;
+    // Keyed by chat too: two chats can both have a file at this path (chat ids never contain "/").
+    const saveKey = `${chatId}/${path}`;
+    const seq = (saveSeqRef.current.get(saveKey) ?? 0) + 1;
+    saveSeqRef.current.set(saveKey, seq);
+
+    setPathStatus(path, 'saving');
     try {
-      await saveIdeFileContent(sessionId, tab.path, tab.content);
-      setTabs((prev) => prev.map((t) => (t.path === path ? { ...t, savedContent: t.content } : t)));
-      setSaveStatus('saved');
+      await saveIdeFileContent(chatId, path, snapshot);
+      if (!isCurrentChat(chatId)) {
+        // The user left the chat while saving: its tabs are parked — record the save there, so the
+        // "unsaved changes" question does not ask about text that is already on disk.
+        const parked = tabStash.get(chatId);
+        if (parked && saveSeqRef.current.get(saveKey) === seq) {
+          parked.tabs = parked.tabs.map((x) => (x.path === path ? { ...x, savedContent: snapshot } : x));
+          if (!parked.tabs.some(isDirty)) {
+            parked.needsPrompt = false;
+            nextLeavePrompt();
+          }
+        }
+        return;
+      }
+      if (saveSeqRef.current.get(saveKey) !== seq) return; // a newer save of this file owns the status
+      updateTabs((prev) => prev.map((x) => (x.path === path ? { ...x, savedContent: snapshot } : x)));
+      // Saving over a pending agent change means "keep mine".
+      clearConflict(path);
+      const current = tabsRef.current.find((x) => x.path === path);
+      setPathStatus(path, current && current.version === version ? 'saved' : 'idle');
     } catch {
-      setSaveStatus('error');
+      if (isCurrentChat(chatId) && saveSeqRef.current.get(saveKey) === seq) setPathStatus(path, 'error');
     }
   }
 
-  function removeTab(path: string) {
-    const remaining = tabsRef.current.filter((t) => t.path !== path);
-    setTabs(remaining);
-    if (activePath === path) {
+  function removeTabs(match: (path: string) => boolean) {
+    const chatId = chatIdRef.current;
+    const removed = tabsRef.current.filter((tab) => match(tab.path));
+    if (removed.length === 0) return;
+    const remaining = tabsRef.current.filter((tab) => !match(tab.path));
+    updateTabs(() => remaining);
+    if (activePathRef.current && match(activePathRef.current)) {
       setActivePath(remaining.length > 0 ? remaining[remaining.length - 1].path : null);
     }
-    if (conflict?.path === path) setConflict(null);
+    setConflicts((c) => {
+      const next = { ...c };
+      for (const tab of removed) delete next[tab.path];
+      return next;
+    });
+    // Drop the editor models too, so reopening shows fresh text with a fresh undo history.
+    if (chatId) disposeModelsLater(chatId, removed.map((tab) => tab.path));
   }
 
   function closeTab(path: string) {
-    const tab = tabsRef.current.find((t) => t.path === path);
-    if (tab && tab.content !== tab.savedContent) {
+    const tab = tabsRef.current.find((x) => x.path === path);
+    if (tab && isDirty(tab)) {
       setDialog({
         kind: 'confirm',
         title: t('workspace.unsavedChanges'),
         message: t('workspace.unsavedChangesMsg'),
         confirmLabel: t('workspace.closeWithoutSave'),
         danger: true,
-        onConfirm: () => removeTab(path),
+        onConfirm: () => removeTabs((p) => p === path),
       });
       return;
     }
-    removeTab(path);
+    removeTabs((p) => p === path);
   }
 
-  async function deleteFile(path: string) {
-    if (!sessionId) return;
+  // CONFIRM_DIALOGS: добавлено 2026-09-24 (M21) — удаление из дерева файлов необратимо, поэтому
+  // сначала подтверждение. Чат запоминается в момент вопроса: ответ «Удалить» относится к нему.
+  function requestDelete(path: string, isDirectory: boolean) {
+    const chatId = chatIdRef.current;
+    if (!chatId) return;
+    const name = fileName(path.replace(/\/+$/, ''));
+    const loosesEdits = tabsRef.current.some((tab) => underPath(tab.path, path, isDirectory) && isDirty(tab));
+    const message =
+      t(isDirectory ? 'workspace.deleteFolderMessage' : 'workspace.deleteFileMessage', { path }) +
+      (loosesEdits ? ` ${t('workspace.deleteUnsavedNote')}` : '');
+    setDialog({
+      kind: 'confirm',
+      title: t(isDirectory ? 'workspace.deleteFolderTitle' : 'workspace.deleteFileTitle', { name }),
+      message,
+      confirmLabel: t('workspace.delete'),
+      danger: true,
+      onConfirm: () => void deleteEntry(chatId, path, isDirectory),
+    });
+  }
+
+  async function deleteEntry(chatId: string, path: string, isDirectory: boolean) {
     try {
-      await deleteWorkspaceFile(sessionId, path);
-      removeTab(path);
-      await loadFiles();
+      if (isDirectory) await deleteWorkspaceFolder(chatId, path);
+      else await deleteWorkspaceFile(chatId, path);
+      if (!isCurrentChat(chatId)) return;
+      removeTabs((p) => underPath(p, path, isDirectory));
+      await loadFiles(chatId);
     } catch (e) {
-      setError(humanError(e, t));
+      if (isCurrentChat(chatId)) setError(humanError(e, t));
     }
   }
 
   async function downloadZip() {
-    if (!sessionId) return;
+    const chatId = chatIdRef.current;
+    if (!chatId) return;
     setZipping(true);
     try {
-      const blob = await downloadWorkspaceZip(sessionId);
+      const blob = await downloadWorkspaceZip(chatId);
       triggerDownload(blob, 'workspace.zip');
     } catch (e) {
-      setError(humanError(e, t));
+      if (isCurrentChat(chatId)) setError(humanError(e, t));
     } finally {
       setZipping(false);
     }
@@ -379,14 +797,19 @@ export function WorkspacePanel({
       notify(t('workspace.fileTooLarge'));
       return;
     }
-    const id = onEnsureWorkspace?.() ?? sessionId;
+    const id = onEnsureWorkspace?.() ?? chatIdRef.current;
     if (!id) return;
     notify(t('workspace.uploading'));
     try {
       await uploadWorkspaceZip(id, file);
+      // The archive went into the chat it was started in; only that chat's view is refreshed.
+      if (!isCurrentChat(id)) return;
       notify(t('workspace.uploaded'));
-      await loadFiles();
+      await loadFiles(id);
+      // The archive may have replaced files that are open right now.
+      for (const tab of tabsRef.current) if (!tab.isBinary) void reloadFromDisk(tab.path);
     } catch (e) {
+      if (!isCurrentChat(id)) return;
       const message = humanError(e, t);
       notify(t('workspace.uploadError', { message }));
       setError(message);
@@ -395,7 +818,8 @@ export function WorkspacePanel({
 
   async function handleRun() {
     // Ctrl+F5 and the command palette reach this too, not only the (hidden) button.
-    if (!sessionId || runBusy || hideRun) return;
+    const chatId = chatIdRef.current;
+    if (!chatId || runBusy || hideRun) return;
     setRunBusy(true);
     setRunError(null);
     try {
@@ -403,10 +827,11 @@ export function WorkspacePanel({
       // received. On Windows the run opens a separate visible console window instead.
       if (!isWindows) {
         await new Promise((resolve) => setTimeout(resolve, 100));
-        await signalrService.joinTask(sessionId);
+        await signalrService.joinTask(chatId);
       }
 
-      const res = await signalrService.runProject(sessionId);
+      const res = await signalrService.runProject(chatId);
+      if (!isCurrentChat(chatId)) return;
 
       if (res.needsManualConfig) {
         setDialog({
@@ -416,9 +841,13 @@ export function WorkspacePanel({
           placeholder: 'dotnet run',
           onSubmit: (cmd) => {
             void (async () => {
-              const res2 = await signalrService.runProjectWithCommand(sessionId, cmd);
-              if (res2.launchedInSeparateWindow) onRunInSeparateWindow?.();
-              else if (res2.error) setRunError(res2.error);
+              try {
+                const res2 = await signalrService.runProjectWithCommand(chatId, cmd);
+                if (res2.launchedInSeparateWindow) onRunInSeparateWindow?.();
+                else if (res2.error && isCurrentChat(chatId)) setRunError(res2.error);
+              } catch (e) {
+                if (isCurrentChat(chatId)) setRunError(humanError(e, t));
+              }
             })();
           },
         });
@@ -431,16 +860,72 @@ export function WorkspacePanel({
         onRunInSeparateWindow?.();
       }
     } catch (e) {
-      setRunError(humanError(e, t));
+      if (isCurrentChat(chatId)) setRunError(humanError(e, t));
     } finally {
       setRunBusy(false);
     }
   }
 
-  // Keep a stable reference so the Ctrl+F5 listener always invokes the latest handler.
+  // SANDBOX_TERMINAL: добавлено 2026-09-24 (ТЗ-2 §6) — кнопка на панели инструментов открывает
+  // терминал во вкладке нижней панели и закрывает его повторным нажатием.
+  function toggleTerminal() {
+    if (terminalOpen && bottomTab === 'terminal') {
+      setTerminalOpen(false);
+      setBottomTab('todo');
+      return;
+    }
+    // Like creating a file: a draft agent chat gets materialized so the terminal has a workspace.
+    if (!terminalOpen) onEnsureWorkspace?.();
+    setTerminalOpen(true);
+    setBottomTab('terminal');
+    setTerminalFocusNonce((n) => n + 1);
+    setBottomHeight((h) => Math.max(h, BOTTOM_TERMINAL_DEFAULT));
+  }
+
+  function closeTerminal() {
+    setTerminalOpen(false);
+    setBottomTab('todo');
+  }
+
+  function startBottomResize(e: ReactPointerEvent<HTMLDivElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = bottomHeight;
+    const max = Math.max(BOTTOM_MIN, (rootRef.current?.clientHeight ?? 800) * 0.75);
+    let latest = startHeight;
+    const onMove = (ev: PointerEvent) => {
+      latest = Math.min(max, Math.max(BOTTOM_MIN, startHeight + (startY - ev.clientY)));
+      setBottomHeight(latest);
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      document.body.classList.remove('workspace-resizing');
+      writeBottomHeight(latest);
+    };
+    document.body.classList.add('workspace-resizing');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }
+
+  function onResizerKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    const max = Math.max(BOTTOM_MIN, (rootRef.current?.clientHeight ?? 800) * 0.75);
+    const next = Math.min(max, Math.max(BOTTOM_MIN, bottomHeight + (e.key === 'ArrowUp' ? 24 : -24)));
+    setBottomHeight(next);
+    writeBottomHeight(next);
+  }
+
+  // Keep stable references so the global shortcuts always invoke the latest handlers.
   const runHandlerRef = useRef<() => void>(() => {});
+  const terminalHandlerRef = useRef<() => void>(() => {});
   useEffect(() => {
     runHandlerRef.current = handleRun;
+    terminalHandlerRef.current = toggleTerminal;
   });
 
   useEffect(() => {
@@ -456,8 +941,21 @@ export function WorkspacePanel({
         setPaletteOpen((o) => !o);
       }
     }
+    // Ctrl+` (by key position, so it also works on layouts where that key is "ё"). Listened to in
+    // the capture phase: a focused xterm or Monaco would otherwise swallow the key.
+    function onTerminalShortcut(e: KeyboardEvent) {
+      if (e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Backquote') {
+        e.preventDefault();
+        e.stopPropagation();
+        terminalHandlerRef.current();
+      }
+    }
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onTerminalShortcut, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onTerminalShortcut, true);
+    };
   }, []);
 
   // Refresh the tree when the agent mutates files (create / str_replace / insert).
@@ -465,14 +963,21 @@ export function WorkspacePanel({
     if (fileRefreshToken && fileRefreshToken > 0) {
       void loadFiles();
     }
+    // Deliberately not keyed on sessionId: the chat switch loads the tree itself.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileRefreshToken, sessionId]);
+  }, [fileRefreshToken]);
 
-  // Instantly open a file the agent just created.
+  // Instantly open a file the agent just created (or refresh it, if it is already open).
   useEffect(() => {
     if (fileCreatedEvent?.path) {
+      const path = fileCreatedEvent.path;
       void loadFiles();
-      void openFile(fileCreatedEvent.path);
+      if (tabsRef.current.some((tab) => tab.path === path)) {
+        setActivePath(path);
+        void reloadFromDisk(path);
+      } else {
+        void openFile(path);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileCreatedEvent]);
@@ -483,46 +988,33 @@ export function WorkspacePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openFileRequest]);
 
-  // Agent edited a file: refresh the open tab's content, but never silently clobber
-  // a user's unsaved edits — surface a conflict prompt instead.
+  // Agent edited a file: refresh the open tab's content, but never silently clobber the user's
+  // unsaved edits — surface a conflict instead. Not keyed on sessionId: the previous chat's last
+  // change must not be replayed against the next chat's files.
   useEffect(() => {
-    if (!agentFileChange?.path || !sessionId) return;
+    if (agentFileChange?.path) void reloadFromDisk(agentFileChange.path);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentFileChange]);
 
-    void (async () => {
-      const tab = tabsRef.current.find((t) => t.path === agentFileChange.path);
-      if (!tab) return;
-      try {
-        const res = await getIdeFileContent(sessionId, agentFileChange.path);
-        const isDirty = tab.content !== tab.savedContent;
-        if (isDirty) {
-          setConflict({ path: agentFileChange.path, incomingContent: res.content });
-        } else {
-          // Diff old vs new content and flash the touched lines, but only when the
-          // change is actually applied (conflicts show a prompt instead, no highlight).
-          const lines = changedLineNumbers(tab.content, res.content);
-          setTabs((prev) =>
-            prev.map((t) =>
-              t.path === agentFileChange.path
-                ? { ...t, content: res.content, savedContent: res.content, isBinary: res.isBinary }
-                : t,
-            ),
-          );
-          if (lines.length > 0) setHighlight({ lines, nonce: Date.now() });
-        }
-      } catch {
-        // The file may have been deleted; the next tree refresh will reconcile.
-      }
-    })();
-  }, [agentFileChange, sessionId]);
-
-  function applyConflict() {
-    if (!conflict) return;
-    setTabs((prev) =>
-      prev.map((t) =>
-        t.path === conflict.path ? { ...t, content: conflict.incomingContent, savedContent: conflict.incomingContent } : t,
+  function takeAgentVersion(path: string) {
+    const incoming = conflicts[path];
+    if (incoming === undefined) return;
+    updateTabs((prev) =>
+      prev.map((x) =>
+        x.path === path ? { ...x, content: incoming, savedContent: incoming, version: x.version + 1, rev: x.rev + 1 } : x,
       ),
     );
-    setConflict(null);
+    clearConflict(path);
+    setPathStatus(path, 'idle');
+  }
+
+  function keepMyVersion(path: string) {
+    const incoming = conflicts[path];
+    if (incoming === undefined) return;
+    // The disk now holds the agent's text; the user's text stays in the editor as unsaved changes,
+    // and a save will deliberately write it over the agent's version.
+    updateTabs((prev) => prev.map((x) => (x.path === path ? { ...x, savedContent: incoming } : x)));
+    clearConflict(path);
   }
 
   const menus: Menu[] = [
@@ -565,12 +1057,16 @@ export function WorkspacePanel({
       label: t('workspace.menuView'),
       items: [
         { label: t('workspace.menuToggleExplorer'), action: () => setExplorerVisible((v) => !v) },
+        { label: t('terminal.menuToggle'), shortcut: 'Ctrl+`', action: () => toggleTerminal() },
       ],
     },
   ];
 
+  const activeSaveStatus: SaveStatus = (activePath && saveStatus[activePath]) || 'idle';
+  const terminalVisible = terminalOpen && bottomTab === 'terminal';
+
   return (
-    <div className="workspace" style={style}>
+    <div className="workspace" style={style} ref={rootRef}>
       <MenuBar menus={menus} />
       <input
         ref={zipInputRef}
@@ -603,13 +1099,23 @@ export function WorkspacePanel({
           )}
           {!hideRun && runError && <span className="workspace__run-error" title={runError}>{runError}</span>}
           {activeTab && (
-            <span className={`workspace__save-status workspace__save-status--${saveStatus}`}>
-              {saveStatus === 'saving' && t('workspace.saving')}
-              {saveStatus === 'saved' && t('workspace.saved')}
-              {saveStatus === 'error' && t('workspace.saveError')}
-              {saveStatus === 'idle' && (activeTab.content !== activeTab.savedContent ? t('workspace.notSaved') : '')}
+            <span className={`workspace__save-status workspace__save-status--${activeSaveStatus}`}>
+              {activeSaveStatus === 'saving' && t('workspace.saving')}
+              {activeSaveStatus === 'saved' && t('workspace.saved')}
+              {activeSaveStatus === 'error' && t('workspace.saveError')}
+              {activeSaveStatus === 'idle' && (isDirty(activeTab) ? t('workspace.notSaved') : '')}
             </span>
           )}
+          <button
+            className={`icon-btn workspace__terminal-btn ${terminalVisible ? 'workspace__terminal-btn--active' : ''}`}
+            onClick={toggleTerminal}
+            disabled={!sessionId && !onEnsureWorkspace}
+            title={t('terminal.toggle')}
+            aria-label={t('terminal.toggle')}
+            aria-pressed={terminalVisible}
+          >
+            <TerminalIcon size={16} />
+          </button>
           <button className="icon-btn" onClick={() => void loadFiles()} title={t('workspace.refreshFiles')} aria-label={t('workspace.refreshFiles')}>
             <RefreshIcon size={16} />
           </button>
@@ -643,7 +1149,7 @@ export function WorkspacePanel({
                   activePath={activePath}
                   dirtyPaths={dirtyPaths}
                   onOpenFile={(p) => void openFile(p)}
-                  onDelete={(p) => void deleteFile(p)}
+                  onDelete={requestDelete}
                 />
               ))}
             </div>
@@ -658,11 +1164,12 @@ export function WorkspacePanel({
                 key={tab.path}
                 className={`workspace__tab ${tab.path === activePath ? 'workspace__tab--active' : ''}`}
                 onClick={() => setActivePath(tab.path)}
-                title={tab.path}
+                title={conflicts[tab.path] !== undefined ? t('workspace.conflictBadge') : tab.path}
               >
                 <FileTypeIcon path={tab.path} size={14} />
                 <span className="workspace__tab-name">{tab.name}</span>
-                {tab.content !== tab.savedContent && <span className="workspace__tab-dirty">●</span>}
+                {conflicts[tab.path] !== undefined && <span className="workspace__tab-conflict">!</span>}
+                {isDirty(tab) && <span className="workspace__tab-dirty">●</span>}
                 <button
                   className="workspace__tab-close"
                   onClick={(e) => {
@@ -683,13 +1190,16 @@ export function WorkspacePanel({
             <Breadcrumbs path={activeTab.path} files={listing?.files ?? []} onOpenFile={(p) => void openFile(p)} />
           )}
 
-          {conflict && (
-            <div className="workspace__conflict">
-              <span className="workspace__conflict-text">{t('workspace.fileChanged')}</span>
-              <button className="workspace__conflict-btn" onClick={applyConflict}>
+          {activeTab && activeConflict !== undefined && (
+            <div className="workspace__conflict" role="alert">
+              <span className="workspace__conflict-text">{t('workspace.fileChanged', { name: activeTab.name })}</span>
+              <button className="workspace__conflict-btn" onClick={() => takeAgentVersion(activeTab.path)}>
                 {t('workspace.update')}
               </button>
-              <button className="workspace__conflict-btn workspace__conflict-btn--secondary" onClick={() => setConflict(null)}>
+              <button
+                className="workspace__conflict-btn workspace__conflict-btn--secondary"
+                onClick={() => keepMyVersion(activeTab.path)}
+              >
                 {t('workspace.keepMine')}
               </button>
             </div>
@@ -718,10 +1228,12 @@ export function WorkspacePanel({
               ) : (
                 <CodeEditor
                   path={activeTab.path}
+                  modelPath={sessionId ? editorModelUri(sessionId, activeTab.path) : undefined}
                   content={activeTab.content}
+                  revision={activeTab.rev}
                   onChange={(v) => handleEditorChange(activeTab.path, v)}
                   onSave={() => void saveTab(activeTab.path)}
-                  highlight={highlight}
+                  highlight={highlight && highlight.path === activeTab.path ? highlight : null}
                   onCursorChange={onCursorChange}
                 />
               )
@@ -753,16 +1265,49 @@ export function WorkspacePanel({
         </section>
       </div>
 
-      <div className="workspace__bottom">
-        <div className="workspace__bottom-tabs">
+      <div className="workspace__bottom" style={{ flexBasis: bottomHeight }}>
+        <div
+          className="workspace__bottom-resizer"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={t('terminal.resize')}
+          tabIndex={0}
+          onPointerDown={startBottomResize}
+          onKeyDown={onResizerKeyDown}
+        />
+        <div className="workspace__bottom-tabs" role="tablist">
           <button
+            role="tab"
+            aria-selected={bottomTab === 'todo'}
             className={`workspace__bottom-tab ${bottomTab === 'todo' ? 'workspace__bottom-tab--active' : ''}`}
             onClick={() => setBottomTab('todo')}
           >
             <CheckIcon size={14} /> {t('workspace.todo')}
           </button>
+          {terminalOpen && (
+            <div
+              className={`workspace__bottom-tab workspace__bottom-tab--closable ${bottomTab === 'terminal' ? 'workspace__bottom-tab--active' : ''}`}
+            >
+              <button
+                role="tab"
+                aria-selected={bottomTab === 'terminal'}
+                className="workspace__bottom-tab-label"
+                onClick={() => setBottomTab('terminal')}
+              >
+                <TerminalIcon size={14} /> {t('workspace.terminal')}
+              </button>
+              <button
+                className="workspace__bottom-tab-close"
+                onClick={closeTerminal}
+                title={t('terminal.close')}
+                aria-label={t('terminal.close')}
+              >
+                <CloseIcon size={11} />
+              </button>
+            </div>
+          )}
         </div>
-        <div className="workspace__bottom-body">
+        <div className="workspace__bottom-body" hidden={bottomTab !== 'todo'}>
           {todos.length > 0 ? (
             <TodoPanel todos={todos} />
           ) : (
@@ -771,6 +1316,20 @@ export function WorkspacePanel({
             </div>
           )}
         </div>
+        {terminalOpen && (
+          // Hidden rather than unmounted on the Todo tab, so the scrollback survives tab switches.
+          <div className="workspace__bottom-body workspace__bottom-body--terminal" hidden={bottomTab !== 'terminal'}>
+            {sessionId ? (
+              <Suspense fallback={<div className="terminal-notice">{t('terminal.connecting')}</div>}>
+                <TerminalPanel key={sessionId} sessionId={sessionId} autoFocus={terminalFocusNonce > 0} />
+              </Suspense>
+            ) : (
+              <div className="workspace__empty workspace__empty--panel">
+                <div className="workspace__empty-text">{t('terminal.noChat')}</div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <CommandPalette
@@ -780,6 +1339,7 @@ export function WorkspacePanel({
         onOpenFile={(p) => void openFile(p)}
         onRun={() => void handleRun()}
         onToggleTodo={() => setBottomTab('todo')}
+        onToggleTerminal={toggleTerminal}
         onSave={() => activePath && void saveTab(activePath)}
       />
 
@@ -807,6 +1367,22 @@ export function WorkspacePanel({
             setDialog(null);
           }}
           onCancel={() => setDialog(null)}
+        />
+      )}
+
+      {leavePrompt && !dialog && (
+        <ConfirmDialog
+          title={t('workspace.leaveUnsavedTitle')}
+          message={t('workspace.leaveUnsavedMessage', {
+            count: leavePrompt.files.length,
+            files: leavePrompt.files.slice(0, 3).map(fileName).join(', ') + (leavePrompt.files.length > 3 ? ', …' : ''),
+          })}
+          confirmLabel={t('workspace.leaveSave')}
+          cancelLabel={t('workspace.leaveKeep')}
+          extraAction={{ label: t('workspace.leaveDiscard'), danger: true, onClick: () => discardLeftEdits(leavePrompt.chatId) }}
+          busy={leaveBusy}
+          onConfirm={() => void saveLeftEdits(leavePrompt.chatId)}
+          onCancel={() => keepLeftEditsForLater(leavePrompt.chatId)}
         />
       )}
 

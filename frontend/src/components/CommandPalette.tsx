@@ -11,6 +11,8 @@ interface CommandPaletteProps {
   onOpenFile: (path: string) => void;
   onRun: () => void;
   onToggleTodo: () => void;
+  /** SANDBOX_TERMINAL: добавлено 2026-09-24 — shows the command only when provided. */
+  onToggleTerminal?: () => void;
   onSave: () => void;
 }
 
@@ -68,6 +70,7 @@ export function CommandPalette({
   onOpenFile,
   onRun,
   onToggleTodo,
+  onToggleTerminal,
   onSave,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
@@ -90,6 +93,9 @@ export function CommandPalette({
       { key: 'cmd:todo', kind: 'command', label: t('palette.toggleTodo'), action: onToggleTodo },
       { key: 'cmd:save', kind: 'command', label: t('palette.saveFile'), action: onSave },
     ];
+    if (onToggleTerminal) {
+      commands.splice(1, 0, { key: 'cmd:terminal', kind: 'command', label: t('palette.openTerminal'), action: onToggleTerminal });
+    }
 
     const q = query.trim();
     if (!q) return commands;
@@ -116,7 +122,7 @@ export function CommandPalette({
     }));
 
     return [...matchedCommands, ...fileItems];
-  }, [query, files, onRun, onToggleTodo, onSave, onOpenFile, t]);
+  }, [query, files, onRun, onToggleTodo, onToggleTerminal, onSave, onOpenFile, t]);
 
   useEffect(() => {
     setSelected(0);

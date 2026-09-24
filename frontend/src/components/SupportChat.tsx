@@ -10,16 +10,25 @@ interface SupportChatProps {
   onToast: (message: string) => void;
 }
 
-function formatTime(iso: string): string {
+// I18N_FORMAT: добавлено 2026-09-24 — время по языку интерфейса, а не всегда ru-RU.
+function formatTime(iso: string, lang: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit' });
+}
+
+// SUPPORT_ECHO: добавлено 2026-09-24 (M16) — своё сообщение показывается сразу из HTTP-ответа, а
+// эхо из хаба (или повтор после переподключения) с тем же id не дублирует его.
+function withMessage(ticket: SupportTicket, msg: SupportMessage): SupportTicket {
+  if (ticket.messages.some((m) => m.id === msg.id)) return ticket;
+  return { ...ticket, messages: [...ticket.messages, msg] };
 }
 
 // SUPPORT: добавлено 2026-09-19
 /** User-facing messenger-style support chat. */
 export function SupportChat({ onClose, onToast }: SupportChatProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const lang = i18n.resolvedLanguage ?? i18n.language;
   const [ticket, setTicket] = useState<SupportTicket | null>(null);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -30,7 +39,7 @@ export function SupportChat({ onClose, onToast }: SupportChatProps) {
     let ticketId: string | null = null;
 
     const unsubscribe = signalrService.onSupportMessage((msg) => {
-      setTicket((t) => (t && t.id === msg.ticketId ? { ...t, messages: [...t.messages, msg] } : t));
+      setTicket((t) => (t && t.id === msg.ticketId ? withMessage(t, msg) : t));
     });
 
     async function init() {
@@ -61,12 +70,18 @@ export function SupportChat({ onClose, onToast }: SupportChatProps) {
   async function handleSend() {
     const content = draft.trim();
     if (!content || !ticket || sending) return;
+    const ticketId = ticket.id;
     setSending(true);
     setDraft('');
     try {
-      await sendSupportMessage(ticket.id, content);
+      const msg = await sendSupportMessage(ticketId, content);
+      // Without this the message only appeared once the hub echoed it back — and never, when the
+      // echo was lost (e.g. the support group was not re-joined after a reconnect).
+      if (msg && msg.id) setTicket((tk) => (tk && tk.id === ticketId ? withMessage(tk, msg) : tk));
     } catch {
       onToast(t('support.sendError'));
+      // Keep what the user typed so a failed send does not lose it.
+      setDraft((d) => d || content);
     } finally {
       setSending(false);
     }
@@ -91,7 +106,7 @@ export function SupportChat({ onClose, onToast }: SupportChatProps) {
             ticket.messages.map((m: SupportMessage) => (
               <div key={m.id} className={`support-msg ${m.isFromAdmin ? 'support-msg--other' : 'support-msg--own'}`}>
                 <div className="support-msg__bubble">{m.content}</div>
-                <div className="support-msg__time">{formatTime(m.createdAt)}</div>
+                <div className="support-msg__time">{formatTime(m.createdAt, lang)}</div>
               </div>
             ))
           )}
@@ -104,7 +119,7 @@ export function SupportChat({ onClose, onToast }: SupportChatProps) {
             placeholder={t('support.messagePlaceholder')}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') void handleSend();
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) void handleSend();
             }}
           />
           <button className="icon-btn" onClick={() => void handleSend()} disabled={!draft.trim() || sending} aria-label={t('common.send')} type="button">
