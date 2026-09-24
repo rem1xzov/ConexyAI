@@ -253,6 +253,15 @@ builder.Services.AddHostedService<ConexyBackgroundWorker>();
 builder.Services.AddHostedService<MemoryExtractionWorker>();
 builder.Services.AddHttpClient<IConexyLlmClient, ConexyLlmClient>();
 builder.Services.AddHttpClient<IWebSearchService, JsonSeoSearchService>();
+// AGENT_WEB_TOOLS: добавлено 2026-09-24 — начало блока агентских инструментов (ws/be-agent).
+// SSRF-гард (DNS-резолвер как шов для тестов) нужен fetch_web_page и take_screenshot; у
+// WebPageFetcher свой SocketsHttpHandler с пиннингом проверенного IP, поэтому не AddHttpClient.
+builder.Services.AddSingleton<ConexyAI.Service.Web.IHostAddressResolver, ConexyAI.Service.Web.DnsHostAddressResolver>();
+builder.Services.AddSingleton<ConexyAI.Service.Web.PublicUrlGuard>();
+builder.Services.AddSingleton<ConexyAI.Service.Web.IWebPageFetcher, ConexyAI.Service.Web.WebPageFetcher>();
+// SEARCH_USER_CHATS: поиск по прошлым чатам пользователя для search_user_chats (только чтение).
+builder.Services.AddScoped<IChatSearchRepository, ChatSearchRepository>();
+// AGENT_WEB_TOOLS: конец блока.
 builder.Services.AddHttpClient<ISpeechKitService, SpeechKitService>((sp, client) =>
 {
     var options = sp.GetRequiredService<IOptions<SpeechKitOptions>>().Value;
