@@ -487,6 +487,8 @@
     "durationMinutes": "{{m}}м {{s}}с",
     "sizeBytes": "{{n}} Б",
     "sizeKilobytes": "{{n}} КБ",
-    "sizeMegabytes": "{{n}} МБ"
+    "sizeMegabytes": "{{n}} МБ",
+    "toolFetchPage": "Читаю страницу {{host}}",
+    "toolSearchChats": "Ищу в прошлых чатах: {{query}}"
   }
 }

@@ -487,6 +487,8 @@
     "durationMinutes": "{{m}}m {{s}}s",
     "sizeBytes": "{{n}} B",
     "sizeKilobytes": "{{n}} KB",
-    "sizeMegabytes": "{{n}} MB"
+    "sizeMegabytes": "{{n}} MB",
+    "toolFetchPage": "Reading {{host}}",
+    "toolSearchChats": "Searching past chats: {{query}}"
   }
 }
