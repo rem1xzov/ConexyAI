@@ -13,7 +13,19 @@ public interface IConexyVisionService
     /// </summary>
     Task<bool> IsAvailableAsync(CancellationToken ct = default);
 
+    /// <summary>
+    /// Renders a page and returns it as a base64 JPEG.
+    /// <para>
+    /// H9: changed 2026-09-24. <paramref name="targetUrlOrPath"/> is either a PUBLIC http(s) URL or a
+    /// file of the chat workspace identified by <paramref name="chatId"/> (relative path,
+    /// <c>/workspace/…</c> as the sandbox shows it, or <c>file://</c> inside the workspace). Anything
+    /// else — host files, other chats, internal hosts, cloud metadata — is refused with
+    /// <see cref="Web.ScreenshotTargetException"/>, and so is every sub-resource or redirect of the page
+    /// that leaves those bounds.
+    /// </para>
+    /// </summary>
     Task<string> CaptureScreenshotBase64Async(
+        Guid chatId,
         string targetUrlOrPath,
         int viewportWidth = 1280,
         int viewportHeight = 800,

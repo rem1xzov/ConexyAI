@@ -1058,7 +1058,9 @@ async Task TestRunRefusedWithoutBackendShellAsync()
         new StaticConversationService(),
         NullLogger<ConexyAgentRunner>.Instance,
         documentService: null!,
-        Options.Create(new AgentOptions { MaxIterations = 5, AuditTimeoutSeconds = auditTimeoutSeconds }));
+        Options.Create(new AgentOptions { MaxIterations = 5, AuditTimeoutSeconds = auditTimeoutSeconds }),
+        webPageFetcher: null!,
+        chatSearch: null!);
 
     var job = new ConexyJob(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), modelType, "Создай app.js");
     var context = new ConversationContext(job.TaskId, job.ChatId, job.UserId, runner.GetSystemPrompt(job.ModelType), job.Prompt);
@@ -1861,6 +1863,7 @@ sealed class UnavailableVisionService : IConexyVisionService
     public Task<bool> IsAvailableAsync(CancellationToken ct = default) => Task.FromResult(false);
 
     public Task<string> CaptureScreenshotBase64Async(
+        Guid chatId,
         string targetUrlOrPath,
         int viewportWidth = 1280,
         int viewportHeight = 800,

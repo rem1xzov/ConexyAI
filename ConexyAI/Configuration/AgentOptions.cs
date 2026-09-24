@@ -25,4 +25,13 @@ public class AgentOptions
     /// A value of &lt;= 0 falls back to the default (90).
     /// </summary>
     public int AuditTimeoutSeconds { get; set; } = 90;
+
+    /// <summary>
+    /// SELF_CORRECTION: добавлено 2026-09-24. How many times the agent is sent back when it tries to
+    /// finish while a build/test/lint command it ran is still failing ("red"). Every push-back quotes
+    /// the tail of the failing output. After the budget the run finishes with the model's answer plus
+    /// an explicit note of what is still failing — it is never failed or discarded for that.
+    /// A value &lt;= 0 falls back to the default (5); values above 20 are capped.
+    /// </summary>
+    public int MaxSelfCorrectionAttempts { get; set; } = 5;
 }
