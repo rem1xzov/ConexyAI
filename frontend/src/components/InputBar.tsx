@@ -1,17 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConexyModel, ReasoningEffort, SendOutcome, TaskAttachment } from '../types/api';
-import { fileToAttachment, isAllowedMime, pastedImageFile } from '../utils/attachments';
-import { useIsMobile } from '../hooks/useMediaQuery';
+import {
+  MAX_TOTAL_ATTACHMENT_BYTES,
+  attachmentBytes,
+  estimateRequestBytes,
+  fileToAttachment,
+  formatMegabytes,
+  isAllowedMime,
+  MAX_REQUEST_BYTES,
+  pastedImageFile,
+} from '../utils/attachments';
+import { useIsMobile, useMediaQuery } from '../hooks/useMediaQuery';
 import { ModelPicker } from './ModelPicker';
 import { VoiceWaveIcon, MicIcon, PlusIcon, SendIcon, StopIcon, UploadIcon, PhotoIcon, CameraIcon, CodeIcon, CloseIcon } from './Icons';
 
 const MAX_ATTACHMENTS = 10;
-
-// ATTACHMENT_SIZE_LIMIT: добавлено 2026-09-22 — base64 раздувает payload примерно на треть,
-// а весь запрос должен пройти сквозь nginx и Kestrel (см. client_max_body_size в nginx.conf).
-// Ловим превышение у себя и говорим об этом прямо, вместо голого 413 от прокси.
-const MAX_TOTAL_ATTACHMENT_BYTES = 45_000_000;
 
 interface InputBarProps {
   model: ConexyModel;
@@ -30,6 +34,9 @@ interface InputBarProps {
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
   // onOpenLive: () => void;
   onSend: (prompt: string, attachments: TaskAttachment[]) => Promise<SendOutcome> | SendOutcome | void;
+  // FILE_DROP: добавлено 2026-09-24 (L11) — файлы, брошенные на колонку чата; nonce отличает
+  // повторный бросок тех же файлов.
+  externalFiles?: { files: File[]; nonce: number } | null;
 }
 
 export function InputBar({
@@ -49,10 +56,15 @@ export function InputBar({
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
   // onOpenLive,
   onSend,
+  externalFiles,
 }: InputBarProps) {
   const { t } = useTranslation();
   // The model picker lives in the chat header on mobile and inline here on desktop.
   const isMobile = useIsMobile();
+  // COMPOSER_KEYS: добавлено 2026-09-24 (L10) — на сенсорных/узких экранах Enter переносит строку
+  // (многострочный ввод иначе невозможен), отправка — кнопкой.
+  const coarsePointer = useMediaQuery('(pointer: coarse)');
+  const enterInsertsNewline = isMobile || coarsePointer;
   const [value, setValue] = useState('');
   const [attachments, setAttachments] = useState<TaskAttachment[]>([]);
   const [isRecording, setIsRecording] = useState(false);
@@ -135,14 +147,34 @@ export function InputBar({
     window.setTimeout(() => setAttachError(null), 8000);
   }
 
+  // ATTACHMENT_SIZE_LIMIT: изменено 2026-09-24 (M24) — лимит считается от СЫРОГО размера файлов
+  // (40 МБ) и от оценки всего тела запроса: base64 раздувает файлы на треть, и прежние 45 МБ сырых
+  // байт превращались в ~60 МБ запроса — больше серверных 55 МБ, то есть 413 уже ПОСЛЕ загрузки.
+  function sizeError(pending: TaskAttachment[], prompt: string): string | null {
+    const raw = attachmentBytes(pending);
+    if (raw > MAX_TOTAL_ATTACHMENT_BYTES || estimateRequestBytes(pending, prompt) > MAX_REQUEST_BYTES) {
+      return t('sync.attachmentsOverLimit', {
+        size: formatMegabytes(raw),
+        limit: formatMegabytes(MAX_TOTAL_ATTACHMENT_BYTES),
+      });
+    }
+    return null;
+  }
+
   async function submit() {
     const prompt = value.trim();
     if (!prompt || disabled) return;
 
-    const totalBytes = attachments.reduce((sum, a) => sum + (a.contentBase64.length * 3) / 4, 0);
-    if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+    // TURN_GUARD (H6): пока идёт ответ, Enter ничего не отправляет — текст остаётся в поле.
+    if (isGenerating) {
+      showAttachError(t('sync.waitForReply'));
+      return;
+    }
+
+    const tooLarge = sizeError(attachments, prompt);
+    if (tooLarge) {
       // Ничего не отправляем и ничего не очищаем — пользователь просто убирает часть файлов.
-      showAttachError(t('input.attachmentsTooLarge'));
+      showAttachError(tooLarge);
       return;
     }
 
@@ -155,18 +187,33 @@ export function InputBar({
 
     const outcome = await onSend(prompt, pending);
     if (outcome && outcome.ok === false) {
-      setValue(prompt);
-      setAttachments(pending);
+      // Keep whatever the user typed meanwhile; only an empty composer gets the text back.
+      setValue((current) => (current.trim() ? current : prompt));
+      setAttachments((current) => (current.length ? current : pending));
       resizeTextarea();
-      showAttachError(t(outcome.tooLarge ? 'input.attachmentsTooLarge' : 'input.sendFailed'));
+      showAttachError(
+        outcome.tooLarge
+          ? t('input.attachmentsTooLarge')
+          : outcome.reason === 'busy'
+            ? t('sync.turnInFlight')
+            : outcome.reason === 'forbidden'
+              ? t('sync.chatForbidden')
+              : outcome.reason === 'loading'
+                ? t('sync.loadingChat')
+                : t('input.sendFailed'),
+      );
     }
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-    }
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    // COMPOSER_KEYS (L10): Enter, подтверждающий выбор в IME (китайский/японский/корейский ввод),
+    // не должен отправлять полунабранный текст. keyCode 229 — то же для Safari/старых Chrome.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    // На телефоне и планшете Enter — новая строка; отправка кнопкой.
+    if (enterInsertsNewline) return;
+    e.preventDefault();
+    void submit();
   }
 
   // Ctrl+V pastes an image from the clipboard as an attachment instead of inserting
@@ -189,6 +236,10 @@ export function InputBar({
   async function addFiles(files: FileList | File[], skipMimeCheck = false) {
     const next = [...attachments];
     const rejected: string[] = [];
+    // ATTACHMENT_SIZE_LIMIT (M24): файл, который не влезает в лимит сообщения, отклоняется ДО
+    // чтения — а не после загрузки всего запроса на сервер.
+    const oversized: string[] = [];
+    let rawTotal = attachmentBytes(next);
     for (const file of Array.from(files)) {
       // BUGFIX_ATTACHMENTS: a refused file used to be dropped without a word, which reads as
       // "the picker ignores .docx in the agent tab". Report it instead of swallowing it.
@@ -201,8 +252,13 @@ export function InputBar({
         window.setTimeout(() => setLimitHint(false), 2500);
         break;
       }
+      if (rawTotal + file.size > MAX_TOTAL_ATTACHMENT_BYTES) {
+        oversized.push(file.name);
+        continue;
+      }
       try {
         next.push(await fileToAttachment(file));
+        rawTotal += file.size;
       } catch (err) {
         console.error('[Attachments] failed to read file', file.name, err);
         rejected.push(file.name);
@@ -210,11 +266,30 @@ export function InputBar({
     }
     setAttachments(next);
     setMenuOpen(false);
-    if (rejected.length > 0) {
-      setAttachError(t('input.unsupportedFiles', { names: rejected.join(', ') }));
-      window.setTimeout(() => setAttachError(null), 6000);
+    const problems: string[] = [];
+    if (rejected.length > 0) problems.push(t('input.unsupportedFiles', { names: rejected.join(', ') }));
+    if (oversized.length > 0) {
+      problems.push(t('sync.filesOverLimit', {
+        names: oversized.join(', '),
+        limit: formatMegabytes(MAX_TOTAL_ATTACHMENT_BYTES),
+      }));
+    }
+    if (problems.length > 0) {
+      setAttachError(problems.join(' '));
+      window.setTimeout(() => setAttachError(null), 8000);
     }
   }
+
+  // FILE_DROP (L11): файлы, брошенные на колонку чата, прикрепляются как выбранные через «+».
+  const lastDropNonceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!externalFiles || externalFiles.nonce === lastDropNonceRef.current) return;
+    lastDropNonceRef.current = externalFiles.nonce;
+    if (disabled) return;
+    void addFiles(externalFiles.files);
+    // addFiles reads the current attachments; only a new drop should trigger it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalFiles]);
 
   function applyTranscript() {
     const spoken = liveTextRef.current.trim();
@@ -629,6 +704,7 @@ export function InputBar({
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
+          enterKeyHint={enterInsertsNewline ? 'enter' : 'send'}
         />
 
         {/* Desktop only: on mobile the model picker lives in the chat header. */}
@@ -670,7 +746,7 @@ export function InputBar({
         ) : (
           <button
             type="submit"
-            onClick={submit}
+            onClick={() => void submit()}
             title={t('common.send')}
             aria-label={t('common.send')}
             className="send-btn"

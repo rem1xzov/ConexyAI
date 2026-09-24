@@ -20,6 +20,11 @@ interface ChatFeedProps {
   // AGENT_FEED_ZED: добавлено 2026-09-23
   /** Opens a file mentioned by an agent action row in the workspace editor. */
   onOpenFile?: (path: string) => void;
+  // LOCAL_STORAGE_BUDGET: добавлено 2026-09-24 (M22/M25) — переписка чата грузится с сервера
+  // (её нет в кеше этого устройства); без этого открытый чат выглядел бы пустым.
+  loading?: boolean;
+  loadFailed?: boolean;
+  onRetryLoad?: () => void;
 }
 
 export function ChatFeed({
@@ -32,6 +37,9 @@ export function ChatFeed({
   onNewChat,
   onContinue,
   onOpenFile,
+  loading,
+  loadFailed,
+  onRetryLoad,
 }: ChatFeedProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -128,6 +136,23 @@ export function ChatFeed({
     observer.observe(el);
     return () => observer.disconnect();
   }, [jumpToBottom]);
+
+  if ((loading || loadFailed) && (!session || session.messages.length === 0)) {
+    return (
+      <div className="feed feed--empty">
+        <div className="hero">
+          <p className="muted" role="status" aria-live="polite">
+            {loadFailed ? t('sync.transcriptFailed') : t('sync.loadingChat')}
+          </p>
+          {loadFailed && onRetryLoad && (
+            <button className="admin-btn" type="button" onClick={onRetryLoad}>
+              {t('sync.retry')}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (!session || session.messages.length === 0) {
     return (

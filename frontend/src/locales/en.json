@@ -1,4 +1,22 @@
 {
+  "sync": {
+    "turnInFlight": "A reply is still being generated in this chat. Wait for it to finish or press Stop.",
+    "waitForReply": "Wait for the current reply to finish or press Stop — your message stays here.",
+    "chatForbidden": "This chat belongs to another account or is no longer available. Start a new chat.",
+    "stopFailed": "Couldn't stop the generation — check the connection and press Stop again.",
+    "loadingChat": "Loading the chat…",
+    "transcriptFailed": "Couldn't load this chat from the server.",
+    "retry": "Retry",
+    "dropFiles": "Drop files to attach them",
+    "attachmentsOverLimit": "The files are too large to send: {{size}} MB, while one message allows up to {{limit}} MB. Remove some files or send them one at a time.",
+    "filesOverLimit": "Not attached — one message allows up to {{limit}} MB of files: {{names}}.",
+    "adminSignIn": "Sign in with an administrator account to open the admin panel.",
+    "profileFailed": "Couldn't load your profile. Check the connection and try again.",
+    "sessionExpired": "Your session has ended. Please sign in again.",
+    "retryAfter": "Try again in {{seconds}} s.",
+    "leaveChatUnsaved": "Files open in the workspace editor have unsaved changes. Leave this chat without saving them?",
+    "leaveWithoutSaving": "Leave without saving"
+  },
   "common": {
     "loading": "Loading…",
     "close": "Close",
@@ -519,6 +537,7 @@
     "forbidden": "You can only write in your own ticket.",
     "superadmin_protected": "Superadmin cannot be changed or deleted.",
     "github_auth": "GitHub login error",
+    "too_many_attempts": "Too many attempts. Please wait a little and try again.",
     "default": "Authentication error"
   },
   "render": {

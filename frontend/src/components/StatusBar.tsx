@@ -8,12 +8,19 @@ interface CursorInfo {
   language: string;
 }
 
+// STATUS_BAR: изменено 2026-09-24 (L8) — статус теперь строго одно из известных значений. Раньше
+// сюда попадала подпись фазы агента («Анализирую…»), которая не совпадала ни с одним ключом и
+// показывалась как «Готово» прямо во время работы агента.
+export type AgentStatus = 'Ready' | 'Working…' | 'Completed' | 'Failed' | 'Stopped';
+
 interface StatusBarProps {
-  agentStatus: string;
+  agentStatus: AgentStatus;
+  /** What the running turn is doing right now (the agent's phase label), shown next to "Working…". */
+  activity?: string | null;
   cursor: CursorInfo | null;
 }
 
-export function StatusBar({ agentStatus, cursor }: StatusBarProps) {
+export function StatusBar({ agentStatus, activity, cursor }: StatusBarProps) {
   const { t } = useTranslation();
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
 
@@ -39,12 +46,15 @@ export function StatusBar({ agentStatus, cursor }: StatusBarProps) {
             ? t('statusbar.agentStopped')
             : t('statusbar.agentReady');
 
+  const detail = agentStatus === 'Working…' && activity ? activity : null;
+  const label = detail ? `${agentStatusLabel} · ${detail}` : agentStatusLabel;
+
   return (
     <footer className="statusbar">
       <div className="statusbar__left">
         <span className={`statusbar__conn statusbar__conn--${status}`} />
-        <span className="statusbar__agent" title={agentStatusLabel}>
-          {agentStatusLabel}
+        <span className="statusbar__agent" title={label}>
+          {label}
         </span>
       </div>
       <div className="statusbar__right">

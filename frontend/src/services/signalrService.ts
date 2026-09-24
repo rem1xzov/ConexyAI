@@ -1,5 +1,6 @@
 import * as signalR from '@microsoft/signalr';
-import type { BuildProblemsPayload, PendingActionPayload, RunProjectErrorPayload, RunProjectResult, SearchStatusPayload, SignalrCallbacks, SupportMessagePayload, TerminalOutputPayload } from '../types/signalr';
+import { recoverFromUnauthorized } from '../api/client';
+import type { AgentStatusPayload, BuildProblemsPayload, FileCreatedPayload, PendingActionPayload, RunProjectErrorPayload, RunProjectResult, SearchStatusPayload, SignalrCallbacks, StopGenerationResult, SupportMessagePayload, TaskCompletedPayload, TerminalOutputPayload, TodoUpdatePayload, ToolActionEvent } from '../types/signalr';
 
 export type ConnectionStatus =
   | 'connected'
@@ -33,13 +34,36 @@ function backoffDelay(attempt: number): number {
   return base + Math.floor(Math.random() * 500);
 }
 
-function nextRetryDelay(context: signalR.RetryContext): number {
-  return backoffDelay(context.previousRetryCount);
-}
-
 /** Human-readable message for the connection logs (thrown values are not always Error instances). */
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// SESSION_REVOKED: добавлено 2026-09-24 (M19) — negotiate с отозванным токеном отвечает 401.
+// SignalR заворачивает его в FailedToNegotiateWithServerError с текстом "... Status code '401'".
+// Повторять подключение тем же токеном бессмысленно — это бесконечный цикл переподключений.
+function isUnauthorizedConnectError(err: unknown): boolean {
+  if (err instanceof signalR.HttpError) return err.statusCode === 401;
+  const message = describeError(err);
+  return /status code '401'/i.test(message) || /\bunauthorized\b/i.test(message);
+}
+
+// CHAT_OWNERSHIP: добавлено 2026-09-24 — контракт C-6. Хаб бросает HubException со словом
+// «forbidden», если id задачи/чата принадлежит другому пользователю.
+function isForbiddenHubError(err: unknown): boolean {
+  return describeError(err).toLowerCase().includes('forbidden');
+}
+
+/** Thrown by {@link SignalrService.joinTask} when the server refused the group for good (C-6). */
+export class ForbiddenJoinError extends Error {
+  constructor(readonly id: string) {
+    super(`Joining task_${id} is forbidden for this account`);
+    this.name = 'ForbiddenJoinError';
+  }
+}
+
+export function isForbiddenJoinError(err: unknown): err is ForbiddenJoinError {
+  return err instanceof ForbiddenJoinError;
 }
 
 function toStatus(state: signalR.HubConnectionState): ConnectionStatus {
@@ -78,9 +102,18 @@ class SignalrService {
   // stale/restarted connection never silently drops the stream (the connection id changes
   // on reconnect, but SignalR groups are per-connection and must be re-added).
   private joinedTaskIds = new Set<string>();
+  // SUPPORT_REJOIN: добавлено 2026-09-24 (M16) — группы тикетов поддержки тоже живут на уровне
+  // соединения. Раньше после переподключения их никто не восстанавливал, и ответы саппорта
+  // молча переставали приходить.
+  private joinedSupportTicketIds = new Set<string>();
+  // CHAT_OWNERSHIP: добавлено 2026-09-24 (C-6) — id, в которые сервер отказал навсегда. Повторный
+  // JoinTask по ним (сторож, rejoin после reconnect) был бы бесконечным циклом отказов.
+  private forbiddenIds = new Set<string>();
   // SUPPORT: добавлено 2026-09-19 — live subscribers for support messages (the support chat
   // opens/closes dynamically, so it subscribes/unsubscribes instead of using the static callbacks).
   private supportHandlers = new Set<(payload: SupportMessagePayload) => void>();
+  // SESSION_REVOKED: одна обработка 401 за раз.
+  private unauthorizedInFlight = false;
 
   async connect(token: string, callbacks: SignalrCallbacks): Promise<void> {
     this.token = token;
@@ -106,36 +139,73 @@ class SignalrService {
       }
     }
 
-    await this.disconnect();
+    await this.teardown();
 
     this.connection = this.build();
     this.registerCallbacks();
     await this.startWithRetry();
   }
 
+  // SESSION_ISOLATION: добавлено 2026-09-24 (H10) — обновление токена того же пользователя не
+  // требует переподключения: accessTokenFactory читает this.token при каждом negotiate/reconnect.
+  // Раньше каждое обновление токена рвало соединение вместе с подписками на идущий ход.
+  setToken(token: string | null): void {
+    this.token = token;
+  }
+
   async joinTask(taskId: string): Promise<void> {
+    // CHAT_OWNERSHIP: сервер уже отказал — не долбим его снова (C-6).
+    if (this.forbiddenIds.has(taskId)) throw new ForbiddenJoinError(taskId);
     this.joinedTaskIds.add(taskId);
     await this.ensureConnected();
+    // The (re)connect that ensureConnected waited for may have tried this id already (rejoinGroups).
+    if (this.forbiddenIds.has(taskId)) throw new ForbiddenJoinError(taskId);
     console.log('[signalr] joinTask', taskId, 'connId=', this.connection?.connectionId);
-    await this.connection!.invoke('JoinTask', taskId);
+    try {
+      await this.connection!.invoke('JoinTask', taskId);
+    } catch (err) {
+      if (isForbiddenHubError(err)) throw this.markForbidden(taskId);
+      throw err;
+    }
   }
 
   // TASK_COMPLETION_WATCHDOG: добавлено 2026-09-22 — повторная подписка нужна только если её нет,
   // иначе сторож опрашивал бы хаб каждые несколько секунд без причины.
   async ensureGroup(taskId: string): Promise<void> {
+    if (this.forbiddenIds.has(taskId)) throw new ForbiddenJoinError(taskId);
     if (this.joinedTaskIds.has(taskId) && this.connection?.state === signalR.HubConnectionState.Connected) {
       return;
     }
     await this.joinTask(taskId);
   }
 
+  /** True when the server has refused this task/chat id for the current account (C-6). */
+  isForbidden(id: string): boolean {
+    return this.forbiddenIds.has(id);
+  }
+
   async leaveTask(taskId: string): Promise<void> {
     this.joinedTaskIds.delete(taskId);
-    if (!this.connection) return;
+    if (!this.connection || this.connection.state !== signalR.HubConnectionState.Connected) return;
     await this.connection.invoke('LeaveTask', taskId);
   }
 
+  // SESSION_ISOLATION: добавлено 2026-09-24 (H10) — выход из аккаунта. Раньше disconnect() оставлял
+  // в памяти JWT прошлого пользователя и его группы: следующий вход в том же браузере
+  // переподписывался на чужие задачи и ходил в хаб со старым токеном.
+  // Состояние чистится ДО await: connect() нового пользователя, вызванный сразу следом (без
+  // ожидания), иначе получил бы свой токен и колбэки затёртыми продолжением этого метода.
   async disconnect(): Promise<void> {
+    this.token = null;
+    this.callbacks = {};
+    this.joinedTaskIds.clear();
+    this.joinedSupportTicketIds.clear();
+    this.forbiddenIds.clear();
+    await this.teardown();
+  }
+
+  /** Stops the current connection without forgetting who the user is (used by connect()). */
+  private async teardown(): Promise<void> {
     // SIGNALR_RELIABILITY: обнуляем ссылку ДО stop(), чтобы никто не увидел полузакрытое
     // соединение как рабочее; stop() же может бросить (например если шёл start()).
     const conn = this.connection;
@@ -196,10 +266,15 @@ class SignalrService {
     await this.connection.invoke('StopTerminal', sessionId);
   }
 
-  /** Cancels an in-flight generation (any model) for the given task id. */
-  async stopGeneration(taskId: string): Promise<void> {
+  // STOP_CONFIRM: изменено 2026-09-24 (M17, контракт C-5) — хаб теперь подтверждает остановку.
+  /**
+   * Cancels an in-flight generation (any model) for the given task id and reports what the server
+   * did. An older backend that returns nothing is treated as `stopping`.
+   */
+  async stopGeneration(taskId: string): Promise<StopGenerationResult> {
     await this.ensureConnected();
-    await this.connection!.invoke('StopGeneration', taskId);
+    const result = await this.connection!.invoke<string | null>('StopGeneration', taskId);
+    return result === 'cancelled' || result === 'not_found' ? result : 'stopping';
   }
 
   // COMMAND_CONFIRM: расширено 2026-09-20 — подтверждение требуется для любой bash-команды.
@@ -220,12 +295,15 @@ class SignalrService {
 
   // SUPPORT: добавлено 2026-09-19
   async joinSupportTicket(ticketId: string): Promise<void> {
+    // SUPPORT_REJOIN: запоминаем тикет, чтобы rejoinGroups вернул его после переподключения.
+    this.joinedSupportTicketIds.add(ticketId);
     await this.ensureConnected();
     await this.connection!.invoke('JoinSupportTicket', ticketId);
   }
 
   async leaveSupportTicket(ticketId: string): Promise<void> {
-    if (!this.connection) return;
+    this.joinedSupportTicketIds.delete(ticketId);
+    if (!this.connection || this.connection.state !== signalR.HubConnectionState.Connected) return;
     await this.connection.invoke('LeaveSupportTicket', ticketId);
   }
 
@@ -257,7 +335,7 @@ class SignalrService {
       .withUrl('/hubs/conexy', {
         accessTokenFactory: () => this.token ?? '',
       })
-      .withAutomaticReconnect({ nextRetryDelayInMilliseconds: nextRetryDelay })
+      .withAutomaticReconnect({ nextRetryDelayInMilliseconds: (context) => this.nextReconnectDelay(context) })
       // Aligned with the server: it pings every 15s and waits 120s for us. The client's default
       // 30s server timeout was tight enough to declare a healthy connection dead mid-task.
       .withKeepAliveInterval(15_000)
@@ -286,6 +364,35 @@ class SignalrService {
     });
 
     return connection;
+  }
+
+  /** Reconnect policy: back off forever, except after a 401 — a revoked token never gets better. */
+  private nextReconnectDelay(context: signalR.RetryContext): number | null {
+    if (isUnauthorizedConnectError(context.retryReason)) {
+      void this.handleUnauthorized();
+      return null;
+    }
+    return backoffDelay(context.previousRetryCount);
+  }
+
+  // SESSION_REVOKED: добавлено 2026-09-24 (M19) — 401 на negotiate/reconnect идёт в ту же единую
+  // точку, что и 401 REST-запросов: в Development — один тихий dev-токен того же пользователя и
+  // новое соединение (группы переподключаются); иначе приложение выходит из аккаунта.
+  private async handleUnauthorized(): Promise<void> {
+    if (this.unauthorizedInFlight) return;
+    this.unauthorizedInFlight = true;
+    try {
+      const next = await recoverFromUnauthorized(this.token, 'signalr');
+      // Signed out meanwhile (disconnect() cleared the token): nothing to reconnect.
+      if (next && this.token !== null) {
+        this.token = next;
+        await this.connect(next, this.callbacks);
+      }
+    } catch (err) {
+      console.warn('[signalr] recovery after 401 failed', describeError(err));
+    } finally {
+      this.unauthorizedInFlight = false;
+    }
   }
 
   // SIGNALR_RESILIENCE: переподключение может длиться долго (502 от прокси, перезапуск бэкенда).
@@ -321,35 +428,61 @@ class SignalrService {
     if (!this.connection || this.connection.state !== signalR.HubConnectionState.Connected) {
       return;
     }
-    for (const taskId of this.joinedTaskIds) {
+    for (const taskId of [...this.joinedTaskIds]) {
       try {
         console.log('[signalr] rejoinTask', taskId, 'connId=', this.connection.connectionId);
         await this.connection.invoke('JoinTask', taskId);
       } catch (e) {
+        // CHAT_OWNERSHIP: отказ по владельцу не лечится повтором — забываем группу (C-6).
+        if (isForbiddenHubError(e)) {
+          this.markForbidden(taskId);
+          continue;
+        }
         console.warn('[signalr] failed to rejoin group', taskId, e);
       }
     }
+    // SUPPORT_REJOIN: добавлено 2026-09-24 (M16).
+    for (const ticketId of [...this.joinedSupportTicketIds]) {
+      try {
+        await this.connection.invoke('JoinSupportTicket', ticketId);
+      } catch (e) {
+        if (isForbiddenHubError(e)) this.joinedSupportTicketIds.delete(ticketId);
+        console.warn('[signalr] failed to rejoin support ticket', ticketId, describeError(e));
+      }
+    }
+  }
+
+  /** Remembers a refused id, drops it from the rejoin set and tells the app (C-6). */
+  private markForbidden(id: string): ForbiddenJoinError {
+    this.joinedTaskIds.delete(id);
+    if (!this.forbiddenIds.has(id)) {
+      this.forbiddenIds.add(id);
+      console.warn('[signalr] JoinTask forbidden for this account; not retrying', { id });
+      this.callbacks.onJoinForbidden?.(id);
+    }
+    return new ForbiddenJoinError(id);
   }
 
   private registerCallbacks(): void {
     if (!this.connection) return;
 
-    this.connection.on('OnContentToken', (delta: string) => this.callbacks.onContentToken?.(delta));
-    this.connection.on('OnThinkingToken', (delta: string) => this.callbacks.onThinkingToken?.(delta));
-    this.connection.on('OnLog', (message: string) => this.callbacks.onLog?.(message));
-    this.connection.on('OnScreenshot', (base64: string) => this.callbacks.onScreenshot?.(base64));
-    this.connection.on('OnAgentStatus', (payload) => this.callbacks.onAgentStatus?.(payload));
-    this.connection.on('OnFileCreated', (payload) => this.callbacks.onFileCreated?.(payload));
-    this.connection.on('ToolAction', (event) => this.callbacks.onToolAction?.(event));
-    this.connection.on('TodoUpdate', (payload) => this.callbacks.onTodoUpdate?.(payload));
-    this.connection.on('OnCompleted', (payload) => this.callbacks.onCompleted?.(payload));
-    this.connection.on('OnError', (error: string) => this.callbacks.onError?.(error));
-    this.connection.on('OnStopped', (taskId: string) => this.callbacks.onStopped?.(taskId));
+    // STREAM_SCOPE: добавлено 2026-09-24 (C-1) — последний аргумент каждого события группы — её id.
+    this.connection.on('OnContentToken', (delta: string, scopeId?: string) => this.callbacks.onContentToken?.(delta, scopeId));
+    this.connection.on('OnThinkingToken', (delta: string, scopeId?: string) => this.callbacks.onThinkingToken?.(delta, scopeId));
+    this.connection.on('OnLog', (message: string, scopeId?: string) => this.callbacks.onLog?.(message, scopeId));
+    this.connection.on('OnScreenshot', (base64: string, scopeId?: string) => this.callbacks.onScreenshot?.(base64, scopeId));
+    this.connection.on('OnAgentStatus', (payload: AgentStatusPayload, scopeId?: string) => this.callbacks.onAgentStatus?.(payload, scopeId));
+    this.connection.on('OnFileCreated', (payload: FileCreatedPayload, scopeId?: string) => this.callbacks.onFileCreated?.(payload, scopeId));
+    this.connection.on('ToolAction', (event: ToolActionEvent, scopeId?: string) => this.callbacks.onToolAction?.(event, scopeId));
+    this.connection.on('TodoUpdate', (payload: TodoUpdatePayload, scopeId?: string) => this.callbacks.onTodoUpdate?.(payload, scopeId));
+    this.connection.on('OnCompleted', (payload: TaskCompletedPayload, scopeId?: string) => this.callbacks.onCompleted?.(payload, scopeId));
+    this.connection.on('OnError', (error: string, scopeId?: string) => this.callbacks.onError?.(error, scopeId));
+    this.connection.on('OnStopped', (taskId: string, scopeId?: string) => this.callbacks.onStopped?.(taskId, scopeId));
     this.connection.on('RunProjectError', (payload: RunProjectErrorPayload) => this.callbacks.onRunProjectError?.(payload));
-    this.connection.on('SearchStatus', (payload: SearchStatusPayload) => this.callbacks.onSearchStatus?.(payload));
-    this.connection.on('BuildProblems', (payload: BuildProblemsPayload) => this.callbacks.onProblems?.(payload));
+    this.connection.on('SearchStatus', (payload: SearchStatusPayload, scopeId?: string) => this.callbacks.onSearchStatus?.(payload, scopeId));
+    this.connection.on('BuildProblems', (payload: BuildProblemsPayload, scopeId?: string) => this.callbacks.onProblems?.(payload, scopeId));
     // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
-    this.connection.on('OnPendingActionCreated', (payload: PendingActionPayload) => this.callbacks.onPendingActionCreated?.(payload));
+    this.connection.on('OnPendingActionCreated', (payload: PendingActionPayload, scopeId?: string) => this.callbacks.onPendingActionCreated?.(payload, scopeId));
     // SUPPORT: добавлено 2026-09-19
     this.connection.on('OnSupportMessageReceived', (payload: SupportMessagePayload) => {
       this.callbacks.onSupportMessageReceived?.(payload);
@@ -384,7 +517,12 @@ class SignalrService {
       // Сюда попадаем, если соединение вообще не поднималось (первый start() ещё не вызван или
       // провалился). Ретрай-цикл живёт в connect(); здесь одна попытка, а ошибка должна дойти до
       // вызывающего, чтобы кнопка показала понятное сообщение, а не молчала.
-      await conn.start();
+      try {
+        await conn.start();
+      } catch (err) {
+        if (isUnauthorizedConnectError(err)) void this.handleUnauthorized();
+        throw err;
+      }
       await this.rejoinGroups();
     }
 
@@ -454,6 +592,12 @@ class SignalrService {
           await this.rejoinGroups();
           return;
         } catch (err) {
+          // SESSION_REVOKED: 401 — повтор тем же токеном не поможет; решает единая обработка 401.
+          if (isUnauthorizedConnectError(err)) {
+            this.notifyState('disconnected');
+            void this.handleUnauthorized();
+            return;
+          }
           attempt += 1;
           console.warn('[signalr] initial connect failed', { attempt, error: describeError(err) });
 

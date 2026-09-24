@@ -3,6 +3,7 @@ import axios from 'axios';
 import type {
   AdminSupportTicket,
   AdminUsersResponse,
+  ChatListResponse,
   ChatSummary,
   ChatTranscript,
   ConexyRequest,
@@ -52,9 +53,13 @@ export async function login(email: string, password: string): Promise<DevTokenRe
 }
 
 // EMAIL_AUTH: добавлено 2026-09-19
-/** Clears the session cookie on the backend (logout). */
-export async function logout(): Promise<void> {
-  await axios.post('/api/auth/logout');
+// SESSION_REVOKED: изменено 2026-09-24 (M19) — выход отзывает токен на сервере (все устройства),
+// поэтому сам токен передаётся явно, а не только через cookie.
+/** Revokes the session on the backend and clears its cookie (logout). */
+export async function logout(token?: string | null): Promise<void> {
+  await axios.post('/api/auth/logout', null, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
 }
 
 // EMAIL_AUTH: добавлено 2026-09-19
@@ -159,10 +164,18 @@ export async function getTaskStatus(id: string): Promise<ConexyResponse> {
 }
 
 // CHAT_SYNC: добавлено 2026-09-23
+// CHAT_LIST_COMPLETE: изменено 2026-09-24 (H8, контракт C-3) — ответ теперь
+// `{ chats, allChatIds }`: последние чаты + все закреплённые и ПОЛНЫЙ набор id. Раньше приходили
+// только 50 последних, и синк удалял всё, что не попало в список, — в том числе закреплённые чаты.
 /** The signed-in user's chats, newest activity first (server-side list, not localStorage). */
-export async function getChats(limit = 50): Promise<ChatSummary[]> {
-  const { data } = await http.get<ChatSummary[]>('/conexy/chats', { params: { limit } });
-  return data;
+export async function getChats(limit = 200): Promise<ChatListResponse> {
+  const { data } = await http.get<ChatListResponse | ChatSummary[]>('/conexy/chats', { params: { limit } });
+  // Старый бэкенд отдаёт голый массив: он может быть обрезан, поэтому полного набора id нет.
+  if (Array.isArray(data)) return { chats: data, allChatIds: null };
+  return {
+    chats: Array.isArray(data?.chats) ? data.chats : [],
+    allChatIds: Array.isArray(data?.allChatIds) ? data.allChatIds : null,
+  };
 }
 
 /** The stored transcript of one chat; the backend scopes it to the token's user. */
@@ -274,4 +287,10 @@ export async function saveIdeFileContent(sessionId: string, path: string, conten
 /** Creates a new file (or directory) in the workspace via the IDE file API. */
 export async function createIdeFile(sessionId: string, path: string, isDirectory = false): Promise<void> {
   await http.post(`/sessions/${sessionId}/files`, { path, isDirectory });
+}
+
+// IDE_DELETE: добавлено 2026-09-24 — удаление файла или папки через IDE API (для WorkspacePanel).
+/** Deletes a file or a folder in the workspace via the IDE file API. */
+export async function deleteIdePath(sessionId: string, path: string): Promise<void> {
+  await http.delete(`/sessions/${sessionId}/files`, { params: { path } });
 }

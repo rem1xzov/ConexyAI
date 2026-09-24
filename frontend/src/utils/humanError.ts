@@ -20,6 +20,12 @@ export function humanError(err: unknown, t: Translate): string {
   };
 
   const status = e.response?.status;
+
+  // KNOWN_ERROR_CODES: добавлено 2026-09-24 (C-2, M20) — машинные коды ответа сервера показываются
+  // человеческим текстом, а не как «TURN_IN_FLIGHT».
+  const knownKey = knownCodeKey(e.response?.data);
+  if (knownKey) return t(knownKey);
+
   const fromBody = extractServerMessage(e.response?.data);
 
   // A gateway/proxy status means the backend was unreachable, not that the request was wrong.
@@ -39,6 +45,24 @@ export function humanError(err: unknown, t: Translate): string {
   }
 
   return fromBody ?? safeText(rawMessage) ?? t('errors.default');
+}
+
+const KNOWN_CODES: Record<string, string> = {
+  TURN_IN_FLIGHT: 'sync.turnInFlight',
+  CHAT_FORBIDDEN: 'sync.chatForbidden',
+  TOO_MANY_ATTEMPTS: 'errors.too_many_attempts',
+  too_many_attempts: 'errors.too_many_attempts',
+};
+
+/** The i18n key for a machine-readable `{ error }` / `{ code }` the server is known to send. */
+function knownCodeKey(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null;
+  const record = data as Record<string, unknown>;
+  for (const field of ['error', 'code']) {
+    const value = record[field];
+    if (typeof value === 'string' && KNOWN_CODES[value]) return KNOWN_CODES[value];
+  }
+  return null;
 }
 
 /** Reads `{ error | message | detail }` off a JSON error body; ignores anything that is markup. */
