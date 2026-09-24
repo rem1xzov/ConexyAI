@@ -89,6 +89,16 @@ interface ActionDescriptor {
   path?: string;
 }
 
+/** Host of a URL ("https://www.example.com/a" -> "example.com"); the raw text when it is not a URL. */
+function urlHost(value: string): string {
+  try {
+    const host = new URL(value).host;
+    return host.replace(/^www\./, '') || value;
+  } catch {
+    return value;
+  }
+}
+
 /**
  * Turns a raw tool invocation into the short description the reference timeline uses
  * ("Read ConexyAgentRunner.cs" instead of the whole shell line where that is obvious).
@@ -111,6 +121,17 @@ function describeAction(event: ToolActionEvent, t: Translate): ActionDescriptor 
 
   if (event.toolName === 'web_search') {
     return { action: 'web', label: `${t('toolPill.searchWeb')}: ${command}` };
+  }
+
+  // DEEP_RESEARCH: добавлено 2026-09-24 — агент читает страницу из выдачи (command = URL);
+  // в строке показываем только хост, полный адрес длинный и ничего не добавляет.
+  if (event.toolName === 'fetch_web_page') {
+    return { action: 'web', label: t('render.toolFetchPage', { host: urlHost(command) }) };
+  }
+
+  // CHAT_SEARCH: добавлено 2026-09-24 — поиск по прошлым диалогам пользователя (command = запрос).
+  if (event.toolName === 'search_user_chats') {
+    return { action: 'search', label: t('render.toolSearchChats', { query: command }) };
   }
 
   if (event.toolName === 'bash' || event.toolName === 'terminal_exec') {

@@ -20,11 +20,12 @@ function imageLayoutModifier(imageCount: number): string {
   return 'attachment-grid--quad';
 }
 
-function formatSize(bytes?: number): string | null {
+// I18N_L2: добавлено 2026-09-24 — единицы размера («B/KB/MB») переводятся (Б/КБ/МБ).
+function formatSize(bytes: number | undefined, t: (key: string, options?: Record<string, unknown>) => string): string | null {
   if (!bytes || bytes <= 0) return null;
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024) return t('render.sizeBytes', { n: bytes });
+  if (bytes < 1024 * 1024) return t('render.sizeKilobytes', { n: Math.round(bytes / 1024) });
+  return t('render.sizeMegabytes', { n: (bytes / (1024 * 1024)).toFixed(1) });
 }
 
 interface LightboxProps {
@@ -158,7 +159,7 @@ export function AttachmentGrid({ attachments }: AttachmentGridProps) {
       {files.length > 0 && (
         <div className="attachment-files">
           {files.map((file, i) => {
-            const size = formatSize(file.sizeBytes);
+            const size = formatSize(file.sizeBytes, t);
             return (
               <span key={`${file.fileName}-${i}`} className="attachment-files__chip" title={file.fileName}>
                 <FileIcon size={14} />

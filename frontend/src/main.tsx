@@ -4,6 +4,7 @@ import App from './App';
 import './i18n';
 import { applyTheme, getStoredTheme } from './theme';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ArtifactPanelHost } from './components/artifacts/ArtifactPanel';
 import './styles/index.css';
 
 applyTheme(getStoredTheme());
@@ -17,6 +18,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary recovery>
       <App />
+      {/* ARTIFACTS: добавлено 2026-09-24 — правая панель артефактов живёт рядом с App (портал в
+          body) и управляется своим маленьким стором, поэтому App.tsx о ней не знает. */}
+      <ArtifactPanelHost />
     </ErrorBoundary>
   </React.StrictMode>,
 );

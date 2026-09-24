@@ -971,8 +971,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     if (res.Success)
                     {
                         await SendFileCreatedAsync(taskId, path, ct);
+                        // The client builds file cards from this line: only for a write that happened.
+                        await LogAsync(taskId, $"[File Written] {path}", ct);
                     }
-                    await LogAsync(taskId, $"[File Written] {path}", ct);
                     return new ConexyToolResult(toolCall.Id, res.Success ? $"File '{path}' written." : res.Error!, !res.Success);
                 }
 
@@ -1000,8 +1001,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     if (res.Success)
                     {
                         await SendFileCreatedAsync(taskId, path, ct);
+                        // The client builds file cards from this line: only for a write that happened.
+                        await LogAsync(taskId, $"[File Patched] {path}", ct);
                     }
-                    await LogAsync(taskId, $"[File Patched] {path}", ct);
                     return new ConexyToolResult(toolCall.Id, res.Success ? $"Patched '{path}'." : res.Error!, !res.Success);
                 }
 
@@ -1021,8 +1023,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     if (res.Success)
                     {
                         await SendFileCreatedAsync(taskId, path, ct);
+                        // The client builds file cards from this line: only for a write that happened.
+                        await LogAsync(taskId, $"[Document Created] {path}", ct);
                     }
-                    await LogAsync(taskId, $"[Document Created] {path}", ct);
                     return new ConexyToolResult(toolCall.Id, res.Success ? $"Document '{path}' created ({bytes.Length} bytes)." : res.Error!, !res.Success);
                 }
 
