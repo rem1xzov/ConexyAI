@@ -533,6 +533,14 @@ public static partial class DocumentParser
         "Fallback" or "del" or "delText" or "moveFrom" or "instrText" or "pPrChange" or "rPrChange" or
         "sectPrChange" or "tblPrChange" or "trPrChange" or "tcPrChange" or "numberingChange" or "rPh";
 
+    /// <summary>Appends as much of <paramref name="text"/> as fits under <paramref name="max"/> characters.</summary>
+    private static void Bounded(StringBuilder target, string text, int max)
+    {
+        var room = max - target.Length;
+        if (room <= 0) return;
+        target.Append(text.Length <= room ? text : text[..TextSanitizer.SafeCut(text, room)]);
+    }
+
     private static string TableRow(IEnumerable<string> cells) =>
         "| " + string.Join(" | ", cells.Select(c => c.Replace("\r", string.Empty).Replace('\n', ' ').Replace("|", "\\|"))) + " |";
 
@@ -636,13 +644,13 @@ public static partial class DocumentParser
                             ReadElementText(r, _paragraph, MaxOutputChars);
                             break;
                         case "tab" when _runDepth > 0:
-                            _paragraph.Append('\t');
+                            Bounded(_paragraph, "\t", MaxOutputChars);
                             break;
                         case "br" or "cr" when _runDepth > 0:
-                            _paragraph.Append('\n');
+                            Bounded(_paragraph, "\n", MaxOutputChars);
                             break;
                         case "noBreakHyphen" when _runDepth > 0:
-                            _paragraph.Append('-');
+                            Bounded(_paragraph, "-", MaxOutputChars);
                             break;
                         case "tbl" when !empty:
                             _tableDepth++;
@@ -671,11 +679,11 @@ public static partial class DocumentParser
                             break;
                         case "tc" when _cells.Count > 0:
                             var cell = _cells.Pop().ToString().Trim();
-                            if (_rows.Count > 0) _rows.Peek().Add(cell);
+                            if (_rows.Count > 0 && _rows.Peek().Count < MaxColumns) _rows.Peek().Add(cell);
                             break;
                         case "tr" when _rows.Count > 0:
                             var row = _rows.Pop();
-                            if (_cells.Count > 0) _cells.Peek().Append(' ').Append(string.Join(" | ", row));
+                            if (_cells.Count > 0) Bounded(_cells.Peek(), " " + string.Join(" | ", row), MaxCellChars);
                             else _output.Line(TableRow(row.Take(MaxColumns)));
                             break;
                         case "tbl" when _tableDepth > 0:
@@ -694,8 +702,7 @@ public static partial class DocumentParser
             {
                 var cell = _cells.Peek();
                 if (text.Trim().Length == 0) return;
-                if (cell.Length > 0) cell.Append(' ');
-                cell.Append(text.Replace('\n', ' '));
+                Bounded(cell, (cell.Length > 0 ? " " : string.Empty) + text.Replace('\n', ' '), MaxCellChars);
                 return;
             }
 
@@ -888,7 +895,9 @@ public static partial class DocumentParser
         using var reader = zip.OpenXml(path);
         if (reader is null) return;
 
-        var cells = new List<(int Column, string Text)>();
+        // One slot per column: a row repeating the same reference overwrites instead of piling up.
+        var values = new string?[MaxColumns];
+        var lastColumn = -1;
         var nextColumn = 0;
         var rowsEmitted = 0;
         var rowsScanned = 0;
@@ -897,7 +906,8 @@ public static partial class DocumentParser
         {
             if (reader.NodeType == XmlNodeType.Element && reader.LocalName == "row")
             {
-                cells.Clear();
+                if (lastColumn >= 0) Array.Clear(values, 0, lastColumn + 1);
+                lastColumn = -1;
                 nextColumn = 0;
                 if (++rowsScanned > MaxRowsScannedPerSheet) break;
             }
@@ -914,9 +924,13 @@ public static partial class DocumentParser
                 }
                 nextColumn = column + 1;
                 var text = ReadCell(reader, shared, formats, date1904);
-                if (text.Trim().Length > 0) cells.Add((column, text));
+                if (text.Trim().Length > 0)
+                {
+                    values[column] = text;
+                    lastColumn = Math.Max(lastColumn, column);
+                }
             }
-            else if (reader.NodeType == XmlNodeType.EndElement && reader.LocalName == "row" && cells.Count > 0)
+            else if (reader.NodeType == XmlNodeType.EndElement && reader.LocalName == "row" && lastColumn >= 0)
             {
                 if (rowsEmitted++ >= MaxRowsPerSheet)
                 {
@@ -924,12 +938,9 @@ public static partial class DocumentParser
                     break;
                 }
                 // Only up to the last non-empty cell; gaps inside the row stay as empty cells.
-                var width = cells.Max(c => c.Column) + 1;
-                var values = new string[width];
-                Array.Fill(values, string.Empty);
-                foreach (var (col, value) in cells) values[col] = value;
-                output.Line(TableRow(values));
-                cells.Clear();
+                output.Line(TableRow(values.Take(lastColumn + 1).Select(v => v ?? string.Empty)));
+                Array.Clear(values, 0, lastColumn + 1);
+                lastColumn = -1;
             }
             reader.Read();
         }
@@ -1191,7 +1202,7 @@ public static partial class DocumentParser
                         ReadElementText(reader, paragraph, MaxOutputChars);
                         break;
                     case "br" when drawing && inParagraph > 0:
-                        paragraph.Append('\n');
+                        Bounded(paragraph, "\n", MaxOutputChars);
                         break;
                     case "tr" when drawing && !empty:
                         rows.Push(new List<string>());
@@ -1214,8 +1225,7 @@ public static partial class DocumentParser
                         if (text.Trim().Length == 0) break;
                         if (cells.Count > 0)
                         {
-                            if (cells.Peek().Length > 0) cells.Peek().Append(' ');
-                            cells.Peek().Append(text.Replace('\n', ' '));
+                            Bounded(cells.Peek(), (cells.Peek().Length > 0 ? " " : string.Empty) + text.Replace('\n', ' '), MaxCellChars);
                         }
                         else
                         {
@@ -1224,11 +1234,11 @@ public static partial class DocumentParser
                         break;
                     case "tc" when cells.Count > 0:
                         var cell = cells.Pop().ToString().Trim();
-                        if (rows.Count > 0) rows.Peek().Add(cell);
+                        if (rows.Count > 0 && rows.Peek().Count < MaxColumns) rows.Peek().Add(cell);
                         break;
                     case "tr" when rows.Count > 0:
                         var row = rows.Pop();
-                        if (cells.Count > 0) cells.Peek().Append(' ').Append(string.Join(" | ", row));
+                        if (cells.Count > 0) Bounded(cells.Peek(), " " + string.Join(" | ", row), MaxCellChars);
                         else output.Line(TableRow(row.Take(MaxColumns)));
                         break;
                 }

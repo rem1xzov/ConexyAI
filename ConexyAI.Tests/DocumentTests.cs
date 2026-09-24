@@ -497,6 +497,12 @@ internal static class DocumentTests
             "a row ends at its last cell within the column cap; XFD is beyond it");
         Assert(lines.Contains("| 10 | 11 |"), "cells without a reference follow each other");
 
+        // The same reference repeated in one row overwrites, it does not pile up (kept under 1 MB so the
+        // compression-ratio check does not refuse the sheet first).
+        var repeated = Workbook("<row r=\"1\">" + string.Concat(Enumerable.Repeat("<c r=\"A1\" t=\"inlineStr\"><is><t>x</t></is></c>", 20_000)) + "</row>");
+        var once = DocumentParser.Parse(repeated, "repeated.xlsx");
+        Assert(once.Split('\n').Contains("| x |") && once.Length < 100, $"a repeated reference yields one cell, got {once.Length} characters");
+
         // Row cap per sheet.
         var many = Workbook(string.Concat(Enumerable.Range(1, DocumentParser.MaxRowsPerSheet + 50).Select(r => $"<row r=\"{r}\"><c r=\"A{r}\"><v>1</v></c></row>")));
         var capped = DocumentParser.Parse(many, "many.xlsx");
