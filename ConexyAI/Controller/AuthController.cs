@@ -5,8 +5,10 @@ using ConexyAI.Entity;
 using ConexyAI.Extensions;
 using ConexyAI.Repository;
 using ConexyAI.Service;
+using ConexyAI.Service.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -29,6 +31,8 @@ public class AuthController : ControllerBase
     private readonly ILogger<AuthController> _logger;
     // EMAIL_AUTH: добавлено 2026-09-19
     private readonly IEmailAuthService _emailAuthService;
+    // TOKEN_REVOCATION: добавлено 2026-09-24 (ревью M19)
+    private readonly ITokenRevocationValidator _revocation;
 
     public AuthController(
         ITokenService tokenService,
@@ -37,7 +41,8 @@ public class AuthController : ControllerBase
         IOptions<GitHubOAuthOptions> gitHubOAuthOptions,
         IUserRepository userRepository,
         ILogger<AuthController> logger,
-        IEmailAuthService emailAuthService)
+        IEmailAuthService emailAuthService,
+        ITokenRevocationValidator revocation)
     {
         _tokenService = tokenService;
         _environment = environment;
@@ -46,6 +51,7 @@ public class AuthController : ControllerBase
         _userRepository = userRepository;
         _logger = logger;
         _emailAuthService = emailAuthService;
+        _revocation = revocation;
     }
 
     /// <summary>
@@ -69,12 +75,15 @@ public class AuthController : ControllerBase
         // FK constraints on user-scoped tables stay satisfiable during local testing.
         await _userRepository.EnsureExistsAsync(effectiveUserId, ct);
 
-        return Ok(_tokenService.CreateToken(effectiveUserId));
+        // TOKEN_REVOCATION: 2026-09-24 — токен несёт текущие TokenVersion/IsAdmin из БД.
+        var user = await _userRepository.GetByIdAsync(effectiveUserId, ct);
+        return Ok(_tokenService.CreateToken(user!));
     }
 
     // GITHUB_OAUTH: добавлено 2026-09-19
     /// <summary>Starts the GitHub OAuth flow: sets a CSRF <c>state</c> cookie and redirects to GitHub.</summary>
     [HttpGet("github/login")]
+    [EnableRateLimiting(AuthRateLimitPolicies.GitHubOAuth)]
     public IActionResult GitHubLogin()
     {
         var state = GenerateState();
@@ -100,6 +109,7 @@ public class AuthController : ControllerBase
     /// clean URL (no fragment). The SPA then fetches the JWT via <c>GET /api/auth/session</c>.
     /// </summary>
     [HttpGet("github/callback")]
+    [EnableRateLimiting(AuthRateLimitPolicies.GitHubOAuth)]
     public async Task<IActionResult> GitHubCallback(
         [FromQuery] string? code,
         [FromQuery] string? state,
@@ -127,7 +137,7 @@ public class AuthController : ControllerBase
         try
         {
             var result = await _gitHubOAuthService.HandleCallbackAsync(code, ct);
-            var token = _tokenService.CreateToken(result.UserId, result.IsAdmin);
+            var token = _tokenService.CreateToken(result.UserId, result.IsAdmin, result.TokenVersion);
 
             // GITHUB_OAUTH: добавлено 2026-09-19 — deliver the JWT via an httpOnly cookie
             // (not a URL fragment), so a repeated callback can no longer clobber it. The SPA
@@ -141,7 +151,9 @@ public class AuthController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "GitHub callback failed for code prefix '{CodePrefix}'.", CodePrefix(code));
-            return RedirectToFrontendError(frontendBase, ex.Message);
+            // ERROR_REDACTION: 2026-09-24 (ревью L12) — раньше в URL уходил ex.Message, а в нём бывает
+            // сырой ответ GitHub. Подробности только в логе, клиенту — стабильный код.
+            return RedirectToFrontendError(frontendBase, "github_auth_failed");
         }
     }
 
@@ -153,7 +165,7 @@ public class AuthController : ControllerBase
     /// Returns 401 when there is no (valid) session.
     /// </summary>
     [HttpGet("session")]
-    public ActionResult<TokenResponse> GetSession()
+    public async Task<ActionResult<TokenResponse>> GetSession(CancellationToken ct)
     {
         var token = Request.Cookies[AuthCookieName];
         if (string.IsNullOrWhiteSpace(token))
@@ -161,20 +173,24 @@ public class AuthController : ControllerBase
             return Unauthorized();
         }
 
-        var validated = _tokenService.ValidateToken(token);
+        // TOKEN_REVOCATION: 2026-09-24 (ревью M19) — cookie-токен проходит ту же проверку, что и
+        // Bearer: отозванный (logout на другом устройстве, разжалование) или токен удалённого
+        // пользователя больше не выдаётся SPA.
+        var validated = await ValidateCookieTokenAsync(token, ct);
         if (validated is null)
         {
-            // Expired/invalid: drop the stale cookie so the client cleanly re-authenticates.
+            // Expired/invalid/revoked: drop the stale cookie so the client cleanly re-authenticates.
             Response.Cookies.Delete(AuthCookieName);
             return Unauthorized();
         }
 
-        return Ok(validated);
+        return Ok(validated.Response);
     }
 
     // EMAIL_AUTH: добавлено 2026-09-19
     /// <summary>Creates a new email/password account and logs the user in immediately.</summary>
     [HttpPost("register")]
+    [EnableRateLimiting(AuthRateLimitPolicies.Register)]
     public async Task<IActionResult> Register([FromBody] EmailPasswordRequest request, CancellationToken ct)
     {
         try
@@ -184,13 +200,14 @@ public class AuthController : ControllerBase
         }
         catch (AuthException ex)
         {
-            return StatusCode(ex.StatusCode, new { code = ex.Code, message = ex.Message });
+            return AuthError(ex);
         }
     }
 
     // EMAIL_AUTH: добавлено 2026-09-19
     /// <summary>Logs in with an email/password account.</summary>
     [HttpPost("login")]
+    [EnableRateLimiting(AuthRateLimitPolicies.Login)]
     public async Task<IActionResult> Login([FromBody] EmailPasswordRequest request, CancellationToken ct)
     {
         try
@@ -200,15 +217,44 @@ public class AuthController : ControllerBase
         }
         catch (AuthException ex)
         {
-            return StatusCode(ex.StatusCode, new { code = ex.Code, message = ex.Message });
+            return AuthError(ex);
         }
     }
 
     // EMAIL_AUTH: добавлено 2026-09-19
-    /// <summary>Clears the session cookie (logout).</summary>
+    /// <summary>
+    /// Logs out: revokes every JWT of the user (all devices) and clears the session cookie.
+    /// </summary>
+    /// <remarks>
+    /// TOKEN_REVOCATION: добавлено 2026-09-24 (ревью M19, H10) — раньше logout только стирал cookie,
+    /// а сам 30-дневный JWT (localStorage, SignalR) продолжал работать. Теперь версия токенов
+    /// пользователя увеличивается, и все выданные ранее токены отклоняются — на ВСЕХ устройствах
+    /// (отдельных сессий у нас нет; это осознанная цена). Пользователь определяется по валидному
+    /// Bearer-токену или по cookie; уже отозванный токен ничего не меняет (нельзя «разлогинивать»
+    /// жертву утёкшим старым токеном).
+    /// </remarks>
     [HttpPost("logout")]
-    public IActionResult Logout()
+    public async Task<IActionResult> Logout(CancellationToken ct)
     {
+        Guid? userId = null;
+        if (User.Identity?.IsAuthenticated == true && User.TryGetUserId(out var bearerUserId))
+        {
+            // The bearer already passed OnTokenValidated (signature + revocation check).
+            userId = bearerUserId;
+        }
+        else if (Request.Cookies[AuthCookieName] is { Length: > 0 } cookieToken
+                 && await ValidateCookieTokenAsync(cookieToken, ct) is { } validated
+                 && validated.Principal.TryGetUserId(out var cookieUserId))
+        {
+            userId = cookieUserId;
+        }
+
+        if (userId is { } id)
+        {
+            await _userRepository.BumpTokenVersionAsync(id, ct);
+            _logger.LogInformation("Auth: user {UserId} logged out; all their tokens are revoked.", id);
+        }
+
         Response.Cookies.Delete(AuthCookieName);
         return Ok(new { success = true });
     }
@@ -231,17 +277,43 @@ public class AuthController : ControllerBase
             user.Email ?? string.Empty,
             displayName,
             user.SubscriptionTier.ToString(),
-            // ADMIN_PANEL: добавлено 2026-09-19 — use the JWT claim (not the DB value) so the
-            // frontend's isAdmin matches the backend's admin access check.
+            // ADMIN_PANEL: добавлено 2026-09-19 — use the same claim the backend's admin checks use.
+            // TOKEN_REVOCATION 2026-09-24: этот claim уже подменён значением из БД (OnTokenValidated).
             User.IsAdmin()));
     }
 
     // EMAIL_AUTH: добавлено 2026-09-19
     private TokenResponse IssueSession(User user)
     {
-        var token = _tokenService.CreateToken(user.Id, user.IsAdmin);
+        var token = _tokenService.CreateToken(user);
         SetAuthCookie(token);
         return token;
+    }
+
+    // LOGIN_LOCKOUT: добавлено 2026-09-24 (ревью M20) — ошибки формы остаются { code, message };
+    // блокировка отвечает 429 в том же формате, что и rate limiter: { error: "TOO_MANY_ATTEMPTS",
+    // retryAfterSeconds, code, message } + заголовок Retry-After.
+    private IActionResult AuthError(AuthException ex)
+    {
+        if (ex.StatusCode == StatusCodes.Status429TooManyRequests)
+        {
+            var retryAfter = ex.RetryAfterSeconds ?? 60;
+            Response.Headers.RetryAfter = retryAfter.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return StatusCode(ex.StatusCode, AuthSecurityExtensions.TooManyAttemptsBody(retryAfter, ex.Message));
+        }
+
+        return StatusCode(ex.StatusCode, new { code = ex.Code, message = ex.Message });
+    }
+
+    // TOKEN_REVOCATION: добавлено 2026-09-24 — подпись/срок + отзыв (tv, существование пользователя).
+    private async Task<ValidatedToken?> ValidateCookieTokenAsync(string token, CancellationToken ct)
+    {
+        var validated = _tokenService.ValidateToken(token);
+        if (validated is null)
+            return null;
+
+        var check = await _revocation.CheckAsync(validated.Principal, ct);
+        return check.IsValid ? validated : null;
     }
 
     private void SetAuthCookie(TokenResponse token)

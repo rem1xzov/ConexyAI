@@ -32,4 +32,14 @@ public class User
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public DateTime LastLoginAt { get; set; } = DateTime.UtcNow;
+
+    // --- TOKEN_REVOCATION: добавлено 2026-09-24 (ревью M19) ---
+    /// <summary>
+    /// Version of the user's sessions. Every JWT carries it in the <c>tv</c> claim and a request is
+    /// rejected when the claim differs from this value, so bumping it (logout, admin revoke)
+    /// invalidates every token issued before. Change it ONLY through
+    /// <c>IUserRepository.BumpTokenVersionAsync</c>: generic updates never write this column.
+    /// </summary>
+    public int TokenVersion { get; set; }
+    // --- /TOKEN_REVOCATION ---
 }

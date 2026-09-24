@@ -91,6 +91,10 @@ public class AdminController : ControllerBase
         if (target.SubscriptionTier == SubscriptionTier.Admin)
             target.SubscriptionTier = SubscriptionTier.Free;
         await _userRepository.UpdateAsync(target, ct);
+        // TOKEN_REVOCATION: добавлено 2026-09-24 (ревью M19) — права админа снимаются уже следующим
+        // запросом (isAdmin в токене подменяется значением из БД), а смена версии вдобавок
+        // разлогинивает разжалованного на всех устройствах.
+        await _userRepository.BumpTokenVersionAsync(target.Id, ct);
 
         _logger.LogInformation("Admin {Requester} demoted user {Target} from admin.", User.GetUserId(), id);
         return Ok(new { success = true });
@@ -116,13 +120,17 @@ public class AdminController : ControllerBase
             });
         }
 
+        // TOKEN_REVOCATION: 2026-09-24 — токены удалённого пользователя отклоняются со следующего
+        // запроса: проверка токена не находит строку (DeleteAsync сбрасывает кэш).
         await _userRepository.DeleteAsync(id, ct);
         _logger.LogInformation("Admin {Requester} deleted user {Target}.", User.GetUserId(), id);
         return Ok(new { success = true });
     }
 
-    private bool IsSuperAdmin(User user) =>
-        _adminOptions.Value.Matches(user.Email, user.GitHubUsername);
+    // ADMIN_VERIFIED_ONLY: 2026-09-24 (ревью H1) — суперадмин только по GitHub id/username или
+    // ПОДТВЕРЖДЁННОМУ email. Иначе аккаунт, занявший email владельца через регистрацию, числился бы
+    // «защищённым суперадмином», и его нельзя было бы удалить.
+    private bool IsSuperAdmin(User user) => _adminOptions.Value.IsSuperAdmin(user);
 
     private AdminUserDto ToDto(User u) => new(
         u.Id,

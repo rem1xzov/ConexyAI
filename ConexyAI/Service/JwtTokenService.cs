@@ -1,8 +1,11 @@
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using ConexyAI.Configuration;
 using ConexyAI.Contract;
+using ConexyAI.Entity;
+using ConexyAI.Service.Auth;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
@@ -17,7 +20,10 @@ public class JwtTokenService : ITokenService
         _options = options.Value;
     }
 
-    public TokenResponse CreateToken(Guid userId, bool isAdmin = false)
+    // TOKEN_REVOCATION: добавлено 2026-09-24
+    public TokenResponse CreateToken(User user) => CreateToken(user.Id, user.IsAdmin, user.TokenVersion);
+
+    public TokenResponse CreateToken(Guid userId, bool isAdmin, int tokenVersion)
     {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SigningKey));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
@@ -29,8 +35,12 @@ public class JwtTokenService : ITokenService
             new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
             new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            // EMAIL_AUTH: добавлено 2026-09-19
-            new Claim("isAdmin", isAdmin ? "true" : "false", ClaimValueTypes.Boolean)
+            // EMAIL_AUTH: добавлено 2026-09-19. TOKEN_REVOCATION 2026-09-24: значение в токене — лишь
+            // снимок на момент выдачи; на каждом запросе оно заменяется значением из БД.
+            new Claim(TokenRevocationValidator.IsAdminClaim, isAdmin ? "true" : "false", ClaimValueTypes.Boolean),
+            // TOKEN_REVOCATION: добавлено 2026-09-24 (ревью M19)
+            new Claim(TokenRevocationValidator.TokenVersionClaim,
+                tokenVersion.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer32)
         };
 
         var token = new JwtSecurityToken(
@@ -48,7 +58,7 @@ public class JwtTokenService : ITokenService
     }
 
     // GITHUB_OAUTH: добавлено 2026-09-19
-    public TokenResponse? ValidateToken(string token)
+    public ValidatedToken? ValidateToken(string token)
     {
         try
         {
@@ -64,14 +74,16 @@ public class JwtTokenService : ITokenService
                 IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SigningKey))
             };
 
-            handler.ValidateToken(token, validationParams, out var validatedToken);
+            var principal = handler.ValidateToken(token, validationParams, out var validatedToken);
             var expiresAt = (validatedToken as JwtSecurityToken)?.ValidTo;
             if (expiresAt is null)
             {
                 return null;
             }
 
-            return new TokenResponse(token, expiresAt.Value, _options.AccessTokenLifetimeMinutes);
+            return new ValidatedToken(
+                new TokenResponse(token, expiresAt.Value, _options.AccessTokenLifetimeMinutes),
+                principal);
         }
         catch
         {
