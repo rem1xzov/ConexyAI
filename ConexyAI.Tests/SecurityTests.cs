@@ -482,13 +482,26 @@ internal static class SecurityTests
             }
 
             Assert(refused, "a second turn with a running id is refused (409)");
+
+            // The client no longer reuses task ids: a fresh id in a chat that is still answering is refused too.
+            var sameChatRefused = false;
+            try
+            {
+                await service.ExecuteAsync(user, new ConexyRequest("ConexyV1-flash", "parallel", ChatId: chatId));
+            }
+            catch (TurnInFlightException)
+            {
+                sameChatRefused = true;
+            }
+            Assert(sameChatRefused, "a new turn in a chat that is still answering is refused (409)");
+            await service.ExecuteAsync(user, new ConexyRequest("ConexyV1-flash", "other chat", ChatId: Guid.NewGuid().ToString()));
+            Assert(queue.Jobs.Count == 2, "another chat is not blocked");
             var row = await db.Conexy.AsNoTracking().SingleAsync(t => t.Id == first.Id);
             Assert(row.Prompt == "first", "the running turn's row is not overwritten");
-            Assert(queue.Jobs.Count == 1, "nothing extra is queued");
 
             guard.MarkCompleted(first.Id);
             await service.ExecuteAsync(user, new ConexyRequest("ConexyV1-flash", "third", SessionId: first.Id.ToString(), ChatId: chatId));
-            Assert(queue.Jobs.Count == 2, "after completion the id can be reused");
+            Assert(queue.Jobs.Count == 3, "after completion the id and the chat can be used again");
         }
         finally
         {

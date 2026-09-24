@@ -1914,6 +1914,10 @@ sealed class StaticConversationService : IConversationService
     public Task<IReadOnlyList<Guid>> GetChatIdsAsync(Guid userId, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<Guid>>(Array.Empty<Guid>());
 
+    // CHAT_SHARE_LINK: и отдельного чата тоже.
+    public Task<ChatListSummary?> GetChatAsync(Guid userId, Guid chatId, CancellationToken ct = default) =>
+        Task.FromResult<ChatListSummary?>(null);
+
     // CHAT_RENAME: и переименования тоже — история не у него.
     public Task<int> RenameChatAsync(Guid userId, Guid chatId, string title, CancellationToken ct = default) =>
         Task.FromResult(0);

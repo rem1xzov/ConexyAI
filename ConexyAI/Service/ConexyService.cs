@@ -119,7 +119,7 @@ public class ConexyService : IConexyService
         // отбрасывался дедупликацией очереди с ответом 202 — клиент ждал ответа, который никогда не
         // придёт, а поток первого хода лился во второй пузырь. Теперь id резервируется ДО любых
         // изменений строки, а занятый id — это 409.
-        if (!_queueGuard.TryReserve(taskId))
+        if (!_queueGuard.TryReserve(taskId, chatId))
         {
             throw new TurnInFlightException(taskId);
         }

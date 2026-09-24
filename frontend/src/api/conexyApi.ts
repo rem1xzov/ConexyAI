@@ -178,6 +178,19 @@ export async function getChats(limit = 200): Promise<ChatListResponse> {
   };
 }
 
+// CHAT_SHARE_LINK: добавлено 2026-09-24 — чат по ссылке может быть старше первых N из списка.
+/** One chat of the signed-in user as the list shows it; null when it is not theirs (404). */
+export async function getChat(chatId: string): Promise<ChatSummary | null> {
+  try {
+    const { data } = await http.get<ChatSummary>(`/conexy/chats/${chatId}`);
+    return data;
+  } catch (err: unknown) {
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    if (status === 404 || status === 403) return null;
+    throw err;
+  }
+}
+
 /** The stored transcript of one chat; the backend scopes it to the token's user. */
 export async function getChatTranscript(chatId: string): Promise<ChatTranscript> {
   const { data } = await http.get<ChatTranscript>(`/conexy/chats/${chatId}/messages`);

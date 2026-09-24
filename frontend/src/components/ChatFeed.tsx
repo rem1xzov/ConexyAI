@@ -195,6 +195,7 @@ export function ChatFeed({
             onNewChat={onNewChat}
             onContinue={onContinue}
             onOpenFile={onOpenFile}
+            chatId={session.id}
           />
         ))}
       </div>

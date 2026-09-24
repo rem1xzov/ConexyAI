@@ -611,6 +611,10 @@
     "sizeKilobytes": "{{n}} КБ",
     "sizeMegabytes": "{{n}} МБ",
     "toolFetchPage": "Читаю страницу {{host}}",
-    "toolSearchChats": "Ищу в прошлых чатах: {{query}}"
+    "toolSearchChats": "Ищу в прошлых чатах: {{query}}",
+    "screenshotsOmitted_one": "{{count}} скриншот не хранится на этом устройстве",
+    "screenshotsOmitted_few": "{{count}} скриншота не хранятся на этом устройстве",
+    "screenshotsOmitted_many": "{{count}} скриншотов не хранятся на этом устройстве",
+    "screenshotsOmitted_other": "{{count}} скриншота не хранятся на этом устройстве"
   }
 }

@@ -152,6 +152,18 @@ public class ConexyController : ControllerBase
         return Ok(new ChatListDto(chats.Select(ToChatSummary).ToList(), allIds));
     }
 
+    // CHAT_SHARE_LINK: добавлено 2026-09-24 — ссылка может вести на чат вне первых N из списка:
+    /// <summary>One chat of the signed-in user as the list shows it (404 for anything else).</summary>
+    [HttpGet("chats/{chatId:guid}")]
+    public async Task<ActionResult<ChatSummaryDto>> GetChat(Guid chatId, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        var chat = await _conversation.GetChatAsync(userId, chatId, ct);
+        return chat is null ? NotFound(new { error = "Chat not found." }) : Ok(ToChatSummary(chat));
+    }
+
     /// <summary>Full stored transcript of one chat, oldest first, for its owner only.</summary>
     [HttpGet("chats/{chatId:guid}/messages")]
     public async Task<ActionResult<ChatTranscriptDto>> GetChatMessages(Guid chatId, CancellationToken ct)

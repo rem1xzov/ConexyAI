@@ -252,6 +252,10 @@ function MessageBubbleBase({
 
       {message.error && <div className="msg__error">{message.error}</div>}
       {hasScreenshots && <VisionGallery screenshots={screenshots} />}
+      {/* M22: screenshots are not kept in local storage; say so instead of letting them vanish. */}
+      {!hasScreenshots && (message.screenshotsOmitted ?? 0) > 0 && (
+        <p className="message__note muted">{t('render.screenshotsOmitted', { count: message.screenshotsOmitted })}</p>
+      )}
 
       {/* CONTINUE_GENERATION: the stop marker is derived from the status, not baked into the
           text, so the stored content stays exactly the partial answer to resume from. */}

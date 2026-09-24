@@ -124,6 +124,10 @@ public interface IConversationService
     // CHAT_SYNC_COMPLETE: добавлено 2026-09-24 — ревью H8.
     /// <summary>Every chat id the user has stored history for (complete list, ids only).</summary>
     Task<IReadOnlyList<Guid>> GetChatIdsAsync(Guid userId, CancellationToken ct = default);
+
+    // CHAT_SHARE_LINK: добавлено 2026-09-24
+    /// <summary>One chat of the user as the chat list shows it, or null.</summary>
+    Task<ChatListSummary?> GetChatAsync(Guid userId, Guid chatId, CancellationToken ct = default);
 }
 
 public class ConversationService : IConversationService
@@ -410,6 +414,10 @@ public class ConversationService : IConversationService
     // CHAT_SYNC_COMPLETE: добавлено 2026-09-24
     public Task<IReadOnlyList<Guid>> GetChatIdsAsync(Guid userId, CancellationToken ct = default) =>
         _chatHistory.GetChatIdsAsync(userId, ct);
+
+    // CHAT_SHARE_LINK: добавлено 2026-09-24
+    public Task<ChatListSummary?> GetChatAsync(Guid userId, Guid chatId, CancellationToken ct = default) =>
+        _chatHistory.GetChatAsync(userId, chatId, ct);
 
     // CHAT_SYNC: добавлено 2026-09-23
     public Task<IReadOnlyList<ChatListSummary>> GetChatsAsync(

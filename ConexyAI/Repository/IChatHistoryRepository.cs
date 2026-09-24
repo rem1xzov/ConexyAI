@@ -70,6 +70,10 @@ public interface IChatHistoryRepository
     /// </summary>
     Task<int> SetPinnedAsync(Guid userId, Guid chatId, bool isPinned, CancellationToken ct = default);
 
+    // CHAT_SHARE_LINK: добавлено 2026-09-24 — чат по ссылке может быть старше первых N из списка.
+    /// <summary>One chat of the user as the chat list shows it, or null when the user has no such chat.</summary>
+    Task<ChatListSummary?> GetChatAsync(Guid userId, Guid chatId, CancellationToken ct = default);
+
     // CHAT_SYNC_COMPLETE: добавлено 2026-09-24 — ревью H8.
     /// <summary>Every chat id the user has stored history for (complete, unbounded — ids only).</summary>
     Task<IReadOnlyList<Guid>> GetChatIdsAsync(Guid userId, CancellationToken ct = default);

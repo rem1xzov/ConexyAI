@@ -3,6 +3,7 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent a
 import { useTranslation } from 'react-i18next';
 import {
   createIdeFile,
+  deleteIdePath,
   deleteWorkspaceFile,
   downloadWorkspaceRaw,
   downloadWorkspaceZip,
@@ -11,7 +12,6 @@ import {
   saveIdeFileContent,
   uploadWorkspaceZip,
 } from '../api/conexyApi';
-import http from '../api/client';
 import type { WorkspaceFileEntry, WorkspaceListing } from '../types/api';
 import type { TodoItem } from '../types/signalr';
 import { signalrService } from '../services/signalrService';
@@ -139,9 +139,7 @@ function hasUnsavedAnywhere(currentTabs: OpenTab[]): boolean {
 
 // The workspace-file endpoint of conexyApi removes files only; the IDE endpoint also removes a
 // folder with everything inside it.
-async function deleteWorkspaceFolder(chatId: string, path: string): Promise<void> {
-  await http.delete(`/sessions/${chatId}/files`, { params: { path } });
-}
+const deleteWorkspaceFolder = deleteIdePath;
 
 // ---------------------------------------------------------------------------------------------
 

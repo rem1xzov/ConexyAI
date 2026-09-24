@@ -599,6 +599,8 @@
     "sizeKilobytes": "{{n}} KB",
     "sizeMegabytes": "{{n}} MB",
     "toolFetchPage": "Reading {{host}}",
-    "toolSearchChats": "Searching past chats: {{query}}"
+    "toolSearchChats": "Searching past chats: {{query}}",
+    "screenshotsOmitted_one": "{{count}} screenshot is not kept on this device",
+    "screenshotsOmitted_other": "{{count}} screenshots are not kept on this device"
   }
 }

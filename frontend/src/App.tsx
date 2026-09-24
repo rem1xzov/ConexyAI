@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
-import { getChats, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, getTaskStatus, runTask } from './api/conexyApi';
+import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, getTaskStatus, runTask } from './api/conexyApi';
 import { isForbiddenJoinError, signalrService } from './services/signalrService';
 // TURN_SCOPE: добавлено 2026-09-24 (H6/H7)
 import { TurnRegistry, type TurnContext } from './services/turnRegistry';
@@ -475,6 +475,8 @@ export default function App() {
   const transcriptLoadingRef = useRef(new Set<string>());
   // CHAT_SHARE: см. эффект открытия ссылки ниже.
   const openedLinkRef = useRef<string | null>(null);
+  // CHAT_SHARE_LINK: id чата, который уже запрашивали у сервера по ссылке (один запрос на ссылку).
+  const linkFetchRef = useRef<string | null>(null);
   // TURN_SCOPE (H7): для какого пользователя уже подхвачены ходы, оставшиеся после перезагрузки.
   const adoptedForRef = useRef<string | null>(null);
 
@@ -1599,8 +1601,6 @@ export default function App() {
   }
   const guardLeaveRef = useRef(guardLeave);
   guardLeaveRef.current = guardLeave;
-  // Passed as a spread: the prop exists on WorkspacePanel once the workspace stream's change is in.
-  const workspaceDirtyProps: Record<string, unknown> = { onDirtyChange: setWorkspaceDirty };
 
   // NEW_CHAT_LOGO: добавлено 2026-09-20
   /** Starts a fresh conversation in the current tab (used by the mark under a reply). */
@@ -2311,7 +2311,24 @@ export default function App() {
     if (!linked || openedLinkRef.current === linked) return;
 
     const session = sessions.find((s) => s.id.toLowerCase() === linked.toLowerCase());
-    if (!session) return;
+    if (!session) {
+      // CHAT_SHARE_LINK: добавлено 2026-09-24 — синхронизация приносит только первые N чатов, а ссылка
+      // может вести на более старый. Спрашиваем сервер об этом одном чате; чужой чат (404) — не открываем.
+      if (token && linkFetchRef.current !== linked) {
+        linkFetchRef.current = linked;
+        const userAtStart = storeUserRef.current;
+        void getChat(linked)
+          .then((chat) => {
+            if (!chat || storeUserRef.current !== userAtStart) return;
+            const stub = sessionFromServer(chat, null, defaultTitle(kindFromServer(chat.kind), liveRef.current.t));
+            setSessions((prev) =>
+              prev.some((s) => s.id.toLowerCase() === stub.id.toLowerCase()) ? prev : [...prev, stub],
+            );
+          })
+          .catch((e: unknown) => console.warn('[ChatShare] could not load the linked chat', { chatId: linked, error: String(e) }));
+      }
+      return;
+    }
 
     openedLinkRef.current = linked;
     setActiveId(session.id);
@@ -2578,7 +2595,7 @@ export default function App() {
                 onRunInSeparateWindow={() => showToast(t('toast.runProject'))}
                 hideRun={model === 'conexy-cowork'}
                 style={{ flex: `0 0 ${workspaceWidth}%` }}
-                {...workspaceDirtyProps}
+                onDirtyChange={setWorkspaceDirty}
               />
             </>
           )}

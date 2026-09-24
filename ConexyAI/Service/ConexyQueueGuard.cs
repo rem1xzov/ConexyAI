@@ -28,6 +28,13 @@ public interface IConexyQueueGuard
     /// </summary>
     bool TryReserve(Guid taskId);
 
+    /// <summary>
+    /// Like <see cref="TryReserve(Guid)"/>, and also refuses when <paramref name="chatId"/> already has a
+    /// queued or running turn: a chat answers one message at a time (the client no longer reuses a
+    /// task id, so the per-id check alone would never fire).
+    /// </summary>
+    bool TryReserve(Guid taskId, Guid chatId);
+
     /// <summary>Enqueues a job whose id was reserved with <see cref="TryReserve"/>; releases it on failure.</summary>
     Task EnqueueReservedAsync(ConexyJob job, CancellationToken ct = default);
 
@@ -40,6 +47,9 @@ public class ConexyQueueGuard : IConexyQueueGuard
     private readonly IConexyQueue _queue;
     private readonly ILogger<ConexyQueueGuard> _logger;
     private readonly ConcurrentDictionary<Guid, byte> _inFlight = new();
+    // TURN_IN_FLIGHT: chat id -> its in-flight task id, and back.
+    private readonly ConcurrentDictionary<Guid, Guid> _chatTurns = new();
+    private readonly ConcurrentDictionary<Guid, Guid> _turnChats = new();
 
     public ConexyQueueGuard(IConexyQueue queue, ILogger<ConexyQueueGuard> logger)
     {
@@ -70,9 +80,28 @@ public class ConexyQueueGuard : IConexyQueueGuard
     public void MarkCompleted(Guid taskId)
     {
         _inFlight.TryRemove(taskId, out _);
+        if (_turnChats.TryRemove(taskId, out var chatId))
+        {
+            _chatTurns.TryRemove(new KeyValuePair<Guid, Guid>(chatId, taskId));
+        }
     }
 
     public bool TryReserve(Guid taskId) => _inFlight.TryAdd(taskId, 0);
+
+    public bool TryReserve(Guid taskId, Guid chatId)
+    {
+        if (!_inFlight.TryAdd(taskId, 0))
+            return false;
+
+        if (!_chatTurns.TryAdd(chatId, taskId))
+        {
+            _inFlight.TryRemove(taskId, out _);
+            return false;
+        }
+
+        _turnChats[taskId] = chatId;
+        return true;
+    }
 
     public async Task EnqueueReservedAsync(ConexyJob job, CancellationToken ct = default)
     {

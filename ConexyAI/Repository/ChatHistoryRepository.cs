@@ -97,6 +97,22 @@ public class ChatHistoryRepository : IChatHistoryRepository
             .ToList();
     }
 
+    // CHAT_SHARE_LINK: добавлено 2026-09-24
+    public async Task<ChatListSummary?> GetChatAsync(Guid userId, Guid chatId, CancellationToken ct = default)
+    {
+        var rows = await QueryChatSummariesAsync(userId, excludeChatId: null, 1, ct, new[] { chatId });
+        if (rows.Count == 0)
+            return null;
+
+        var r = rows[0];
+        var model = await _context.Chats
+            .AsNoTracking()
+            .Where(c => c.Id == chatId && c.UserId == userId)
+            .Select(c => c.Model)
+            .FirstOrDefaultAsync(ct);
+        return new ChatListSummary(r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind, r.Title, r.IsPinned, model);
+    }
+
     // CHAT_SYNC_COMPLETE: добавлено 2026-09-24
     public async Task<IReadOnlyList<Guid>> GetChatIdsAsync(Guid userId, CancellationToken ct = default)
     {
