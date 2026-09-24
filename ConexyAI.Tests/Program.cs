@@ -396,6 +396,9 @@ async Task TestCreateOrGetAsyncIsIdempotentUnderParallelRaceAsync()
         await using (var schema = CreateNpgsqlContext(dbName))
         {
             await schema.Database.EnsureCreatedAsync();
+            // CHAT_OWNERSHIP: task rows now reference users (FK, review M9), so the owner must exist.
+            schema.Users.Add(new User { Id = userId });
+            await schema.SaveChangesAsync();
         }
 
         await using var ctx1 = CreateNpgsqlContext(dbName);

@@ -4,6 +4,7 @@ using ConexyAI.Entity;
 using ConexyAI.Extensions;
 using ConexyAI.Model;
 using ConexyAI.Repository;
+using ConexyAI.Service;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -20,11 +21,16 @@ public class AdminController : ControllerBase
     private readonly IOptions<AdminAccountsOptions> _adminOptions;
     private readonly ILogger<AdminController> _logger;
 
+    // USER_DATA_CLEANUP: добавлено 2026-09-24 — ревью M9: файлы пользователя удаляются вместе с ним.
+    private readonly IUserDataCleanupService _cleanup;
+
     public AdminController(
         IUserRepository userRepository,
         IOptions<AdminAccountsOptions> adminOptions,
-        ILogger<AdminController> logger)
+        ILogger<AdminController> logger,
+        IUserDataCleanupService cleanup)
     {
+        _cleanup = cleanup;
         _userRepository = userRepository;
         _adminOptions = adminOptions;
         _logger = logger;
@@ -119,6 +125,10 @@ public class AdminController : ControllerBase
                 message = "Суперадмина нельзя удалить."
             });
         }
+
+        // USER_DATA_CLEANUP: рабочие каталоги и файлы документов — до удаления строки: после каскада
+        // уже не узнать, какие чаты и документы были его.
+        await _cleanup.DeleteUserFilesAsync(id, ct);
 
         // TOKEN_REVOCATION: 2026-09-24 — токены удалённого пользователя отклоняются со следующего
         // запроса: проверка токена не находит строку (DeleteAsync сбрасывает кэш).
