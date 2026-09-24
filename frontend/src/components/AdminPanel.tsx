@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { deleteUser, getAdminUsers, makeAdmin, revokeAdmin } from '../api/conexyApi';
 import type { AdminUser } from '../types/api';
@@ -39,7 +39,10 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // CONFIRM_DIALOGS: добавлено 2026-09-24 — выдача/снятие админки и удаление пользователя идут
+  // через подтверждение. Храним сам объект пользователя: список может перезагрузиться, пока
+  // диалог открыт, и поиск по id тогда не нашёл бы, кого подтверждали.
+  const [pendingAction, setPendingAction] = useState<{ kind: 'makeAdmin' | 'revokeAdmin' | 'delete'; user: AdminUser } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   // SUPPORT: добавлено 2026-09-19
   const [tab, setTab] = useState<'users' | 'support'>('users');
@@ -53,11 +56,16 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
   // ADMIN_PANEL_FIX: добавлено 2026-09-23 — ошибка загрузки должна быть и понятной, и
   // преодолимой: 403 означает «не админ» (а не сломанные данные), а кнопка «Повторить» убирает
   // необходимость перезагружать страницу, если запрос упал по сети.
+  // Быстрые «Назад/Вперёд» не должны давать странице N показать ответ для страницы N-1.
+  const loadSeqRef = useRef(0);
+
   async function load(p: number) {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const res = await getAdminUsers(p, PAGE_SIZE);
+      if (seq !== loadSeqRef.current) return;
       // ADMIN_PANEL_FIX: добавлено 2026-09-23 — ответ не той формы не должен ронять весь рендер.
       // Раньше `res.users` без проверки уходил в state, и следующий `users.map(...)` бросал
       // TypeError, из-за которого React размонтировал всё дерево — тот самый чёрный экран.
@@ -65,10 +73,11 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
       setTotal(Number.isFinite(res?.totalCount) ? res.totalCount : 0);
       setPage(Number.isFinite(res?.page) ? res.page : p);
     } catch (e) {
+      if (seq !== loadSeqRef.current) return;
       const status = (e as { response?: { status?: number } })?.response?.status;
       setError(status === 403 ? t('admin.noAccess') : humanError(e, t));
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   }
 
@@ -117,8 +126,21 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
       onToast(t('admin.toastFailed'));
     } finally {
       setBusyId(null);
-      setConfirmDeleteId(null);
     }
+  }
+
+  function userName(u: AdminUser): string {
+    return u.gitHubUsername ?? u.email ?? t('account.user');
+  }
+
+  function runPendingAction() {
+    const action = pendingAction;
+    // Close first: the request can take a while and a second click must not repeat it.
+    setPendingAction(null);
+    if (!action) return;
+    if (action.kind === 'makeAdmin') void handleMakeAdmin(action.user);
+    else if (action.kind === 'revokeAdmin') void handleRevokeAdmin(action.user);
+    else void handleDelete(action.user);
   }
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -174,7 +196,7 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
           {users.map((u) => (
             <div key={u.id} className="admin-user">
               <div className="admin-user__info">
-                <div className="admin-user__name">{u.gitHubUsername ?? u.email ?? t('account.user')}</div>
+                <div className="admin-user__name">{userName(u)}</div>
                 <div className="admin-user__meta">
                   <span className="admin-user__tier">{u.tier}</span>
                   <span className={`admin-user__role ${roleClass(u)}`}>{roleLabel(u)}</span>
@@ -189,17 +211,17 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
               ) : (
                 <div className="admin-user__actions">
                   {u.isAdmin ? (
-                    <button className="admin-btn" onClick={() => void handleRevokeAdmin(u)} disabled={busyId === u.id} type="button">
+                    <button className="admin-btn" onClick={() => setPendingAction({ kind: 'revokeAdmin', user: u })} disabled={busyId === u.id} type="button">
                       {t('admin.revokeAdmin')}
                     </button>
                   ) : (
-                    <button className="admin-btn" onClick={() => void handleMakeAdmin(u)} disabled={busyId === u.id} type="button">
+                    <button className="admin-btn" onClick={() => setPendingAction({ kind: 'makeAdmin', user: u })} disabled={busyId === u.id} type="button">
                       {t('admin.makeAdmin')}
                     </button>
                   )}
                   <button
                     className="admin-btn admin-btn--danger"
-                    onClick={() => setConfirmDeleteId(u.id)}
+                    onClick={() => setPendingAction({ kind: 'delete', user: u })}
                     disabled={busyId === u.id}
                     type="button"
                   >
@@ -231,17 +253,34 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
         </>
       )}
 
-      {confirmDeleteId && (
+      {pendingAction && (
         <ConfirmDialog
-          title={t('admin.deleteConfirmTitle')}
-          message={t('admin.deleteConfirmMessage')}
-          confirmLabel={t('admin.confirmDelete')}
-          danger
-          onConfirm={() => {
-            const u = users.find((x) => x.id === confirmDeleteId);
-            if (u) void handleDelete(u);
-          }}
-          onCancel={() => setConfirmDeleteId(null)}
+          title={t(
+            pendingAction.kind === 'makeAdmin'
+              ? 'admin.makeAdminConfirmTitle'
+              : pendingAction.kind === 'revokeAdmin'
+                ? 'admin.revokeAdminConfirmTitle'
+                : 'admin.deleteConfirmTitle',
+            { name: userName(pendingAction.user) },
+          )}
+          message={t(
+            pendingAction.kind === 'makeAdmin'
+              ? 'admin.makeAdminConfirmMessage'
+              : pendingAction.kind === 'revokeAdmin'
+                ? 'admin.revokeAdminConfirmMessage'
+                : 'admin.deleteConfirmMessage',
+            { name: userName(pendingAction.user) },
+          )}
+          confirmLabel={
+            pendingAction.kind === 'makeAdmin'
+              ? t('admin.makeAdmin')
+              : pendingAction.kind === 'revokeAdmin'
+                ? t('admin.revokeAdmin')
+                : t('admin.confirmDelete')
+          }
+          danger={pendingAction.kind !== 'makeAdmin'}
+          onConfirm={runPendingAction}
+          onCancel={() => setPendingAction(null)}
         />
       )}
     </div>

@@ -5904,3 +5904,28 @@ body {
   color: var(--danger, #ef4444);
   align-self: center;
 }
+
+/* ======================================================================================
+ * WS_FE_WORKSPACE: добавлено 2026-09-24 — стили потока fe-workspace: диалоги подтверждения,
+ * рабочая область (конфликты правок, терминал) и настройки (персонализация, память).
+ * ====================================================================================== */
+
+/* ---------- CONFIRM_DIALOGS ---------- */
+.dialog-actions {
+  flex-wrap: wrap;
+}
+
+.dialog-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.dialog-btn--danger-outline {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.dialog-btn--danger-outline:hover:not(:disabled) {
+  background: rgba(255, 107, 122, 0.1);
+}

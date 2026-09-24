@@ -1,7 +1,16 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
-function DialogShell({ onCancel, children }: { onCancel: () => void; children: ReactNode }) {
+function DialogShell({
+  onCancel,
+  labelledBy,
+  children,
+}: {
+  onCancel: () => void;
+  labelledBy?: string;
+  children: ReactNode;
+}) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onCancel();
@@ -10,21 +19,44 @@ function DialogShell({ onCancel, children }: { onCancel: () => void; children: R
     return () => document.removeEventListener('keydown', onKey);
   }, [onCancel]);
 
-  return (
+  // CONFIRM_DIALOGS: добавлено 2026-09-24 — диалог рендерится в body: у боковой панели и других
+  // контейнеров есть backdrop-filter, а он делает их containing block для position: fixed, и
+  // оверлей оказывался зажат внутри сайдбара вместо того, чтобы закрыть весь экран.
+  return createPortal(
     <div className="dialog-overlay" onMouseDown={onCancel}>
-      <div className="dialog-card" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        className="dialog-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
+}
+
+// CONFIRM_DIALOGS: добавлено 2026-09-24 — третья кнопка нужна диалогам вида «Сохранить / Не
+// сохранять / Отмена» (переключение чата с несохранёнными файлами), а `busy` блокирует кнопки,
+// пока подтверждённое действие ещё выполняется, чтобы двойной клик не запускал его дважды.
+export interface ConfirmDialogExtraAction {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
 }
 
 export interface ConfirmDialogProps {
   title: string;
-  message?: string;
+  message?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
+  /** Optional third button rendered between Cancel and Confirm. */
+  extraAction?: ConfirmDialogExtraAction;
+  /** Disables every button while the confirmed action is still running. */
+  busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -35,24 +67,50 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel,
   danger,
+  extraAction,
+  busy,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
+  const titleId = useId();
   const confirmText = confirmLabel ?? t('common.confirm');
   const cancelText = cancelLabel ?? t('common.cancel');
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+
+  // A destructive dialog focuses Cancel, so a reflexive Enter never deletes anything.
+  useEffect(() => {
+    (danger ? cancelRef : confirmRef).current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
-    <DialogShell onCancel={onCancel}>
-      <div className="dialog-title">{title}</div>
+    <DialogShell onCancel={busy ? () => {} : onCancel} labelledBy={titleId}>
+      <div className="dialog-title" id={titleId}>
+        {title}
+      </div>
       {message && <div className="dialog-message">{message}</div>}
       <div className="dialog-actions">
-        <button className="dialog-btn" onClick={onCancel} type="button">
+        <button ref={cancelRef} className="dialog-btn" onClick={onCancel} type="button" disabled={busy}>
           {cancelText}
         </button>
+        {extraAction && (
+          <button
+            className={`dialog-btn ${extraAction.danger ? 'dialog-btn--danger-outline' : ''}`}
+            onClick={extraAction.onClick}
+            type="button"
+            disabled={busy}
+          >
+            {extraAction.label}
+          </button>
+        )}
         <button
+          ref={confirmRef}
           className={`dialog-btn dialog-btn--primary ${danger ? 'dialog-btn--danger' : ''}`}
           onClick={onConfirm}
           type="button"
+          disabled={busy}
         >
           {confirmText}
         </button>
@@ -83,6 +141,7 @@ export function PromptDialog({
   onCancel,
 }: PromptDialogProps) {
   const { t } = useTranslation();
+  const titleId = useId();
   const confirmText = confirmLabel ?? t('common.ok');
   const cancelText = cancelLabel ?? t('common.cancel');
   const [value, setValue] = useState(initialValue);
@@ -99,8 +158,10 @@ export function PromptDialog({
   }
 
   return (
-    <DialogShell onCancel={onCancel}>
-      <div className="dialog-title">{title}</div>
+    <DialogShell onCancel={onCancel} labelledBy={titleId}>
+      <div className="dialog-title" id={titleId}>
+        {title}
+      </div>
       {message && <div className="dialog-message">{message}</div>}
       <input
         ref={inputRef}

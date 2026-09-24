@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { ChatSession, ChatSessionKind } from '../types/chat';
 import type { UserProfile } from '../types/api';
 import { AccountWidget } from './AccountWidget';
+import { ConfirmDialog } from './Dialog';
 import {
   MenuIcon,
   SearchIcon,
@@ -86,6 +87,9 @@ export function Sidebar(props: SidebarProps) {
   const [menuUp, setMenuUp] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+  // CONFIRM_DIALOGS: добавлено 2026-09-24 — удаление чата необратимо (история на сервере + файлы
+  // рабочей области), поэтому пункт меню только открывает подтверждение, а не удаляет сразу.
+  const [pendingDelete, setPendingDelete] = useState<ChatSession | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -268,7 +272,7 @@ export function Sidebar(props: SidebarProps) {
                         <button
                           className="chats__menu-item chats__menu-item--danger"
                           onClick={() => {
-                            onDeleteSession(s.id);
+                            setPendingDelete(s);
                             setOpenMenuId(null);
                           }}
                         >
@@ -309,6 +313,26 @@ export function Sidebar(props: SidebarProps) {
             )}
           </div>
         </>
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={t('sidebar.deleteConfirmTitle')}
+          message={t(
+            (pendingDelete.kind ?? 'chat') === 'projects'
+              ? 'sidebar.deleteConfirmMessageWorkspace'
+              : 'sidebar.deleteConfirmMessage',
+            { title: pendingDelete.title },
+          )}
+          confirmLabel={t('sidebar.delete')}
+          danger
+          onConfirm={() => {
+            const id = pendingDelete.id;
+            setPendingDelete(null);
+            onDeleteSession(id);
+          }}
+          onCancel={() => setPendingDelete(null)}
+        />
       )}
     </aside>
   );
