@@ -21,6 +21,9 @@ public static class AttachmentText
 
     public static string ComposeUserMessage(string prompt, IReadOnlyList<TaskAttachment>? attachments)
     {
+        // TEXT_DECODING: добавлено 2026-09-24 (ревью M6) — сообщение сохраняется в историю (Postgres):
+        // NUL или одиночный суррогат в нём роняли вставку, и терялся весь ход.
+        prompt = TextSanitizer.Clean(prompt);
         var documents = attachments?
             .Where(a => !a.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -33,7 +36,7 @@ public static class AttachmentText
         var budget = MaxCharsPerMessage;
         foreach (var attachment in documents)
         {
-            var name = Path.GetFileName(attachment.FileName ?? string.Empty);
+            var name = TextSanitizer.Truncate(TextSanitizer.Clean(Path.GetFileName(attachment.FileName ?? string.Empty)), 200);
             if (string.IsNullOrWhiteSpace(name)) name = "вложение";
 
             sb.Append("\n\n");
@@ -59,7 +62,8 @@ public static class AttachmentText
             }
 
             var truncated = text.Length > limit;
-            var body = truncated ? text[..limit] : text;
+            // Never between the halves of a surrogate pair (an emoji at the cut would leave a lone one).
+            var body = truncated ? TextSanitizer.Truncate(text, limit) : text;
             budget -= body.Length;
 
             sb.Append($"--- Вложение «{name}» ---\n{body}\n");
@@ -81,6 +85,7 @@ public static class AttachmentText
 
         try
         {
+            // Parse decodes text by its BOM/encoding and strips NUL and other control characters.
             var bytes = Convert.FromBase64String(attachment.ContentBase64?.Trim() ?? string.Empty);
             return DocumentParser.Parse(bytes, fileName).Trim();
         }

@@ -12,6 +12,19 @@ public interface IDocumentRepository
         Guid userId, string query, int limit, string? documentName, string textSearchConfig, CancellationToken ct = default);
     Task<DocumentChunk?> GetChunkAsync(Guid userId, Guid documentId, int? chunkIndex, CancellationToken ct = default);
     Task<IReadOnlyList<DocumentChunk>> GetChunksAsync(Guid userId, Guid documentId, CancellationToken ct = default);
+
+    // RAG_DOCUMENTS: добавлено 2026-09-24 (ревью L6, M9)
+    /// <summary>Number of chunks of the user's document (0 for a foreign or unknown id).</summary>
+    Task<int> CountChunksAsync(Guid userId, Guid documentId, CancellationToken ct = default);
+
+    /// <summary>Up to <paramref name="take"/> chunks from <paramref name="fromIndex"/> on, in order.</summary>
+    Task<IReadOnlyList<DocumentChunk>> GetChunkRangeAsync(Guid userId, Guid documentId, int fromIndex, int take, CancellationToken ct = default);
+
+    /// <summary>Deletes the user's document and its chunks; returns the deleted row (for its file) or null.</summary>
+    Task<Document?> DeleteDocumentAsync(Guid userId, Guid id, CancellationToken ct = default);
+
+    /// <summary>Deletes every document of the user with its chunks; returns the deleted rows.</summary>
+    Task<IReadOnlyList<Document>> DeleteUserDocumentsAsync(Guid userId, CancellationToken ct = default);
 }
 
 // RAG: добавлено 2026-09-17

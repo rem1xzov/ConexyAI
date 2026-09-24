@@ -23,7 +23,7 @@ public class DocumentController : ControllerBase
         _documentRepository = documentRepository;
     }
 
-    /// <summary>Uploads a document (TXT/MD/DOCX/PDF) and indexes it into the RAG knowledge base.</summary>
+    /// <summary>Uploads a document (text, DOCX, XLSX, PPTX, PDF) and indexes it into the RAG knowledge base.</summary>
     [HttpPost]
     [RequestSizeLimit(55_000_000)]
     public async Task<ActionResult<Document>> Upload([FromForm] IFormFile file, CancellationToken ct)
@@ -33,6 +33,11 @@ public class DocumentController : ControllerBase
 
         if (file is null || file.Length == 0)
             return BadRequest(new { error = "No file uploaded." });
+
+        // RAG_DOCUMENTS: добавлено 2026-09-24 — раньше любой файл (картинка, архив, старый .doc)
+        // индексировался как «текст в UTF-8», и в базу знаний попадал двоичный мусор.
+        if (!DocumentParser.CanExtract(file.FileName))
+            return BadRequest(new { error = "UNSUPPORTED_FORMAT", message = "Supported: .docx, .xlsx, .pptx, .pdf and text files." });
 
         await using var ms = new MemoryStream();
         await file.CopyToAsync(ms, ct);
@@ -50,6 +55,20 @@ public class DocumentController : ControllerBase
 
         var documents = await _documentRepository.ListDocumentsAsync(userId, ct);
         return Ok(documents.Select(d => new { d.Id, d.Title, d.FileName, d.ContentType, d.CreatedAt }));
+    }
+
+    // RAG_DOCUMENTS: добавлено 2026-09-24 (ревью M9)
+    /// <summary>Deletes one of the user's documents: its chunks, its row and its stored file.</summary>
+    /// <returns>204, or 404 for an unknown id or another user's document.</returns>
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        return await _documentService.DeleteAsync(userId, id, ct)
+            ? NoContent()
+            : NotFound(new { error = "Document not found." });
     }
 
     /// <summary>Runs a full-text search over indexed documents (used for testing/debugging).</summary>
