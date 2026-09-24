@@ -139,6 +139,12 @@ export function InputBar({
     const prompt = value.trim();
     if (!prompt || disabled) return;
 
+    // TURN_GUARD (H6): пока идёт ответ, Enter ничего не отправляет — текст остаётся в поле.
+    if (isGenerating) {
+      showAttachError(t('sync.waitForReply'));
+      return;
+    }
+
     const totalBytes = attachments.reduce((sum, a) => sum + (a.contentBase64.length * 3) / 4, 0);
     if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
       // Ничего не отправляем и ничего не очищаем — пользователь просто убирает часть файлов.
@@ -155,10 +161,21 @@ export function InputBar({
 
     const outcome = await onSend(prompt, pending);
     if (outcome && outcome.ok === false) {
-      setValue(prompt);
-      setAttachments(pending);
+      // Keep whatever the user typed meanwhile; only an empty composer gets the text back.
+      setValue((current) => (current.trim() ? current : prompt));
+      setAttachments((current) => (current.length ? current : pending));
       resizeTextarea();
-      showAttachError(t(outcome.tooLarge ? 'input.attachmentsTooLarge' : 'input.sendFailed'));
+      showAttachError(
+        outcome.tooLarge
+          ? t('input.attachmentsTooLarge')
+          : outcome.reason === 'busy'
+            ? t('sync.turnInFlight')
+            : outcome.reason === 'forbidden'
+              ? t('sync.chatForbidden')
+              : outcome.reason === 'loading'
+                ? t('sync.loadingChat')
+                : t('input.sendFailed'),
+      );
     }
   }
 

@@ -20,6 +20,10 @@ export interface SendOutcome {
   ok: boolean;
   /** The payload was rejected for its size (413 from the proxy or the server). */
   tooLarge?: boolean;
+  // TURN_GUARD: добавлено 2026-09-24 (H6, контракт C-2)
+  /** Why nothing was sent: a turn of this chat is still running (`busy`, also 409 TURN_IN_FLIGHT)
+   *  or the chat belongs to another account (`forbidden`, 403 CHAT_FORBIDDEN). */
+  reason?: 'busy' | 'forbidden' | 'loading';
 }
 
 export interface ConexyRequest {
@@ -44,6 +48,10 @@ export interface ConexyRequest {
   /** The tab this chat belongs to ('chat' | 'projects' | 'students'), persisted with the history so
    *  a chat synced to another device reopens in the same tab instead of the generic chat list. */
   chatKind?: ChatSessionKind;
+  // REGENERATE_REPLACES_TURN: добавлено 2026-09-24 (контракт C-10, review M5)
+  /** The turn replaces the chat's LAST stored turn (regenerate, resend or edit of the last user
+   *  message) instead of appending a duplicate user row. Never set for an ordinary new message. */
+  regenerate?: boolean;
 }
 
 export interface ConexyResponse {
@@ -68,8 +76,21 @@ export interface ChatSummary {
   lastActivityAt: string;
   messageCount: number;
   lastMessage?: string | null;
+  lastMessagePreview?: string | null;
   // CHAT_PIN: добавлено 2026-09-23 — закреплён ли чат наверху сайдбара (общий флаг для всех устройств).
   isPinned: boolean;
+  // CHAT_MODEL_SYNC: добавлено 2026-09-24 (M18, контракт C-3) — последняя модель чата:
+  // "ConexyV1-flash" | "ConexyV1-pro" | "conexy-coder" | "conexy-cowork"; null у старых строк.
+  model?: string | null;
+}
+
+// CHAT_LIST_COMPLETE: добавлено 2026-09-24 (H8, контракт C-3)
+/** `GET /api/conexy/chats`: the newest chats (plus every pinned one) and the COMPLETE id set.
+ *  `allChatIds` is null only when talking to an older backend that returned a bare array — then the
+ *  client must not prune anything, because the list may be truncated. */
+export interface ChatListResponse {
+  chats: ChatSummary[];
+  allChatIds: string[] | null;
 }
 
 /** One stored turn inside a chat transcript. */

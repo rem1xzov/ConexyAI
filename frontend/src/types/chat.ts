@@ -29,6 +29,16 @@ export interface ChatMessage {
   /** Reasoning segments of the agent run, in order, each with its own start/end so the timeline
    *  shows an honest per-step duration instead of one drifted counter. */
   steps?: AgentStep[];
+  // TURN_SCOPE: добавлено 2026-09-24 (H6/H7)
+  /** Server task (turn) id of this assistant answer. Every turn gets its own id, so live events,
+   *  the watchdog and Stop can target exactly this message — also after a page reload. */
+  taskId?: string;
+  /** Set while `POST /run` for this answer has not returned yet (the turn has no task id). A message
+   *  still carrying it after a reload was never confirmed by the server. */
+  awaitingTaskId?: boolean;
+  // LOCAL_STORAGE_BUDGET: добавлено 2026-09-24 (M22)
+  /** Screenshots are never written to localStorage; this counts the ones dropped from the cache. */
+  screenshotsOmitted?: number;
 }
 
 // AGENT_TIMELINE: добавлено 2026-09-22
@@ -91,4 +101,18 @@ export interface ChatSession {
   // INCOGNITO_CHAT: добавлено 2026-09-20
   /** Local-only chat: hidden from the sidebar and never written to localStorage. */
   incognito?: boolean;
+  // CHAT_OWNERSHIP: добавлено 2026-09-24 (C-2 403 / C-6)
+  /** The server said this chat belongs to another account: nothing can be sent or joined here. */
+  forbidden?: boolean;
+  // LOCAL_STORAGE_BUDGET: добавлено 2026-09-24 (M22)
+  /** The messages are not cached on this device (evicted to save space, or never downloaded); the
+   *  transcript is loaded from the server when the chat is opened. */
+  needsTranscript?: boolean;
+  // TRANSCRIPT_REFRESH: добавлено 2026-09-24 (M25)
+  /** The server's `lastActivityAt` / `messageCount` as of the last sync. A different value later
+   *  means the chat was continued somewhere else and its transcript has to be refreshed. */
+  serverActivityAt?: string;
+  serverMessageCount?: number;
+  /** Turns this device started since that sync: such a change on the server is our own. */
+  unsyncedTurns?: number;
 }

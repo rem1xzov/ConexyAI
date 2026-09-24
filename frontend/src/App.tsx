@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
 import { getChats, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, getTaskStatus, runTask } from './api/conexyApi';
-import { signalrService } from './services/signalrService';
+import { isForbiddenJoinError, signalrService } from './services/signalrService';
+// TURN_SCOPE: добавлено 2026-09-24 (H6/H7)
+import { TurnRegistry, type TurnContext } from './services/turnRegistry';
 import { useAuth } from './hooks/useAuth';
 import { useIsMobile } from './hooks/useMediaQuery';
 import { Sidebar } from './components/Sidebar';
@@ -10,7 +12,7 @@ import { ChatFeed } from './components/ChatFeed';
 import { InputBar } from './components/InputBar';
 import { ModelPicker } from './components/ModelPicker';
 import { WorkspacePanel } from './components/WorkspacePanel';
-import { StatusBar } from './components/StatusBar';
+import { StatusBar, type AgentStatus } from './components/StatusBar';
 import { ConnectionBanner } from './components/ConnectionBanner';
 // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
 // import { LiveVoiceModal } from './components/LiveVoiceModal';
@@ -35,34 +37,48 @@ import type { AuthMode } from './components/AuthModal';
 import { SettingsModal } from './components/SettingsModal';
 import { getStoredTheme, setTheme, type Theme } from './theme';
 import { setLanguage } from './i18n';
-import type { ConexyModel, LimitExceededInfo, ReasoningEffort, SendOutcome, SubscriptionUsage, TaskAttachment, ChatSummary, ChatTranscript } from './types/api';
+import type { ChatSummary, ConexyModel, LimitExceededInfo, ReasoningEffort, SendOutcome, SubscriptionUsage, TaskAttachment } from './types/api';
 import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep } from './types/chat';
-import type { PendingActionPayload } from './types/signalr';
+import type { PendingActionPayload, SignalrCallbacks } from './types/signalr';
 // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
 import { toMessageAttachment } from './utils/attachments';
 // DEPLOY_WINDOW_GRACEFUL_ERRORS: добавлено 2026-09-23
 import { humanError } from './utils/humanError';
-
-const STORAGE_KEY = 'conexy_sessions';
+// SESSION_ISOLATION / CHAT_STORAGE: добавлено 2026-09-24 (H10, M22, L13)
+import { userIdFromToken } from './utils/authToken';
+import {
+  ChatPersistence,
+  chatIdFromStorageKey,
+  clearUserSessions,
+  loadUserSessions,
+  parseStoredSession,
+  takeLegacySessions,
+} from './utils/chatStorage';
+import {
+  isAgentModel,
+  isSessionStreaming,
+  kindFromServer,
+  mapLimit,
+  mergeTranscript,
+  messagesFromTranscript,
+  modelFromServer,
+  sessionFromServer,
+  uid,
+} from './utils/chatSession';
 
 // CHAT_DELETE: маршрут удаления объявлен как {chatId:guid}, поэтому запрос на не-UUID id чата
 // смысла не имеет (старые локальные сессии).
 const GUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function uid(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
-  }
-
-  // CHAT_SYNC: fallback обязателен именно в форме UUID. Идентификатор чата уезжает на сервер как
-  // `chatId`, и история диалога пишется под ним же; если он не парсится как Guid, бэкенд молча
-  // подменяет chatId на taskId — и такой чат потом невозможно ни синхронизировать, ни найти.
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
+// CHAT_LIST_COMPLETE: добавлено 2026-09-24 (H8, C-3) — сколько последних чатов просить у сервера.
+// Полный набор id приходит отдельно (allChatIds), поэтому лимит больше не определяет, что удалять.
+const CHAT_LIST_LIMIT = 200;
+// Сколько новых (незнакомых этому устройству) чатов загружать сразу вместе с перепиской; остальные
+// догружаются при открытии — первая синхронизация на новом устройстве не делает 200 запросов.
+const EAGER_TRANSCRIPTS = 10;
+const TRANSCRIPT_CONCURRENCY = 4;
+// SESSION_ISOLATION: токен без читаемого `sub` (не должно случаться) всё равно получает свой ключ.
+const UNKNOWN_USER = 'unknown';
 
 // AGENT_TIMELINE: добавлено 2026-09-22
 /**
@@ -75,57 +91,6 @@ function closeSteps(steps?: AgentStep[]): AgentStep[] | undefined {
   if (last.endedAt !== undefined) return steps;
   const now = Date.now();
   return steps.map((s) => (s.id === last.id ? { ...s, endedAt: now } : s));
-}
-
-function normalizeMessage(m: ChatMessage): ChatMessage {
-  return {
-    ...m,
-    thinking: m.thinking ?? '',
-    logs: m.logs ?? [],
-    screenshots: m.screenshots ?? [],
-    toolActions: m.toolActions ?? [],
-    todos: m.todos ?? [],
-    problems: m.problems ?? [],
-  };
-}
-
-// COWORK_MODE: добавлено 2026-09-23 — оба режима агента живут во вкладке «Агент».
-function isAgentModel(model: ConexyModel): boolean {
-  return model === 'conexy-coder' || model === 'conexy-cowork';
-}
-
-function normalizeSession(s: ChatSession): ChatSession {
-  const raw = s.model as string;
-  const model: ConexyModel =
-    raw === 'conexy-coder' || raw === 'Conexy-coder' ? 'conexy-coder'
-    : raw === 'conexy-cowork' ? 'conexy-cowork'
-    : raw === 'ConexyV1-pro' ? 'ConexyV1-pro'
-    : 'ConexyV1-flash';
-  return {
-    ...s,
-    model,
-    kind: s.kind ?? (isAgentModel(model) ? 'projects' : 'chat'),
-    messages: (s.messages ?? []).map(normalizeMessage),
-  };
-}
-
-function loadSessions(): ChatSession[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as ChatSession[];
-    return Array.isArray(parsed) ? parsed.map(normalizeSession) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveSessions(sessions: ChatSession[]): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
-  } catch {
-    // ignore quota / availability errors
-  }
 }
 
 function updateMessage(
@@ -155,16 +120,6 @@ function defaultTitle(kind: ChatSessionKind, t: (key: string) => string): string
   return t('sidebar.newChat');
 }
 
-// CHAT_KIND_SYNC: добавлено 2026-09-23
-/**
- * The tab a server chat belongs to. The mode is persisted with the history, so a chat synced to a
- * second device reopens in the same tab — including the students tab, which cannot be inferred from
- * anything else. Unknown or missing values fall back to the generic chat tab.
- */
-function kindFromServer(kind: string | null | undefined): ChatSessionKind {
-  return kind === 'projects' || kind === 'students' ? kind : 'chat';
-}
-
 // CHAT_SHARE: `#/chat/<id>` — ссылка, которую выдаёт «Поделиться». Это hash-маршрут, поэтому он не
 // требует правил переписывания на сервере, и открыть чат по нему может только его владелец:
 // история читается строго по UserId, у остальных просто нет такого чата.
@@ -175,48 +130,6 @@ function chatIdFromHash(hash: string): string | null {
 
 function chatLink(id: string): string {
   return `${window.location.origin}${window.location.pathname}#/chat/${id}`;
-}
-
-// CHAT_SYNC: добавлено 2026-09-23
-/**
- * Builds a local session from a server chat list entry plus its stored transcript. Used for chats
- * this device has never seen (created on another device), which is what makes the sidebar no longer
- * device-local.
- */
-function sessionFromServer(
-  chat: ChatSummary,
-  transcript: ChatTranscript | null,
-  fallbackTitle: string,
-): ChatSession {
-  const kind = kindFromServer(chat.kind);
-
-  const messages: ChatMessage[] = (transcript?.messages ?? [])
-    // Only real turns belong in the transcript; tool/system rows are internal plumbing.
-    .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .map((m) => ({
-      id: uid(),
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-      status: 'complete' as const,
-      createdAt: new Date(m.createdAt).getTime(),
-    }));
-
-  return {
-    id: chat.id,
-    title: chat.title || fallbackTitle,
-    status: 'Completed',
-    // CHAT_DELETE: чат пришёл с сервера, поэтому его можно и удалять локально, если сервер
-    // перестанет его отдавать (см. prune в syncChats).
-    remote: true,
-    // The agent tab has its own models (the picker remembers which one); students always runs Pro;
-    // in the plain chat tab the model is chosen per message anyway.
-    model: kind === 'projects' ? 'conexy-coder' : kind === 'students' ? 'ConexyV1-pro' : 'ConexyV1-flash',
-    kind,
-    messages,
-    // CHAT_PIN: закрепление, сделанное на другом устройстве, приезжает вместе с чатом.
-    isPinned: chat.isPinned,
-    createdAt: messages.length > 0 ? messages[0].createdAt : new Date(chat.lastActivityAt).getTime(),
-  };
 }
 
 // LOGO_SWEEP: добавлено 2026-09-20 — time-of-day greeting for the start screen.
@@ -236,13 +149,63 @@ function greetingKey(kind: ChatSessionKind): string {
   return `${scope}.good${time}`;
 }
 
+// TURN_SCOPE: добавлено 2026-09-24
+/** Where a turn's final state is written: its chat, its assistant message and (if known) its task. */
+interface TurnTarget {
+  sessionId: string;
+  messageId: string;
+  taskId?: string;
+}
+
+type TurnOutcome = 'complete' | 'stopped' | 'error';
+
+interface FinalizeOptions {
+  /** Full stored answer (OnCompleted payload / task record). */
+  result?: string;
+  error?: string;
+  /** Also rewrite a message the user already stopped locally (the server knows better). */
+  allowFromStopped?: boolean;
+}
+
+function httpStatus(e: unknown): number | undefined {
+  return (e as { response?: { status?: number } } | null)?.response?.status;
+}
+
+function errorCode(e: unknown): string | undefined {
+  const data = (e as { response?: { data?: { error?: unknown } } } | null)?.response?.data;
+  return typeof data?.error === 'string' ? data.error : undefined;
+}
+
+// REGENERATE_REPLACES_TURN: добавлено 2026-09-24 (C-10)
+/** True when this answer's turn is stored on the server (accepted by `POST /run`, or synced from it). */
+function turnPersisted(answer: ChatMessage | undefined): boolean {
+  if (!answer || answer.role !== 'assistant') return false;
+  if (answer.taskId) return true;
+  // No task id: either a transcript row from the server (stored) or a send that never got through.
+  return !answer.awaitingTaskId && answer.status !== 'error';
+}
+
+/**
+ * Whether re-sending the user message at `userIndex` replaces the chat's LAST stored turn (C-10).
+ * Only then may the request carry `regenerate: true` — for anything else the server would delete a
+ * turn that has nothing to do with this one.
+ */
+function replacesLastTurn(messages: ChatMessage[], userIndex: number): boolean {
+  if (userIndex < 0 || messages.slice(userIndex + 1).some((m) => m.role === 'user')) return false;
+  const last = messages[messages.length - 1];
+  return messages.length - 1 > userIndex && turnPersisted(last);
+}
+
 export default function App() {
   // EMAIL_AUTH: добавлено 2026-09-19
-  const { token, user, initializing, error: authError, login, register, logout } = useAuth();
+  const { token, user, initializing, profileFailed, reloadProfile, error: authError, login, register, logout } = useAuth();
   // SETTINGS: добавлено 2026-09-19
   const { t, i18n } = useTranslation();
   // MOBILE: добавлено 2026-09-19 — drives the responsive layout (sidebar overlay, agent tabs).
   const isMobile = useIsMobile();
+  // SESSION_ISOLATION: добавлено 2026-09-24 (H10) — чей это экран. Обновление токена того же
+  // пользователя его не меняет; вход другого пользователя (или выход) — меняет.
+  const userId = token ? (userIdFromToken(token) ?? UNKNOWN_USER) : null;
 
   const [activeTab, setActiveTab] = useState<ChatSessionKind>('chat');
   const [model, setModel] = useState<ConexyModel>('ConexyV1-flash');
@@ -258,17 +221,12 @@ export default function App() {
   const [workspaceWidth, setWorkspaceWidth] = useState(55); // % width of the IDE pane
   const [ideCollapsed, setIdeCollapsed] = useState(false);
 
-  const [sessions, setSessions] = useState<ChatSession[]>(loadSessions);
-  // CHAT_SYNC: добавлено 2026-09-23 — снимок списка чатов для синхронизации с сервером.
-  const sessionsRef = useRef(sessions);
-  sessionsRef.current = sessions;
+  // SESSION_ISOLATION: чаты в памяти принадлежат `storeUser`; кеш на диске разложен по пользователям.
+  const [storeUser, setStoreUser] = useState<string | null>(userId);
+  const [sessions, setSessions] = useState<ChatSession[]>(() => loadUserSessions(userId));
   // Every visit starts on a fresh, empty chat with the default model instead of restoring
   // the last opened session. Previous chats stay available from the sidebar.
   const [activeId, setActiveId] = useState<string | null>(() => uid());
-  // CHAT_DELETE: тот же приём для активного чата — синхронизация должна знать, какой чат сейчас
-  // открыт, чтобы не выдернуть его из-под пользователя при прунинге.
-  const activeIdRef = useRef(activeId);
-  activeIdRef.current = activeId;
   const [toast, setToast] = useState<string | null>(null);
   const [fileCreatedEvent, setFileCreatedEvent] = useState<{ path: string; name: string } | null>(null);
   // AGENT_FEED_ZED: добавлено 2026-09-23 — запрос «открой этот файл» из ленты шагов агента.
@@ -279,7 +237,6 @@ export default function App() {
   const openFileNonceRef = useRef(0);
   const [fileRefreshToken, setFileRefreshToken] = useState(0);
   const [agentFileChange, setAgentFileChange] = useState<{ path: string } | null>(null);
-  const [agentStatus, setAgentStatus] = useState('Ready');
   const [cursorInfo, setCursorInfo] = useState<{ line: number; column: number; language: string } | null>(null);
   // COMMAND_CONFIRM: добавлено 2026-09-20
   // The command awaiting a decision, and the task (if any) whose commands run without asking.
@@ -299,143 +256,53 @@ export default function App() {
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
   const [language, setLanguageState] = useState<string>(i18n.language);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // LOCAL_STORAGE_BUDGET: добавлено 2026-09-24 — переписка открытого чата догружается с сервера.
+  const [transcriptLoad, setTranscriptLoad] = useState<{ id: string; failed: boolean } | null>(null);
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
   // const [isLiveOpen, setIsLiveOpen] = useState(false);
 
-  const streamingRef = useRef<{ sessionId: string; messageId: string; taskId?: string } | null>(null);
+  // SESSION_ISOLATION: добавлено 2026-09-24 (H10) — смена аккаунта (или выход) подменяет список
+  // чатов ПРЯМО В РЕНДЕРЕ, до коммита: ни один кадр не показывает чаты прошлого пользователя, и
+  // открытый чат не может «переехать» в чужой аккаунт. Побочные эффекты (чистка диска, хаба,
+  // контекстов ходов) — в эффекте ниже.
+  if (storeUser !== userId) {
+    setStoreUser(userId);
+    setSessions(loadUserSessions(userId));
+    setActiveId(uid());
+    setIncognito(false);
+    setPendingAction(null);
+    setAllowAllTaskId(null);
+    setTranscriptLoad(null);
+  }
+
+  // CHAT_SYNC: добавлено 2026-09-23 — снимок списка чатов для синхронизации с сервером.
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  // CHAT_DELETE: тот же приём для активного чата — синхронизация должна знать, какой чат сейчас
+  // открыт, чтобы не выдернуть его из-под пользователя при прунинге.
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
+  const storeUserRef = useRef(storeUser);
+  storeUserRef.current = storeUser;
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+
+  // SESSION_ISOLATION: обновлённый токен того же пользователя просто передаётся клиентам — без
+  // переподключения хаба (раньше каждое обновление рвало соединение вместе с подписками хода).
+  // Первый эффект компонента: всё, что ниже ходит в API, уже видит актуальный токен.
+  useEffect(() => {
+    setAuthToken(token);
+    signalrService.setToken(token);
+  }, [token]);
+
+  // TURN_SCOPE: добавлено 2026-09-24 (H6/H7) — вместо одного глобального streamingRef: по контексту
+  // на каждый идущий ход, с ключом taskId (и индексом по чату).
+  const registryRef = useRef<TurnRegistry | null>(null);
+  if (!registryRef.current) registryRef.current = new TurnRegistry();
+  const registry = registryRef.current;
   // TASK_COMPLETION_DIAGNOSTICS: добавлено 2026-09-23 — номер тика сторожа для логов.
   const watchdogTickRef = useRef(0);
 
-  // SIGNALR_RESILIENCE: добавлено 2026-09-22
-  /**
-   * Сверяет ход выполнения с сервером после обрыва связи (или перезагрузки страницы). События,
-   * прошедшие пока сокет лежал, потеряны навсегда, поэтому единственный источник правды — сама
-   * запись задачи. Без этого UI продолжал крутить спиннер по уже завершившейся задаче.
-   */
-  const resyncTurn = useCallback(
-    async (sessionId: string, messageId: string, taskId: string, tick = 0): Promise<void> => {
-      try {
-        const res = await getTaskStatus(taskId);
-        const status = (res.status ?? '').toLowerCase();
-        // Снимок до того, как мы могли обнулить streamingRef: нужен для лога, иначе он всегда false.
-        const wasStreaming = streamingRef.current?.messageId === messageId;
-
-        // TASK_COMPLETION_WATCHDOG: добавлено 2026-09-22
-        // TASK_COMPLETION_DIAGNOSTICS: расширено 2026-09-23 — при следующем воспроизведении
-        // «висит генерация» по этой строке видно ЦЕЛИКОМ решение сторожа: на каком тике он сработал,
-        // какой статус реально вернул сервер и что из этого следует. Раньше удачный опрос «running»
-        // вообще ничего не писал, и нельзя было отличить «сторож не вызвался» от «вызвался, но статус
-        // не тот».
-        console.info('[Watchdog] poll', { taskId, tick, status, resultChars: res.result?.length ?? 0 });
-
-        if (status === 'running' || status === 'pending') {
-          // Задача жива: гарантируем членство в её группах, чтобы поток событий возобновился.
-          void signalrService.ensureGroup(taskId).catch((e: unknown) => {
-            console.warn('[Watchdog] ensureGroup failed', { taskId, error: String(e) });
-          });
-          return;
-        }
-
-        // TASK_COMPLETION_WATCHDOG: добавлено 2026-09-22 — терминальный статус на сервере
-        // означает, что мы больше не в стриме. Без этого сторож продолжал бы опрос, а кнопка
-        // «Стоп» оставалась бы доступной по уже законченной задаче.
-        if (streamingRef.current?.messageId === messageId) {
-          streamingRef.current = null;
-        }
-
-        setSessions((prev) =>
-          updateMessage(prev, sessionId, messageId, (m) => {
-            if (status === 'completed') {
-              return {
-                ...m,
-                content: m.content || (res.result ?? ''),
-                status: 'complete',
-                steps: closeSteps(m.steps),
-              };
-            }
-            if (status === 'cancelled') {
-              return { ...m, status: 'stopped', steps: closeSteps(m.steps) };
-            }
-            return {
-              ...m,
-              status: 'error',
-              error: res.result || t('agent.taskFailed'),
-              steps: closeSteps(m.steps),
-            };
-          }),
-        );
-        setSessions((prev) =>
-          updateSession(prev, sessionId, (s) => ({
-            ...s,
-            status:
-              status === 'completed' ? 'Completed' : status === 'cancelled' ? 'Stopped' : 'Failed',
-          })),
-        );
-
-        // Keep the status bar honest: the run is over even if no live event told us so.
-        setAgentStatus(
-          status === 'completed' ? 'Completed' : status === 'cancelled' ? 'Stopped' : 'Failed',
-        );
-
-        console.info('[Watchdog] finalizing turn from server state', {
-          sessionId,
-          taskId,
-          tick,
-          status,
-          wasStreaming,
-        });
-      } catch (err) {
-        // Недоступная/чужая задача не фатальна — транскрипт остаётся как есть. Но молчать нельзя:
-        // именно проглатывание ошибки опроса делало баг невидимым (502 от прокси = вечный спиннер).
-        console.warn('[Watchdog] could not read task state', { taskId, tick, error: String(err) });
-      }
-    },
-    [t],
-  );
-
-  // TASK_COMPLETION_WATCHDOG: добавлено 2026-09-22
-  // Гарантия, что генерация завершается САМА. Живое событие OnCompleted приходит по SignalR и в
-  // редких случаях может быть потеряно (короткий прогон завершился до подписки на группу,
-  // переподключение, обрыв). Раньше в этой ситуации интерфейс оставался в состоянии «генерирует»
-  // навсегда, и пользователь был вынужден жать «Стоп». Теперь состояние сверяется с записью
-  // задачи, пока идёт стрим, и сообщение закрывается автоматически.
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      watchdogTickRef.current += 1;
-      const ctx = streamingRef.current;
-      if (!ctx) return;
-      if (!ctx.taskId) {
-        // Раньше это молча выключало сторожа: ход «генерируется», а опрашивать нечего. Такой
-        // случай обязан быть виден в консоли, иначе его невозможно отличить от «сторож не работает».
-        console.warn('[Watchdog] streaming turn has no taskId — completion cannot be verified', {
-          tick: watchdogTickRef.current,
-          sessionId: ctx.sessionId,
-          messageId: ctx.messageId,
-        });
-        return;
-      }
-      void resyncTurn(ctx.sessionId, ctx.messageId, ctx.taskId, watchdogTickRef.current);
-    }, 5000);
-    return () => window.clearInterval(id);
-  }, [resyncTurn]);
-
-  // SIGNALR_RESILIENCE: добавлено 2026-09-22 — после перезагрузки в localStorage может остаться ход,
-  // который был в процессе, когда вкладка закрылась: статус «streaming» без единого события о
-  // завершении. Сверяем такие ходы с сервером один раз за загрузку страницы.
-  const didInitialResyncRef = useRef(false);
-  useEffect(() => {
-    if (!token || didInitialResyncRef.current) return;
-    didInitialResyncRef.current = true;
-
-    for (const session of sessions) {
-      if (!session.taskId) continue;
-      const last = session.messages[session.messages.length - 1];
-      if (!last || last.role !== 'assistant' || last.status !== 'streaming') continue;
-      // Ход, который ведёт текущая вкладка, уже отслеживается живьём — не мешаем ему.
-      if (streamingRef.current?.messageId === last.id) continue;
-      void resyncTurn(session.id, last.id, session.taskId);
-    }
-  }, [token, sessions, resyncTurn]);
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
   // const liveRespondRef = useRef<{ resolve: (text: string) => void; reject: (err: Error) => void } | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -458,6 +325,8 @@ export default function App() {
     setAuthModal(null);
   }
 
+  // SESSION_ISOLATION: всё локальное состояние аккаунта чистится по смене userId (см. эффект ниже),
+  // поэтому выход — это просто сброс токена.
   function handleLogout() {
     void logout();
   }
@@ -505,17 +374,55 @@ export default function App() {
   // клик по пункту меню выглядел как «ничего не произошло». Плюс авторедирект молча менял хеш, так
   // что пользователь не понимал, почему экран не открылся. Теперь на `#/admin` всегда есть
   // определённый исход: загрузка (пока профиль неизвестен), явное «нет доступа» или сама панель.
+  // ADMIN_GUEST: изменено 2026-09-24 (L13) — гость видит приглашение войти, а не вечную «Загрузку…»,
+  // и окончательно упавший /auth/me показывает ошибку с повтором.
   const adminView = (() => {
     if (!isAdminRoute) return null;
 
+    const backToChat = (
+      <button className="admin-btn" type="button" onClick={() => { window.location.hash = ''; }}>
+        {t('admin.backToChat')}
+      </button>
+    );
+
     if (!user) {
+      if (!token && !initializing) {
+        return (
+          <div className="route-fallback">
+            <p className="route-fallback__text">{t('sync.adminSignIn')}</p>
+            <button className="admin-btn" type="button" onClick={() => setAuthModal('login')}>
+              {t('sidebar.login')}
+            </button>
+            {backToChat}
+            {authModal && (
+              <AuthModal
+                mode={authModal}
+                onSubmit={handleAuthSubmit}
+                onSwitchMode={() => setAuthModal(authModal === 'login' ? 'register' : 'login')}
+                onClose={() => setAuthModal(null)}
+              />
+            )}
+          </div>
+        );
+      }
+
+      if (profileFailed) {
+        return (
+          <div className="route-fallback">
+            <p className="route-fallback__text">{t('sync.profileFailed')}</p>
+            <button className="admin-btn" type="button" onClick={reloadProfile}>
+              {t('sync.retry')}
+            </button>
+            {backToChat}
+          </div>
+        );
+      }
+
       return (
         <div className="route-fallback">
           <span className="route-fallback__spinner" aria-hidden="true" />
           <p className="route-fallback__text">{t('common.loading')}</p>
-          <button className="admin-btn" type="button" onClick={() => { window.location.hash = ''; }}>
-            {t('admin.backToChat')}
-          </button>
+          {backToChat}
         </div>
       );
     }
@@ -524,21 +431,13 @@ export default function App() {
       return (
         <div className="route-fallback">
           <p className="route-fallback__text">{t('admin.noAccess')}</p>
-          <button className="admin-btn" type="button" onClick={() => { window.location.hash = ''; }}>
-            {t('admin.backToChat')}
-          </button>
+          {backToChat}
         </div>
       );
     }
 
     return null; // admin and authenticated -> the panel is rendered below
   })();
-
-  useEffect(() => {
-    // INCOGNITO_CHAT: добавлено 2026-09-20 — incognito chats stay in memory for the current
-    // visit only, so they are filtered out of the persisted list (and the sidebar).
-    saveSessions(sessions.filter((s) => !s.incognito));
-  }, [sessions]);
 
   // CHAT_SYNC: добавлено 2026-09-23
   // Список чатов раньше жил только в localStorage этого браузера — отсюда «разные чаты» на ПК и
@@ -561,9 +460,693 @@ export default function App() {
   // остаётся локальным и повторяется при следующей сверке — иначе сервер вернул бы false и
   // закрепление молча пропадало бы.
   const pendingPinsRef = useRef(new Map<string, boolean>());
+  // LOCAL_STORAGE_BUDGET: чаты, чья переписка прямо сейчас грузится с сервера.
+  const transcriptLoadingRef = useRef(new Set<string>());
+  // CHAT_SHARE: см. эффект открытия ссылки ниже.
+  const openedLinkRef = useRef<string | null>(null);
+  // TURN_SCOPE (H7): для какого пользователя уже подхвачены ходы, оставшиеся после перезагрузки.
+  const adoptedForRef = useRef<string | null>(null);
+
+  // CHAT_STORAGE: добавлено 2026-09-24 (M22, L13) — кеш чатов на диске: по ключу на чат, только
+  // изменённые, не чаще раза в 500 мс (раньше — весь список на КАЖДЫЙ токен стрима).
+  const persistenceRef = useRef<ChatPersistence | null>(null);
+  useEffect(() => {
+    if (!storeUser) return;
+    const persistence = new ChatPersistence(storeUser, (chatId) =>
+      chatId === activeIdRef.current ||
+      Boolean(registry.bySession(chatId)) ||
+      isSessionStreaming(sessionsRef.current.find((s) => s.id === chatId)),
+    );
+    persistence.seed(sessionsRef.current);
+    persistenceRef.current = persistence;
+    return () => {
+      persistence.dispose(true);
+      if (persistenceRef.current === persistence) persistenceRef.current = null;
+    };
+  }, [storeUser, registry]);
+
+  useEffect(() => {
+    // INCOGNITO_CHAT: добавлено 2026-09-20 — incognito chats stay in memory for the current
+    // visit only; the persistence layer never writes them.
+    const persistence = persistenceRef.current;
+    if (!persistence || persistence.userId !== storeUser) return;
+    persistence.schedule(sessions);
+  }, [sessions, storeUser]);
+
+  // TWO_TABS: добавлено 2026-09-24 (L13) — другая вкладка того же пользователя изменила чат: берём её
+  // версию. Раньше каждая вкладка записывала свой снимок ВСЕГО списка и затирала чужие изменения.
+  // Чат, в котором эта вкладка сама ведёт генерацию, не трогаем: её копия свежее.
+  useEffect(() => {
+    if (!storeUser) return;
+    const onStorage = (e: StorageEvent) => {
+      if (e.storageArea !== window.localStorage) return;
+      const chatId = chatIdFromStorageKey(e.key, storeUser);
+      if (!chatId || registry.bySession(chatId)) return;
+      const incoming = parseStoredSession(e.newValue);
+      setSessions((prev) => {
+        const index = prev.findIndex((s) => s.id === chatId);
+        if (!incoming) {
+          // Removed in the other tab (deleted or pruned). The chat open here stays on screen.
+          if (index < 0 || chatId === activeIdRef.current) return prev;
+          persistenceRef.current?.acknowledge(chatId, null);
+          return prev.filter((s) => s.id !== chatId);
+        }
+        const current = index >= 0 ? prev[index] : undefined;
+        // The other tab only evicted its cached messages to save space; ours are still good.
+        const next = current && incoming.needsTranscript && current.messages.length > 0
+          ? { ...incoming, messages: current.messages, needsTranscript: current.needsTranscript, createdAt: current.createdAt }
+          : incoming;
+        persistenceRef.current?.acknowledge(chatId, next);
+        if (index < 0) return [next, ...prev];
+        const copy = prev.slice();
+        copy[index] = next;
+        return copy;
+      });
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [storeUser, registry]);
+
+  // SESSION_ISOLATION: добавлено 2026-09-24 (H10) — выход или вход другого пользователя. Раньше
+  // logout чистил только токен: следующий человек за этим браузером видел чужие чаты и мог
+  // продолжить чужой агентский чат (в чужой рабочей области).
+  const prevUserRef = useRef(userId);
+  useEffect(() => {
+    const previous = prevUserRef.current;
+    if (previous === userId) return;
+    prevUserRef.current = userId;
+
+    registry.clear();
+    recentRenamesRef.current.clear();
+    recentPinsRef.current.clear();
+    pendingPinsRef.current.clear();
+    transcriptLoadingRef.current.clear();
+    openedLinkRef.current = null;
+    adoptedForRef.current = null;
+    chatSyncRef.current.lastToken = null;
+    setUsage(null);
+    if (previous) clearUserSessions(previous);
+    console.info('[Session] account changed; local state of the previous account cleared', {
+      hadPreviousAccount: Boolean(previous),
+      signedIn: Boolean(userId),
+    });
+  }, [userId, registry]);
+
+  // SUBSCRIPTION_TIERS: добавлено 2026-09-17
+  async function refreshUsage() {
+    if (!tokenRef.current) return;
+    try {
+      setUsage(await getSubscriptionUsage());
+    } catch {
+      // Best-effort; the indicator simply stays unchanged on transient failures.
+    }
+  }
+
+  useEffect(() => {
+    void refreshUsage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  // BUGFIX_PERF: добавлено 2026-09-21
+  // MessageBubble is memoised, which only helps if the callbacks it receives keep one identity
+  // for the whole session. The handlers below therefore read the mutable inputs through this
+  // latest-values ref instead of closing over state that changes on every streamed token.
+  const activeSession = sessions.find((s) => s.id === activeId) ?? null;
+  const students = activeTab === 'students';
+  const isAgent = activeTab === 'projects';
+  const chatTab = !isAgent && !students;
+  const incognitoActive = incognito && chatTab;
+
+  const liveRef = useRef({} as {
+    token: string | null;
+    sessions: ChatSession[];
+    activeId: string | null;
+    activeTab: ChatSessionKind;
+    model: ConexyModel;
+    thinking: boolean;
+    reasoningEffort: ReasoningEffort;
+    smartSearch: boolean;
+    students: boolean;
+    incognitoActive: boolean;
+    sessionIncognito: boolean;
+    sessionTaskId: string | undefined;
+    pendingAction: PendingActionPayload | null;
+    showToast: (message: string) => void;
+    refreshUsage: () => Promise<void>;
+    t: typeof t;
+  });
+  liveRef.current = {
+    token,
+    sessions,
+    activeId,
+    activeTab,
+    model,
+    thinking,
+    reasoningEffort,
+    smartSearch,
+    students,
+    incognitoActive,
+    sessionIncognito: activeSession?.incognito ?? false,
+    sessionTaskId: activeSession?.taskId,
+    pendingAction,
+    showToast,
+    refreshUsage,
+    t,
+  };
+
+  // ---------------------------------------------------------------------------------------------
+  // TURN_SCOPE: добавлено 2026-09-24 (H6/H7/M17, контракты C-1/C-5/C-6) — жизненный цикл хода.
+  // Функции ниже пересоздаются на каждый рендер; долгоживущие обработчики (SignalR, сторож,
+  // мемоизированные колбэки пузырей) зовут их через opsRef, поэтому всегда видят свежие значения.
+  // ---------------------------------------------------------------------------------------------
+
+  /** The turn an event belongs to, by its scope id (C-1). */
+  function resolveTurn(scopeId?: string): TurnContext | undefined {
+    if (scopeId) return registry.byTask(scopeId) ?? registry.bySession(scopeId);
+    // An older backend sends no scope id: that is only unambiguous with exactly one live turn.
+    const all = registry.all();
+    return all.length === 1 ? all[0] : undefined;
+  }
+
+  /** The chat an event belongs to: its turn's chat, or a chat-scoped (workspace) event's chat. */
+  function resolveChatId(scopeId?: string): string | null {
+    const ctx = resolveTurn(scopeId);
+    if (ctx) return ctx.sessionId;
+    if (!scopeId) return null;
+    const lower = scopeId.toLowerCase();
+    return sessionsRef.current.find((s) => s.id.toLowerCase() === lower)?.id ?? null;
+  }
+
+  function dropEvent(event: string, scopeId?: string) {
+    // Not a warning: late tokens of a turn the user already stopped land here by design.
+    console.debug('[signalr] dropped an event without a matching turn', { event, scopeId });
+  }
+
+  function patchTurn(ctx: TurnContext, updater: (m: ChatMessage) => ChatMessage) {
+    setSessions((prev) =>
+      updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => (m.status === 'streaming' ? updater(m) : m)),
+    );
+  }
+
+  /** Finds the assistant message of a task that is no longer (or never was) tracked here. */
+  function findMessageByTask(taskId: string, includeStopped: boolean): TurnTarget | null {
+    const lower = taskId.toLowerCase();
+    for (const s of sessionsRef.current) {
+      for (let i = s.messages.length - 1; i >= 0; i -= 1) {
+        const m = s.messages[i];
+        if (m.role !== 'assistant' || m.taskId?.toLowerCase() !== lower) continue;
+        const eligible = m.status === 'streaming' || (includeStopped && m.status === 'stopped');
+        return eligible ? { sessionId: s.id, messageId: m.id, taskId: m.taskId } : null;
+      }
+      // Data cached before 2026-09-24: the turn id lived only on the session.
+      if (s.taskId?.toLowerCase() === lower) {
+        const last = s.messages[s.messages.length - 1];
+        if (last?.role === 'assistant' && last.status === 'streaming' && !last.taskId && !last.awaitingTaskId) {
+          return { sessionId: s.id, messageId: last.id, taskId };
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Writes the final state of a turn into its own message (never "the current" one). */
+  function finalizeTurn(target: TurnTarget, outcome: TurnOutcome, opts: FinalizeOptions = {}) {
+    const translate = liveRef.current.t;
+    setSessions((prev) => {
+      let changed = false;
+      const next = updateMessage(prev, target.sessionId, target.messageId, (m) => {
+        const eligible = m.status === 'streaming' || (opts.allowFromStopped === true && m.status === 'stopped');
+        if (!eligible) return m;
+        changed = true;
+        const base: ChatMessage = { ...m, steps: closeSteps(m.steps), awaitingTaskId: undefined };
+        if (outcome === 'complete') {
+          // H7: the stored result is the FULL answer. The streamed text can miss tokens that went by
+          // while the socket or the page was down, so it no longer wins over the result.
+          const result = opts.result;
+          return { ...base, status: 'complete', content: result && result.trim() ? result : m.content, error: undefined };
+        }
+        if (outcome === 'stopped') return { ...base, status: 'stopped' };
+        return { ...base, status: 'error', error: opts.error || translate('agent.taskFailed') };
+      });
+      if (!changed) return prev;
+      const status = outcome === 'complete' ? 'Completed' : outcome === 'stopped' ? 'Stopped' : 'Failed';
+      return updateSession(next, target.sessionId, (s) => ({ ...s, status }));
+    });
+  }
+
+  // COMMAND_CONFIRM: a finished task never auto-approves, and the backend drops the flag in its own
+  // finally block. Only the task that finished is cleared — another chat's card stays.
+  function clearTaskApprovals(taskId?: string) {
+    const lower = taskId?.toLowerCase();
+    setPendingAction((p) => (p && (!lower || p.taskId?.toLowerCase() === lower) ? null : p));
+    setAllowAllTaskId((id) => (id && (!lower || id.toLowerCase() === lower) ? null : id));
+  }
+
+  /** A terminal event (OnCompleted / OnError / OnStopped) finalizes ONLY its own turn. */
+  function finishFromServer(taskId: string | undefined, outcome: TurnOutcome, opts: FinalizeOptions) {
+    const ctx = taskId ? registry.byTask(taskId) : resolveTurn(undefined);
+    const effectiveTaskId = taskId ?? ctx?.taskId;
+    // TASK_COMPLETION_WATCHDOG: a turn this page no longer tracks is still found by its task id, so a
+    // finished run can never leave the transcript stuck in "streaming".
+    const target: TurnTarget | null = ctx
+      ? { sessionId: ctx.sessionId, messageId: ctx.messageId, taskId: ctx.taskId }
+      : effectiveTaskId
+        ? findMessageByTask(effectiveTaskId, outcome === 'complete')
+        : null;
+
+    clearTaskApprovals(effectiveTaskId);
+    // The turn is over either way: its task group is not needed any more (and is not re-joined
+    // after every reconnect).
+    if (effectiveTaskId) void signalrService.leaveTask(effectiveTaskId).catch(() => undefined);
+    if (!target) {
+      dropEvent(`terminal:${outcome}`, taskId);
+      return;
+    }
+    if (ctx) registry.end(ctx);
+    // A run the user stopped that still completed on the server shows the stored answer.
+    finalizeTurn(target, outcome, { ...opts, allowFromStopped: outcome === 'complete' && !ctx });
+    // SUBSCRIPTION_TIERS: добавлено 2026-09-17
+    if (outcome !== 'stopped') void refreshUsage();
+  }
+
+  // CHAT_OWNERSHIP: добавлено 2026-09-24 (C-2 403 / C-6) — чат принадлежит другому аккаунту.
+  function markChatForbidden(chatId: string) {
+    const translate = liveRef.current.t;
+    const ctx = registry.bySession(chatId);
+    if (ctx) registry.end(ctx);
+    setSessions((prev) =>
+      updateSession(prev, chatId, (s) => ({
+        ...s,
+        forbidden: true,
+        status: isSessionStreaming(s) ? 'Failed' : s.status,
+        messages: s.messages.map((m) =>
+          m.status === 'streaming'
+            ? { ...m, status: 'error', error: translate('sync.chatForbidden'), steps: closeSteps(m.steps), awaitingTaskId: undefined }
+            : m,
+        ),
+      })),
+    );
+    if (chatId === activeIdRef.current) showToast(translate('sync.chatForbidden'));
+  }
+
+  /** Joins the turn's task group and its chat's workspace group; a refusal is final (C-6). */
+  async function joinTurnGroups(target: { sessionId: string; taskId?: string }) {
+    // AGENT_EVENT_GROUPS: добавлено 2026-09-22 — бэкенд вещает в ДВЕ разные группы:
+    //   * task_{taskId}  — раннер и воркер (OnAgentStatus, pending_confirmation, OnCompleted…);
+    //   * task_{chatId}  — сервисы bash и редактора (started/completed/failed, TerminalOutput,
+    //                      BuildProblems), потому что для них этот id — ещё и ключ воркспейса.
+    // DEPLOY_WINDOW_GRACEFUL_ERRORS: подписка на группы не должна ронять отправку. Задача на
+    // бэкенде УЖЕ принята, а событий мы не увидим только до того, как связь вернётся — сторож
+    // (resyncTurn → joinTurnGroups) дозальёт группы сам.
+    const ids = [target.taskId, target.sessionId].filter((id): id is string => Boolean(id));
+    for (const id of ids) {
+      try {
+        await signalrService.ensureGroup(id);
+      } catch (e) {
+        // onJoinForbidden already marked the chat; retrying would just loop.
+        if (isForbiddenJoinError(e)) return;
+        console.warn('[signalr] joining the turn groups failed; the watchdog will retry', { id, error: String(e) });
+      }
+    }
+  }
+
+  // SIGNALR_RESILIENCE: добавлено 2026-09-22
+  /**
+   * Сверяет ход выполнения с сервером после обрыва связи (или перезагрузки страницы). События,
+   * прошедшие пока сокет лежал, потеряны навсегда, поэтому единственный источник правды — сама
+   * запись задачи. Без этого UI продолжал крутить спиннер по уже завершившейся задаче.
+   */
+  async function resyncTurn(target: TurnTarget & { taskId: string }, tick = 0, allowFromStopped = false): Promise<void> {
+    const translate = liveRef.current.t;
+    try {
+      const res = await getTaskStatus(target.taskId);
+      const status = (res.status ?? '').toLowerCase();
+      const ctx = registry.byTask(target.taskId);
+
+      // TASK_COMPLETION_WATCHDOG: добавлено 2026-09-22
+      // TASK_COMPLETION_DIAGNOSTICS: расширено 2026-09-23 — при следующем воспроизведении
+      // «висит генерация» по этой строке видно ЦЕЛИКОМ решение сторожа.
+      console.info('[Watchdog] poll', { taskId: target.taskId, tick, status, resultChars: res.result?.length ?? 0 });
+
+      if (status === 'running' || status === 'pending') {
+        // Задача жива: гарантируем членство в её группах, чтобы поток событий возобновился.
+        if (ctx) void joinTurnGroups(ctx);
+        return;
+      }
+
+      // TASK_COMPLETION_WATCHDOG: терминальный статус на сервере означает, что мы больше не в стриме.
+      if (ctx) registry.end(ctx);
+      const session = sessionsRef.current.find((s) => s.id === target.sessionId);
+      const outcome: TurnOutcome = status === 'completed' ? 'complete' : status === 'cancelled' ? 'stopped' : 'error';
+      finalizeTurn(target, outcome, {
+        // An incognito task record keeps only a placeholder instead of the answer.
+        result: session?.incognito ? undefined : (res.result ?? undefined),
+        error: res.result || translate('agent.taskFailed'),
+        allowFromStopped,
+      });
+      clearTaskApprovals(target.taskId);
+      void signalrService.leaveTask(target.taskId).catch(() => undefined);
+
+      console.info('[Watchdog] finalizing turn from server state', {
+        sessionId: target.sessionId,
+        taskId: target.taskId,
+        tick,
+        status,
+        wasStreaming: Boolean(ctx),
+      });
+    } catch (err) {
+      if (httpStatus(err) === 404) {
+        // The task record does not exist for this account: polling it again cannot help.
+        const ctx = registry.byTask(target.taskId);
+        if (ctx) registry.end(ctx);
+        finalizeTurn(target, 'error', { error: translate('agent.taskFailed'), allowFromStopped });
+        console.warn('[Watchdog] task not found; turn closed', { taskId: target.taskId, tick });
+        return;
+      }
+      // Недоступная задача не фатальна — транскрипт остаётся как есть. Но молчать нельзя:
+      // именно проглатывание ошибки опроса делало баг невидимым (502 от прокси = вечный спиннер).
+      console.warn('[Watchdog] could not read task state', { taskId: target.taskId, tick, error: String(err) });
+    }
+  }
+
+  // H7: ход, начатый до перезагрузки (или в другой вкладке), «усыновляется»: получает контекст,
+  // подписку на обе группы, опрос сторожем и рабочую кнопку «Стоп».
+  function adoptTurn(target: TurnTarget & { taskId: string }) {
+    if (registry.bySession(target.sessionId)) return;
+    const ctx: TurnContext = { ...target, adopted: true, startedAt: Date.now() };
+    registry.begin(ctx);
+    setSessions((prev) => updateSession(prev, target.sessionId, (s) => (s.status === 'Running' ? s : { ...s, status: 'Running' })));
+    console.info('[Resync] adopting a turn left running before the reload', { sessionId: target.sessionId, taskId: target.taskId });
+    void (async () => {
+      // Join FIRST, then read the record: a turn that finished before the join is finalized from
+      // the server's result instead of spinning forever; one that finishes after it sends OnCompleted.
+      await joinTurnGroups(ctx);
+      if (!registry.isActive(ctx)) return;
+      await resyncTurn(target, 0);
+    })();
+  }
+
+  // STOP_CONFIRM: добавлено 2026-09-24 (M17, C-5) — ответ хаба больше не игнорируется.
+  async function stopOnServer(target: TurnTarget & { taskId: string }) {
+    const translate = liveRef.current.t;
+    try {
+      const result = await signalrService.stopGeneration(target.taskId);
+      console.info('[Stop] server answered', { taskId: target.taskId, result });
+      // `stopping`: OnStopped follows. `cancelled` (the turn never ran) / `not_found` (it had already
+      // finished): nothing more will come — the task record is the final truth.
+      if (result !== 'stopping') await resyncTurn(target, 0, true);
+    } catch (err) {
+      console.warn('[Stop] StopGeneration failed', { taskId: target.taskId, error: String(err) });
+      showToast(translate('sync.stopFailed'));
+      // The turn most likely keeps running: show it as running again so Stop can be pressed again.
+      reattachTurn(target);
+    }
+  }
+
+  function reattachTurn(target: TurnTarget & { taskId: string }) {
+    if (registry.bySession(target.sessionId)) return;
+    const session = sessionsRef.current.find((s) => s.id === target.sessionId);
+    const message = session?.messages.find((m) => m.id === target.messageId);
+    if (!message || message.status !== 'stopped') return;
+    setSessions((prev) =>
+      updateSession(prev, target.sessionId, (s) => ({
+        ...s,
+        status: 'Running',
+        messages: s.messages.map((m) => (m.id === target.messageId ? { ...m, status: 'streaming' } : m)),
+      })),
+    );
+    const ctx: TurnContext = { ...target, adopted: true, startedAt: Date.now() };
+    registry.begin(ctx);
+    void joinTurnGroups(ctx);
+  }
+
+  const opsRef = useRef({
+    resyncTurn,
+    adoptTurn,
+    finalizeTurn,
+    joinTurnGroups,
+    stopOnServer,
+    markChatForbidden,
+    clearTaskApprovals,
+  });
+  opsRef.current = {
+    resyncTurn,
+    adoptTurn,
+    finalizeTurn,
+    joinTurnGroups,
+    stopOnServer,
+    markChatForbidden,
+    clearTaskApprovals,
+  };
+
+  // STREAM_SCOPE: добавлено 2026-09-24 (H6, C-1) — каждое событие маршрутизируется по scopeId в
+  // СВОЙ ход; то, что сопоставить нельзя, отбрасывается, а не пишется в «текущее» сообщение.
+  const eventsRef = useRef<SignalrCallbacks>({});
+  eventsRef.current = {
+    onContentToken: (delta, scopeId) => {
+      const ctx = resolveTurn(scopeId);
+      if (!ctx) return dropEvent('OnContentToken', scopeId);
+      // Hide the live action badge as soon as the final answer starts streaming.
+      patchTurn(ctx, (m) => ({ ...m, content: m.content + delta, currentAction: null }));
+    },
+    onThinkingToken: (delta, scopeId) => {
+      const ctx = resolveTurn(scopeId);
+      if (!ctx) return dropEvent('OnThinkingToken', scopeId);
+      patchTurn(ctx, (m) => ({ ...m, thinking: (m.thinking ?? '') + delta }));
+    },
+    onLog: (message, scopeId) => {
+      const ctx = resolveTurn(scopeId);
+      if (!ctx) return dropEvent('OnLog', scopeId);
+      patchTurn(ctx, (m) => ({ ...m, logs: [...(m.logs ?? []), message] }));
+    },
+    onScreenshot: (base64, scopeId) => {
+      const ctx = resolveTurn(scopeId);
+      if (!ctx) return dropEvent('OnScreenshot', scopeId);
+      patchTurn(ctx, (m) => ({ ...m, screenshots: [...(m.screenshots ?? []), base64] }));
+    },
+    onAgentStatus: (payload, scopeId) => {
+      const ctx = resolveTurn(scopeId);
+      if (!ctx) return dropEvent('OnAgentStatus', scopeId);
+      patchTurn(ctx, (m) => {
+        // AGENT_TIMELINE: добавлено 2026-09-22 — каждая фаза «размышления» становится
+        // отдельным шагом со своим startedAt, поэтому таймер каждого шага честно идёт
+        // от нуля, а завершённые шаги больше не тикают и не путаются между собой.
+        const steps = m.steps ?? [];
+        const last = steps[steps.length - 1];
+        const open = last && last.endedAt === undefined ? last : undefined;
+
+        if (payload.stage === 'thinking') {
+          // A new reasoning phase: close the previous one and start a fresh step.
+          const now = Date.now();
+          // AGENT_FEED_ZED: the reasoning stream is cumulative on the message, so each step
+          // records the slice of it that belongs to that step.
+          const thinkingLength = (m.thinking ?? '').length;
+          const closed = open
+            ? steps.map((s) =>
+                s.id === open.id ? { ...s, endedAt: now, reasoningTo: thinkingLength } : s,
+              )
+            : steps;
+          return {
+            ...m,
+            currentAction: payload,
+            steps: [
+              ...closed,
+              {
+                id: uid(),
+                stage: payload.stage,
+                label: payload.label,
+                startedAt: now,
+                afterToolCount: (m.toolActions ?? []).length,
+                reasoningFrom: thinkingLength,
+              },
+            ],
+          };
+        }
+
+        // Any other phase ends the current reasoning step.
+        if (!open) return { ...m, currentAction: payload };
+        const now = Date.now();
+        const thinkingLength = (m.thinking ?? '').length;
+        return {
+          ...m,
+          currentAction: payload,
+          steps: steps.map((s) =>
+            s.id === open.id ? { ...s, endedAt: now, reasoningTo: thinkingLength } : s,
+          ),
+        };
+      });
+    },
+    onFileCreated: (payload, scopeId) => {
+      // The workspace panel shows the OPEN chat: a file created by another chat's agent must not
+      // open a tab there.
+      const chatId = resolveChatId(scopeId);
+      if (!chatId || chatId !== activeIdRef.current) return dropEvent('OnFileCreated', scopeId);
+      setFileCreatedEvent(payload);
+    },
+    onToolAction: (event, scopeId) => {
+      // Workspace events (bash, editor) are scoped by the chat id and belong to that chat's turn.
+      const ctx = resolveTurn(scopeId);
+      if (ctx) {
+        patchTurn(ctx, (m) => ({ ...m, toolActions: [...(m.toolActions ?? []), event] }));
+      }
+      const chatId = ctx?.sessionId ?? resolveChatId(scopeId);
+      if (!chatId) return dropEvent('ToolAction', scopeId);
+      // Refresh the file tree when the editor creates/edits a file, so the
+      // new/modified file appears in the IDE without a manual refresh.
+      if (
+        chatId === activeIdRef.current &&
+        event.toolName === 'str_replace_editor' &&
+        (event.command === 'create' || event.command === 'str_replace' || event.command === 'insert') &&
+        event.status === 'completed'
+      ) {
+        setFileRefreshToken((n) => n + 1);
+        setAgentFileChange({ path: event.path });
+      }
+    },
+    onTodoUpdate: (payload, scopeId) => {
+      const ctx = resolveTurn(scopeId);
+      if (!ctx) return dropEvent('TodoUpdate', scopeId);
+      patchTurn(ctx, (m) => ({ ...m, todos: payload.todos }));
+    },
+    onCompleted: (payload, scopeId) => {
+      finishFromServer(payload?.taskId ?? scopeId, 'complete', { result: payload?.result });
+      // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
+      // liveRespondRef.current?.resolve(payload.result);
+    },
+    onError: (err, scopeId) => {
+      finishFromServer(scopeId, 'error', { error: err });
+    },
+    onStopped: (taskId, scopeId) => {
+      finishFromServer(taskId || scopeId, 'stopped', {});
+    },
+    onRunProjectError: (payload) => {
+      showToast(liveRef.current.t('toast.runError', { message: payload.message }));
+    },
+    onSearchStatus: (payload, scopeId) => {
+      const ctx = resolveTurn(scopeId);
+      if (!ctx) return dropEvent('SearchStatus', scopeId);
+      // L13: the label is built at event time in the CURRENT language.
+      const translate = liveRef.current.t;
+      const action = payload.status === 'searching'
+        ? { stage: 'searching', label: payload.query ? translate('agent.searching', { query: payload.query }) : translate('agent.searchingShort') }
+        : null;
+      patchTurn(ctx, (m) => ({ ...m, currentAction: action }));
+    },
+    onProblems: (payload, scopeId) => {
+      const ctx = resolveTurn(scopeId);
+      if (!ctx) return dropEvent('BuildProblems', scopeId);
+      patchTurn(ctx, (m) => ({ ...m, problems: payload.problems ?? [] }));
+    },
+    // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
+    onPendingActionCreated: (payload, scopeId) => {
+      if (!resolveTurn(scopeId) && !registry.byTask(payload.taskId)) return dropEvent('OnPendingActionCreated', scopeId);
+      setPendingAction(payload);
+    },
+    // SIGNALR_RESILIENCE: добавлено 2026-09-22 — после успешного переподключения события,
+    // которые не дошли, уже не вернуть, поэтому состояние КАЖДОГО идущего хода перечитываем.
+    onReconnected: () => {
+      for (const ctx of registry.all()) {
+        if (ctx.taskId) void resyncTurn({ sessionId: ctx.sessionId, messageId: ctx.messageId, taskId: ctx.taskId });
+      }
+    },
+    // CHAT_OWNERSHIP (C-6): вход в группу запрещён навсегда — чат не наш.
+    onJoinForbidden: (id) => {
+      const ctx = registry.byTask(id) ?? registry.bySession(id);
+      const chatId = ctx?.sessionId ?? resolveChatId(id) ?? findMessageByTask(id, true)?.sessionId ?? null;
+      if (chatId) markChatForbidden(chatId);
+    },
+  };
+
+  // Соединение живёт, пока не сменится пользователь. Выход закрывает его и забывает токен и группы.
+  useEffect(() => {
+    const currentToken = tokenRef.current;
+    if (!userId || !currentToken) {
+      void signalrService.disconnect();
+      return;
+    }
+
+    let disposed = false;
+    const ev = (): SignalrCallbacks => (disposed ? {} : eventsRef.current);
+
+    void signalrService.connect(currentToken, {
+      onContentToken: (delta, scopeId) => ev().onContentToken?.(delta, scopeId),
+      onThinkingToken: (delta, scopeId) => ev().onThinkingToken?.(delta, scopeId),
+      onLog: (message, scopeId) => ev().onLog?.(message, scopeId),
+      onScreenshot: (base64, scopeId) => ev().onScreenshot?.(base64, scopeId),
+      onAgentStatus: (payload, scopeId) => ev().onAgentStatus?.(payload, scopeId),
+      onFileCreated: (payload, scopeId) => ev().onFileCreated?.(payload, scopeId),
+      onToolAction: (event, scopeId) => ev().onToolAction?.(event, scopeId),
+      onTodoUpdate: (payload, scopeId) => ev().onTodoUpdate?.(payload, scopeId),
+      onCompleted: (payload, scopeId) => ev().onCompleted?.(payload, scopeId),
+      onError: (error, scopeId) => ev().onError?.(error, scopeId),
+      onStopped: (taskId, scopeId) => ev().onStopped?.(taskId, scopeId),
+      onRunProjectError: (payload) => ev().onRunProjectError?.(payload),
+      onSearchStatus: (payload, scopeId) => ev().onSearchStatus?.(payload, scopeId),
+      onProblems: (payload, scopeId) => ev().onProblems?.(payload, scopeId),
+      onPendingActionCreated: (payload, scopeId) => ev().onPendingActionCreated?.(payload, scopeId),
+      onReconnected: () => ev().onReconnected?.(),
+      onJoinForbidden: (id) => ev().onJoinForbidden?.(id),
+    });
+
+    return () => {
+      disposed = true;
+      void signalrService.disconnect();
+    };
+  }, [userId]);
+
+  // TASK_COMPLETION_WATCHDOG: добавлено 2026-09-22
+  // Гарантия, что генерация завершается САМА. Живое событие OnCompleted приходит по SignalR и в
+  // редких случаях может быть потеряно (короткий прогон завершился до подписки на группу,
+  // переподключение, обрыв). Состояние сверяется с записью задачи, пока идёт стрим, и сообщение
+  // закрывается автоматически. TURN_SCOPE: теперь опрашивается КАЖДЫЙ идущий ход, а не один.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      watchdogTickRef.current += 1;
+      const tick = watchdogTickRef.current;
+      for (const ctx of registry.all()) {
+        if (!ctx.taskId) {
+          // POST /run ещё не вернулся. Долго без taskId — это видно в консоли, а не молча.
+          if (Date.now() - ctx.startedAt > 30_000) {
+            console.warn('[Watchdog] streaming turn has no taskId yet — completion cannot be verified', {
+              tick,
+              sessionId: ctx.sessionId,
+              messageId: ctx.messageId,
+            });
+          }
+          continue;
+        }
+        void opsRef.current.resyncTurn({ sessionId: ctx.sessionId, messageId: ctx.messageId, taskId: ctx.taskId }, tick);
+      }
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [registry]);
+
+  // SIGNALR_RESILIENCE: добавлено 2026-09-22 — после перезагрузки в localStorage может остаться ход,
+  // который был в процессе, когда вкладка закрылась: статус «streaming» без единого события о
+  // завершении. H7 (2026-09-24): такой ход не просто сверяется, а УСЫНОВЛЯЕТСЯ.
+  useEffect(() => {
+    if (!token || !storeUser || storeUser !== userId || adoptedForRef.current === storeUser) return;
+    adoptedForRef.current = storeUser;
+
+    for (const session of sessionsRef.current) {
+      if (session.incognito || !isSessionStreaming(session)) continue;
+      // Ход, который ведёт текущая вкладка, уже отслеживается живьём — не мешаем ему.
+      if (registry.bySession(session.id)) continue;
+      const last = session.messages[session.messages.length - 1];
+      const taskId = last.taskId ?? (last.awaitingTaskId ? undefined : session.taskId);
+      if (!taskId) {
+        // POST /run так и не ответил (вкладку закрыли раньше) — сервер ход не подтверждал.
+        console.info('[Resync] a turn was never confirmed by the server; marking it stopped', { sessionId: session.id });
+        opsRef.current.finalizeTurn({ sessionId: session.id, messageId: last.id }, 'stopped');
+        continue;
+      }
+      opsRef.current.adoptTurn({ sessionId: session.id, messageId: last.id, taskId });
+    }
+  }, [token, storeUser, userId, registry]);
 
   const syncChats = useCallback(async () => {
-    if (!token) return;
+    const userAtStart = storeUserRef.current;
+    if (!tokenRef.current || !userAtStart) return;
 
     const state = chatSyncRef.current;
     // Один запрос за раз: параллельные тики (focus + visibilitychange) не должны дублироваться.
@@ -571,80 +1154,160 @@ export default function App() {
     state.inFlight = true;
     state.lastStartedAt = Date.now();
 
+    const isBusy = (s: ChatSession) => Boolean(registryRef.current?.bySession(s.id)) || isSessionStreaming(s);
+
     try {
       const syncStartedAt = Date.now();
-      const chats = await getChats();
-      const serverIds = new Set(chats.map((c) => c.id));
-      // CHAT_RENAME: серверные имена — для актуализации тех чатов, что уже есть локально.
-      const serverTitles = new Map(chats.map((c) => [c.id, c.title ?? null]));
-      // CHAT_PIN: серверное закрепление — то же самое, но для порядка в сайдбаре.
-      const serverPins = new Map(chats.map((c) => [c.id, c.isPinned]));
-      const known = new Set(sessionsRef.current.map((s) => s.id));
-      const missing = chats.filter((c) => !known.has(c.id));
+      const { chats, allChatIds } = await getChats(CHAT_LIST_LIMIT);
+      // Аккаунт сменился, пока шёл запрос: этот ответ относится к другому пользователю.
+      if (storeUserRef.current !== userAtStart) return;
+      const translate = liveRef.current.t;
 
-      // Ничего нового нет, но могли удалить что-то на другом устройстве — прунинг всё равно нужен.
-      const restored = missing.length === 0
-        ? []
-        : await Promise.all(
-            missing.map(async (chat) => {
-              // A missing transcript must not drop the chat itself from the list.
-              const transcript = await getChatTranscript(chat.id).catch((e: unknown) => {
-                console.warn('[ChatSync] transcript unavailable', { chatId: chat.id, error: String(e) });
-                return null;
-              });
-              return sessionFromServer(chat, transcript, defaultTitle(kindFromServer(chat.kind), t));
-            }),
-          );
+      const lower = (id: string) => id.toLowerCase();
+      // CHAT_LIST_COMPLETE (H8): полный набор id — единственное, по чему можно удалять локальные чаты.
+      const allIds = allChatIds ? new Set(allChatIds.map(lower)) : null;
+      const summaries = new Map(chats.map((c) => [lower(c.id), c]));
+      const serverIds = allIds ?? new Set(summaries.keys());
+      // CHAT_RENAME: серверные имена — для актуализации тех чатов, что уже есть локально.
+      const serverTitles = new Map(chats.map((c) => [lower(c.id), c.title ?? null]));
+      // CHAT_PIN: серверное закрепление — то же самое, но для порядка в сайдбаре.
+      const serverPins = new Map(chats.map((c) => [lower(c.id), c.isPinned]));
+
+      const snapshot = sessionsRef.current;
+      const known = new Set(snapshot.map((s) => lower(s.id)));
+
+      // SESSION_ISOLATION (H10): чаты из старого общего кеша — только подтверждённые сервером как свои.
+      const migrated = allIds ? takeLegacySessions(allIds).filter((s) => !known.has(lower(s.id))) : [];
+      const migratedIds = new Set(migrated.map((s) => lower(s.id)));
+
+      // Чаты, которых на этом устройстве нет: свежие — сразу с перепиской, остальные — по открытию.
+      const missing = chats.filter((c) => !known.has(lower(c.id)) && !migratedIds.has(lower(c.id)));
+      const eager = new Set(missing.slice(0, EAGER_TRANSCRIPTS).map((c) => c.id));
+      const restored = await mapLimit(missing, TRANSCRIPT_CONCURRENCY, async (chat) => {
+        // A missing transcript must not drop the chat itself from the list.
+        const transcript = eager.has(chat.id)
+          ? await getChatTranscript(chat.id).catch((e: unknown) => {
+              console.warn('[ChatSync] transcript unavailable', { chatId: chat.id, error: String(e) });
+              return null;
+            })
+          : null;
+        return sessionFromServer(chat, transcript, defaultTitle(kindFromServer(chat.kind), translate));
+      });
+
+      // TRANSCRIPT_REFRESH (M25): чат, продолженный на другом устройстве, — у сервера новее
+      // lastActivityAt / другое число сообщений. Изменение, которое сделали мы сами (unsyncedTurns),
+      // и чат, где сейчас идёт генерация, не трогаем.
+      interface RefreshPlan { summary: ChatSummary; unsyncedAtStart: number; refetch: boolean }
+      const plans = new Map<string, RefreshPlan>();
+      for (const s of [...snapshot, ...migrated]) {
+        if (s.incognito || !s.remote || isBusy(s)) continue;
+        const summary = summaries.get(lower(s.id));
+        if (!summary) continue;
+        const baselineKnown = s.serverActivityAt !== undefined;
+        const changed = !baselineKnown
+          || s.serverActivityAt !== summary.lastActivityAt
+          || s.serverMessageCount !== summary.messageCount;
+        if (!changed) continue;
+        const unsynced = s.unsyncedTurns ?? 0;
+        const fromLegacy = migratedIds.has(lower(s.id));
+        plans.set(s.id, {
+          summary,
+          unsyncedAtStart: unsynced,
+          // A chat seen for the first time since this version only records the baseline.
+          refetch: !s.needsTranscript && unsynced === 0 && (baselineKnown || fromLegacy),
+        });
+      }
+      const fetched = new Map(
+        await mapLimit([...plans].filter(([, p]) => p.refetch), TRANSCRIPT_CONCURRENCY, async ([id]) => {
+          const transcript = await getChatTranscript(id).catch((e: unknown) => {
+            console.warn('[ChatSync] could not refresh a transcript', { chatId: id, error: String(e) });
+            return null;
+          });
+          return [id, transcript] as const;
+        }),
+      );
+      if (storeUserRef.current !== userAtStart) return;
 
       let added = 0;
       let pruned = 0;
       let retitled = 0;
       let repinned = 0;
+      let refreshed = 0;
       setSessions((prev) => {
-        const existing = new Set(prev.map((s) => s.id));
-        const fresh = restored.filter((s) => !existing.has(s.id));
-        // CHAT_DELETE: для чатов, которые были на сервере, источник правды — сервер. Локальная
-        // сессия, помеченная `remote`, которой больше нет в списке, была удалена (возможно с
-        // другого устройства) — убираем и здесь, иначе удалённые чаты «воскресают» в сайдбаре.
-        // Не трогаем: локальные черновики (нет серверной записи), активный чат (не выдёргиваем
-        // открытый экран) и чат с идущим прогоном (его история ещё не записана).
-        const kept = prev.filter((s) => {
-          if (s.incognito || !s.remote) return true;
-          if (s.id === activeIdRef.current) return true;
-          if (streamingRef.current?.sessionId === s.id) return true;
-          return serverIds.has(s.id);
+        const existing = new Set(prev.map((s) => lower(s.id)));
+        let changedAny = false;
+
         // CHAT_RENAME: имя тоже берём с сервера — так переименование, сделанное на телефоне,
-        // доезжает до этого устройства, а у чатов, которым имя не задавали, в сайдбаре появляется
-        // реальный первый вопрос вместо «Новый чат».
-        // CHAT_PIN: и закрепление — оно задаёт порядок, а не только значок.
-        }).map((s) => {
-          const serverTitle = serverTitles.get(s.id);
+        // доезжает до этого устройства. CHAT_PIN: и закрепление — оно задаёт порядок.
+        // TRANSCRIPT_REFRESH (M25): и переписка чата, продолженного на другом устройстве.
+        const refresh = (s: ChatSession): ChatSession => {
+          let next = s;
+          const key = lower(s.id);
+          const serverTitle = serverTitles.get(key);
           // Наш rename новее этого ответа — он и побеждает.
           const recentRename = recentRenamesRef.current.get(s.id);
           const titleWins = Boolean(serverTitle) && serverTitle !== s.title
             && !(recentRename && recentRename.at > syncStartedAt);
 
-          const serverPin = serverPins.get(s.id);
+          const serverPin = serverPins.get(key);
           const recentPin = recentPinsRef.current.get(s.id);
           // Пока пин не подтверждён сервером, локальное значение важнее серверного.
           const pinWins = serverPin !== undefined && serverPin !== (s.isPinned ?? false)
             && pendingPinsRef.current.get(s.id) === undefined
             && !(recentPin && recentPin.at > syncStartedAt);
 
-          if (!titleWins && !pinWins) return s;
-          if (titleWins) retitled += 1;
-          if (pinWins) repinned += 1;
-          return {
-            ...s,
-            ...(titleWins ? { title: serverTitle as string } : {}),
-            ...(pinWins ? { isPinned: serverPin } : {}),
-          };
-        });
+          if (titleWins || pinWins) {
+            if (titleWins) retitled += 1;
+            if (pinWins) repinned += 1;
+            next = {
+              ...next,
+              ...(titleWins ? { title: serverTitle as string } : {}),
+              ...(pinWins ? { isPinned: serverPin } : {}),
+            };
+          }
+
+          const plan = plans.get(s.id);
+          const transcript = plan ? fetched.get(s.id) : undefined;
+          // A turn started while we were fetching, or the transcript could not be read: leave the
+          // baseline as it is, so the next sync looks at this chat again.
+          if (plan && !isBusy(s) && !(plan.refetch && !transcript)) {
+            if (plan.refetch && transcript) {
+              const merged = mergeTranscript(s.messages, messagesFromTranscript(transcript));
+              if (merged) {
+                refreshed += 1;
+                next = { ...next, messages: merged };
+              }
+              // CHAT_MODEL_SYNC (M18): чат, продолженный в другом режиме, открывается в нём.
+              if (plan.summary.model) next = { ...next, model: modelFromServer(next.kind ?? 'chat', plan.summary.model) };
+            }
+            next = {
+              ...next,
+              serverActivityAt: plan.summary.lastActivityAt,
+              serverMessageCount: plan.summary.messageCount,
+              unsyncedTurns: Math.max(0, (s.unsyncedTurns ?? 0) - plan.unsyncedAtStart),
+            };
+          }
+
+          if (next !== s) changedAny = true;
+          return next;
+        };
+
+        // CHAT_DELETE: для чатов, которые были на сервере, источник правды — сервер.
+        // CHAT_LIST_COMPLETE (H8): удаляем локальный серверный чат ТОЛЬКО если его id нет в полном
+        // наборе allChatIds. Никогда: без полного набора (старый бэкенд), закреплённые, открытый чат,
+        // чат с идущей генерацией (его история ещё не записана), локальные черновики и инкогнито.
+        const kept = prev.filter((s) => {
+          if (s.incognito || !s.remote || !allIds) return true;
+          if (allIds.has(lower(s.id))) return true;
+          if (s.isPinned || s.id === activeIdRef.current || isBusy(s)) return true;
+          return false;
+        }).map(refresh);
+        const fresh = [...migrated.map(refresh), ...restored].filter((s) => !existing.has(lower(s.id)));
 
         added = fresh.length;
         // map длины не меняет, поэтому длина kept и есть число оставленных чатов.
         pruned = prev.length - kept.length;
-        if (fresh.length === 0 && pruned === 0 && retitled === 0 && repinned === 0) return prev;
+        if (fresh.length === 0 && pruned === 0 && !changedAny) return prev;
         return [...kept, ...fresh];
       });
 
@@ -661,7 +1324,7 @@ export default function App() {
       // которые в момент клика сервер ещё не знал (см. pendingPinsRef выше).
       let replayedPins = 0;
       for (const [chatId, desired] of pendingPinsRef.current) {
-        if (!serverIds.has(chatId)) continue;
+        if (!serverIds.has(lower(chatId))) continue;
         try {
           await setChatPinned(chatId, desired);
           pendingPinsRef.current.delete(chatId);
@@ -674,7 +1337,15 @@ export default function App() {
       }
 
       console.info('[ChatSync] chat list synced', {
-        fetched: chats.length, added, pruned, retitled, repinned, replayedPins,
+        fetched: chats.length,
+        total: allChatIds?.length ?? null,
+        added,
+        migrated: migrated.length,
+        pruned,
+        retitled,
+        repinned,
+        refreshed,
+        replayedPins,
       });
     } catch (e) {
       // Offline or a failed request must not break the app: the local list stays as it is.
@@ -682,13 +1353,13 @@ export default function App() {
     } finally {
       chatSyncRef.current.inFlight = false;
     }
-  }, [token, t]);
+  }, []);
 
   useEffect(() => {
     if (!token || chatSyncRef.current.lastToken === token) return;
     chatSyncRef.current.lastToken = token;
     void syncChats();
-  }, [token, syncChats]);
+  }, [token, userId, syncChats]);
 
   // CHAT_SYNC_FOCUS: сверка при возвращении во вкладку. Debounce обязателен: пользователь, который
   // быстро переключается между окнами, иначе выдал бы по запросу на каждое переключение.
@@ -712,284 +1383,62 @@ export default function App() {
     };
   }, [syncChats]);
 
-  // SUBSCRIPTION_TIERS: добавлено 2026-09-17
-  async function refreshUsage() {
-    if (!token) return;
-    try {
-      setUsage(await getSubscriptionUsage());
-    } catch {
-      // Best-effort; the indicator simply stays unchanged on transient failures.
-    }
+  // LOCAL_STORAGE_BUDGET: добавлено 2026-09-24 (M22) — переписка чата, которой нет в кеше этого
+  // устройства (вытеснена ради места или ещё не загружалась), грузится с сервера при открытии.
+  function loadTranscript(chatId: string) {
+    if (transcriptLoadingRef.current.has(chatId)) return;
+    transcriptLoadingRef.current.add(chatId);
+    setTranscriptLoad({ id: chatId, failed: false });
+    getChatTranscript(chatId)
+      .then((transcript) => {
+        setSessions((prev) =>
+          updateSession(prev, chatId, (s) =>
+            !s.needsTranscript || isSessionStreaming(s)
+              ? s
+              : { ...s, messages: messagesFromTranscript(transcript), needsTranscript: undefined },
+          ),
+        );
+        setTranscriptLoad((cur) => (cur?.id === chatId ? null : cur));
+      })
+      .catch((e: unknown) => {
+        const status = httpStatus(e);
+        if (status === 403) {
+          markChatForbidden(chatId);
+          setTranscriptLoad((cur) => (cur?.id === chatId ? null : cur));
+          return;
+        }
+        if (status === 404) {
+          // Nothing is stored for this chat (any more): show it empty rather than loading forever.
+          setSessions((prev) => updateSession(prev, chatId, (s) => ({ ...s, needsTranscript: undefined })));
+          setTranscriptLoad((cur) => (cur?.id === chatId ? null : cur));
+          return;
+        }
+        console.warn('[ChatSync] could not load the transcript of the open chat', { chatId, error: String(e) });
+        setTranscriptLoad({ id: chatId, failed: true });
+      })
+      .finally(() => {
+        transcriptLoadingRef.current.delete(chatId);
+      });
   }
 
   useEffect(() => {
-    void refreshUsage();
+    if (!token || !activeSession?.needsTranscript) return;
+    if (transcriptLoad?.id === activeSession.id && transcriptLoad.failed) return; // waits for "Retry"
+    loadTranscript(activeSession.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [token, activeSession?.id, activeSession?.needsTranscript]);
 
-  useEffect(() => {
-    setAuthToken(token);
-
-    if (!token) {
-      void signalrService.disconnect();
-      return;
-    }
-
-    let disposed = false;
-
-    void signalrService.connect(token, {
-      onContentToken: (delta) => {
-        const ctx = streamingRef.current;
-        if (!ctx || disposed) return;
-        setSessions((prev) =>
-          updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => ({
-            ...m,
-            content: m.content + delta,
-            // Hide the live action badge as soon as the final answer starts streaming.
-            currentAction: null,
-          })),
-        );
-      },
-      onThinkingToken: (delta) => {
-        const ctx = streamingRef.current;
-        if (!ctx || disposed) return;
-        setSessions((prev) =>
-          updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => ({ ...m, thinking: (m.thinking ?? '') + delta })),
-        );
-      },
-      onLog: (message) => {
-        const ctx = streamingRef.current;
-        if (!ctx || disposed) return;
-        setSessions((prev) =>
-          updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => ({ ...m, logs: [...(m.logs ?? []), message] })),
-        );
-      },
-      onScreenshot: (base64) => {
-        const ctx = streamingRef.current;
-        if (!ctx || disposed) return;
-        setSessions((prev) =>
-          updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => ({
-            ...m,
-            screenshots: [...(m.screenshots ?? []), base64],
-          })),
-        );
-      },
-      onAgentStatus: (payload) => {
-        const ctx = streamingRef.current;
-        if (!ctx || disposed) return;
-        setAgentStatus(payload.label);
-        setSessions((prev) =>
-          updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => {
-            // AGENT_TIMELINE: добавлено 2026-09-22 — каждая фаза «размышления» становится
-            // отдельным шагом со своим startedAt, поэтому таймер каждого шага честно идёт
-            // от нуля, а завершённые шаги больше не тикают и не путаются между собой.
-            const steps = m.steps ?? [];
-            const last = steps[steps.length - 1];
-            const open = last && last.endedAt === undefined ? last : undefined;
-
-            if (payload.stage === 'thinking') {
-              // A new reasoning phase: close the previous one and start a fresh step.
-              const now = Date.now();
-              // AGENT_FEED_ZED: the reasoning stream is cumulative on the message, so each step
-              // records the slice of it that belongs to that step.
-              const thinkingLength = (m.thinking ?? '').length;
-              const closed = open
-                ? steps.map((s) =>
-                    s.id === open.id ? { ...s, endedAt: now, reasoningTo: thinkingLength } : s,
-                  )
-                : steps;
-              return {
-                ...m,
-                currentAction: payload,
-                steps: [
-                  ...closed,
-                  {
-                    id: uid(),
-                    stage: payload.stage,
-                    label: payload.label,
-                    startedAt: now,
-                    afterToolCount: (m.toolActions ?? []).length,
-                    reasoningFrom: thinkingLength,
-                  },
-                ],
-              };
-            }
-
-            // Any other phase ends the current reasoning step.
-            if (!open) return { ...m, currentAction: payload };
-            const now = Date.now();
-            const thinkingLength = (m.thinking ?? '').length;
-            return {
-              ...m,
-              currentAction: payload,
-              steps: steps.map((s) =>
-                s.id === open.id ? { ...s, endedAt: now, reasoningTo: thinkingLength } : s,
-              ),
-            };
-          }),
-        );
-      },
-      onFileCreated: (payload) => {
-        if (disposed) return;
-        setFileCreatedEvent(payload);
-      },
-      onToolAction: (event) => {
-        const ctx = streamingRef.current;
-        if (!ctx || disposed) return;
-        setSessions((prev) =>
-          updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => ({
-            ...m,
-            toolActions: [...(m.toolActions ?? []), event],
-          })),
-        );
-        // Refresh the file tree when the editor creates/edits a file, so the
-        // new/modified file appears in the IDE without a manual refresh.
-        if (
-          event.toolName === 'str_replace_editor' &&
-          (event.command === 'create' || event.command === 'str_replace' || event.command === 'insert') &&
-          event.status === 'completed'
-        ) {
-          setFileRefreshToken((t) => t + 1);
-          setAgentFileChange({ path: event.path });
-        }
-      },
-      onTodoUpdate: (payload) => {
-        const ctx = streamingRef.current;
-        if (!ctx || disposed) return;
-        setSessions((prev) =>
-          updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => ({
-            ...m,
-            todos: payload.todos,
-          })),
-        );
-      },
-      onCompleted: (payload) => {
-        // COMMAND_CONFIRM: добавлено 2026-09-20 — a finished task never auto-approves, and the
-        // backend drops the flag in its own finally block.
-        setPendingAction(null);
-        setAllowAllTaskId(null);
-        if (disposed) return;
-
-        // TASK_COMPLETION_WATCHDOG: fall back to resolving the message by task id, so a finished run
-        // can never leave the transcript stuck in "streaming".
-        const ctx = streamingRef.current ?? findStreamingTarget(payload.taskId);
-        if (!ctx) return;
-        const { sessionId, messageId } = ctx;
-        streamingRef.current = null;
-        setAgentStatus('Completed');
-        setSessions((prev) =>
-          updateMessage(prev, sessionId, messageId, (m) => ({
-            ...m,
-            content: m.content || payload.result,
-            status: 'complete',
-            steps: closeSteps(m.steps),
-          })),
-        );
-        setSessions((prev) => updateSession(prev, sessionId, (s) => ({ ...s, status: 'Completed' })));
-        // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
-        // const responder = liveRespondRef.current;
-        // liveRespondRef.current = null;
-        // responder?.resolve(payload.result);
-        // SUBSCRIPTION_TIERS: добавлено 2026-09-17
-        void refreshUsage();
-      },
-      onError: (err) => {
-        // COMMAND_CONFIRM: добавлено 2026-09-20
-        setPendingAction(null);
-        setAllowAllTaskId(null);
-        if (disposed) return;
-        const ctx = streamingRef.current ?? findStreamingTarget();
-        if (!ctx) return;
-        const { sessionId, messageId } = ctx;
-        streamingRef.current = null;
-        setAgentStatus('Failed');
-        setSessions((prev) =>
-          updateMessage(prev, sessionId, messageId, (m) => ({
-            ...m,
-            status: 'error',
-            error: err,
-            steps: closeSteps(m.steps),
-          })),
-        );
-        setSessions((prev) => updateSession(prev, sessionId, (s) => ({ ...s, status: 'Failed' })));
-        // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
-        // const responder = liveRespondRef.current;
-        // liveRespondRef.current = null;
-        // responder?.reject(new Error(err));
-        // SUBSCRIPTION_TIERS: добавлено 2026-09-17
-        void refreshUsage();
-      },
-      onStopped: () => {
-        // COMMAND_CONFIRM: добавлено 2026-09-20
-        setPendingAction(null);
-        setAllowAllTaskId(null);
-        if (disposed) return;
-        const ctx = streamingRef.current ?? findStreamingTarget();
-        if (!ctx) return;
-        streamingRef.current = null;
-        finalizeStopped(ctx);
-        // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
-        // const responder = liveRespondRef.current;
-        // liveRespondRef.current = null;
-        // responder?.reject(new Error('Генерация остановлена'));
-      },
-      onRunProjectError: (payload) => {
-        if (disposed) return;
-        showToast(t('toast.runError', { message: payload.message }));
-      },
-      onSearchStatus: (payload) => {
-        if (disposed) return;
-        const ctx = streamingRef.current;
-        if (ctx) {
-          const action = payload.status === 'searching'
-            ? { stage: 'searching', label: payload.query ? t('agent.searching', { query: payload.query }) : t('agent.searchingShort') }
-            : null;
-          setSessions((prev) =>
-            updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => ({ ...m, currentAction: action })),
-          );
-        }
-      },
-      onProblems: (payload) => {
-        if (disposed) return;
-        const ctx = streamingRef.current;
-        if (!ctx) return;
-        setSessions((prev) =>
-          updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => ({ ...m, problems: payload.problems ?? [] })),
-        );
-      },
-      // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
-      onPendingActionCreated: (payload) => {
-        if (disposed) return;
-        setPendingAction(payload);
-      },
-      // SIGNALR_RESILIENCE: добавлено 2026-09-22 — после успешного переподключения события,
-      // которые не дошли, уже не вернуть, поэтому состояние хода надо перечитать с сервера.
-      onReconnected: () => {
-        if (disposed) return;
-        const ctx = streamingRef.current;
-        if (!ctx?.taskId) return;
-        void resyncTurn(ctx.sessionId, ctx.messageId, ctx.taskId);
-      },
-    });
-
-    return () => {
-      disposed = true;
-      void signalrService.disconnect();
-    };
-  }, [token]);
-
-  const activeSession = sessions.find((s) => s.id === activeId) ?? null;
   const mode: 'chat' | 'code' = activeTab === 'projects' ? 'code' : 'chat';
-  const students = activeTab === 'students';
-  const isAgent = activeTab === 'projects';
-  const agentRunning = activeSession?.status === 'Running';
+  // TURN_SCOPE (H6/L8): «идёт генерация» — это состояние ОТКРЫТОГО чата, а не глобальный флаг.
+  const activeStreaming = isSessionStreaming(activeSession);
+  const agentRunning = activeStreaming || activeSession?.status === 'Running';
+  const activeLoading = Boolean(activeSession?.needsTranscript) && !(transcriptLoad?.id === activeSession?.id && transcriptLoad?.failed);
+  const activeLoadFailed = Boolean(activeSession?.needsTranscript) && transcriptLoad?.id === activeSession?.id && Boolean(transcriptLoad?.failed);
 
   // INCOGNITO_CHAT: добавлено 2026-09-20
   // The switch is offered only for a still-empty plain chat: once the first message is sent the
   // mode is locked in (the header keeps a passive badge so the user cannot forget it).
-  const chatTab = !isAgent && !students;
-  const chatEmpty = (activeSession?.messages.length ?? 0) === 0;
-  const incognitoActive = incognito && chatTab;
+  const chatEmpty = (activeSession?.messages.length ?? 0) === 0 && !activeSession?.needsTranscript;
   const showIncognitoToggle = chatTab && chatEmpty && Boolean(token);
   // Incognito chats are in-memory only, so they never reach the sidebar or localStorage.
   const visibleSessions = sessions.filter((s) => !s.incognito);
@@ -1051,82 +1500,27 @@ export default function App() {
   const displayName = user?.displayName ? user.displayName.split('@')[0] : null;
   const greeting = t(greetingKey(activeTab), { name: displayName ?? t('chat.defaultName') });
 
-  // BUGFIX_PERF: добавлено 2026-09-21
-  // MessageBubble is memoised, which only helps if the callbacks it receives keep one identity
-  // for the whole session. The handlers below therefore read the mutable inputs through this
-  // latest-values ref instead of closing over state that changes on every streamed token.
-  const liveRef = useRef({} as {
-    token: string | null;
-    sessions: ChatSession[];
-    activeId: string | null;
-    activeTab: ChatSessionKind;
-    model: ConexyModel;
-    thinking: boolean;
-    reasoningEffort: ReasoningEffort;
-    smartSearch: boolean;
-    students: boolean;
-    incognitoActive: boolean;
-    sessionIncognito: boolean;
-    sessionTaskId: string | undefined;
-    pendingAction: PendingActionPayload | null;
-    showToast: (message: string) => void;
-    refreshUsage: () => Promise<void>;
-    t: typeof t;
-  });
-  liveRef.current = {
-    token,
-    sessions,
-    activeId,
-    activeTab,
-    model,
-    thinking,
-    reasoningEffort,
-    smartSearch,
-    students,
-    incognitoActive,
-    sessionIncognito: activeSession?.incognito ?? false,
-    sessionTaskId: activeSession?.taskId,
-    pendingAction,
-    showToast,
-    refreshUsage,
-    t,
-  };
-
-  // TASK_COMPLETION_WATCHDOG: добавлено 2026-09-22
-  // Резолвер цели для терминальных событий. Раньше onCompleted/onError/onStopped просто выходили,
-  // если streamingRef оказался пуст, и сообщение навсегда оставалось в состоянии «генерирует».
-  // Теперь цель ищется по taskId (или по активной сессии), а не только по локальному контексту.
-  function findStreamingTarget(taskId?: string): { sessionId: string; messageId: string } | null {
-    const all = liveRef.current.sessions;
-    const session =
-      (taskId ? all.find((s) => s.taskId === taskId) : undefined) ??
-      all.find((s) => s.id === liveRef.current.activeId);
-    if (!session) return null;
-
-    const message = [...session.messages]
-      .reverse()
-      .find((m) => m.role === 'assistant' && m.status === 'streaming');
-    return message ? { sessionId: session.id, messageId: message.id } : null;
-  }
-
   // Latest agent progress for the IDE bottom panel (the task checklist).
   const lastAssistant = [...(activeSession?.messages ?? [])].reverse().find((m) => m.role === 'assistant') ?? null;
   const latestTodos = lastAssistant?.todos ?? [];
 
-  // Reset the status bar and editor cursor info when switching sessions.
+  // STATUS_BAR: изменено 2026-09-24 (L8) — статус-бар выводится из состояния открытого чата.
+  // Раньше в него писалась подпись фазы агента («Анализирую…»), которую статус-бар не узнавал и
+  // показывал как «Готово», а после ошибки отправки там навсегда оставалось «Работает…».
+  const agentStatus: AgentStatus = agentRunning
+    ? 'Working…'
+    : activeSession?.status === 'Completed'
+      ? 'Completed'
+      : activeSession?.status === 'Failed'
+        ? 'Failed'
+        : activeSession?.status === 'Stopped'
+          ? 'Stopped'
+          : 'Ready';
+  const agentActivity = agentRunning ? (lastAssistant?.currentAction?.label ?? null) : null;
+
+  // Reset the editor cursor info when switching sessions.
   useEffect(() => {
-    const s = sessions.find((x) => x.id === activeId);
-    setAgentStatus(
-      s?.status === 'Running'
-        ? 'Working…'
-        : s?.status === 'Completed'
-          ? 'Completed'
-          : s?.status === 'Failed'
-            ? 'Failed'
-            : 'Ready',
-    );
     setCursorInfo(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
 
   function handleDividerMouseDown() {
@@ -1190,7 +1584,32 @@ export default function App() {
     }
   }
 
-  function handleNewSession(kind: ChatSessionKind): string {
+  // COWORK_MODE / CHAT_MODEL_SYNC: изменено 2026-09-24 (M18) — открытый чат восстанавливает свою
+  // модель: агентский — Coder или Cowork, обычный — flash или pro, «Ученики» — всегда pro.
+  // Иначе следующее сообщение молча ушло бы в ту модель, что последней показывал переключатель.
+  function applySessionModel(s: ChatSession) {
+    const kind = s.kind ?? 'chat';
+    if (kind === 'projects') {
+      setModel(isAgentModel(s.model) ? s.model : 'conexy-coder');
+    } else if (kind === 'students') {
+      setModel('ConexyV1-pro');
+    } else {
+      const next = s.model === 'ConexyV1-pro' ? 'ConexyV1-pro' : 'ConexyV1-flash';
+      setModel(next);
+      if (next !== 'ConexyV1-pro') setThinking(false);
+    }
+  }
+
+  function openSession(id: string) {
+    setActiveId(id);
+    const selected = sessionsRef.current.find((s) => s.id === id);
+    if (selected) applySessionModel(selected);
+    // INCOGNITO_CHAT: opening another chat always returns to normal mode.
+    setIncognito(false);
+    if (isMobile) setSidebarOpen(false);
+  }
+
+  function handleNewSession(_kind: ChatSessionKind): string {
     // A brand-new chat exists only as the currently-open empty screen (a draft).
     // It is NOT added to the sidebar list and creates no backend entity until the
     // user sends the first message — see ensureSessionId, which materializes it.
@@ -1264,7 +1683,7 @@ export default function App() {
       recentPinsRef.current.set(id, { isPinned: next, at: Date.now() });
       pendingPinsRef.current.delete(id);
     } catch (e) {
-      const status = (e as { response?: { status?: number } })?.response?.status;
+      const status = httpStatus(e);
       // 404 = у чата ещё нет ни одной строки истории (ход не дописан), поэтому пин некуда сохранить.
       // Не откатываем и не теряем его: запоминаем как неподтверждённый и досылаем в syncChats, как
       // только сервер начнёт отдавать этот чат. Любая другая ошибка — откат, иначе состояние
@@ -1294,7 +1713,7 @@ export default function App() {
       try {
         await renameChat(id, trimmed);
       } catch (e) {
-        const status = (e as { response?: { status?: number } })?.response?.status;
+        const status = httpStatus(e);
         // 404 = сервер такого чата у этого пользователя не знает: локальное имя всё равно корректно.
         // Любая другая ошибка — не применяем, иначе имя разойдётся с сервером и будет перезаписано
         // ближайшей синхронизацией.
@@ -1316,22 +1735,26 @@ export default function App() {
   // локальный список. Раньше чат исчезал только в этом браузере, а следующий sync возвращал его из
   // базы обратно.
   async function handleDeleteSession(id: string) {
-    // Clear every reference to the deleted chat so it can never be re-opened:
-    // the session list, the active id, and any in-flight stream still targeting
-    // it (whose late SignalR deltas could otherwise re-attach messages).
-    if (streamingRef.current?.sessionId === id) {
-      streamingRef.current = null;
-    }
-
     const session = sessionsRef.current.find((s) => s.id === id);
     // A chat that never reached the server (draft, incognito) has nothing to delete there.
     const shouldAskServer = Boolean(session) && !session!.incognito && GUID_LIKE.test(id);
+
+    // TURN_SCOPE: идущий в этом чате ход сначала останавливается — иначе воркер в finally записал
+    // бы его историю обратно, и удалённый чат «воскрес» бы (M8).
+    const ctx = registry.bySession(id);
+    if (ctx?.taskId) {
+      await signalrService.stopGeneration(ctx.taskId).catch((e: unknown) => {
+        console.warn('[ChatDelete] could not stop the running turn first', { id, error: String(e) });
+      });
+    } else if (ctx) {
+      ctx.stopRequested = true;
+    }
 
     if (shouldAskServer) {
       try {
         await deleteChat(id);
       } catch (e) {
-        const status = (e as { response?: { status?: number } })?.response?.status;
+        const status = httpStatus(e);
         // 404 means the server has no such chat for this user: it is safe (and correct) to drop the
         // local copy anyway. Any other failure must NOT pretend the delete happened.
         if (status !== 404) {
@@ -1342,8 +1765,11 @@ export default function App() {
       }
     }
 
+    // Clear every reference to the deleted chat so it can never be re-opened: the session list,
+    // the active id, and its turn (whose late SignalR deltas are dropped from now on).
+    registry.end(registry.bySession(id));
     setSessions((prev) => prev.filter((s) => s.id !== id));
-    if (activeId === id) {
+    if (activeIdRef.current === id) {
       setActiveId(uid());
       // INCOGNITO_CHAT: the deleted chat took its mode with it.
       setIncognito(false);
@@ -1395,21 +1821,45 @@ export default function App() {
     // CONTINUE_GENERATION: добавлено 2026-09-21 — when set, the answer resumes inside that
     // existing message instead of appending a new user/assistant pair.
     continueMessageId?: string,
+    // REGENERATE_REPLACES_TURN: добавлено 2026-09-24 (C-10) — the turn replaces the chat's last
+    // stored turn (regenerate / resend / edit of the last user message).
+    regenerate?: boolean,
   ): Promise<SendOutcome> => {
     const live = liveRef.current;
-    setAgentStatus('Working…');
+    const turns = registryRef.current!;
     const session = live.sessions.find((s) => s.id === sessionId);
+    // SESSION_ISOLATION: a reply to a request of a previous account must not touch this one.
+    const ownerAtStart = storeUserRef.current;
+
+    // TURN_GUARD (H6): один ход на чат. Раньше Enter во время генерации отправлял второй ход с тем же
+    // taskId: бэкенд молча его выбрасывал, хвост ответа 1 лился в пузырь 2, а пузырь 1 навсегда
+    // оставался «генерирующимся».
+    if (turns.bySession(sessionId) || isSessionStreaming(session)) return { ok: false, reason: 'busy' };
+    if (session?.forbidden) return { ok: false, reason: 'forbidden' };
+    if (session?.needsTranscript) return { ok: false, reason: 'loading' };
+
     const kind = session?.kind ?? live.activeTab;
-    const currentTaskId = session?.taskId;
-    const continueFrom = continueMessageId
-      ? session?.messages.find((m) => m.id === continueMessageId)?.content
+    const continueTarget = continueMessageId
+      ? session?.messages.find((m) => m.id === continueMessageId)
       : undefined;
+    const continueFrom = continueTarget?.content;
+    const previousSessionStatus = session?.status ?? 'Idle';
+
+    const assistantId = continueMessageId ?? uid();
+    // Registered BEFORE the first await, so a second Enter in the same tick is already refused.
+    const ctx: TurnContext = { sessionId, messageId: assistantId, startedAt: Date.now() };
+    turns.begin(ctx);
 
     // ATTACHMENTS_IN_BUBBLE: turn the outgoing files into the transcript representation (image
     // thumbnails, file chips). Only the preview is kept — the originals go to the model.
-    const messageAttachments = attachments.length
-      ? await Promise.all(attachments.map((a) => toMessageAttachment(a)))
-      : [];
+    let messageAttachments: Awaited<ReturnType<typeof toMessageAttachment>>[] = [];
+    try {
+      messageAttachments = attachments.length
+        ? await Promise.all(attachments.map((a) => toMessageAttachment(a)))
+        : [];
+    } catch (e) {
+      console.warn('[Attachments] could not build previews', String(e));
+    }
 
     const userMsg: ChatMessage = {
       id: uid(),
@@ -1424,7 +1874,7 @@ export default function App() {
       attachments: messageAttachments.length ? messageAttachments : undefined,
     };
     const assistantMsg: ChatMessage = {
-      id: continueMessageId ?? uid(),
+      id: assistantId,
       role: 'assistant',
       content: '',
       thinking: '',
@@ -1433,6 +1883,7 @@ export default function App() {
       screenshots: [],
       createdAt: Date.now(),
       model: live.model,
+      awaitingTaskId: true,
     };
 
     setSessions((prev) =>
@@ -1443,7 +1894,9 @@ export default function App() {
         model: live.model,
         messages: continueMessageId
           ? s.messages.map((m) =>
-              m.id === continueMessageId ? { ...m, status: 'streaming', error: undefined } : m,
+              m.id === continueMessageId
+                ? { ...m, status: 'streaming', error: undefined, taskId: undefined, awaitingTaskId: true }
+                : m,
             )
           : appendUserMessage
             ? [...s.messages, userMsg, assistantMsg]
@@ -1451,7 +1904,27 @@ export default function App() {
       })),
     );
 
+    /** Takes the optimistic messages back out (the turn never reached the model). */
+    const rollback = (status: ChatSession['status']) => {
+      setSessions((prev) =>
+        updateSession(prev, sessionId, (s) => ({
+          ...s,
+          status,
+          messages: continueMessageId
+            ? s.messages.map((m) =>
+                m.id === continueMessageId
+                  ? { ...m, status: continueTarget?.status ?? 'stopped', taskId: continueTarget?.taskId, awaitingTaskId: undefined }
+                  : m,
+              )
+            : s.messages.filter((m) => m.id !== userMsg.id && m.id !== assistantMsg.id),
+        })),
+      );
+    };
+
     try {
+      // TURN_SCOPE (H6): sessionId больше не отправляется. Бэкенд превращал его в taskId, поэтому все
+      // ходы чата жили в ОДНОЙ группе task_{id}, и события соседних ходов было не различить. Теперь у
+      // каждого хода свой taskId; рабочая область и история по-прежнему ключуются chatId.
       const res = await runTask({
         model: live.model,
         prompt,
@@ -1460,7 +1933,6 @@ export default function App() {
         reasoningEffort: live.reasoningEffort,
         smartSearch: live.smartSearch,
         studentsMode: live.students,
-        sessionId: currentTaskId,
         chatId: sessionId,
         // INCOGNITO_CHAT: добавлено 2026-09-20 — 'incognitoActive' covers the very first
         // message (the session does not exist yet); later turns read the flag off the session.
@@ -1470,40 +1942,50 @@ export default function App() {
         // CHAT_KIND_SYNC: режим вкладки сохраняется вместе с историей, чтобы на другом устройстве
         // чат учеников открылся в «Учениках», а не в общем чате.
         chatKind: live.sessions.find((s) => s.id === sessionId)?.kind ?? live.activeTab,
+        regenerate: regenerate ? true : undefined,
       });
 
-      setSessions((prev) => updateSession(prev, sessionId, (s) => ({ ...s, taskId: res.id, remote: true })));
-      streamingRef.current = { sessionId, messageId: assistantMsg.id, taskId: res.id };
-      // AGENT_EVENT_GROUPS: добавлено 2026-09-22 — бэкенд вещает в ДВЕ разные группы:
-      //   * task_{taskId}  — раннер и воркер (OnAgentStatus, pending_confirmation, OnCompleted…);
-      //   * task_{chatId}  — сервисы bash и редактора (started/completed/failed, TerminalOutput,
-      //                      BuildProblems), потому что для них этот id — ещё и ключ воркспейса.
-      // Мы слушали только первую, поэтому карточка команды создавалась по pending_confirmation,
-      // а событие о завершении уходило в пустоту — статус навсегда застревал на «выполняется»,
-      // и строки правок файлов тоже не появлялись. Подписываемся на обе.
-      // DEPLOY_WINDOW_GRACEFUL_ERRORS: подписка на группы не должна ронять отправку. Задача на
-      // бэкенде УЖЕ принята, а событий мы не увидим только до того, как связь вернётся — сторож
-      // (resyncTurn → ensureGroup) дозальёт группы сам. Раньше ошибка joinTask превращала успешно
-      // принятую задачу в «Ошибку» в UI.
-      await signalrService.joinTask(res.id).catch((e: unknown) => {
-        console.warn('[signalr] joinTask after run failed; the watchdog will retry', { taskId: res.id, error: String(e) });
-      });
-      await signalrService.joinTask(sessionId).catch((e: unknown) => {
-        console.warn('[signalr] joinTask for the workspace failed; the watchdog will retry', { sessionId, error: String(e) });
-      });
+      const taskId = res.id;
+      if (storeUserRef.current !== ownerAtStart) return { ok: true };
+      setSessions((prev) =>
+        updateSession(prev, sessionId, (s) => ({
+          ...s,
+          taskId,
+          remote: true,
+          // TRANSCRIPT_REFRESH (M25): the server's next change to this chat is our own.
+          unsyncedTurns: (s.unsyncedTurns ?? 0) + 1,
+          messages: s.messages.map((m) => (m.id === assistantId ? { ...m, taskId, awaitingTaskId: undefined } : m)),
+        })),
+      );
+
+      if (ctx.stopRequested || !turns.isActive(ctx)) {
+        // Stop was pressed (or the chat deleted) while the request was in flight: the turn is already
+        // closed on screen — cancel it on the server too.
+        turns.end(ctx);
+        void opsRef.current.stopOnServer({ sessionId, messageId: assistantId, taskId });
+        return { ok: true };
+      }
+
+      turns.attachTask(ctx, taskId);
+      await opsRef.current.joinTurnGroups(ctx);
       return { ok: true };
     } catch (e) {
+      turns.end(ctx);
+      if (storeUserRef.current !== ownerAtStart) return { ok: false };
+      const status = httpStatus(e);
+      const code = errorCode(e);
+
       // SUBSCRIPTION_TIERS: добавлено 2026-09-17
       const data = (e as { response?: { data?: { error?: string; limit?: string; resetsAt?: string } } })?.response?.data;
-      if (data?.error === 'LIMIT_EXCEEDED') {
-        setLimitExceeded({ limit: data.limit ?? 'unknown', resetsAt: data.resetsAt ?? '' });
+      if (code === 'LIMIT_EXCEEDED') {
+        setLimitExceeded({ limit: data?.limit ?? 'unknown', resetsAt: data?.resetsAt ?? '' });
         setUpgradeOpen(true);
         setSessions((prev) =>
           updateSession(prev, sessionId, (s) => ({
             ...s,
             status: 'Failed',
             messages: s.messages.map((m) =>
-              m.id === assistantMsg.id ? { ...m, status: 'error', error: live.t('agent.limitExceeded') } : m,
+              m.id === assistantMsg.id ? { ...m, status: 'error', error: live.t('agent.limitExceeded'), awaitingTaskId: undefined } : m,
             ),
           })),
         );
@@ -1511,86 +1993,80 @@ export default function App() {
         return { ok: false };
       }
 
+      // TURN_GUARD (C-2): 409 — в этом чате ещё идёт ход (другая вкладка/устройство). 403 — чат
+      // чужой. Ни то, ни другое не ответ модели: оптимистичные сообщения убираются, текст и файлы
+      // возвращаются в композер.
+      if (status === 409 || code === 'TURN_IN_FLIGHT') {
+        rollback(previousSessionStatus === 'Running' ? 'Idle' : previousSessionStatus);
+        return { ok: false, reason: 'busy' };
+      }
+      if (status === 403 || code === 'CHAT_FORBIDDEN') {
+        rollback(previousSessionStatus === 'Running' ? 'Idle' : previousSessionStatus);
+        opsRef.current.markChatForbidden(sessionId);
+        return { ok: false, reason: 'forbidden' };
+      }
+
       // ATTACHMENT_SIZE_LIMIT: добавлено 2026-09-22 — прокси (nginx, дефолт 1MB) режет тело
       // раньше бэкенда и отдаёт голый 413. Это не ошибка модели, а неудавшаяся отправка,
       // поэтому оптимистичные сообщения убираем из ленты, а текст и файлы возвращает композер.
-      const tooLarge = (e as { response?: { status?: number } })?.response?.status === 413;
-
-      const message = humanError(e, live.t);
-      streamingRef.current = null;
-
-      if (tooLarge && appendUserMessage) {
-        setAgentStatus('Ready');
-        setSessions((prev) =>
-          updateSession(prev, sessionId, (s) => ({
-            ...s,
-            status: 'Idle',
-            messages: s.messages.filter((m) => m.id !== userMsg.id && m.id !== assistantMsg.id),
-          })),
-        );
+      if (status === 413 && appendUserMessage) {
+        rollback('Idle');
         return { ok: false, tooLarge: true };
       }
 
+      const message = humanError(e, live.t);
       setSessions((prev) =>
         updateSession(prev, sessionId, (s) => ({
           ...s,
           status: 'Failed',
           messages: s.messages.map((m) =>
-            m.id === assistantMsg.id ? { ...m, status: 'error', error: message } : m,
+            m.id === assistantMsg.id ? { ...m, status: 'error', error: message, awaitingTaskId: undefined } : m,
           ),
         })),
       );
       // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
-      // const responder = liveRespondRef.current;
-      // liveRespondRef.current = null;
-      // responder?.reject(new Error(message));
+      // liveRespondRef.current?.reject(new Error(message));
       return { ok: false };
     }
   }, []);
 
+  /** Refusals of the bubble actions (regenerate, resend, edit, continue) are said out loud. */
+  const notifyOutcome = useCallback((outcome: SendOutcome) => {
+    if (outcome.ok) return;
+    const live = liveRef.current;
+    if (outcome.reason === 'busy') live.showToast(live.t('sync.turnInFlight'));
+    else if (outcome.reason === 'forbidden') live.showToast(live.t('sync.chatForbidden'));
+    else if (outcome.reason === 'loading') live.showToast(live.t('sync.loadingChat'));
+  }, []);
+
   async function handleSend(prompt: string, attachments: TaskAttachment[]): Promise<SendOutcome> {
     if (!prompt.trim() || !token) return { ok: false };
+    // TURN_GUARD (H6): как и у regenerate/resend/edit — пока в открытом чате идёт ход, новый не
+    // отправляется (текст остаётся в композере).
+    if (activeSession && (registry.bySession(activeSession.id) || isSessionStreaming(activeSession))) {
+      return { ok: false, reason: 'busy' };
+    }
     const sessionId = ensureSessionId(activeTab);
     return startCompletion(sessionId, prompt, attachments, true);
   }
 
-  // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
-  /*
-  function sendLiveMessage(text: string): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      if (!token || streamingRef.current) {
-        reject(new Error('Генерация уже выполняется'));
-        return;
-      }
-      const sessionId = ensureSessionId(activeTab);
+  // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17 (sendLiveMessage удалён вместе с
+  // глобальным streamingRef; при возврате голосового режима строить его поверх startCompletion).
 
-      // Safety net: never let the voice loop hang on "Думаю..." forever.
-      const timeoutId = window.setTimeout(() => {
-        liveRespondRef.current = null;
-        reject(new Error('Время ожидания ответа модели истекло'));
-      }, 60_000);
-
-      liveRespondRef.current = {
-        resolve: (result) => {
-          window.clearTimeout(timeoutId);
-          resolve(result);
-        },
-        reject: (err) => {
-          window.clearTimeout(timeoutId);
-          reject(err);
-        },
-      };
-      void startCompletion(sessionId, text, [], true);
-    });
-  }
-  */
+  /** True while a turn of this chat is being generated (this tab, or another tab via storage). */
+  const sessionBusy = useCallback((s: ChatSession) =>
+    Boolean(registryRef.current?.bySession(s.id)) || isSessionStreaming(s), []);
 
   // BUGFIX_PERF: stable callbacks (see liveRef) so MessageBubble's memo is not defeated.
   const handleRegenerate = useCallback((assistantMessageId: string) => {
     const live = liveRef.current;
-    if (!live.token || streamingRef.current) return;
+    if (!live.token) return;
     const session = live.sessions.find((s) => s.id === live.activeId);
     if (!session) return;
+    if (sessionBusy(session)) {
+      live.showToast(live.t('sync.turnInFlight'));
+      return;
+    }
     const idx = session.messages.findIndex((m) => m.id === assistantMessageId);
     if (idx < 0) return;
 
@@ -1605,28 +2081,42 @@ export default function App() {
     }
     if (!prompt.trim()) return;
 
-    void startCompletion(session.id, prompt, [], false);
-  }, [startCompletion]);
+    // C-10: only the answer of the chat's LAST turn can replace that turn on the server.
+    const regenerate = !session.incognito && idx === session.messages.length - 1 && turnPersisted(session.messages[idx]);
+    void startCompletion(session.id, prompt, [], false, undefined, regenerate).then(notifyOutcome);
+  }, [startCompletion, notifyOutcome, sessionBusy]);
 
   const handleResend = useCallback((messageId: string) => {
     const live = liveRef.current;
-    if (!live.token || streamingRef.current) return;
+    if (!live.token) return;
     const session = live.sessions.find((s) => s.id === live.activeId);
     if (!session) return;
-    const message = session.messages.find((m) => m.id === messageId);
+    if (sessionBusy(session)) {
+      live.showToast(live.t('sync.turnInFlight'));
+      return;
+    }
+    const index = session.messages.findIndex((m) => m.id === messageId);
+    const message = session.messages[index];
     if (!message || message.role !== 'user') return;
-    void startCompletion(session.id, message.content, [], true);
-  }, [startCompletion]);
+    const regenerate = !session.incognito && replacesLastTurn(session.messages, index);
+    void startCompletion(session.id, message.content, [], true, undefined, regenerate).then(notifyOutcome);
+  }, [startCompletion, notifyOutcome, sessionBusy]);
 
   const handleEditMessage = useCallback((messageId: string, newContent: string) => {
     const live = liveRef.current;
-    if (!live.token || streamingRef.current) return;
+    if (!live.token) return;
     const session = live.sessions.find((s) => s.id === live.activeId);
     if (!session) return;
-    const message = session.messages.find((m) => m.id === messageId);
+    if (sessionBusy(session)) {
+      live.showToast(live.t('sync.turnInFlight'));
+      return;
+    }
+    const index = session.messages.findIndex((m) => m.id === messageId);
+    const message = session.messages[index];
     if (!message || message.role !== 'user') return;
-    void startCompletion(session.id, newContent, [], true);
-  }, [startCompletion]);
+    const regenerate = !session.incognito && replacesLastTurn(session.messages, index);
+    void startCompletion(session.id, newContent, [], true, undefined, regenerate).then(notifyOutcome);
+  }, [startCompletion, notifyOutcome, sessionBusy]);
 
   // CONTINUE_GENERATION: добавлено 2026-09-21
   // BUGFIX_CONTINUE_CLICK: добавлено 2026-09-22 — раньше здесь были «тихие» return'ы (нет
@@ -1638,18 +2128,18 @@ export default function App() {
     const live = liveRef.current;
     if (!live.token) return;
 
-    if (streamingRef.current) {
-      // Something is already running — say so instead of swallowing the click.
-      live.showToast(live.t('message.continueBusy'));
-      return;
-    }
-
     // Prefer the session currently on screen, then fall back to whichever session owns it.
     const session =
       live.sessions.find(
         (s) => s.id === live.activeId && s.messages.some((m) => m.id === messageId),
       ) ?? live.sessions.find((s) => s.messages.some((m) => m.id === messageId));
     if (!session) return;
+
+    if (sessionBusy(session)) {
+      // Something is already running in this chat — say so instead of swallowing the click.
+      live.showToast(live.t('message.continueBusy'));
+      return;
+    }
 
     const index = session.messages.findIndex((m) => m.id === messageId);
     const target = session.messages[index];
@@ -1672,33 +2162,37 @@ export default function App() {
     // An answer stopped before the first token has nothing to resume from; the call is still made
     // with an empty prefix, so the model simply answers the prompt again inside the same message
     // instead of the button doing nothing at all.
-    void startCompletion(session.id, prompt, [], false, messageId);
-  }, [startCompletion]);
+    void startCompletion(session.id, prompt, [], false, messageId).then(notifyOutcome);
+  }, [startCompletion, notifyOutcome, sessionBusy]);
 
-  function finalizeStopped(ctx: { sessionId: string; messageId: string }) {
-    setAgentStatus('Stopped');
+  // STOP_CONFIRM: изменено 2026-09-24 (M17) — «Стоп» останавливает ход ОТКРЫТОГО чата: экран
+  // переключается сразу, а ответ хаба решает, что дальше (см. stopOnServer).
+  function handleStop() {
+    const session = activeSession;
+    if (!session) return;
+    const ctx = registry.bySession(session.id);
+    const last = session.messages[session.messages.length - 1];
+    const messageId = ctx?.messageId ?? (isSessionStreaming(session) ? last.id : null);
+    if (!messageId) return;
+
+    // Without a live context (a turn another tab runs, or one left over) the id comes off the message.
+    const taskId = ctx
+      ? ctx.taskId
+      : last.taskId ?? (last.awaitingTaskId ? undefined : session.taskId);
+
+    if (ctx) {
+      ctx.stopRequested = true;
+      registry.end(ctx);
+    }
     // CONTINUE_GENERATION: the stop marker is no longer baked into the text — it is rendered
     // from the 'stopped' status, so the stored content stays exactly the partial answer that
     // "Продолжить" hands back to the model.
-    setSessions((prev) =>
-      updateMessage(prev, ctx.sessionId, ctx.messageId, (m) => {
-        const steps = closeSteps(m.steps);
-        if (m.status === 'stopped') return { ...m, steps };
-        return { ...m, status: 'stopped', steps };
-      }),
-    );
-    setSessions((prev) => updateSession(prev, ctx.sessionId, (s) => ({ ...s, status: 'Stopped' })));
-  }
+    finalizeTurn({ sessionId: session.id, messageId }, 'stopped');
+    clearTaskApprovals(taskId);
 
-  function handleStop() {
-    const ctx = streamingRef.current;
-    if (!ctx) return;
-    const taskId = ctx.taskId ?? activeSession?.taskId;
-    if (taskId) void signalrService.stopGeneration(taskId);
-
-    // Flip the UI immediately; the backend OnStopped event is idempotent and will be a no-op.
-    streamingRef.current = null;
-    finalizeStopped(ctx);
+    // No task id yet: POST /run is still in flight — startCompletion cancels the turn right after
+    // the server returns its id (ctx.stopRequested).
+    if (taskId) void stopOnServer({ sessionId: session.id, messageId, taskId });
   }
 
   // AGENT_FEED_ZED: добавлено 2026-09-23 — клик по пути файла в строке действия агента.
@@ -1715,7 +2209,7 @@ export default function App() {
   // BUGFIX_PERF: stable identity so MessageBubble's memo holds.
   const handleCommandDecision = useCallback(async (actionId: string, approved: boolean, allowAll: boolean) => {
     const live = liveRef.current;
-    const taskId = live.pendingAction?.taskId ?? streamingRef.current?.taskId ?? live.sessionTaskId;
+    const taskId = live.pendingAction?.taskId ?? registryRef.current?.bySession(live.activeId)?.taskId ?? live.sessionTaskId;
     setPendingAction(null);
     if (approved && allowAll && taskId) setAllowAllTaskId(taskId);
     try {
@@ -1779,19 +2273,21 @@ export default function App() {
   // CHAT_SHARE: открыть чат, пришедший ссылкой. Ждём, пока синхронизация подтянет список, —
   // на первом рендере чата ещё нет, а ссылку без него открыть нечем. Если чат так и не появился
   // (ссылка от чужого аккаунта), ничего не делаем: текущий экран остаётся на месте.
-  const openedLinkRef = useRef<string | null>(null);
   useEffect(() => {
     const linked = chatIdFromHash(route);
     if (!linked || openedLinkRef.current === linked) return;
 
-    const session = sessions.find((s) => s.id === linked);
+    const session = sessions.find((s) => s.id.toLowerCase() === linked.toLowerCase());
     if (!session) return;
 
     openedLinkRef.current = linked;
-    setActiveId(linked);
+    setActiveId(session.id);
     setActiveTab(session.kind ?? 'chat');
+    // CHAT_MODEL_SYNC (M18): Cowork-чат по ссылке открывается как Cowork, flash/pro — как были.
+    applySessionModel(session);
     setIncognito(false);
     if (isMobile) setSidebarOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route, sessions, isMobile]);
 
   // ADMIN_HOOKS_ORDER: возвраты для админки обязаны стоять ПОСЛЕ самого последнего хука этого
@@ -1836,18 +2332,7 @@ export default function App() {
           handleNewSession(kind);
           if (isMobile) setSidebarOpen(false);
         }}
-        onSelectSession={(id) => {
-          setActiveId(id);
-          // COWORK_MODE: an agent chat reopens in the mode it was run in (Coder or Cowork) —
-          // otherwise the next message would silently go to whichever mode the picker showed last.
-          const selected = sessions.find((s) => s.id === id);
-          if (selected && selected.kind === 'projects' && isAgentModel(selected.model)) {
-            setModel(selected.model);
-          }
-          // INCOGNITO_CHAT: opening another chat always returns to normal mode.
-          setIncognito(false);
-          if (isMobile) setSidebarOpen(false);
-        }}
+        onSelectSession={openSession}
         onSearchChange={setSearch}
         onShareSession={handleShareSession}
         onPinSession={handlePinSession}
@@ -1976,6 +2461,13 @@ export default function App() {
                     onNewChat={handleNewChat}
                     onContinue={handleContinue}
                     onOpenFile={handleOpenWorkspaceFile}
+                    loading={activeLoading}
+                    loadFailed={activeLoadFailed}
+                    onRetryLoad={() => {
+                      if (!activeSession) return;
+                      setTranscriptLoad(null);
+                      loadTranscript(activeSession.id);
+                    }}
                   />
                 ) : initializing ? (
                   <div className="feed feed--empty">
@@ -2017,7 +2509,7 @@ export default function App() {
                     smartSearch={smartSearch}
                     onSmartSearchChange={setSmartSearch}
                     locked={students}
-                    disabled={!token}
+                    disabled={!token || activeLoading}
                     isGenerating={agentRunning}
                     onStop={handleStop}
                     // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
@@ -2049,7 +2541,7 @@ export default function App() {
             </>
           )}
         </div>
-        <StatusBar agentStatus={agentStatus} cursor={cursorInfo} />
+        <StatusBar agentStatus={agentStatus} activity={agentActivity} cursor={cursorInfo} />
       </main>
 
       {toast && <div className="toast">{toast}</div>}
