@@ -2,13 +2,16 @@ import { memo, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { inlineText, parseInline, parseMarkdown, type Block, type Inline, type TableAlign } from './markdown/parse';
 import { CodeBlock } from './markdown/CodeBlock';
+import { MathTex } from './markdown/Math';
+import { MermaidDiagram } from './markdown/MermaidDiagram';
 
 /**
  * Renders the Markdown of model replies (see `markdown/parse.ts` for the supported subset).
  *
  * MARKDOWN_M23: переписано 2026-09-24 — разбор вынесен в отдельный парсер (CommonMark-правила для
  * огороженного кода, вложенных списков, `start` у нумерованных и flanking-разделителей), здесь
- * остался только вывод. Весь текст модели попадает в DOM как текстовые узлы React.
+ * остался только вывод. Весь текст модели попадает в DOM как текстовые узлы React; единственные
+ * исключения — HTML от KaTeX (trust:false) и схема mermaid, показанная через <img>.
  */
 
 /**
@@ -32,7 +35,7 @@ function renderInlineNodes(nodes: Inline[]): ReactNode[] {
           </code>
         );
       case 'math':
-        return node.display ? `$$${node.value}$$` : `$${node.value}$`;
+        return <MathTex key={i} tex={node.value} display={node.display} />;
       case 'br':
         return <br key={i} />;
       case 'link':
@@ -121,13 +124,12 @@ function renderBlocks(blocks: Block[], ctx: RenderContext): ReactNode[] {
         );
       }
       case 'code':
+        if (block.lang.toLowerCase() === 'mermaid') {
+          return <MermaidDiagram key={key} code={block.code} closed={block.closed} />;
+        }
         return <CodeBlock key={key} language={block.lang} code={block.code} closed={block.closed} />;
       case 'math':
-        return (
-          <p key={key} className="my-1">
-            {`$$${block.tex}$$`}
-          </p>
-        );
+        return <MathTex key={key} tex={block.tex} display block />;
       case 'hr':
         return <hr key={key} className="markdown__hr" />;
       case 'blockquote':

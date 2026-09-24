@@ -435,6 +435,12 @@
     "copy": "Copy",
     "copied": "Copied",
     "copyCode": "Copy code",
+    "showCode": "Code",
+    "showDiagram": "Diagram",
+    "mermaidAlt": "Mermaid diagram",
+    "mermaidPending": "The diagram will be drawn once the block is complete.",
+    "mermaidRendering": "Drawing the diagram…",
+    "mermaidError": "Could not draw the diagram:",
     "taskDone": "Done",
     "taskTodo": "Not done"
   }

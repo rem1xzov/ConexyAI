@@ -435,6 +435,12 @@
     "copy": "Копировать",
     "copied": "Скопировано",
     "copyCode": "Копировать код",
+    "showCode": "Код",
+    "showDiagram": "Схема",
+    "mermaidAlt": "Диаграмма Mermaid",
+    "mermaidPending": "Схема появится, когда блок будет дописан.",
+    "mermaidRendering": "Рисую схему…",
+    "mermaidError": "Не удалось построить схему:",
     "taskDone": "Выполнено",
     "taskTodo": "Не выполнено"
   }
