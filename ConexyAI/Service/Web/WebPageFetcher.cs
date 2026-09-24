@@ -415,7 +415,9 @@ public sealed class WebPageFetcher : IWebPageFetcher, IDisposable
             throw new PublicUrlRejectedException(check.Error ?? "Адрес не публичный.");
 
         Exception? lastError = null;
-        foreach (var address in check.Addresses)
+        // IPv4 first: containers often have no IPv6 route, and a dead IPv6 attempt would eat the
+        // connect timeout before the working address is tried.
+        foreach (var address in check.Addresses.OrderBy(a => a.AddressFamily == AddressFamily.InterNetwork ? 0 : 1))
         {
             var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
             try

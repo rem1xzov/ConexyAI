@@ -34,6 +34,7 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent web: the URL guard refuses private, metadata, localhost and internal hosts", GuardRefusesNonPublicTargetsAsync);
         TestRegistry.Add("agent web: fetch_web_page never follows a redirect to a private host", FetchRefusesPrivateRedirectAsync);
         TestRegistry.Add("agent web: fetch_web_page returns title, final URL, decoded and bounded text", FetchReadsPublicPageAsync);
+        TestRegistry.Add("agent web: fetch_web_page re-checks the address at connect time (DNS rebinding)", FetchDefeatsDnsRebindingAsync);
         TestRegistry.Add("agent web: HTML is cleaned into readable Markdown-like text", HtmlIsCleanedAsync);
         TestRegistry.Add("agent web: the guard, fetcher and vision service resolve from DI", WebServicesResolveFromDiAsync);
         TestRegistry.Add("agent chats: search_user_chats stays inside the user's own other chats", ChatSearchIsScopedAsync);
@@ -143,6 +144,21 @@ internal static class AgentCapabilityTests
 
         var direct = await fetcher.FetchAsync("http://127.0.0.1:5432/", null);
         Assert(direct.Status == WebPageFetchStatus.PageError && handler.Requests.Count == 6, "a private start URL is refused before any request");
+    }
+
+    // DNS rebinding: the name is public for the pre-flight check and loopback when the socket is
+    // opened. The production handler re-validates in its connect callback, so nothing connects.
+    private static async Task FetchDefeatsDnsRebindingAsync()
+    {
+        var resolver = new RebindingResolver();
+        using var fetcher = new WebPageFetcher(
+            new PublicUrlGuard(resolver), Options.Create(new WebSearchOptions { FetchTimeoutSeconds = 5 }), NullLogger<WebPageFetcher>.Instance);
+
+        var result = await fetcher.FetchAsync("http://rebind.attacker-example.com:9/", null);
+
+        Assert(resolver.Calls >= 2, $"the host is resolved again at connect time, calls={resolver.Calls}");
+        Assert(result.Status == WebPageFetchStatus.PageError && result.Output.Contains("запрещ"),
+            $"the connect-time check refuses the rebound address, got {result.Status}: '{result.Output}'");
     }
 
     // The same registrations as Program.cs: the fetcher's test-only handler parameter must fall back
@@ -849,6 +865,16 @@ internal static class AgentCapabilityTests
                 ? Task.FromResult(addresses)
                 : Task.FromException<IPAddress[]>(new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.HostNotFound));
         }
+    }
+
+    private sealed class RebindingResolver : IHostAddressResolver
+    {
+        private int _calls;
+
+        public int Calls => _calls;
+
+        public Task<IPAddress[]> ResolveAsync(string host, CancellationToken ct) =>
+            Task.FromResult(new[] { IPAddress.Parse(Interlocked.Increment(ref _calls) == 1 ? "93.184.216.34" : "127.0.0.1") });
     }
 
     private sealed class RoutingHandler : HttpMessageHandler
