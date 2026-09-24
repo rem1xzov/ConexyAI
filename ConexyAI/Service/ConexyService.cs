@@ -143,7 +143,8 @@ public class ConexyService : IConexyService
                 entity.Status = ConexyStatus.Pending;
                 entity.Result = null;
                 entity.FinishedAt = null;
-                entity.ChatId = chatId;
+                // INCOGNITO_CHAT: the task row of an incognito turn is not linked to its chat.
+                entity.ChatId = request.Incognito ? null : chatId;
                 await _repository.UpdateAsync(entity, ct);
             }
             else
@@ -152,7 +153,7 @@ public class ConexyService : IConexyService
                 {
                     Id = taskId,
                     UserId = userId,
-                    ChatId = chatId,
+                    ChatId = request.Incognito ? null : chatId,
                     Model = modelType.ToPublicName(),
                     Prompt = storedPrompt,
                     Status = ConexyStatus.Pending

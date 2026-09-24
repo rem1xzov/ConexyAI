@@ -187,7 +187,18 @@ public class ConexyController : ControllerBase
         if (!TryGetUserId(out var userId))
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
+        // INCOGNITO_CHAT: an incognito chat lives in memory only — drop it (and its files) without
+        // writing anything about it to the database, not even a tombstone.
+        if (_incognito.GetOwner(chatId) == userId && !await _chatAccess.IsRecordedAsync(chatId, ct))
+        {
+            _cancellations.CancelChat(chatId);
+            _incognito.Clear(chatId, userId);
+            await _workspaceService.CleanupWorkspaceAsync(chatId, ct);
+            return NoContent();
+        }
+
         var access = await _chatAccess.GetAccessAsync(userId, chatId, ct);
+
         if (access != ChatAccessKind.Owner)
         {
             // Foreign, already deleted, or never existed: the same answer, so ids cannot be probed.

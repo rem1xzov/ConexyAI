@@ -77,6 +77,9 @@ public interface IChatAccessService
 
     /// <summary>True when the owner deleted this chat. Used to stop an in-flight turn resurrecting it.</summary>
     Task<bool> IsDeletedAsync(Guid chatId, CancellationToken ct = default);
+
+    /// <summary>True when the database knows this chat (an owner row or legacy evidence of one).</summary>
+    Task<bool> IsRecordedAsync(Guid chatId, CancellationToken ct = default);
 }
 
 public class ChatAccessService : IChatAccessService
@@ -232,6 +235,9 @@ public class ChatAccessService : IChatAccessService
 
     public async Task<bool> IsDeletedAsync(Guid chatId, CancellationToken ct = default) =>
         await _db.Chats.AsNoTracking().AnyAsync(c => c.Id == chatId && c.DeletedAt != null, ct);
+
+    public async Task<bool> IsRecordedAsync(Guid chatId, CancellationToken ct = default) =>
+        (await ResolveOwnerAsync(chatId, backfill: false, ct)).UserId is not null;
 
     private sealed record OwnerLookup(Guid? UserId, bool Deleted);
 
