@@ -23,7 +23,10 @@ function DialogShell({
   // контейнеров есть backdrop-filter, а он делает их containing block для position: fixed, и
   // оверлей оказывался зажат внутри сайдбара вместо того, чтобы закрыть весь экран.
   return createPortal(
-    <div className="dialog-overlay" onMouseDown={onCancel}>
+    // DIALOG_MOBILE: `dialog-overlay--compact` marks the small confirm/prompt dialogs. On a phone a
+    // full-screen sheet is right for the large modals but leaves a 360px-wide confirmation glued to
+    // the status bar, so the two cases are told apart in CSS by this class alone.
+    <div className="dialog-overlay dialog-overlay--compact" onMouseDown={onCancel}>
       <div
         className="dialog-card"
         role="dialog"

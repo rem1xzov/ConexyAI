@@ -5845,6 +5845,72 @@ body {
     padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
   }
 
+  /* DIALOG_MOBILE: a confirm/prompt dialog is NOT a full-screen sheet. Stretched to the overlay's
+     height it looked glued to the status bar, which is what made deleting a chat feel broken. The
+     sheet above stays for the large modals (settings, upgrade, auth, support) — those genuinely
+     need the room. */
+  .dialog-overlay.dialog-overlay--compact {
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    min-height: 100dvh;
+  }
+
+  .dialog-overlay--compact .dialog-card {
+    width: 100%;
+    max-width: 360px;
+    height: auto;
+    /* Fits between the safe areas (notch in landscape) with the overlay's 16px padding. */
+    max-height: calc(100dvh - 32px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    margin: auto;
+    border-radius: 12px;
+    overflow-y: auto;
+    padding: 20px;
+    padding-top: calc(20px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Actions share the row as equal halves instead of stacking into full-height buttons. */
+  .dialog-overlay--compact .dialog-actions {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .dialog-overlay--compact .dialog-btn {
+    flex: 1 1 auto;
+    min-height: 40px;
+    white-space: nowrap;
+  }
+
+  /* TOUCH_TARGETS: the agent's decision buttons roll under a finger, so they grow to a real target. */
+  .cmd-confirm__btn {
+    min-height: 36px;
+    padding: 8px 14px;
+  }
+
+  /* TOUCH_TARGETS: the row under a message holds up to nine icons, so it wraps instead of squeezing
+     them, and each one gets a 36px square. */
+  .message-actions {
+    flex-wrap: wrap;
+  }
+
+  .message-actions__btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  /* The model pill in the chat header is a primary control on a phone. */
+  .modelpicker__trigger {
+    min-height: 36px;
+  }
+
+  /* The wide settings layout caps itself at 90vh so it does not fill a desktop window. On a phone
+     that cap left a strip of dead space under a sheet that is otherwise full-screen; the compound
+     selector is needed because the cap is declared further down this file. */
+  .settings-modal.settings-modal--wide {
+    max-height: 100dvh;
+  }
+
   /* Hero greeting -> smaller font */
   .hero__title {
     font-size: 24px;
@@ -5885,6 +5951,29 @@ body {
   }
 }
 
+/* ---------- TOUCH_TARGETS: the narrowest phones (2026-09-24) ---------- */
+/* A separate block rather than a nested one: every media query in this file is flat, and this is the
+   only rule set that keys on a narrower breakpoint than the phone layout above. */
+@media (max-width: 400px) {
+  /* The agent's two decisions share the row as equal halves instead of squeezing against the
+     command text, and the "allow all" switch drops to its own full-width line. */
+  .cmd-card__actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .cmd-confirm__btn {
+    justify-content: center;
+    min-height: 40px;
+  }
+
+  .cmd-confirm__allow-all {
+    grid-column: 1 / -1;
+    margin-left: 0;
+  }
+}
+
 /* ---------- SIGNALR_RESILIENCE: добавлено 2026-09-22 ---------- */
 /* Явное состояние связи. Без него оборванный сокет оставлял спиннер агента крутиться вечно и
    пользователь не мог отличить «задача ещё идёт» от «связь потеряна». */
@@ -5896,6 +5985,9 @@ body {
   z-index: 600;
   display: flex;
   align-items: center;
+  /* CONN_BANNER_MOBILE: on a narrow phone the text keeps the full width and the action wraps onto
+     its own line instead of squeezing the message into a column. */
+  flex-wrap: wrap;
   gap: 10px;
   max-width: min(720px, calc(100vw - 32px));
   padding: 10px 14px;
@@ -5955,7 +6047,11 @@ body {
 
 .conn-banner__action {
   flex-shrink: 0;
-  padding: 5px 12px;
+  /* A real tap target: this reloads the page, so it must not be a 26px sliver on a phone. */
+  align-self: center;
+  min-height: 36px;
+  padding: 0 14px;
+  white-space: nowrap;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--surface-2);
