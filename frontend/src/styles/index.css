@@ -5623,7 +5623,8 @@ body {
     position: fixed;
     top: 0;
     left: 0;
-    bottom: 0;
+    /* MOBILE_KEYBOARD: stop short of the on-screen keyboard (see useKeyboardInset). */
+    bottom: var(--kb-inset, 0px);
     width: 100%;
     min-width: 0;
     z-index: 200;
@@ -5631,15 +5632,30 @@ body {
     transform: translateX(-100%);
     transition: transform 0.25s ease;
     border-right: none;
+    /* MOBILE_DRAWER: the vertical scroll inside the panel stays with the browser; horizontal
+       movement belongs to the swipe. (A horizontal scroller under the finger opts out again — see
+       belongsToHorizontalScroller.) */
+    touch-action: pan-y;
   }
   .sidebar:not(.sidebar--collapsed) {
     transform: translateX(0);
   }
+  /* MOBILE_DRAWER: mounted even while closed, because the swipe fades it in proportionally to the
+     finger's travel. Its resting opacity stays 1 — --bg-overlay is already translucent, so capping
+     it at 0.6 here would halve the dimming the app has always had. */
   .sidebar-backdrop {
     position: fixed;
-    inset: 0;
+    inset: 0 0 var(--kb-inset, 0px) 0;
     background: var(--bg-overlay);
     z-index: 150;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+    touch-action: pan-y;
+  }
+  .sidebar-backdrop--on {
+    opacity: 1;
+    pointer-events: auto;
   }
   .mobile-menu-btn {
     position: fixed;
@@ -5664,6 +5680,47 @@ body {
      hamburger and the model picker sit on the same centre line. */
   .chat-header {
     padding-left: 56px;
+  }
+
+  /* MOBILE_KEYBOARD: the whole layout gives up the keyboard's height, so the composer lands on top
+     of it instead of behind it. Browsers that implement interactive-widget report ~0 here. */
+  .app {
+    padding-bottom: var(--kb-inset, 0px);
+  }
+
+  /* ---------- FOCUS_MODE: the start screen steps aside for the keyboard (2026-09-24) ---------- */
+  /* Tapping into the composer on the empty home screen hides the greeting and the chips and lifts
+     the composer into the space they leave. Everything is transitioned, so the layout breathes
+     instead of jumping. */
+  .chat-stage__hero-inner {
+    transition:
+      max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+      opacity 0.25s ease,
+      transform 0.25s cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .chat-stage--composer-focused .chat-stage__hero {
+    flex-grow: 0;
+    padding-bottom: 0;
+  }
+
+  .chat-stage--composer-focused .chat-stage__hero-inner {
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(-24px);
+    overflow: hidden;
+  }
+
+  .chat-stage--composer-focused .chat-stage__tail {
+    flex-grow: 1;
+  }
+
+  .chat-stage--composer-focused .chat-stage__chips {
+    opacity: 0;
+    max-height: 0;
+    margin-top: 0;
+    overflow: hidden;
+    pointer-events: none;
   }
 
   /* GUEST_HERO: compact guest block; the start-screen content may scroll instead of pushing

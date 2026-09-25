@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatSession, ChatSessionKind } from '../types/chat';
 import type { UserProfile } from '../types/api';
@@ -39,6 +39,9 @@ interface SidebarProps {
   onOpenAdmin: () => void;
   onOpenSupport: () => void;
   onOpenSettings: () => void;
+  // MOBILE_DRAWER: the drawer swipe needs the panel node itself — the transform is written straight
+  // to the element while the finger moves, without going through React state.
+  asideRef?: Ref<HTMLElement>;
 }
 
 const TABS: { key: ChatSessionKind; labelKey: string }[] = [
@@ -79,6 +82,7 @@ export function Sidebar(props: SidebarProps) {
     onOpenAdmin,
     onOpenSupport,
     onOpenSettings,
+    asideRef,
   } = props;
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -165,7 +169,7 @@ export function Sidebar(props: SidebarProps) {
   }
 
   return (
-    <aside className={`sidebar ${open ? '' : 'sidebar--collapsed'}`}>
+    <aside ref={asideRef} className={`sidebar ${open ? '' : 'sidebar--collapsed'}`}>
       <div className="sidebar__top">
         <button className="icon-btn" onClick={onToggle} title="Toggle sidebar" aria-label="Toggle sidebar">
           <MenuIcon size={20} />

@@ -37,6 +37,9 @@ interface InputBarProps {
   // FILE_DROP: добавлено 2026-09-24 (L11) — файлы, брошенные на колонку чата; nonce отличает
   // повторный бросок тех же файлов.
   externalFiles?: { files: File[]; nonce: number } | null;
+  // FOCUS_MODE: the start screen collapses its greeting while the composer has focus (mobile only).
+  onComposerFocus?: () => void;
+  onComposerBlur?: () => void;
 }
 
 export function InputBar({
@@ -53,10 +56,10 @@ export function InputBar({
   disabled,
   isGenerating,
   onStop,
-  // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
-  // onOpenLive,
   onSend,
   externalFiles,
+  onComposerFocus,
+  onComposerBlur,
 }: InputBarProps) {
   const { t } = useTranslation();
   // The model picker lives in the chat header on mobile and inline here on desktop.
@@ -704,6 +707,8 @@ export function InputBar({
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
+          onFocus={onComposerFocus}
+          onBlur={onComposerBlur}
           enterKeyHint={enterInsertsNewline ? 'enter' : 'send'}
         />
 

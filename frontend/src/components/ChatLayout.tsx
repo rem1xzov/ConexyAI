@@ -12,6 +12,11 @@ export interface ChatQuickChip {
 interface ChatLayoutProps {
   /** No messages yet: the hero and the composer sit in the vertical centre. */
   empty: boolean;
+  /**
+   * FOCUS_MODE: the user tapped into the composer on the empty start screen (mobile only), so the
+   * greeting and the chips step aside and the composer takes the freed space at the top.
+   */
+  composerFocused?: boolean;
   /** Start-screen content (mark + greeting), shown centred above the composer. */
   hero?: ReactNode;
   chips?: ChatQuickChip[];
@@ -31,9 +36,17 @@ interface ChatLayoutProps {
  * with the hero just above it and the chips below. When active: the feed takes the free space and
  * the spacers collapse, leaving the composer at the bottom.
  */
-export function ChatLayout({ empty, hero, chips = [], feed, composer }: ChatLayoutProps) {
+export function ChatLayout({ empty, composerFocused = false, hero, chips = [], feed, composer }: ChatLayoutProps) {
+  const stageClass = [
+    'chat-stage',
+    empty ? 'chat-stage--empty' : 'chat-stage--active',
+    composerFocused ? 'chat-stage--composer-focused' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   return (
-    <div className={`chat-stage ${empty ? 'chat-stage--empty' : 'chat-stage--active'}`}>
+    <div className={stageClass}>
       <div className="chat-stage__feed">{empty ? null : feed}</div>
 
       <div className="chat-stage__hero">

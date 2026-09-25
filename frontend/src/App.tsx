@@ -9,6 +9,9 @@ import { useAuth } from './hooks/useAuth';
 import { useIsMobile } from './hooks/useMediaQuery';
 // FILE_DROP: добавлено 2026-09-24 (L11)
 import { useFileDropZone, usePreventWindowFileDrop } from './hooks/useFileDrop';
+// MOBILE_DRAWER / MOBILE_KEYBOARD: добавлено 2026-09-24
+import { useDrawerSwipe } from './hooks/useDrawerSwipe';
+import { useKeyboardInset } from './hooks/useKeyboardInset';
 import { Sidebar } from './components/Sidebar';
 import { ChatFeed } from './components/ChatFeed';
 import { InputBar } from './components/InputBar';
@@ -73,6 +76,13 @@ import {
 // CHAT_DELETE: маршрут удаления объявлен как {chatId:guid}, поэтому запрос на не-UUID id чата
 // смысла не имеет (старые локальные сессии).
 const GUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// SMOOTH_STREAM: tokens arrive in network-sized bursts, so writing each one straight into state made
+// the answer grow in visible steps. They are queued and released a few characters per frame instead.
+// The step scales with the backlog, so smoothing never holds back a fast answer.
+const MIN_TOKEN_CHARS_PER_FRAME = 2;
+const MAX_TOKEN_CHARS_PER_FRAME = 8;
+const TOKEN_FRAMES_TO_DRAIN = 6;
 
 // CHAT_LIST_COMPLETE: добавлено 2026-09-24 (H8, C-3) — сколько последних чатов просить у сервера.
 // Полный набор id приходит отдельно (allChatIds), поэтому лимит больше не определяет, что удалять.
@@ -222,6 +232,8 @@ export default function App() {
   const [incognito, setIncognito] = useState(false);
   const [search, setSearch] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(() => !isMobile);
+  // FOCUS_MODE: the start screen steps aside while the composer has focus (mobile layout only).
+  const [composerFocused, setComposerFocused] = useState(false);
   const [workspaceWidth, setWorkspaceWidth] = useState(55); // % width of the IDE pane
   const [ideCollapsed, setIdeCollapsed] = useState(false);
 
@@ -661,6 +673,52 @@ export default function App() {
     );
   }
 
+  // SMOOTH_STREAM: queue one network chunk for the given turn and make sure a frame is scheduled.
+  function enqueueContentToken(ctx: TurnContext, delta: string) {
+    const key = `${ctx.sessionId}:${ctx.messageId}`;
+    const entry = tokenQueueRef.current.get(key);
+    if (entry) entry.text += delta;
+    else tokenQueueRef.current.set(key, { ctx, text: delta });
+    if (tokenFrameRef.current === null) {
+      tokenFrameRef.current = window.requestAnimationFrame(releaseContentTokens);
+    }
+  }
+
+  /**
+   * SMOOTH_STREAM: one frame's worth of text, for every turn still buffering. A small backlog is
+   * released a couple of characters at a time (smooth); a large one is flushed faster so the answer
+   * never lags behind the network by more than a few frames. Everything non-content (thinking,
+   * steps, statuses) still goes straight through — only the answer text is smoothed.
+   */
+  function releaseContentTokens() {
+    tokenFrameRef.current = null;
+    for (const [key, entry] of tokenQueueRef.current) {
+      if (entry.text.length === 0) {
+        tokenQueueRef.current.delete(key);
+        continue;
+      }
+      const wanted = Math.ceil(entry.text.length / TOKEN_FRAMES_TO_DRAIN);
+      const take = Math.min(MAX_TOKEN_CHARS_PER_FRAME, Math.max(MIN_TOKEN_CHARS_PER_FRAME, wanted));
+      const slice = entry.text.slice(0, take);
+      entry.text = entry.text.slice(take);
+      // Hide the live action badge as soon as the final answer starts streaming.
+      patchTurn(entry.ctx, (m) => ({ ...m, content: m.content + slice, currentAction: null }));
+      if (entry.text.length === 0) tokenQueueRef.current.delete(key);
+    }
+    if (tokenQueueRef.current.size > 0) {
+      tokenFrameRef.current = window.requestAnimationFrame(releaseContentTokens);
+    }
+  }
+
+  /** Text still waiting in the frame queue for one turn, removed from it. */
+  function drainContentTokens(sessionId: string, messageId: string): string {
+    const key = `${sessionId}:${messageId}`;
+    const entry = tokenQueueRef.current.get(key);
+    if (!entry) return '';
+    tokenQueueRef.current.delete(key);
+    return entry.text;
+  }
+
   /** Finds the assistant message of a task that is no longer (or never was) tracked here. */
   function findMessageByTask(taskId: string, includeStopped: boolean): TurnTarget | null {
     const lower = taskId.toLowerCase();
@@ -685,13 +743,22 @@ export default function App() {
   /** Writes the final state of a turn into its own message (never "the current" one). */
   function finalizeTurn(target: TurnTarget, outcome: TurnOutcome, opts: FinalizeOptions = {}) {
     const translate = liveRef.current.t;
+    // SMOOTH_STREAM: whatever the frame queue still holds belongs to this answer. Drained here —
+    // outside the state updater, which must stay pure — so a stopped turn keeps every character
+    // that the server already sent, instead of losing the last few frames of it.
+    const buffered = drainContentTokens(target.sessionId, target.messageId);
     setSessions((prev) => {
       let changed = false;
       const next = updateMessage(prev, target.sessionId, target.messageId, (m) => {
         const eligible = m.status === 'streaming' || (opts.allowFromStopped === true && m.status === 'stopped');
         if (!eligible) return m;
         changed = true;
-        const base: ChatMessage = { ...m, steps: closeSteps(m.steps), awaitingTaskId: undefined };
+        const base: ChatMessage = {
+          ...m,
+          content: buffered ? m.content + buffered : m.content,
+          steps: closeSteps(m.steps),
+          awaitingTaskId: undefined,
+        };
         if (outcome === 'complete') {
           // H7: the stored result is the FULL answer. The streamed text can miss tokens that went by
           // while the socket or the page was down, so it no longer wins over the result.
@@ -912,6 +979,16 @@ export default function App() {
     clearTaskApprovals,
   };
 
+  // SMOOTH_STREAM: tokens are buffered here per turn and released on animation frames (see
+  // releaseContentTokens). The queue lives in a ref because it is written from the SignalR handler
+  // and read by the frame callback — neither of which should re-render on its own.
+  const tokenQueueRef = useRef(new Map<string, { ctx: TurnContext; text: string }>());
+  const tokenFrameRef = useRef<number | null>(null);
+
+  // MOBILE_DRAWER: the drawer transform is written directly to these nodes during a swipe.
+  const sidebarPanelRef = useRef<HTMLElement | null>(null);
+  const sidebarBackdropRef = useRef<HTMLDivElement | null>(null);
+
   // STREAM_SCOPE: добавлено 2026-09-24 (H6, C-1) — каждое событие маршрутизируется по scopeId в
   // СВОЙ ход; то, что сопоставить нельзя, отбрасывается, а не пишется в «текущее» сообщение.
   const eventsRef = useRef<SignalrCallbacks>({});
@@ -919,8 +996,7 @@ export default function App() {
     onContentToken: (delta, scopeId) => {
       const ctx = resolveTurn(scopeId);
       if (!ctx) return dropEvent('OnContentToken', scopeId);
-      // Hide the live action badge as soon as the final answer starts streaming.
-      patchTurn(ctx, (m) => ({ ...m, content: m.content + delta, currentAction: null }));
+      enqueueContentToken(ctx, delta);
     },
     onThinkingToken: (delta, scopeId) => {
       const ctx = resolveTurn(scopeId);
@@ -2340,6 +2416,21 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route, sessions, isMobile]);
 
+  // MOBILE_DRAWER: the sidebar is a drawer on phones, so it can be pulled out from the left edge and
+  // pushed back with a swipe. The hook writes the transform straight to the DOM while dragging.
+  useDrawerSwipe({
+    enabled: isMobile,
+    open: sidebarOpen,
+    onOpen: () => setSidebarOpen(true),
+    onClose: () => setSidebarOpen(false),
+    panelRef: sidebarPanelRef,
+    backdropRef: sidebarBackdropRef,
+  });
+
+  // MOBILE_KEYBOARD: keeps the composer above the on-screen keyboard where the viewport meta hint is
+  // not supported (Safari); on Android the hint already resizes the layout.
+  useKeyboardInset(isMobile);
+
   // ADMIN_HOOKS_ORDER: возвраты для админки обязаны стоять ПОСЛЕ самого последнего хука этого
   // компонента. Раньше они были выше useEffect'а инкогнито, и переход на `#/admin` (без F5)
   // рендерил App с на один хук меньше — React падал с #300 «Rendered fewer hooks than expected».
@@ -2373,6 +2464,7 @@ export default function App() {
         search={search}
         sessions={visibleSessions}
         activeId={activeId}
+        asideRef={sidebarPanelRef}
         onToggle={() => setSidebarOpen((o) => !o)}
         onTabChange={(tab) => guardLeave(() => {
           handleTabChange(tab);
@@ -2409,8 +2501,14 @@ export default function App() {
           <MenuIcon size={20} />
         </button>
       )}
-      {isMobile && sidebarOpen && (
-        <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
+      {isMobile && (
+        // MOBILE_DRAWER: mounted even while closed, because the drawer swipe fades it in
+        // proportionally to the finger's travel. `pointer-events` is off until it is actually open.
+        <div
+          ref={sidebarBackdropRef}
+          className={`sidebar-backdrop ${sidebarOpen ? 'sidebar-backdrop--on' : ''}`}
+          onClick={() => setSidebarOpen(false)}
+        />
       )}
 
       <main className="main" ref={mainRef}>
@@ -2491,6 +2589,9 @@ export default function App() {
             )}
             <ChatLayout
               empty={stageEmpty}
+              // FOCUS_MODE: mobile only, and never for guests — their hero holds the login and
+              // registration buttons, which must not hide the moment the composer is tapped.
+              composerFocused={isMobile && stageEmpty && composerFocused && !isGuest}
               hero={
                 isGuest ? (
                   <GuestHero
@@ -2573,6 +2674,8 @@ export default function App() {
                     // onOpenLive={() => setIsLiveOpen(true)}
                     onSend={handleSend}
                     externalFiles={droppedFiles}
+                    onComposerFocus={() => setComposerFocused(true)}
+                    onComposerBlur={() => setComposerFocused(false)}
                   />
                 </>
               }
