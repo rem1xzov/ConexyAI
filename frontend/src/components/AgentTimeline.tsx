@@ -1,77 +1,41 @@
 import { useTranslation } from 'react-i18next';
-import type { AgentStep } from '../types/chat';
+import type { TurnBlock } from '../types/chat';
 import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
 import { ActionStepLine, type ActionKind, type ActionState } from './ActionStepLine';
 import { CommandConfirmCard } from './CommandConfirmCard';
 import { ThinkingStep } from './ThinkingStep';
+import { TodoPanel } from './TodoPanel';
+import { AssistantContent } from './artifacts/AssistantContent';
+import { isTerminalToolStatus, toolEventFromBlock } from '../utils/turnBlocks';
 
-// AGENT_FEED_ZED: переписано 2026-09-23
-// Формат ленты повторяет Zed AI:
-//   * размышление — лёгкий сворачиваемый заголовок «Размышления» с лампочкой, без счётчика;
-//   * действия (поиск, чтение, правка файлов) — ОДНА плотная строка с иконкой, без рамки;
-//   * полноразмерный блок остался только у команд, которым нужно решение пользователя, — там
-//     реально есть что скрывать (команда и её вывод), поэтому там рамка и уместна.
-// Раньше каждая команда получала свою полноразмерную карточку, и лента превращалась в столбик
-// одинаковых блоков.
-
-const MAX_VISIBLE = 40;
-
-interface RowUnit {
-  kind: 'row';
-  id: string;
-  firstActionIndex: number;
-  action: ActionKind;
-  label: string;
-  path?: string;
-  state: ActionState;
-  detail?: string;
-  errorLine?: string;
-  // READABLE_RESULT: краткий итог (exit code) прямо в строке, чтобы связка «команда → результат»
-  // читалась без раскрытия, как в терминальном блоке.
-  meta?: string;
-}
-
-interface StepUnit {
-  kind: 'step';
-  id: string;
-  label: string;
-  /** Reasoning text produced during this step (falls back to the backend label). */
-  text: string;
-  startedAt: number;
-  endedAt?: number;
-}
-
-interface CardUnit {
-  kind: 'card';
-  id: string;
-  firstActionIndex: number;
-  events: ToolActionEvent[];
-}
-
-type Unit = RowUnit | StepUnit | CardUnit;
+// INTERLEAVED_STREAM: переписано 2026-09-24
+//
+// Раньше лента собиралась из двух независимых наборов — размышления (`steps`) и действия
+// (`toolActions`) — и склеивала их по счётчику вызовов, а текст ответа рендерился отдельно, одним
+// куском внизу сообщения. Из-за этого короткие реплики модели между инструментами оказывались
+// приклеены к финальному ответу, а инструменты висели над текстом вне контекста.
+//
+// Теперь источник правды — хронологический массив `message.blocks` (см. `utils/turnBlocks`), и
+// лента просто рендерит его по порядку: размышление → текст → инструмент → текст → команда → ответ.
+// Плоские поля (`steps`, `toolActions`, `content`) продолжают заполняться для остальных
+// потребителей — выгрузки, карточек файлов, плана в IDE, — но лента на них больше не опирается.
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
 interface AgentTimelineProps {
-  actions: ToolActionEvent[];
-  steps?: AgentStep[];
-  /** Full reasoning stream of the message; each step shows its own slice of it. */
-  thinking?: string;
+  /** Chronological feed of the turn (see `utils/turnBlocks`; `MessageBubble` builds it). */
+  blocks: TurnBlock[];
+  /** Owns this feed — text blocks go through the artifact-aware renderer under this id. */
+  messageId: string;
+  createdAt: number;
+  /** True while the turn is still running — the last thought block shows a live timer. */
+  streaming?: boolean;
   /** Inline decision handler for commands that require approval; omit for a read-only view. */
   onCommandDecision?: CommandDecisionHandler;
-  /** Live status shown when no tool row or card covers the current moment. */
+  /** Live status shown when no block is currently running. */
   statusPill?: { label: string } | null;
   /** Opens a path from an action row in the workspace editor. */
   onOpenPath?: (path: string) => void;
-}
-
-/** Events sharing a pending action id are one command awaiting the user's decision. */
-function isApprovalCommand(event: ToolActionEvent): boolean {
-  return event.toolName === 'bash' && event.pendingActionId != null;
-}
-
-function pairKey(event: ToolActionEvent): string {
-  return `${event.toolName}|${event.path}|${event.command}`;
 }
 
 function stateFrom(event: ToolActionEvent): ActionState {
@@ -79,14 +43,6 @@ function stateFrom(event: ToolActionEvent): ActionState {
   if (event.status === 'failed') return 'failed';
   if (event.status === 'rejected') return 'rejected';
   return 'running';
-}
-
-interface ActionDescriptor {
-  action: ActionKind;
-  /** The short line itself, e.g. "Читаю" or "Поиск: StudentsMode". */
-  label: string;
-  /** File the action touched, when there is one worth linking. */
-  path?: string;
 }
 
 /** Host of a URL ("https://www.example.com/a" -> "example.com"); the raw text when it is not a URL. */
@@ -99,8 +55,16 @@ function urlHost(value: string): string {
   }
 }
 
+interface ActionDescriptor {
+  action: ActionKind;
+  /** The short line itself, e.g. "Читаю" or "Поиск: StudentsMode". */
+  label: string;
+  /** File the action touched, when there is one worth linking. */
+  path?: string;
+}
+
 /**
- * Turns a raw tool invocation into the short description the reference timeline uses
+ * Turns a raw tool invocation into the short description the reference feed uses
  * ("Read ConexyAgentRunner.cs" instead of the whole shell line where that is obvious).
  */
 function describeAction(event: ToolActionEvent, t: Translate): ActionDescriptor {
@@ -147,153 +111,99 @@ function describeAction(event: ToolActionEvent, t: Translate): ActionDescriptor 
   return { action: 'command', label: event.summary || `${event.toolName} ${command}`.trim() };
 }
 
-function rowFrom(event: ToolActionEvent, id: string, actionIndex: number, t: Translate): RowUnit {
-  const { action, label, path } = describeAction(event, t);
-  return {
-    kind: 'row',
-    id,
-    firstActionIndex: actionIndex,
-    action,
-    label,
-    path,
-    state: stateFrom(event),
-    detail: event.output,
-    errorLine: event.status === 'failed' ? event.summary : undefined,
-    meta: event.status === 'completed' ? event.summary : undefined,
-  };
-}
-
-/**
- * Builds the ordered timeline: reasoning steps and tool rows interleaved by how many tool events
- * had already been emitted when each step started, so the order always matches what really
- * happened instead of grouping all reasoning at the top.
- */
-function buildUnits(
-  actions: ToolActionEvent[],
-  steps: AgentStep[],
-  thinking: string,
-  t: Translate,
-): Unit[] {
-  const tail = actions.slice(-MAX_VISIBLE);
-  const offset = actions.length - tail.length;
-
-  const units: Unit[] = [];
-  const openRows = new Map<string, RowUnit>();
-  const cards = new Map<string, CardUnit>();
-
-  tail.forEach((action, i) => {
-    const actionIndex = offset + i;
-
-    if (isApprovalCommand(action)) {
-      const key = action.pendingActionId!;
-      let card = cards.get(key);
-      if (!card) {
-        card = { kind: 'card', id: `card-${key}`, firstActionIndex: actionIndex, events: [] };
-        cards.set(key, card);
-        units.push(card);
-      }
-      card.events.push(action);
-      return;
-    }
-
-    const key = pairKey(action);
-    if (action.status === 'started') {
-      const row = rowFrom(action, `${key}#${actionIndex}`, actionIndex, t);
-      units.push(row);
-      openRows.set(key, row);
-      return;
-    }
-
-    const open = openRows.get(key);
-    if (open) {
-      open.state = stateFrom(action);
-      open.detail = action.output ?? open.detail;
-      open.errorLine = open.state === 'failed' ? action.summary : undefined;
-      open.meta = open.state === 'completed' ? action.summary : undefined;
-      openRows.delete(key);
-      return;
-    }
-
-    // A completion whose "started" twin fell outside the visible tail.
-    units.push(rowFrom(action, `${key}#${actionIndex}`, actionIndex, t));
-  });
-
-  for (const step of steps) {
-    // AGENT_FEED_ZED: each step owns the slice of the reasoning stream that was produced while it
-    // was the open step, so the expanded block shows real reasoning text instead of the generic
-    // backend label. Older/restored steps without offsets fall back to the label.
-    const from = step.reasoningFrom ?? 0;
-    const slice = thinking.slice(from, step.reasoningTo);
-    const stepUnit: StepUnit = {
-      kind: 'step',
-      id: `step-${step.id}`,
-      label: step.label,
-      text: slice.trim() || step.label,
-      startedAt: step.startedAt,
-      endedAt: step.endedAt,
-    };
-    const before = units.findIndex(
-      (u) => u.kind !== 'step' && u.firstActionIndex >= step.afterToolCount,
-    );
-    if (before < 0) units.push(stepUnit);
-    else units.splice(before, 0, stepUnit);
-  }
-
-  return units;
-}
-
 export function AgentTimeline({
-  actions,
-  steps = [],
-  thinking = '',
+  blocks,
+  messageId,
+  createdAt,
+  streaming = false,
   onCommandDecision,
   statusPill,
   onOpenPath,
 }: AgentTimelineProps) {
   const { t } = useTranslation();
 
-  const units = buildUnits(actions, steps, thinking, t);
+  const feed = blocks;
+  if (feed.length === 0 && !statusPill) return null;
 
-  const lastUnit = units[units.length - 1];
-  // The live status row is only useful when nothing else is already showing activity.
-  const showStatusRow =
-    Boolean(statusPill) &&
-    loadingNothing(units) &&
-    !(lastUnit && lastUnit.kind === 'step' && lastUnit.endedAt === undefined);
-
-  if (units.length === 0 && !showStatusRow) return null;
+  const lastIndex = feed.length - 1;
+  const lastBlock = feed[lastIndex];
+  // One "working" indicator at a time: the live status row waits until nothing else is running.
+  const somethingRunning = feed.some((block) => {
+    if (block.type === 'tool') return !isTerminalToolStatus(block.status);
+    if (block.type === 'thought') return block.durationMs === undefined;
+    return false;
+  });
+  const showStatusRow = Boolean(statusPill) && !somethingRunning;
 
   return (
     <div className="agent-timeline">
-      {units.map((unit) => {
-        if (unit.kind === 'step') {
-          const running = unit.endedAt === undefined;
-          return <ThinkingStep key={unit.id} text={unit.text} running={running} />;
-        }
+      {feed.map((block, index) => {
+        switch (block.type) {
+          case 'thought':
+            return (
+              <ThinkingStep
+                key={block.id}
+                text={block.content}
+                // Only the very last block of a running turn is still being written in.
+                running={index === lastIndex && streaming && block.durationMs === undefined}
+              />
+            );
 
-        if (unit.kind === 'card') {
-          return (
-            <CommandConfirmCard
-              key={unit.id}
-              events={unit.events}
-              onDecision={onCommandDecision}
-            />
-          );
-        }
+          case 'text':
+            return (
+              // ARTIFACTS: text goes through the artifact-aware renderer, so a `<conexy_artifact>` tag
+              // in an agent's own line becomes a card instead of leaking into the feed as raw markup.
+              // The block id scopes this block's artifacts, so two text blocks of one message do not
+              // overwrite each other in the panel.
+              <div key={block.id} className="agent-feed__text chat-text">
+                <AssistantContent
+                  messageId={`${messageId}#${block.id}`}
+                  createdAt={createdAt}
+                  content={block.content}
+                  // Only the newest text block of a running turn is still being written into.
+                  streaming={index === lastIndex && streaming}
+                />
+              </div>
+            );
 
-        return (
-          <ActionStepLine
-            key={unit.id}
-            kind={unit.action}
-            label={unit.label}
-            path={unit.path}
-            onOpenPath={onOpenPath}
-            state={unit.state}
-            meta={unit.meta}
-            errorLine={unit.errorLine}
-            detail={unit.detail}
-          />
-        );
+          case 'plan':
+            return <TodoPanel key={block.id} todos={block.items} />;
+
+          case 'tool': {
+            // A command that went through approval keeps the full terminal card for its whole life —
+            // request, decision and output all belong together, and switching it to a compact row the
+            // moment it finishes would both lose the card's output panel and jump the feed.
+            if (block.actionId) {
+              return (
+                <CommandConfirmCard
+                  key={block.id}
+                  events={[toolEventFromBlock(block)]}
+                  onDecision={onCommandDecision}
+                />
+              );
+            }
+
+            const event = toolEventFromBlock(block);
+            const { action, label, path } = describeAction(event, t);
+            const state = stateFrom(event);
+            return (
+              <ActionStepLine
+                key={block.id}
+                kind={action}
+                label={label}
+                path={path}
+                onOpenPath={onOpenPath}
+                state={state}
+                meta={state === 'completed' ? block.summary : undefined}
+                errorLine={state === 'failed' ? block.summary : undefined}
+                detail={block.output}
+              />
+            );
+          }
+
+          default:
+            return null;
+        }
       })}
 
       {showStatusRow && statusPill && (
@@ -306,14 +216,19 @@ export function AgentTimeline({
   );
 }
 
-/** True when no unit is currently running — used to avoid stacking two "working" indicators. */
-function loadingNothing(units: Unit[]): boolean {
-  return !units.some((u) => {
-    if (u.kind === 'row') return u.state === 'running';
-    if (u.kind === 'card')
-      return !u.events.some(
-        (e) => e.status === 'completed' || e.status === 'failed' || e.status === 'rejected',
-      );
-    return u.endedAt === undefined;
-  });
+/**
+ * What the feed already renders, so `MessageBubble` does not repeat it: the reasoning accordion, the
+ * top-of-message plan and the standalone answer bubble all step aside once their block is present.
+ */
+export function feedSummary(blocks: TurnBlock[] | undefined): {
+  thoughts: boolean;
+  plan: boolean;
+  text: boolean;
+} {
+  const list = blocks ?? [];
+  return {
+    thoughts: list.some((b) => b.type === 'thought'),
+    plan: list.some((b) => b.type === 'plan'),
+    text: list.some((b) => b.type === 'text'),
+  };
 }

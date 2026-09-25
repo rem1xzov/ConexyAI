@@ -45,10 +45,19 @@ import { ConfirmDialog } from './components/Dialog';
 import { getStoredTheme, setTheme, type Theme } from './theme';
 import { setLanguage } from './i18n';
 import type { ChatSummary, ConexyModel, LimitExceededInfo, ReasoningEffort, SendOutcome, SubscriptionUsage, TaskAttachment } from './types/api';
-import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep } from './types/chat';
+import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep, TurnBlock } from './types/chat';
 import type { PendingActionPayload, SignalrCallbacks } from './types/signalr';
 // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
 import { toMessageAttachment } from './utils/attachments';
+// INTERLEAVED_STREAM: добавлено 2026-09-24
+import {
+  appendTextBlock,
+  appendThoughtBlock,
+  applyFinalAnswer,
+  applyPlanBlock,
+  applyToolEvent,
+  closeFeedBlocks,
+} from './utils/turnBlocks';
 // DEPLOY_WINDOW_GRACEFUL_ERRORS: добавлено 2026-09-23
 import { humanError } from './utils/humanError';
 // SESSION_ISOLATION / CHAT_STORAGE: добавлено 2026-09-24 (H10, M22, L13)
@@ -675,6 +684,22 @@ export default function App() {
     );
   }
 
+  // INTERLEAVED_STREAM: the block feed exists for the agent tabs only — the plain chat and students
+  // paths keep rendering from `content` alone, exactly as before.
+  function isAgentSession(sessionId: string): boolean {
+    return sessionsRef.current.find((s) => s.id === sessionId)?.kind === 'projects';
+  }
+
+  /** Answer text: into the flat field (copy, export, persistence) and into the chronological feed. */
+  function appendTurnText(m: ChatMessage, sessionId: string, slice: string): ChatMessage {
+    return {
+      ...m,
+      content: m.content + slice,
+      currentAction: null,
+      blocks: isAgentSession(sessionId) ? appendTextBlock(m.blocks ?? [], slice) : m.blocks,
+    };
+  }
+
   // SMOOTH_STREAM: queue one network chunk for the given turn and make sure a frame is scheduled.
   function enqueueContentToken(ctx: TurnContext, delta: string) {
     const key = `${ctx.sessionId}:${ctx.messageId}`;
@@ -706,7 +731,7 @@ export default function App() {
       const slice = entry.text.slice(0, take);
       entry.text = entry.text.slice(take);
       // Hide the live action badge as soon as the final answer starts streaming.
-      patchTurn(entry.ctx, (m) => ({ ...m, content: m.content + slice, currentAction: null }));
+      patchTurn(entry.ctx, (m) => appendTurnText(m, entry.ctx.sessionId, slice));
       if (entry.text.length === 0) tokenQueueRef.current.delete(key);
     }
     if (tokenQueueRef.current.size > 0) {
@@ -751,6 +776,17 @@ export default function App() {
     // outside the state updater, which must stay pure — so a stopped turn keeps every character
     // that the server already sent, instead of losing the last few frames of it.
     const buffered = drainContentTokens(target.sessionId, target.messageId);
+    // INTERLEAVED_STREAM: the feed is closed in the same step as the flat fields — the buffered text
+    // first, then (for a finished turn) the server's answer over the streamed one. Read from the same
+    // snapshot the updater below works on, so both stay in agreement.
+    const closedBlocks = isAgentSession(target.sessionId)
+      ? closeFeedBlocks(
+          sessionsRef.current.find((s) => s.id === target.sessionId)?.messages.find((m) => m.id === target.messageId)
+            ?.blocks ?? [],
+          buffered,
+          outcome === 'complete' ? opts.result : undefined,
+        )
+      : undefined;
     setSessions((prev) => {
       let changed = false;
       const next = updateMessage(prev, target.sessionId, target.messageId, (m) => {
@@ -760,6 +796,7 @@ export default function App() {
         const base: ChatMessage = {
           ...m,
           content: buffered ? m.content + buffered : m.content,
+          blocks: closedBlocks ?? m.blocks,
           steps: closeSteps(m.steps),
           awaitingTaskId: undefined,
         };
@@ -1005,7 +1042,11 @@ export default function App() {
     onThinkingToken: (delta, scopeId) => {
       const ctx = resolveTurn(scopeId);
       if (!ctx) return dropEvent('OnThinkingToken', scopeId);
-      patchTurn(ctx, (m) => ({ ...m, thinking: (m.thinking ?? '') + delta }));
+      patchTurn(ctx, (m) => ({
+        ...m,
+        thinking: (m.thinking ?? '') + delta,
+        blocks: isAgentSession(ctx.sessionId) ? appendThoughtBlock(m.blocks ?? [], delta) : m.blocks,
+      }));
     },
     onLog: (message, scopeId) => {
       const ctx = resolveTurn(scopeId);
@@ -1080,7 +1121,11 @@ export default function App() {
       // Workspace events (bash, editor) are scoped by the chat id and belong to that chat's turn.
       const ctx = resolveTurn(scopeId);
       if (ctx) {
-        patchTurn(ctx, (m) => ({ ...m, toolActions: [...(m.toolActions ?? []), event] }));
+        patchTurn(ctx, (m) => ({
+          ...m,
+          toolActions: [...(m.toolActions ?? []), event],
+          blocks: isAgentSession(ctx.sessionId) ? applyToolEvent(m.blocks ?? [], event) : m.blocks,
+        }));
       }
       const chatId = ctx?.sessionId ?? resolveChatId(scopeId);
       if (!chatId) return dropEvent('ToolAction', scopeId);
@@ -1099,7 +1144,11 @@ export default function App() {
     onTodoUpdate: (payload, scopeId) => {
       const ctx = resolveTurn(scopeId);
       if (!ctx) return dropEvent('TodoUpdate', scopeId);
-      patchTurn(ctx, (m) => ({ ...m, todos: payload.todos }));
+      patchTurn(ctx, (m) => ({
+        ...m,
+        todos: payload.todos,
+        blocks: isAgentSession(ctx.sessionId) ? applyPlanBlock(m.blocks ?? [], payload.todos) : m.blocks,
+      }));
     },
     onCompleted: (payload, scopeId) => {
       finishFromServer(payload?.taskId ?? scopeId, 'complete', { result: payload?.result });

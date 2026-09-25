@@ -227,6 +227,8 @@ export function ChatFeed({
             onContinue={onContinue}
             onOpenFile={onOpenFile}
             chatId={session.id}
+            // INTERLEAVED_STREAM: only the agent tabs build a chronological feed of their turn.
+            agentTurn={(session.kind ?? 'chat') === 'projects'}
           />
         ))}
       </div>

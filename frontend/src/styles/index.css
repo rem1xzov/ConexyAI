@@ -4278,10 +4278,18 @@ body {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 4px;
+  /* INTERLEAVED_STREAM: 8px between the chronological blocks — dense like the reference, but never
+     crowded, and no full-screen placeholder cards. */
+  gap: 8px;
   margin: 10px 0 0;
   max-width: 100%;
   min-width: 0;
+}
+
+/* The model's own text between tools, inside the feed: no frame, just the answer type. */
+.agent-feed__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* AGENT_FEED_ZED: живая строка статуса под активным прогоном («Выполняю команду: …»).

@@ -33,6 +33,13 @@ export interface ChatMessage {
   /** Server task (turn) id of this assistant answer. Every turn gets its own id, so live events,
    *  the watchdog and Stop can target exactly this message — also after a page reload. */
   taskId?: string;
+  // INTERLEAVED_STREAM: добавлено 2026-09-24
+  /**
+   * Chronological feed of an agent turn (see `TurnBlock`). Only agent turns have it: the plain chat and students paths keep rendering from `content` alone. Absent on messages
+   * restored from a cache written before this existed — they are replayed with
+   * `blocksFromLegacy` instead of being lost.
+   */
+  blocks?: TurnBlock[];
   /** Set while `POST /run` for this answer has not returned yet (the turn has no task id). A message
    *  still carrying it after a reload was never confirmed by the server. */
   awaitingTaskId?: boolean;
@@ -79,6 +86,66 @@ export interface AgentAction {
   stage: string;
   label: string;
   file?: string | null;
+}
+
+// INTERLEAVED_STREAM: добавлено 2026-09-24
+/**
+ * One entry of an agent turn's chronological feed.
+ *
+ * The agent path has always sent its events in true order, but the client kept them in separate flat
+ * fields: every tool call went into `toolActions`, all reasoning text into `thinking` and ALL answer
+ * text — including the short lines the model writes between tool calls — into one `content` string.
+ * Rendering those three fields meant the answer was glued together at the bottom of the message and
+ * the tools piled up above it, out of context.
+ *
+ * `blocks` keeps the order the events arrived in, so a text block sits exactly where it was written:
+ * reasoning → text → tool → text → command → final answer.
+ */
+export type TurnBlock = TurnThoughtBlock | TurnTextBlock | TurnToolBlock | TurnPlanBlock;
+
+export interface TurnThoughtBlock {
+  id: string;
+  type: 'thought';
+  content: string;
+  /** When this reasoning block opened — what the duration below is measured from. */
+  startedAt: number;
+  /** Filled in when the block is closed; absent while the agent is still thinking in it. */
+  durationMs?: number;
+  isCollapsed?: boolean;
+}
+
+export interface TurnTextBlock {
+  id: string;
+  type: 'text';
+  content: string;
+}
+
+export type TurnToolStatus = 'pending_approval' | 'running' | 'success' | 'error' | 'rejected';
+
+export interface TurnToolBlock {
+  id: string;
+  type: 'tool';
+  /**
+   * Correlation key of this invocation. The backend's `ToolActionEvent` carries no tool-call id, so
+   * the pair (name, path, command) is what ties a `started` event to its later `completed` one.
+   */
+  toolCallId: string;
+  name: string;
+  command: string;
+  path: string;
+  status: TurnToolStatus;
+  output?: string;
+  summary?: string;
+  workingDirectory?: string;
+  /** Set for a command that needs the user's decision: the buttons render inside this block. */
+  actionId?: string;
+  isDangerous?: boolean;
+}
+
+export interface TurnPlanBlock {
+  id: string;
+  type: 'plan';
+  items: TodoItem[];
 }
 
 export interface ChatSession {

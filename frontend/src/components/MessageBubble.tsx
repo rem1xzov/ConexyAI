@@ -8,7 +8,8 @@ import { producedFiles } from '../utils/producedFiles';
 import { ConexyLogo } from './ConexyLogo';
 import { VisionGallery } from './VisionGallery';
 import { AttachmentGrid } from './AttachmentGrid';
-import { AgentTimeline } from './AgentTimeline';
+import { AgentTimeline, feedSummary } from './AgentTimeline';
+import { blocksFromLegacy } from '../utils/turnBlocks';
 import { DurationBadge } from './StepDuration';
 import { TodoPanel } from './TodoPanel';
 import { AssistantContent } from './artifacts/AssistantContent';
@@ -40,6 +41,12 @@ interface MessageBubbleProps {
   // FILE_CARDS: добавлено 2026-09-24
   /** Chat (= workspace) id, needed to download files the agent produced. */
   chatId?: string;
+  // INTERLEAVED_STREAM: добавлено 2026-09-24
+  /**
+   * True for the agent tabs (Coder/Cowork). Only they own their text in the chronological feed; the
+   * plain chat and students paths keep the answer in its own bubble, as before.
+   */
+  agentTurn?: boolean;
 }
 
 // TURN_TIMER: добавлено 2026-09-24 (ревью L3)
@@ -71,6 +78,7 @@ function MessageBubbleBase({
   onContinue,
   onOpenFile,
   chatId,
+  agentTurn = false,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
@@ -104,7 +112,27 @@ function MessageBubbleBase({
   // тем же текстом дважды. Оставляем её только там, где шагов нет: обычный чат, а также
   // восстановленное после перезагрузки сообщение (steps живут только в памяти вкладки).
   const hasSteps = (message.steps?.length ?? 0) > 0;
-  const showThinkingAccordion = (hasThinking || phase === 'thinking') && !hasSteps;
+  // INTERLEAVED_STREAM: the chronological feed, built once per event batch. A message restored from
+  // a cache written before the feed existed has none, so its flat fields are replayed — which keeps
+  // its tools and reasoning exactly where the old timeline drew them. Only an agent turn replays its
+  // answer into the feed; everywhere else the answer stays a separate bubble (see `feed.text`).
+  const feed = useMemo(
+    () =>
+      message.blocks ??
+      blocksFromLegacy({
+        toolActions: message.toolActions,
+        steps: message.steps,
+        thinking,
+        content,
+        withContent: agentTurn,
+      }),
+    [message.blocks, message.toolActions, message.steps, thinking, content, agentTurn],
+  );
+  // What the feed already renders. Each of these used to be drawn separately as well — the reasoning
+  // accordion, the plan and the answer bubble — which is exactly how the answer ended up glued to the
+  // bottom, away from the tools it talked about.
+  const parts = feedSummary(feed);
+  const showThinkingAccordion = (hasThinking || phase === 'thinking') && !hasSteps && !parts.thoughts;
   // Live agent status, rendered as a pill only when no tool event already covers it.
   const statusPill =
     phase === 'tool_calling' && currentAction ? { label: currentAction.label } : null;
@@ -200,8 +228,9 @@ function MessageBubbleBase({
   return (
     <div className="w-full max-w-3xl mx-auto my-6 px-2">
       {/* Agent task plan, kept above the working blocks so the required order
-          pills -> running light -> answer text stays intact. */}
-      <TodoPanel todos={todos} />
+          pills -> running light -> answer text stays intact. Once the plan has a block of its own in
+          the feed, this would only repeat it. */}
+      {!parts.plan && <TodoPanel todos={todos} />}
 
       {/* 1. Thought process: the reasoning accordion comes first. */}
       {showThinkingAccordion && (
@@ -213,28 +242,31 @@ function MessageBubbleBase({
         </details>
       )}
 
-      {/* 2. Compact step timeline: reasoning rows + tool rows, and a full card only for the
-          commands that actually need the user's decision. */}
+      {/* 2. Chronological feed: reasoning rows, tool rows and the model's own text in the order
+          they happened — a full card only for the commands that need the user's decision. */}
       <AgentTimeline
-        actions={toolActions}
-        steps={message.steps}
-        thinking={thinking}
+        blocks={feed}
+        messageId={message.id}
+        createdAt={message.createdAt}
+        streaming={streaming}
         onCommandDecision={onCommandDecision}
         statusPill={statusPill}
         onOpenPath={onOpenFile}
       />
 
-      {/* 4. Streamed answer (Markdown + artifact cards in place of <conexy_artifact> tags). */}
-      <div className="w-full chat-text leading-relaxed">
-        <div className="break-words">
-          <AssistantContent
-            messageId={message.id}
-            createdAt={message.createdAt}
-            content={content}
-            streaming={streaming}
-          />
+      {/* 4. Answer text, for messages the feed does not carry: the plain chat and students paths. */}
+      {!parts.text && (
+        <div className="w-full chat-text leading-relaxed">
+          <div className="break-words">
+            <AssistantContent
+              messageId={message.id}
+              createdAt={message.createdAt}
+              content={content}
+              streaming={streaming}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* FILE_CARDS: добавлено 2026-09-24 — files produced in this turn, with a download button. */}
       <ProducedFiles files={files} chatId={chatId} onOpenFile={onOpenFile} />
