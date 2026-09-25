@@ -134,8 +134,10 @@ function MessageBubbleBase({
   const parts = feedSummary(feed);
   const showThinkingAccordion = (hasThinking || phase === 'thinking') && !hasSteps && !parts.thoughts;
   // Live agent status, rendered as a pill only when no tool event already covers it.
-  const statusPill =
-    phase === 'tool_calling' && currentAction ? { label: currentAction.label } : null;
+  // INTERLEAVED_STREAM: offered for every phase now, not just `tool_calling`. Some phases stream no
+  // text of their own — the auditor review is one — so this label is the only trace of them, and the
+  // feed hides the pill whenever a thought or tool block is running anyway.
+  const statusPill = currentAction ? { label: currentAction.label } : null;
   const showActions = message.status !== 'streaming';
   // FILE_CARDS: files the agent wrote during this turn, derived from its logs and editor events.
   const logs = message.logs;

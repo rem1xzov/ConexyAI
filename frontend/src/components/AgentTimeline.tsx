@@ -128,9 +128,11 @@ export function AgentTimeline({
   const lastIndex = feed.length - 1;
   const lastBlock = feed[lastIndex];
   // One "working" indicator at a time: the live status row waits until nothing else is running.
-  const somethingRunning = feed.some((block) => {
+  const somethingRunning = feed.some((block, index) => {
     if (block.type === 'tool') return !isTerminalToolStatus(block.status);
-    if (block.type === 'thought') return block.durationMs === undefined;
+    // A thought counts as running only while it is the live one; a block left open by a finished
+    // turn must not keep the status row hidden forever.
+    if (block.type === 'thought') return streaming && index === lastIndex && block.durationMs === undefined;
     return false;
   });
   const showStatusRow = Boolean(statusPill) && !somethingRunning;
