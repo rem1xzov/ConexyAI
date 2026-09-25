@@ -5755,7 +5755,7 @@ body {
      gains stays empty above it instead of pushing it up into the middle of the view.
 
      The compound `.chat-stage.chat-stage--composer-focused` is deliberate: it has to outrank
-     `.chat-stage--empty .chat-stage__hero-inner` below (max-height 200px). With equal specificity
+     `.chat-stage--empty .chat-stage__hero-inner` below (max-height 320px). With equal specificity
      that rule won on source order, so the greeting was invisible but still occupied its full
      height — which is exactly what left the composer floating in the upper half. */
   .chat-stage__hero-inner {
@@ -5792,10 +5792,22 @@ body {
     pointer-events: none;
   }
 
-  /* GUEST_HERO: compact guest block; the start-screen content may scroll instead of pushing
-     the composer off screen when the on-screen keyboard shrinks the viewport. */
+  /* GUEST_HERO: the guest block is a mark, a title, a three-line pitch and TWO stacked buttons
+     (~225–245px all told), so the old flat 200px cap cut the primary button off mid-height — a
+     fresh visitor only ever saw "Sign in", and the pitch grew a stray scrollbar (2026-09-25
+     report). The cap stays, because it and `overflow-y: auto` are what keep the start-screen
+     content from pushing the composer off a short viewport; it just has to clear the guest
+     block's real height, which depends on the locale, system font size and the safe areas, so it
+     is tied to the viewport instead of a pixel guess. `dvh` follows the dynamic viewport, the
+     `vh` line above it is the fallback for engines that do not know `dvh` yet (there an unknown
+     unit would drop the whole declaration, i.e. remove the safety valve altogether).
+
+     Signed-in users are unaffected either way: their hero is a single line, and
+     `--composer-focused` collapses it to zero. Guests cannot focus the composer at all
+     (`disabled` while signed out), so no on-screen keyboard competes for this space either. */
   .chat-stage--empty .chat-stage__hero-inner {
-    max-height: 200px;
+    max-height: min(320px, 48vh);
+    max-height: min(320px, 48dvh);
     overflow-y: auto;
   }
 
