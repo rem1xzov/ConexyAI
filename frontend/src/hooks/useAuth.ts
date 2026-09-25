@@ -6,7 +6,10 @@ import {
   getSession,
   login as apiLogin,
   logout as apiLogout,
-  register as apiRegister,
+  resendVerificationCode as apiResendCode,
+  startRegistration as apiStartRegistration,
+  verifyEmail as apiVerifyEmail,
+  type VerificationChallenge,
 } from '../api/conexyApi';
 import { onTokenRefreshed, onUnauthorized } from '../api/client';
 import type { UserProfile } from '../types/api';
@@ -131,6 +134,13 @@ function retryAfterSeconds(e: unknown): number | null {
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
+// EMAIL_VERIFICATION: добавлено 2026-09-24 — сколько попыток ввести код осталось (сервер считает их
+// сам, форма только показывает).
+function attemptsLeft(e: unknown): number | null {
+  const value = Number((e as { response?: { data?: { attemptsLeft?: unknown } } } | null)?.response?.data?.attemptsLeft);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+}
+
 /** Maps a backend error code to a localized message via the i18n <c>errors.*</c> namespace. */
 function authErrorMessage(e: unknown, t: Translate): string {
   const code = extractAuthErrorCode(e) ?? (statusOf(e) === 429 ? 'too_many_attempts' : null);
@@ -139,6 +149,14 @@ function authErrorMessage(e: unknown, t: Translate): string {
     return seconds
       ? `${t('errors.too_many_attempts')} ${t('sync.retryAfter', { seconds })}`
       : t('errors.too_many_attempts');
+  }
+  if (code === 'invalid_code') {
+    const left = attemptsLeft(e);
+    return left ? t('errors.invalid_code_left', { count: left }) : t('errors.invalid_code');
+  }
+  if (code === 'resend_cooldown') {
+    const seconds = retryAfterSeconds(e);
+    return seconds ? t('errors.resend_cooldown', { seconds }) : t('errors.resend_cooldown_short');
   }
   if (code) {
     const key = `errors.${code}`;
@@ -386,15 +404,43 @@ export function useAuth() {
     [applyToken, t],
   );
 
+  // EMAIL_VERIFICATION: изменено 2026-09-24 — регистрация возвращает задачу подтверждения, а не
+  // сессию: пароль уходит на сервер, там он ждёт кода, и только confirmEmail выдаёт токен.
   const register = useCallback(
-    async (email: string, password: string) => {
+    async (email: string, password: string): Promise<VerificationChallenge> => {
       try {
-        applyToken(await apiRegister(email, password));
+        return await apiStartRegistration(email, password);
+      } catch (e) {
+        throw new Error(authErrorMessage(e, t));
+      }
+    },
+    [t],
+  );
+
+  // EMAIL_VERIFICATION: ввод кода из письма — здесь появляется сессия.
+  const confirmEmail = useCallback(
+    async (email: string, code: string) => {
+      try {
+        applyToken(await apiVerifyEmail(email, code));
       } catch (e) {
         throw new Error(authErrorMessage(e, t));
       }
     },
     [applyToken, t],
+  );
+
+  // EMAIL_VERIFICATION: повторная отправка; сервер отвечает своим кулдауном, чтобы форма показала
+  // отсчёт, даже если она его потеряла.
+  const resendCode = useCallback(
+    async (email: string): Promise<number> => {
+      try {
+        const res = await apiResendCode(email);
+        return res.resendCooldownSeconds;
+      } catch (e) {
+        throw new Error(authErrorMessage(e, t));
+      }
+    },
+    [t],
   );
 
   // SESSION_REVOKED: изменено 2026-09-24 (M19) — выход отзывает токен на сервере (Bearer + cookie),
@@ -415,5 +461,18 @@ export function useAuth() {
     setError(null);
   }, []);
 
-  return { token, user, error, authUnavailable, initializing, profileFailed, reloadProfile, login, register, logout };
+  return {
+    token,
+    user,
+    error,
+    authUnavailable,
+    initializing,
+    profileFailed,
+    reloadProfile,
+    login,
+    register,
+    confirmEmail,
+    resendCode,
+    logout,
+  };
 }

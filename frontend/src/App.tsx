@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
-import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, getTaskStatus, runTask } from './api/conexyApi';
+import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, getTaskStatus, runTask, type VerificationChallenge } from './api/conexyApi';
 import { isForbiddenJoinError, signalrService } from './services/signalrService';
 // TURN_SCOPE: добавлено 2026-09-24 (H6/H7)
 import { TurnRegistry, type TurnContext } from './services/turnRegistry';
@@ -223,7 +223,7 @@ function replacesLastTurn(messages: ChatMessage[], userIndex: number): boolean {
 
 export default function App() {
   // EMAIL_AUTH: добавлено 2026-09-19
-  const { token, user, initializing, profileFailed, reloadProfile, error: authError, login, register, logout } = useAuth();
+  const { token, user, initializing, profileFailed, reloadProfile, error: authError, login, register, confirmEmail, resendCode, logout } = useAuth();
   // SETTINGS: добавлено 2026-09-19
   const { t, i18n } = useTranslation();
   // MOBILE: добавлено 2026-09-19 — drives the responsive layout (sidebar overlay, agent tabs).
@@ -349,13 +349,14 @@ export default function App() {
     toastTimer.current = window.setTimeout(() => setToast(null), 2200);
   }
 
-  // EMAIL_AUTH: добавлено 2026-09-19
-  async function handleAuthSubmit(email: string, password: string) {
+  // EMAIL_AUTH / EMAIL_VERIFICATION: изменено 2026-09-24 — регистрация больше не заканчивается входом:
+  // первый шаг возвращает задачу подтверждения, форма переходит к вводу кода, а модалка закрывается
+  // уже после confirmEmail (сессия появляется там).
+  async function handleAuthSubmit(email: string, password: string): Promise<VerificationChallenge | void> {
     if (authModal === 'register') {
-      await register(email, password);
-    } else {
-      await login(email, password);
+      return register(email, password);
     }
+    await login(email, password);
     setAuthModal(null);
   }
 
@@ -432,6 +433,8 @@ export default function App() {
               <AuthModal
                 mode={authModal}
                 onSubmit={handleAuthSubmit}
+                onConfirmCode={confirmEmail}
+                onResendCode={resendCode}
                 onSwitchMode={() => setAuthModal(authModal === 'login' ? 'register' : 'login')}
                 onClose={() => setAuthModal(null)}
               />
@@ -2800,6 +2803,8 @@ export default function App() {
         <AuthModal
           mode={authModal}
           onSubmit={handleAuthSubmit}
+          onConfirmCode={confirmEmail}
+          onResendCode={resendCode}
           onSwitchMode={() => setAuthModal(authModal === 'login' ? 'register' : 'login')}
           onClose={() => setAuthModal(null)}
         />

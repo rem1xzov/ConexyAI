@@ -38,6 +38,9 @@ public class DbConexy : Microsoft.EntityFrameworkCore.DbContext
     public DbSet<SupportTicket> SupportTickets => Set<SupportTicket>();
     public DbSet<SupportMessage> SupportMessages => Set<SupportMessage>();
 
+    // EMAIL_VERIFICATION: добавлено 2026-09-24 — неподтверждённые регистрации (код + хэш пароля).
+    public DbSet<EmailVerificationCodeEntity> EmailVerificationCodes => Set<EmailVerificationCodeEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

@@ -115,6 +115,12 @@ services:
       AiUpstream__DeepSeek__ProAgentModel: ${DEEPSEEK_PRO_AGENT_MODEL:-deepseek-v4-pro}
       GitHub__PersonalAccessToken: ${GITHUB_PAT:-}
       GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      # EMAIL_VERIFICATION: Gmail app password for the sign-up code. Deliberately no default — an
+      # unset variable leaves mail unconfigured, and sign-up answers "email_not_configured" with a
+      # log line instead of silently accepting accounts nobody can confirm.
+      Smtp__Password: ${SMTP_PASSWORD:-}
+      Smtp__User: ${SMTP_USER:-conexy.ai.ru@gmail.com}
+      Smtp__FromEmail: ${SMTP_FROM_EMAIL:-conexy.ai.ru@gmail.com}
       GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
       ADMIN_ACCOUNTS: ${ADMIN_ACCOUNTS:-}
       WebSearch__JsonSeoApiKey: ${JSONSEO_API_KEY:-}

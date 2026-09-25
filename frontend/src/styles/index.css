@@ -1200,6 +1200,51 @@ body {
   }
 }
 
+/* ---------- EMAIL_VERIFICATION: шаг ввода кода (2026-09-25) ---------- */
+/* Крупное поле с разрядкой: шесть цифр видны целиком, не нужно наклоняться к экрану. */
+.auth-code__input {
+  width: 100%;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 12px;
+  text-align: center;
+  /* Разрядка добавляет отступ справа у последней цифры — компенсируем, чтобы код стоял по центру. */
+  text-indent: 12px;
+  padding: 12px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.auth-modal__subtitle {
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* Подсказка про «Спам» и отсчёт до повторной отправки. */
+.auth-modal__hint {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.auth-modal__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.auth-modal__actions .dialog-btn {
+  flex: 1 1 auto;
+  min-height: 40px;
+  white-space: nowrap;
+}
+
 /* ---------- Session context menu ---------- */
 
 .chats__row {

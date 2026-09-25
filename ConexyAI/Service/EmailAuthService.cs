@@ -11,9 +11,6 @@ namespace ConexyAI.Service;
 // EMAIL_AUTH: добавлено 2026-09-19
 public interface IEmailAuthService
 {
-    /// <summary>Creates a new email/password user (throws <see cref="AuthException"/> on conflict).</summary>
-    Task<User> RegisterAsync(string email, string password, CancellationToken ct = default);
-
     /// <summary>Authenticates an email/password user (throws <see cref="AuthException"/> on failure).</summary>
     Task<User> LoginAsync(string email, string password, CancellationToken ct = default);
 }
@@ -40,53 +37,6 @@ public class EmailAuthService : IEmailAuthService
         _adminOptions = adminOptions;
         _logger = logger;
         _attempts = attempts;
-    }
-
-    public async Task<User> RegisterAsync(string email, string password, CancellationToken ct = default)
-    {
-        var normalized = NormalizeEmail(email);
-        ValidatePassword(password);
-
-        var existing = await _userRepository.GetByEmailAsync(normalized, ct);
-        if (existing is not null)
-        {
-            // A password-less account is a GitHub-only user; an email/password login can't work.
-            if (existing.PasswordHash is null)
-            {
-                throw new AuthException(
-                    "email_linked_to_github",
-                    "Этот email привязан к входу через GitHub. Войдите через GitHub.",
-                    409);
-            }
-
-            throw new AuthException("email_taken", "Этот email уже зарегистрирован.", 409);
-        }
-
-        var now = DateTime.UtcNow;
-        // ADMIN_VERIFIED_ONLY: добавлено 2026-09-24 (ревью H1) — регистрация НИКОГДА не выдаёт админа:
-        // email здесь ничем не подтверждён, совпадение с ADMIN_ACCOUNTS ничего не доказывает (раньше
-        // любой аноним регистрировал email владельца и получал admin + SubscriptionTier.Admin).
-        var user = new User
-        {
-            Id = Guid.NewGuid(),
-            Email = normalized,
-            EmailConfirmed = false,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
-            SubscriptionTier = SubscriptionTier.Free,
-            IsAdmin = false,
-            CreatedAt = now,
-            LastLoginAt = now
-        };
-        // EMAIL_VERIFICATION_HOOK (ревью H1): когда появится подтверждение email, обработчик «email
-        // подтверждён» должен выставить EmailConfirmed = true и ПОВТОРНО оценить админство:
-        //     if (_adminOptions.Value.IsSuperAdmin(user)) { user.IsAdmin = true; user.SubscriptionTier = SubscriptionTier.Admin; }
-        // и сохранить через IUserRepository.UpdateAsync (кэш проверки токена сбросится сам, isAdmin
-        // в JWT подменяется значением из БД на каждом запросе — перевыпускать токен не нужно).
-
-        await _userRepository.AddAsync(user, ct);
-        // PRIVACY_LOGS: 2026-09-24 (ревью H3) — без email в логе, id достаточно.
-        _logger.LogInformation("Email auth: registered new user {UserId}.", user.Id);
-        return user;
     }
 
     public async Task<User> LoginAsync(string email, string password, CancellationToken ct = default)
@@ -121,6 +71,19 @@ public class EmailAuthService : IEmailAuthService
             throw Failed(normalized, new AuthException("invalid_credentials", "Неверный email или пароль.", 401));
         }
 
+        // EMAIL_VERIFICATION: добавлено 2026-09-24 — аккаунт без подтверждённой почты в систему не
+        // пускается, иначе одноразовый код обходится обычным входом. Новые аккаунты создаются уже
+        // подтверждёнными (так что сюда попадают только строки, оставшиеся от старых версий), а
+        // миграция проставляет EmailConfirmed всем существующим пользователям, чтобы они не потеряли
+        // доступ.
+        if (!user.EmailConfirmed)
+        {
+            throw Failed(normalized, new AuthException(
+                "email_not_verified",
+                "Почта не подтверждена. Завершите регистрацию кодом из письма.",
+                403));
+        }
+
         _attempts.Reset(normalized);
 
         // ADMIN_UNLIMITED: добавлено 2026-09-19 — promote ADMIN_ACCOUNTS superadmins on
@@ -152,7 +115,9 @@ public class EmailAuthService : IEmailAuthService
         return failure;
     }
 
-    private static string NormalizeEmail(string email)
+    // EMAIL_VERIFICATION: добавлено 2026-09-24 — те же правила, что у формы входа, поэтому вынесены
+    // в internal static: регистрация проверяет email и пароль ровно так же, как логин.
+    internal static string NormalizeEmail(string email)
     {
         if (string.IsNullOrWhiteSpace(email))
         {
@@ -170,7 +135,7 @@ public class EmailAuthService : IEmailAuthService
         return normalized;
     }
 
-    private static void ValidatePassword(string password)
+    internal static void ValidatePassword(string password)
     {
         if (string.IsNullOrWhiteSpace(password))
         {

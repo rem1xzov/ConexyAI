@@ -6,6 +6,8 @@ using ConexyAI.Hub;
 using ConexyAI.Repository;
 using ConexyAI.Service;
 using ConexyAI.Service.Auth;
+// EMAIL_VERIFICATION: добавлено 2026-09-24
+using ConexyAI.Service.Email;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -132,6 +134,14 @@ builder.Services.Configure<ConversationOptions>(builder.Configuration.GetSection
 builder.Services.Configure<RagOptions>(builder.Configuration.GetSection(RagOptions.SectionName));
 // SANDBOX: добавлено 2026-09-17
 builder.Services.Configure<SandboxOptions>(builder.Configuration.GetSection(SandboxOptions.SectionName));
+// EMAIL_VERIFICATION: добавлено 2026-09-24 — SMTP для писем с кодом подтверждения. Пароль
+// приложения приходит ТОЛЬКО из окружения (SMTP_PASSWORD), в appsettings.json его нет и не должно
+// быть: конфиг лежит в репозитории и в образе.
+builder.Services.Configure<SmtpOptions>(options =>
+{
+    builder.Configuration.GetSection(SmtpOptions.SectionName).Bind(options);
+    options.Password = builder.Configuration[SmtpOptions.PasswordEnvVar] ?? "";
+});
 // EMAIL_AUTH: добавлено 2026-09-19
 builder.Services.Configure<AdminAccountsOptions>(options =>
 {
@@ -190,6 +200,13 @@ builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IGitHubOAuthService, GitHubOAuthService>();
 // EMAIL_AUTH: добавлено 2026-09-19
 builder.Services.AddScoped<IEmailAuthService, EmailAuthService>();
+// EMAIL_VERIFICATION: добавлено 2026-09-24
+builder.Services.AddScoped<IEmailVerificationRepository, EmailVerificationRepository>();
+builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
+builder.Services.AddScoped<IEmailVerificationService, EmailVerificationService>();
+// EMAIL_VERIFICATION: код живёт по своему таймеру (срок годности и кулдаун повторной отправки),
+// поэтому часы берём из DI — в тестах их подменяет ManualTime.
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IConexyService, ConexyService>();
 builder.Services.AddScoped<IConexyAgentRunner, ConexyAgentRunner>();
 // CONVERSATION_SERVICE: добавлено 2026-09-23 — единая сборка контекста и запись хода.

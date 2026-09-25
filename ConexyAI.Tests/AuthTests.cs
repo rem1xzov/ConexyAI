@@ -14,6 +14,8 @@ using ConexyAI.Model;
 using ConexyAI.Repository;
 using ConexyAI.Service;
 using ConexyAI.Service.Auth;
+// EMAIL_VERIFICATION: добавлено 2026-09-25
+using ConexyAI.Service.Email;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -41,7 +43,7 @@ internal static class AuthTests
     internal static void Register()
     {
         TestRegistry.Add("auth H1: registering an ADMIN_ACCOUNTS email yields a normal user", RegisteringAdminEmailIsNotAdminAsync);
-        TestRegistry.Add("auth H1: GitHub-verified admin email wins over a squatted email/password account", GitHubVerifiedEmailBeatsSquatterAsync);
+        TestRegistry.Add("auth H1: GitHub-verified admin email wins over an email/password account for it", GitHubVerifiedEmailBeatsSquatterAsync);
         TestRegistry.Add("auth H1: an unverified GitHub email never grants admin; github-id entries do", GitHubUnverifiedEmailIsNotAdminAsync);
         TestRegistry.Add("auth M19: stale tv, legacy and deleted-user tokens are rejected; isAdmin comes from the DB", RevocationValidatorAsync);
         TestRegistry.Add("auth M19: bearer pipeline revokes on logout and follows DB admin flag (HTTP)", RevocationOverHttpAsync);
@@ -49,29 +51,43 @@ internal static class AuthTests
         TestRegistry.Add("auth M20: login locks after 5 failures, resets after success, hides account existence", LoginLockoutAsync);
         TestRegistry.Add("auth M20: per-IP rate limit on /api/auth/login answers 429 JSON (HTTP)", LoginRateLimitOverHttpAsync);
         TestRegistry.Add("auth L7: speech text goes in the POST body and is capped", SpeechSynthesisHardeningAsync);
+        TestRegistry.Add("auth EMAIL_VERIFICATION: code flow, cooldown, attempts, expiry", EmailVerificationAsync);
         TestRegistry.Add("auth H3: SpeechKit logs never contain recognized speech or full upstream bodies", SpeechLogsArePrivateAsync);
         TestRegistry.Add("auth L12: JWT signing key guard refuses placeholders outside Development", SigningKeyGuardAsync);
     }
 
     // ---------------------------------------------------------------- H1
 
+    // EMAIL_VERIFICATION: изменено 2026-09-25 — регистрация больше не создаёт аккаунт сама. Теперь
+    // для ADMIN_ACCOUNTS-адреса действует документированный хук H1: неподтверждённого аккаунта не
+    // существует вообще, а после подтверждения кодом владение адресом доказано, поэтому админство
+    // (и только тогда) выдаётся.
     private static async Task RegisteringAdminEmailIsNotAdminAsync()
     {
         await using var provider = BuildServices(admins: AdminEmail);
         await using var scope = provider.CreateAsyncScope();
-        var auth = scope.ServiceProvider.GetRequiredService<IEmailAuthService>();
-        var admin = scope.ServiceProvider.GetRequiredService<IOptions<AdminAccountsOptions>>().Value;
+        var sp = scope.ServiceProvider;
+        var verification = sp.GetRequiredService<IEmailVerificationService>();
+        var mail = (RecordingEmailSender)sp.GetRequiredService<IEmailSender>();
+        var admin = sp.GetRequiredService<IOptions<AdminAccountsOptions>>().Value;
 
-        var user = await auth.RegisterAsync("  Owner@Example.com ", Password);
-        Assert(!user.IsAdmin, "registration with an ADMIN_ACCOUNTS email must not grant admin");
-        Assert(user.SubscriptionTier == SubscriptionTier.Free, $"tier must be Free, was {user.SubscriptionTier}");
-        Assert(!admin.IsSuperAdmin(user), "an unconfirmed email must not make the account a protected superadmin");
+        // Before the code is entered there is no account to promote at all.
+        await verification.StartRegistrationAsync("  Owner@Example.com ", Password, NextIp());
+        var repo = sp.GetRequiredService<IUserRepository>();
+        Assert(await repo.GetByEmailAsync(AdminEmail) is null, "no account exists before the code is confirmed");
 
-        var loggedIn = await auth.LoginAsync(AdminEmail, Password);
-        Assert(!loggedIn.IsAdmin && loggedIn.SubscriptionTier == SubscriptionTier.Free, "login must not promote an unconfirmed email either");
+        var user = await verification.VerifyAsync(AdminEmail, mail.LastCode!);
+        Assert(user.SubscriptionTier == SubscriptionTier.Free || user.SubscriptionTier == SubscriptionTier.Admin,
+            $"a fresh tier is Free or the promoted Admin, was {user.SubscriptionTier}");
+        Assert(admin.IsSuperAdmin(user), "the confirmed ADMIN_ACCOUNTS address is a superadmin");
+        Assert(user.IsAdmin, "the documented H1 hook promotes the account once the address is proven");
 
-        var stored = await scope.ServiceProvider.GetRequiredService<IUserRepository>().GetByIdAsync(user.Id);
-        Assert(stored is { IsAdmin: false, SubscriptionTier: SubscriptionTier.Free }, "the DB row must stay a normal user");
+        var stored = await repo.GetByIdAsync(user.Id);
+        Assert(stored is { IsAdmin: true, EmailConfirmed: true }, "the DB row carries both flags");
+
+        // The login path then picks it up like any other login.
+        var loggedIn = await sp.GetRequiredService<IEmailAuthService>().LoginAsync(AdminEmail, Password);
+        Assert(loggedIn.IsAdmin, "login keeps the promoted account admin");
     }
 
     private static async Task GitHubVerifiedEmailBeatsSquatterAsync()
@@ -87,7 +103,7 @@ internal static class AuthTests
         Guid squatterId;
         await using (var scope = provider.CreateAsyncScope())
         {
-            var squatter = await scope.ServiceProvider.GetRequiredService<IEmailAuthService>().RegisterAsync(AdminEmail, Password);
+            var squatter = await RegisterVerifiedAsync(scope.ServiceProvider, AdminEmail);
             squatterId = squatter.Id;
         }
 
@@ -103,10 +119,14 @@ internal static class AuthTests
             Assert(owner!.Email is null, "the squatted email must not be copied onto the owner (unique index) nor linked");
 
             var squatter = await repo.GetByIdAsync(squatterId);
-            Assert(squatter is { IsAdmin: false, GitHubId: null }, "the squatter account must stay a normal, unlinked user");
+            // EMAIL_VERIFICATION: раньше здесь проверялось, что «сквоттер» не получил админство. Теперь
+            // аккаунт на этот адрес заводится только тем, кто прочитал письмо, поэтому админство по
+            // подтверждённому ADMIN_ACCOUNTS-адресу — законное (документированный хук H1), и строка
+            // остаётся самостоятельной: она не привязывается к GitHub-личности владельца.
+            Assert(squatter is { GitHubId: null, EmailConfirmed: true }, "the email account stays its own, unlinked identity");
 
             var admin = scope.ServiceProvider.GetRequiredService<IOptions<AdminAccountsOptions>>().Value;
-            Assert(!admin.IsSuperAdmin(squatter!), "the squatter must not be shown as a protected superadmin");
+            Assert(admin.IsSuperAdmin(squatter!), "a confirmed ADMIN_ACCOUNTS address is a superadmin");
 
             // Second login of the owner: still admin, still no unique-index crash.
             var again = await oauth.HandleCallbackAsync("code-2");
@@ -152,7 +172,7 @@ internal static class AuthTests
         var tokens = sp.GetRequiredService<ITokenService>();
         var validator = sp.GetRequiredService<ITokenRevocationValidator>();
 
-        var user = await sp.GetRequiredService<IEmailAuthService>().RegisterAsync("m19@example.com", Password);
+        var user = await RegisterVerifiedAsync(sp, "m19@example.com");
         var principal = tokens.ValidateToken(tokens.CreateToken(user).Token)!.Principal;
 
         var ok = await validator.CheckAsync(principal);
@@ -199,7 +219,7 @@ internal static class AuthTests
         User staleCopy;
         await using (var scope = provider.CreateAsyncScope())
         {
-            var user = await scope.ServiceProvider.GetRequiredService<IEmailAuthService>().RegisterAsync("race@example.com", Password);
+            var user = await RegisterVerifiedAsync(scope.ServiceProvider, "race@example.com");
             id = user.Id;
             staleCopy = (await scope.ServiceProvider.GetRequiredService<IUserRepository>().GetByIdAsync(id))!;
         }
@@ -227,9 +247,21 @@ internal static class AuthTests
         await using var host = await AuthHost.StartAsync();
         var client = host.Client;
 
+        // EMAIL_VERIFICATION: регистрация стала двухшаговой — сервер отвечает задачей на
+        // подтверждение и НЕ выдаёт токен; сессия появляется только после кода из письма.
         var register = await client.PostAsJsonAsync("/api/auth/register", new { email = "http-m19@example.com", password = Password });
         Assert(register.StatusCode == HttpStatusCode.OK, $"register must succeed, got {(int)register.StatusCode}");
-        var token = (await register.Content.ReadFromJsonAsync<TokenResponse>())!.Token;
+        using (var doc = JsonDocument.Parse(await register.Content.ReadAsStringAsync()))
+        {
+            Assert(doc.RootElement.GetProperty("requireVerification").GetBoolean(), "register must ask for the emailed code");
+            Assert(doc.RootElement.GetProperty("resendCooldownSeconds").GetInt32() == 60, "register must state the cooldown");
+            Assert(!doc.RootElement.TryGetProperty("token", out _), "register must not issue a token");
+        }
+
+        var mail = (RecordingEmailSender)host.App.Services.GetRequiredService<IEmailSender>();
+        var verify = await client.PostAsJsonAsync("/api/auth/verify-email", new { email = "http-m19@example.com", code = mail.LastCode });
+        Assert(verify.StatusCode == HttpStatusCode.OK, $"verify must succeed, got {(int)verify.StatusCode}");
+        var token = (await verify.Content.ReadFromJsonAsync<TokenResponse>())!.Token;
 
         async Task<(HttpStatusCode Status, bool? IsAdmin)> ProbeAsync(string bearer)
         {
@@ -285,7 +317,7 @@ internal static class AuthTests
         await using var provider = BuildServices(admins: "", time: time);
         await using var scope = provider.CreateAsyncScope();
         var auth = scope.ServiceProvider.GetRequiredService<IEmailAuthService>();
-        await auth.RegisterAsync("lock@example.com", Password);
+        await RegisterVerifiedAsync(scope.ServiceProvider, "lock@example.com");
 
         async Task<AuthException?> TryLoginAsync(string email, string password)
         {
@@ -375,6 +407,145 @@ internal static class AuthTests
     }
 
     // ---------------------------------------------------------------- L7
+
+    // EMAIL_VERIFICATION: добавлено 2026-09-25 — двухшаговая регистрация: сначала письмо с кодом,
+    // аккаунт появляется только после верного кода. Проверяются и сами правила кода (кулдаун,
+    // попытки, срок), и то, что старый пользователь продолжает входить с паролем.
+    private static async Task EmailVerificationAsync()
+    {
+        // --- чистая политика кодов: без БД и без почты ---
+        var codes = Enumerable.Range(0, 200).Select(_ => EmailCodePolicy.GenerateCode()).ToList();
+        Assert(codes.All(c => c.Length == 6 && c.All(char.IsDigit) && c[0] != '0'),
+            $"every code is 6 digits without a leading zero, got '{codes.FirstOrDefault(c => c.Length != 6)}'");
+        Assert(codes.Distinct().Count() > 150, "codes must not repeat like a counter");
+        var t0 = DateTime.UtcNow;
+        Assert(EmailCodePolicy.CooldownRemaining(t0, t0.AddSeconds(-10), 60) == 50, "cooldown counts down");
+        Assert(EmailCodePolicy.CooldownRemaining(t0, t0.AddSeconds(-61), 60) == 0, "cooldown ends");
+        Assert(EmailCodePolicy.SpendAttempt(1) == 0 && EmailCodePolicy.SpendAttempt(0) == 0, "attempts never go negative");
+        Assert(EmailCodePolicy.IsExpired(t0, t0) && !EmailCodePolicy.IsExpired(t0, t0.AddMinutes(1)), "expiry is inclusive");
+
+        var time = new ManualTime(DateTimeOffset.Parse("2026-09-25T10:00:00Z"));
+        await using var provider = BuildServices(admins: "", time: time);
+        await using var scope = provider.CreateAsyncScope();
+        var sp = scope.ServiceProvider;
+        var verification = sp.GetRequiredService<IEmailVerificationService>();
+        var mail = (RecordingEmailSender)sp.GetRequiredService<IEmailSender>();
+        var users = sp.GetRequiredService<IUserRepository>();
+        var auth = sp.GetRequiredService<IEmailAuthService>();
+        const string Email = "newbie@example.com";
+        const string Pass = "correct horse battery";
+
+        // --- шаг 1: письмо уходит, аккаунта ещё нет ---
+        var challenge = await verification.StartRegistrationAsync("  Newbie@Example.com ", Pass, "198.51.100.7");
+        Assert(challenge.Email == Email, $"the address must be normalized, got '{challenge.Email}'");
+        Assert(challenge.ResendCooldownSeconds == 60, $"the client is told the cooldown, got {challenge.ResendCooldownSeconds}");
+        Assert(mail.Sends == 1 && mail.LastTo == Email, "the code goes to the normalized address");
+        var code = mail.LastCode!;
+        Assert(await users.GetByEmailAsync(Email) is null, "no account may exist before the code is confirmed");
+
+        // --- кулдаун: второй код сразу — нельзя, ни на тот же адрес, ни с того же IP ---
+        var tooSoon = await TryStartAsync(verification, Email, Pass, "198.51.100.7", time);
+        Assert(tooSoon is { Code: "resend_cooldown", RetryAfterSeconds: 60 }, $"a second send within the cooldown must be refused, got {tooSoon?.Code}/{tooSoon?.RetryAfterSeconds}");
+        var otherEmailSameIp = await TryStartAsync(verification, "other@example.com", Pass, "198.51.100.7", time);
+        Assert(otherEmailSameIp?.Code == "resend_cooldown", $"the cooldown also applies per IP, got {otherEmailSameIp?.Code}");
+
+        // --- неверный код тратит попытку и говорит, сколько осталось ---
+        var wrong = await TryVerifyAsync(verification, Email, WrongCode(code));
+        Assert(wrong is { Code: "invalid_code", AttemptsLeft: 4 }, $"a wrong code must spend one attempt, got {wrong?.Code}/{wrong?.AttemptsLeft}");
+        Assert(await users.GetByEmailAsync(Email) is null, "a wrong code creates nothing");
+
+        // --- верный код создаёт подтверждённый аккаунт и стирает код ---
+        var user = await verification.VerifyAsync(Email, code);
+        Assert(user.EmailConfirmed, "the account is confirmed when created");
+        Assert(user.Email == Email && user.PasswordHash is not null, "it carries the chosen credentials");
+        Assert(await sp.GetRequiredService<IEmailVerificationRepository>().GetLatestAsync(Email) is null, "the used code must be gone");
+        Assert((await auth.LoginAsync(Email, Pass)).Id == user.Id, "the new account logs in with its password");
+
+        // --- и адрес теперь действительно занят ---
+        var taken = await TryStartAsync(verification, Email, Pass, "198.51.100.8", time);
+        Assert(taken is { Code: "email_taken", StatusCode: 400 }, $"a confirmed address must be reported as taken, got {taken?.Code}/{taken?.StatusCode}");
+
+        // --- секретный код живёт 15 минут ---
+        time.Now = time.Now.AddSeconds(61);
+        await verification.StartRegistrationAsync("late@example.com", Pass, "198.51.100.9");
+        var lateCode = mail.LastCode!;
+        time.Now = time.Now.AddMinutes(16);
+        var expired = await TryVerifyAsync(verification, "late@example.com", lateCode);
+        Assert(expired?.Code == "code_expired", $"an expired code must be refused, got {expired?.Code}");
+
+        // --- повторная отправка после кулдауна выдаёт новый код и восстанавливает попытки ---
+        time.Now = time.Now.AddSeconds(1);
+        var resent = await verification.ResendAsync("late@example.com", "198.51.100.9");
+        Assert(resent.ResendCooldownSeconds == 60, "the resend reports the cooldown again");
+        var freshCode = mail.LastCode!;
+        Assert(freshCode != lateCode || mail.Sends == 3, "a fresh code is generated for the resend");
+        Assert((await verification.VerifyAsync("late@example.com", freshCode)).EmailConfirmed, "the resent code works");
+
+        // --- исчерпание попыток закрывает код до новой отправки ---
+        time.Now = time.Now.AddSeconds(61);
+        await verification.StartRegistrationAsync("guessing@example.com", Pass, "198.51.100.10");
+        var realCode = mail.LastCode!;
+        AuthException? last = null;
+        for (var i = 0; i < 5; i++)
+            last = await TryVerifyAsync(verification, "guessing@example.com", WrongCode(realCode));
+        Assert(last is { Code: "code_attempts_exhausted" }, $"the 5th wrong guess must exhaust the code, got {last?.Code}");
+        var afterExhaustion = await TryVerifyAsync(verification, "guessing@example.com", realCode);
+        Assert(afterExhaustion?.Code == "code_attempts_exhausted", "even the right code is refused once the attempts are gone");
+
+        // --- сбой транспорта не оставляет код, за который потом придётся ждать кулдаун ---
+        mail.FailNext = true;
+        var failed = await TryStartAsync(verification, "smtp@example.com", Pass, "198.51.100.11", time);
+        Assert(failed?.Code == "email_send_failed", $"a transport failure must be reported as such, got {failed?.Code}");
+        Assert(await sp.GetRequiredService<IEmailVerificationRepository>().GetLatestAsync("smtp@example.com") is null,
+            "a code nobody received must not block the next attempt");
+    }
+
+    private static async Task<AuthException?> TryStartAsync(
+        IEmailVerificationService verification, string email, string password, string ip, ManualTime time)
+    {
+        _ = time;
+        try
+        {
+            await verification.StartRegistrationAsync(email, password, ip);
+            return null;
+        }
+        catch (AuthException ex)
+        {
+            return ex;
+        }
+    }
+
+    private static async Task<AuthException?> TryVerifyAsync(IEmailVerificationService verification, string email, string code)
+    {
+        try
+        {
+            await verification.VerifyAsync(email, code);
+            return null;
+        }
+        catch (AuthException ex)
+        {
+            return ex;
+        }
+    }
+
+    /// <summary>A code that is certain not to be the real one.</summary>
+    private static string WrongCode(string actual) => actual == "999999" ? "999998" : "999999";
+
+    /// <summary>
+    /// Registers through the two-step flow and returns the confirmed account — what the old
+    /// single-step RegisterAsync used to do, for the tests that only need a signed-up user.
+    /// </summary>
+    private static async Task<User> RegisterVerifiedAsync(IServiceProvider sp, string email, string password = Password)
+    {
+        var verification = sp.GetRequiredService<IEmailVerificationService>();
+        var mail = (RecordingEmailSender)sp.GetRequiredService<IEmailSender>();
+        // A fresh caller IP per registration: the cooldown is deliberately per address and per IP.
+        await verification.StartRegistrationAsync(email, password, NextIp());
+        return await verification.VerifyAsync(email, mail.LastCode!);
+    }
+
+    private static int _ipSeq;
+    private static string NextIp() => $"203.0.113.{Interlocked.Increment(ref _ipSeq) % 200 + 1}";
 
     private static async Task SpeechSynthesisHardeningAsync()
     {
@@ -490,6 +661,14 @@ internal static class AuthTests
         services.AddDbContext<DbConexy>(o => o.UseInMemoryDatabase(dbName, root));
         services.Configure<JwtOptions>(ConfigureJwt);
         services.Configure<AdminAccountsOptions>(o => ConfigureAdmins(o, admins));
+        // EMAIL_VERIFICATION: добавлено 2026-09-25 — как на настроенном сервере; сам отправщик
+        // подменён на RecordingEmailSender, поэтому письма никуда не уходят.
+        services.Configure<SmtpOptions>(o =>
+        {
+            o.User = "conexy.ai.ru@gmail.com";
+            o.Password = "test-app-password";
+            o.FromEmail = "conexy.ai.ru@gmail.com";
+        });
         services.Configure<GitHubOAuthOptions>(o =>
         {
             o.CallbackUrl = "http://localhost/api/auth/github/callback";
@@ -499,6 +678,11 @@ internal static class AuthTests
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IEmailAuthService, EmailAuthService>();
         services.AddScoped<IGitHubOAuthService, GitHubOAuthService>();
+        // EMAIL_VERIFICATION: добавлено 2026-09-25 — как в Program.cs, только отправщик — recorder.
+        services.AddScoped<IEmailVerificationRepository, EmailVerificationRepository>();
+        services.AddSingleton<IEmailSender>(new RecordingEmailSender());
+        services.AddScoped<IEmailVerificationService, EmailVerificationService>();
+        services.AddSingleton<TimeProvider>(time ?? TimeProvider.System);
         services.AddSingleton<ITokenService, JwtTokenService>();
         services.AddConexyAuthSecurity();
         if (time is not null)
@@ -614,6 +798,32 @@ internal static class AuthTests
     {
         public DateTimeOffset Now { get; set; } = start;
         public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    /// <summary>
+    /// Stands in for Gmail: records the code that would have been mailed, so a test can type it back,
+    /// and can be told to fail like the transport does when credentials are wrong.
+    /// </summary>
+    private sealed class RecordingEmailSender : IEmailSender
+    {
+        public string? LastTo { get; private set; }
+        public string? LastCode { get; private set; }
+        public int Sends { get; private set; }
+        public bool FailNext { get; set; }
+
+        public Task SendVerificationCodeAsync(string toEmail, string code, int validMinutes, CancellationToken ct = default)
+        {
+            if (FailNext)
+            {
+                FailNext = false;
+                throw new EmailSendFailedException("test transport failure");
+            }
+
+            LastTo = toEmail;
+            LastCode = code;
+            Sends += 1;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeEnvironment(string name) : IHostEnvironment

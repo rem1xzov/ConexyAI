@@ -38,10 +38,29 @@ export async function getSession(): Promise<DevTokenResponse> {
   return data;
 }
 
-// EMAIL_AUTH: добавлено 2026-09-19
-/** Registers a new email/password account and returns its session token. */
-export async function register(email: string, password: string): Promise<DevTokenResponse> {
-  const { data } = await axios.post<DevTokenResponse>('/api/auth/register', { email, password });
+// EMAIL_VERIFICATION: изменено 2026-09-24 — регистрация двухшаговая. Сервер запоминает выбранный
+// пароль, шлёт на адрес 6-значный код и НЕ выдаёт сессию: токен появляется только после confirmEmail.
+/** What `/api/auth/register` answers: the code was sent, there is no session yet. */
+export interface VerificationChallenge {
+  email: string;
+  resendCooldownSeconds: number;
+}
+
+/** Starts a sign-up: validates the address and password, mails a code. No token yet. */
+export async function startRegistration(email: string, password: string): Promise<VerificationChallenge> {
+  const { data } = await axios.post<VerificationChallenge>('/api/auth/register', { email, password });
+  return data;
+}
+
+/** Confirms the emailed code — the account is created here and the session token comes back. */
+export async function verifyEmail(email: string, code: string): Promise<DevTokenResponse> {
+  const { data } = await axios.post<DevTokenResponse>('/api/auth/verify-email', { email, code });
+  return data;
+}
+
+/** Asks for a fresh code for a pending sign-up; the server replies with the cooldown it enforces. */
+export async function resendVerificationCode(email: string): Promise<{ resendCooldownSeconds: number }> {
+  const { data } = await axios.post<{ resendCooldownSeconds: number }>('/api/auth/resend-code', { email });
   return data;
 }
 

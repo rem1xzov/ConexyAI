@@ -22,6 +22,13 @@ public static class AuthRateLimitPolicies
     /// <summary>POST /api/auth/register — per client IP.</summary>
     public const string Register = "auth-register";
 
+    // EMAIL_VERIFICATION: добавлено 2026-09-24
+    /// <summary>POST /api/auth/verify-email — per client IP; the code is also attempt-limited per row.</summary>
+    public const string VerifyEmail = "auth-verify-email";
+
+    /// <summary>POST /api/auth/resend-code — per client IP; the 60s cooldown is enforced per address too.</summary>
+    public const string ResendCode = "auth-resend-code";
+
     /// <summary>GET /api/auth/github/login + /callback — per client IP.</summary>
     public const string GitHubOAuth = "auth-github";
 
@@ -168,6 +175,13 @@ public static class AuthSecurityExtensions
             ctx => FixedWindow(ClientPartitionKey(ctx), permits: 10, TimeSpan.FromMinutes(1)));
         // Регистрация: 10 за 10 минут с одного IP — хватает на опечатки, но не на ферму аккаунтов.
         options.AddPolicy(AuthRateLimitPolicies.Register,
+            ctx => FixedWindow(ClientPartitionKey(ctx), permits: 10, TimeSpan.FromMinutes(10)));
+        // EMAIL_VERIFICATION: проверка кода — 20 за 10 минут с одного IP. Перебор шестизначного кода
+        // в любом случае ограничен пятью попытками на сам код в БД, здесь — защита от потока запросов.
+        options.AddPolicy(AuthRateLimitPolicies.VerifyEmail,
+            ctx => FixedWindow(ClientPartitionKey(ctx), permits: 20, TimeSpan.FromMinutes(10)));
+        // Повторная отправка — 10 за 10 минут с одного IP (плюс кулдаун 60 сек на адрес и на IP).
+        options.AddPolicy(AuthRateLimitPolicies.ResendCode,
             ctx => FixedWindow(ClientPartitionKey(ctx), permits: 10, TimeSpan.FromMinutes(10)));
         options.AddPolicy(AuthRateLimitPolicies.GitHubOAuth,
             ctx => FixedWindow(ClientPartitionKey(ctx), permits: 20, TimeSpan.FromMinutes(1)));

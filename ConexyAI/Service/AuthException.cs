@@ -18,6 +18,13 @@ public class AuthException : Exception
     /// <summary>Seconds the client should wait before retrying (lockout only), else <c>null</c>.</summary>
     public int? RetryAfterSeconds { get; }
 
+    // EMAIL_VERIFICATION: добавлено 2026-09-24
+    /// <summary>
+    /// Guesses left for a confirmation code, when the error is about one. The form shows the count,
+    /// so the user can see that a mistyped digit cost them something.
+    /// </summary>
+    public int? AttemptsLeft { get; init; }
+
     public AuthException(string code, string message, int statusCode = 400, int? retryAfterSeconds = null)
         : base(message)
     {

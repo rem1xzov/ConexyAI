@@ -6,6 +6,8 @@ using ConexyAI.Extensions;
 using ConexyAI.Repository;
 using ConexyAI.Service;
 using ConexyAI.Service.Auth;
+// EMAIL_VERIFICATION: добавлено 2026-09-24
+using ConexyAI.Service.Email;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -33,6 +35,8 @@ public class AuthController : ControllerBase
     private readonly IEmailAuthService _emailAuthService;
     // TOKEN_REVOCATION: добавлено 2026-09-24 (ревью M19)
     private readonly ITokenRevocationValidator _revocation;
+    // EMAIL_VERIFICATION: добавлено 2026-09-24
+    private readonly IEmailVerificationService _emailVerification;
 
     public AuthController(
         ITokenService tokenService,
@@ -42,7 +46,8 @@ public class AuthController : ControllerBase
         IUserRepository userRepository,
         ILogger<AuthController> logger,
         IEmailAuthService emailAuthService,
-        ITokenRevocationValidator revocation)
+        ITokenRevocationValidator revocation,
+        IEmailVerificationService emailVerification)
     {
         _tokenService = tokenService;
         _environment = environment;
@@ -52,6 +57,7 @@ public class AuthController : ControllerBase
         _logger = logger;
         _emailAuthService = emailAuthService;
         _revocation = revocation;
+        _emailVerification = emailVerification;
     }
 
     /// <summary>
@@ -187,16 +193,67 @@ public class AuthController : ControllerBase
         return Ok(validated.Response);
     }
 
-    // EMAIL_AUTH: добавлено 2026-09-19
-    /// <summary>Creates a new email/password account and logs the user in immediately.</summary>
+    // EMAIL_AUTH: изменено 2026-09-24 (EMAIL_VERIFICATION) — регистрация больше не выдаёт токен: она
+    // запоминает выбранный пароль и отправляет на адрес 6-значный код, а аккаунт появляется только в
+    // verify-email. Так неподтверждённых пользователей в базе не бывает вообще.
+    /// <summary>
+    /// Starts a sign-up: validates the address and password, mails a 6-digit code and returns the
+    /// challenge. No JWT is issued here — the account does not exist yet.
+    /// </summary>
     [HttpPost("register")]
     [EnableRateLimiting(AuthRateLimitPolicies.Register)]
     public async Task<IActionResult> Register([FromBody] EmailPasswordRequest request, CancellationToken ct)
     {
         try
         {
-            var user = await _emailAuthService.RegisterAsync(request.Email, request.Password, ct);
+            var challenge = await _emailVerification.StartRegistrationAsync(
+                request.Email, request.Password, ClientIp(), ct);
+
+            return Ok(new
+            {
+                success = true,
+                requireVerification = true,
+                email = challenge.Email,
+                resendCooldownSeconds = challenge.ResendCooldownSeconds,
+            });
+        }
+        catch (AuthException ex)
+        {
+            return AuthError(ex);
+        }
+    }
+
+    // EMAIL_VERIFICATION: добавлено 2026-09-24
+    /// <summary>
+    /// Confirms a sign-up with the 6-digit code. On success the account is created (already
+    /// confirmed) and a full session is issued, so the client is logged in without a second step.
+    /// </summary>
+    [HttpPost("verify-email")]
+    [EnableRateLimiting(AuthRateLimitPolicies.VerifyEmail)]
+    public async Task<IActionResult> VerifyEmail([FromBody] EmailVerificationRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var user = await _emailVerification.VerifyAsync(request.Email, request.Code, ct);
+            _logger.LogInformation("Email verification: account confirmed (user {UserId}).", user.Id);
             return Ok(IssueSession(user));
+        }
+        catch (AuthException ex)
+        {
+            return AuthError(ex);
+        }
+    }
+
+    // EMAIL_VERIFICATION: добавлено 2026-09-24
+    /// <summary>Sends a fresh code for a pending sign-up, outside the 60-second cooldown.</summary>
+    [HttpPost("resend-code")]
+    [EnableRateLimiting(AuthRateLimitPolicies.ResendCode)]
+    public async Task<IActionResult> ResendCode([FromBody] EmailOnlyRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var challenge = await _emailVerification.ResendAsync(request.Email, ClientIp(), ct);
+            return Ok(new { success = true, resendCooldownSeconds = challenge.ResendCooldownSeconds });
         }
         catch (AuthException ex)
         {
@@ -302,8 +359,22 @@ public class AuthController : ControllerBase
             return StatusCode(ex.StatusCode, AuthSecurityExtensions.TooManyAttemptsBody(retryAfter, ex.Message));
         }
 
-        return StatusCode(ex.StatusCode, new { code = ex.Code, message = ex.Message });
+        // EMAIL_VERIFICATION: retryAfterSeconds (the resend cooldown) and attemptsLeft (the remaining
+        // guesses for a code) travel with the error so the form can show both without guessing.
+        return StatusCode(ex.StatusCode, new
+        {
+            code = ex.Code,
+            message = ex.Message,
+            retryAfterSeconds = ex.RetryAfterSeconds,
+            attemptsLeft = ex.AttemptsLeft,
+        });
     }
+
+    /// <summary>
+    /// The caller's address, for the per-IP resend cooldown. Forwarded headers are already applied by
+    /// the pipeline, so this is the real client address rather than the proxy's.
+    /// </summary>
+    private string? ClientIp() => HttpContext.Connection.RemoteIpAddress?.ToString();
 
     // TOKEN_REVOCATION: добавлено 2026-09-24 — подпись/срок + отзыв (tv, существование пользователя).
     private async Task<ValidatedToken?> ValidateCookieTokenAsync(string token, CancellationToken ct)
