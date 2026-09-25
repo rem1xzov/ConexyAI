@@ -4636,7 +4636,8 @@ body {
 
 /* ---------- LOGO_SWEEP: добавлено 2026-09-20 ---------- */
 /*
- * The mark's geometry comes from assets/conexyai.svg. The travelling highlight is a
+ * The mark's geometry comes from public/conexyai.svg (the same file served as the tab icon). The
+ * travelling highlight is a
  * stroke-dasharray window on a second copy of each chevron, moved by stroke-dashoffset.
  * pathLength={100} normalises both paths, so the dash maths below is path-length agnostic:
  *   dasharray "18 170" -> period 188, one 18-unit band + a gap longer than the path.

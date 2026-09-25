@@ -6,7 +6,8 @@
  * `stroke-dashoffset`. Both paths run bottom-left -> apex -> bottom-right, so the sweep
  * follows the bend for free, and `pathLength={100}` normalises the dash maths.
  *
- * Geometry is taken from `src/assets/conexyai.svg` (640x640 viewBox).
+ * Geometry is taken from `public/conexyai.svg` (640x640 viewBox) — the same file the browser loads
+ * as the tab icon, so the mark cannot drift between the favicon and the app.
  */
 interface ChevronSpec {
   id: string;
