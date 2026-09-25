@@ -2432,8 +2432,13 @@ export default function App() {
   });
 
   // MOBILE_KEYBOARD: keeps the composer above the on-screen keyboard where the viewport meta hint is
-  // not supported (Safari); on Android the hint already resizes the layout.
-  useKeyboardInset(isMobile);
+  // not supported (Safari), and drops the focus state when the keyboard is dismissed with the Android
+  // back button — that path leaves the textarea focused and never fires a blur, which used to leave
+  // the start screen stuck in its focused layout.
+  useKeyboardInset({
+    enabled: isMobile,
+    onKeyboardClosed: () => setComposerFocused(false),
+  });
 
   // ADMIN_HOOKS_ORDER: возвраты для админки обязаны стоять ПОСЛЕ самого последнего хука этого
   // компонента. Раньше они были выше useEffect'а инкогнито, и переход на `#/admin` (без F5)

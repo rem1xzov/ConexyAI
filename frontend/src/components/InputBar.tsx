@@ -697,6 +697,9 @@ export function InputBar({
         <textarea
           ref={textareaRef}
           className="inputbar__textarea"
+          // KEYBOARD_CLOSE: marks the field the keyboard handler is allowed to blur when the on-screen
+          // keyboard is dismissed (a transcript message being edited is a textarea too).
+          data-composer-input="true"
           rows={1}
           disabled={disabled}
           placeholder={t('input.placeholder')}
