@@ -1,5 +1,6 @@
-import { memo, useEffect, useMemo, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { splitArtifacts } from '../../utils/artifacts';
+import { settledPrefix, STREAM_PARSE_INTERVAL_MS } from '../../utils/streamText';
 import { Markdown } from '../Markdown';
 import { ArtifactCard } from './ArtifactCard';
 import { getArtifactState, openArtifact, registerMessageArtifacts, unregisterMessage } from './store';
@@ -31,7 +32,32 @@ export const AssistantContent = memo(function AssistantContent({
   content,
   streaming,
 }: AssistantContentProps) {
-  const segments = useMemo(() => splitArtifacts(content, streaming), [content, streaming]);
+  // STREAM_THROTTLE: see settledPrefix / STREAM_PARSE_INTERVAL_MS. The settled prefix is what the
+  // parser sees; everything after it is appended as plain text at the bottom, so the answer still
+  // grows every frame and only its formatting catches up on the next tick. When the stream ends the
+  // whole text is parsed once.
+  const [parsedContent, setParsedContent] = useState(() => settledPrefix(content));
+  const liveContentRef = useRef(content);
+  liveContentRef.current = content;
+
+  useEffect(() => {
+    if (!streaming) {
+      setParsedContent(liveContentRef.current);
+      return;
+    }
+    const id = window.setInterval(() => {
+      const next = settledPrefix(liveContentRef.current);
+      setParsedContent((prev) => (next === prev ? prev : next));
+    }, STREAM_PARSE_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [streaming]);
+
+  // Content can shrink or be replaced (regenerate, edit, resume), and then the settled prefix is no
+  // longer a prefix at all — showing a stale tail after it would duplicate text.
+  const settled = content.startsWith(parsedContent) ? parsedContent : content;
+  const tail = settled === content ? '' : content.slice(settled.length);
+
+  const segments = useMemo(() => splitArtifacts(settled, streaming), [settled, streaming]);
   // An artifact whose opening tag is still arriving has no reliable identifier yet, so it is not
   // registered (it is always the last one, which keeps the `messageId:index` keys stable).
   const artifacts = useMemo(
@@ -63,7 +89,9 @@ export const AssistantContent = memo(function AssistantContent({
     openArtifact(artifacts[live].identifier, null, { auto: true });
   }, [streaming, content, artifacts, messageId]);
 
-  if (segments.length === 1 && segments[0].kind === 'markdown') return <Markdown text={segments[0].text} />;
+  if (segments.length === 1 && segments[0].kind === 'markdown' && !tail) {
+    return <Markdown text={segments[0].text} />;
+  }
 
   return (
     <>
@@ -78,6 +106,8 @@ export const AssistantContent = memo(function AssistantContent({
           />
         ),
       )}
+      {/* The not-yet-parsed tail of a live answer: plain text, updated every frame. */}
+      {tail && <span className="stream-tail">{tail}</span>}
     </>
   );
 });

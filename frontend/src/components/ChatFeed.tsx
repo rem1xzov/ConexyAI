@@ -25,6 +25,10 @@ interface ChatFeedProps {
   loading?: boolean;
   loadFailed?: boolean;
   onRetryLoad?: () => void;
+  // STREAM_FOLLOW: true in the agent tabs (Coder/Cowork), where the value is the live step and log
+  // feed, so the view follows it. False in plain chats (flash/pro/students), where the answer must
+  // grow without dragging the view along — see the effect below.
+  followStream?: boolean;
 }
 
 export function ChatFeed({
@@ -40,6 +44,7 @@ export function ChatFeed({
   loading,
   loadFailed,
   onRetryLoad,
+  followStream = true,
 }: ChatFeedProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -60,10 +65,11 @@ export function ChatFeed({
   // the user moving away from the bottom — otherwise clicking the button instantly re-shows it.
   const programmaticUntilRef = useRef(0);
 
-  // Один порог на оба решения: он и «мы внизу» (для автоследования), и «показать кнопку».
-  // 140px — заметное расстояние: микроскроллы на пару пикселей и рост контента не включают
-  // кнопку, но осознанный уход вверх по истории — включает.
-  const PIN_THRESHOLD_PX = 140;
+  // One epsilon for «мы всё ещё у хвоста»: осознанного движения вверх на 10px достаточно, чтобы
+  // выключить автоследование, поэтому читающего выше пользователя больше никуда не тянет.
+  const MANUAL_SCROLL_EPSILON_PX = 10;
+  // Кнопка «вниз» ждёт куда большего сдвига: иначе она мигала бы от любого толчка.
+  const SCROLL_BUTTON_THRESHOLD_PX = 140;
 
   /** Instant scroll (no animation) — used when following the stream token by token. */
   const jumpToBottom = useCallback(() => {
@@ -77,9 +83,8 @@ export function ChatFeed({
     if (!el) return;
     if (Date.now() < programmaticUntilRef.current) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const pinned = distance <= PIN_THRESHOLD_PX;
-    pinnedRef.current = pinned;
-    setShowScrollButton(!pinned);
+    pinnedRef.current = distance <= MANUAL_SCROLL_EPSILON_PX;
+    setShowScrollButton(distance > SCROLL_BUTTON_THRESHOLD_PX);
   }, []);
 
   // Clicking the button re-enables following and animates to the newest message.
@@ -103,27 +108,53 @@ export function ChatFeed({
     }
   }, [sessionId, jumpToBottom]);
 
-  // FOLLOW_BOTTOM: единый ключ «в ленте что-то выросло». Раньше слежение зависело только от
-  // длины текста и thinking, поэтому новые шаги агента, карточки команд и todo-план выталкивали
-  // контент вниз без прокрутки — именно это и выглядело как «лента не следует за агентом».
-  // Ключом покрыт и стриминг текста, и компактный таймлайн шагов, и карточки подтверждения.
-  const followKey = [
-    messageCount,
-    lastMessage?.id ?? '',
-    lastMessage?.status ?? '',
+  // FOLLOW_BOTTOM: единый ключ «в ленте что-то выросло», и ключ «появился новый ход». Разделены
+  // намеренно: реакция на них разная (см. эффекты ниже).
+  // Ключ роста покрывает и стриминг текста, и thinking, и компактный таймлайн шагов, и карточки
+  // подтверждения — раньше слежение зависело только от длины текста и thinking, поэтому новые шаги
+  // агента, карточки команд и todo-план выталкивали контент вниз без прокрутки.
+  const turnKey = `${messageCount}|${lastMessage?.id ?? ''}`;
+  const growthKey = [
     lastMessage?.content.length ?? 0,
     lastMessage?.thinking?.length ?? 0,
     lastMessage?.toolActions?.length ?? 0,
     lastMessage?.steps?.length ?? 0,
     lastMessage?.todos?.length ?? 0,
     lastMessage?.currentAction?.label ?? '',
+    lastMessage?.status ?? '',
   ].join('|');
+  const prevTurnKeyRef = useRef(turnKey);
 
+  // A new turn is a deliberate step forward: jump to it and start following again, even if the user
+  // had scrolled up in the history before typing.
   useEffect(() => {
-    // Only follow while the user is (or was) at the bottom — never yank them back mid-reading.
-    if (!pinnedRef.current) return;
+    if (prevTurnKeyRef.current === turnKey) return;
+    prevTurnKeyRef.current = turnKey;
+    pinnedRef.current = true;
+    setShowScrollButton(false);
     jumpToBottom();
-  }, [followKey, jumpToBottom]);
+  }, [turnKey, jumpToBottom]);
+
+  // STREAM_FOLLOW: что делать, пока растёт ответ.
+  //   агентские вкладки (followStream) — держим хвост в поле зрения: там ценность в живом потоке
+  //   шагов и логов;
+  //   обычный чат — НЕ следуем. Экран остаётся там, куда его поставил новый ход, поэтому ответ
+  //   можно читать с первой строки, пока он печатается. Рост здесь только снимает флаг «мы внизу»,
+  //   из-за чего обработчик изменения размеров ниже перестаёт дёргать вид при показе клавиатуры.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (followStream) {
+      if (pinnedRef.current) jumpToBottom();
+      return;
+    }
+    if (!pinnedRef.current) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distance > MANUAL_SCROLL_EPSILON_PX) {
+      pinnedRef.current = false;
+      setShowScrollButton(true);
+    }
+  }, [growthKey, followStream, jumpToBottom]);
 
   // Keep the pin honest when the viewport or content box changes without a scroll event
   // (window resize, mobile keyboard opening, opening the sidebar).

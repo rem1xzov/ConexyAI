@@ -2544,6 +2544,13 @@ body {
   line-height: 1.35;
 }
 
+/* ---------- STREAM_THROTTLE: the live tail of an answer (2026-09-24) ---------- */
+/* Text that arrived since the last Markdown parse. It is plain text on purpose: it can grow every
+   frame without re-running the parser (and KaTeX/mermaid behind it). pre-wrap keeps its breaks. */
+.stream-tail {
+  white-space: pre-wrap;
+}
+
 /* ---------- TABLES_GFM: GFM tables (2026-09-23) ---------- */
 /* Colours go through the theme variables (not Tailwind neutrals/blue) so tables stay readable in
    the light and incognito palettes as well. */
@@ -5689,9 +5696,14 @@ body {
   }
 
   /* ---------- FOCUS_MODE: the start screen steps aside for the keyboard (2026-09-24) ---------- */
-  /* Tapping into the composer on the empty home screen hides the greeting and the chips and lifts
-     the composer into the space they leave. Everything is transitioned, so the layout breathes
-     instead of jumping. */
+  /* Tapping into the composer on the empty home screen hides the greeting and the chips, and the
+     composer stays anchored to the bottom of the screen, right above the keyboard — the space it
+     gains stays empty above it instead of pushing it up into the middle of the view.
+
+     The compound `.chat-stage.chat-stage--composer-focused` is deliberate: it has to outrank
+     `.chat-stage--empty .chat-stage__hero-inner` below (max-height 200px). With equal specificity
+     that rule won on source order, so the greeting was invisible but still occupied its full
+     height — which is exactly what left the composer floating in the upper half. */
   .chat-stage__hero-inner {
     transition:
       max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1),
@@ -5699,23 +5711,26 @@ body {
       transform 0.25s cubic-bezier(0.2, 0, 0, 1);
   }
 
-  .chat-stage--composer-focused .chat-stage__hero {
-    flex-grow: 0;
+  /* Grows so the composer below it lands at the bottom; `align-items: flex-end` keeps the
+     (collapsed) greeting out of the way. */
+  .chat-stage.chat-stage--composer-focused .chat-stage__hero {
+    flex-grow: 1;
     padding-bottom: 0;
   }
 
-  .chat-stage--composer-focused .chat-stage__hero-inner {
+  .chat-stage.chat-stage--composer-focused .chat-stage__hero-inner {
     max-height: 0;
     opacity: 0;
     transform: translateY(-24px);
     overflow: hidden;
   }
 
-  .chat-stage--composer-focused .chat-stage__tail {
-    flex-grow: 1;
+  /* No spare space below the composer: it is the last thing above the keyboard. */
+  .chat-stage.chat-stage--composer-focused .chat-stage__tail {
+    flex-grow: 0;
   }
 
-  .chat-stage--composer-focused .chat-stage__chips {
+  .chat-stage.chat-stage--composer-focused .chat-stage__chips {
     opacity: 0;
     max-height: 0;
     margin-top: 0;

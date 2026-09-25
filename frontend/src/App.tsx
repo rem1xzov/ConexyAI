@@ -79,10 +79,12 @@ const GUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 
 // SMOOTH_STREAM: tokens arrive in network-sized bursts, so writing each one straight into state made
 // the answer grow in visible steps. They are queued and released a few characters per frame instead.
-// The step scales with the backlog, so smoothing never holds back a fast answer.
+// 2-4 characters is the calm, steady pace; a backlog above the threshold is flushed faster so
+// smoothing never holds a fast answer back.
 const MIN_TOKEN_CHARS_PER_FRAME = 2;
-const MAX_TOKEN_CHARS_PER_FRAME = 8;
-const TOKEN_FRAMES_TO_DRAIN = 6;
+const MAX_TOKEN_CHARS_PER_FRAME = 4;
+const TOKEN_BACKLOG_ACCELERATE = 40;
+const FAST_TOKEN_CHARS_PER_FRAME = 16;
 
 // CHAT_LIST_COMPLETE: добавлено 2026-09-24 (H8, C-3) — сколько последних чатов просить у сервера.
 // Полный набор id приходит отдельно (allChatIds), поэтому лимит больше не определяет, что удалять.
@@ -697,8 +699,10 @@ export default function App() {
         tokenQueueRef.current.delete(key);
         continue;
       }
-      const wanted = Math.ceil(entry.text.length / TOKEN_FRAMES_TO_DRAIN);
-      const take = Math.min(MAX_TOKEN_CHARS_PER_FRAME, Math.max(MIN_TOKEN_CHARS_PER_FRAME, wanted));
+      const backlog = entry.text.length;
+      const take = backlog > TOKEN_BACKLOG_ACCELERATE
+        ? Math.min(FAST_TOKEN_CHARS_PER_FRAME, Math.ceil(backlog / 4))
+        : Math.min(MAX_TOKEN_CHARS_PER_FRAME, Math.max(MIN_TOKEN_CHARS_PER_FRAME, Math.ceil(backlog / 8)));
       const slice = entry.text.slice(0, take);
       entry.text = entry.text.slice(take);
       // Hide the live action badge as soon as the final answer starts streaming.
@@ -2619,6 +2623,9 @@ export default function App() {
                     onNewChat={handleNewChat}
                     onContinue={handleContinue}
                     onOpenFile={handleOpenWorkspaceFile}
+                    // STREAM_FOLLOW: agent tabs keep the tail in view (live logs/steps); plain chats
+                    // must not drag the view while the answer streams in.
+                    followStream={isAgent}
                     loading={activeLoading}
                     loadFailed={activeLoadFailed}
                     onRetryLoad={() => {
