@@ -1,7 +1,7 @@
 namespace ConexyAI.Entity;
 
 /// <summary>
-/// EMAIL_VERIFICATION: one sign-up waiting for its 6-digit code.
+/// EMAIL_VERIFICATION: one sign-up (or password reset) waiting for its 6-digit code.
 /// <para>
 /// The row carries the hash of the password the user chose, and the account is created only once the
 /// code is entered. That keeps three properties at once: nothing half-registered lands in
@@ -9,6 +9,11 @@ namespace ConexyAI.Entity;
 /// finish), because the row is simply replaced by the next attempt; and every row in <c>users</c> is
 /// confirmed by definition, which is what lets the login path require confirmation without breaking
 /// accounts that already exist.
+/// </para>
+/// <para>
+/// PASSWORD_RESET: the same row serves password resets — see <see cref="Purpose"/>. A reset row has no
+/// password hash, because the new password is chosen after the code has been sent, and the code only
+/// proves that the address belongs to the account owner.
 /// </para>
 /// </summary>
 public class EmailVerificationCodeEntity
@@ -18,11 +23,18 @@ public class EmailVerificationCodeEntity
     /// <summary>Lower-case address — the only thing the user has to prove ownership of.</summary>
     public string Email { get; set; } = null!;
 
+    /// <summary>Which flow this code belongs to — see <see cref="EmailCodePurposes"/>.</summary>
+    public string Purpose { get; set; } = EmailCodePurposes.SignUp;
+
     /// <summary>BCrypt hash of the 6-digit code. The code itself is never stored, logged or returned.</summary>
     public string CodeHash { get; set; } = null!;
 
-    /// <summary>Hash of the chosen password, applied to the account only when the code is confirmed.</summary>
-    public string PasswordHash { get; set; } = null!;
+    /// <summary>
+    /// Hash of the chosen password, applied to the account only when the code is confirmed. <c>null</c>
+    /// for <see cref="EmailCodePurposes.PasswordReset"/> rows, where the password is hashed when the
+    /// reset is confirmed rather than when the code is sent.
+    /// </summary>
+    public string? PasswordHash { get; set; }
 
     public DateTime ExpiresAt { get; set; }
 

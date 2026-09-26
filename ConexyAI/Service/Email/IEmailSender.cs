@@ -12,6 +12,13 @@ public interface IEmailSender
 {
     /// <summary>Raises <see cref="EmailSendFailedException"/> when the message could not be handed over.</summary>
     Task SendVerificationCodeAsync(string toEmail, string code, int validMinutes, CancellationToken ct = default);
+
+    /// <summary>
+    /// PASSWORD_RESET: the same code, but the message says a password is being changed — the wording of
+    /// the sign-up mail would make a user who is not signing up think their account is under attack and
+    /// ignore it. Raised the same way on failure.
+    /// </summary>
+    Task SendPasswordResetCodeAsync(string toEmail, string code, int validMinutes, CancellationToken ct = default);
 }
 
 /// <summary>

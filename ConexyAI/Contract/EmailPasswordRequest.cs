@@ -20,3 +20,10 @@ public record EmailVerificationRequest(string Email, string Code);
 
 /// <summary>Request of a fresh code for a pending sign-up.</summary>
 public record EmailOnlyRequest(string Email);
+
+// PASSWORD_RESET: добавлено 2026-09-26
+/// <summary>
+/// Confirms a password reset: the code that was mailed, plus the password the user wants instead. Both
+/// travel together because the code is sent before the form asks for the password.
+/// </summary>
+public record PasswordResetRequest(string Email, string Code, string NewPassword);

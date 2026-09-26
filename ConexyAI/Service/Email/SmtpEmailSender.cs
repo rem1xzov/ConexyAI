@@ -29,7 +29,47 @@ public class SmtpEmailSender : IEmailSender
         _logger = logger;
     }
 
-    public async Task SendVerificationCodeAsync(string toEmail, string code, int validMinutes, CancellationToken ct = default)
+    public Task SendVerificationCodeAsync(string toEmail, string code, int validMinutes, CancellationToken ct = default) =>
+        SendAsync(
+            toEmail,
+            subject: $"ConexyAI: код подтверждения {code}",
+            heading: "Подтверждение почты",
+            intro: "Введите этот код, чтобы завершить регистрацию:",
+            ignoreNote: "Если вы не регистрировались в ConexyAI — просто проигнорируйте письмо: без кода доступ\n" +
+                        "к аккаунту не появится.",
+            textTitle: "ConexyAI — подтверждение почты",
+            code,
+            validMinutes,
+            ct);
+
+    // PASSWORD_RESET: добавлено 2026-09-26
+    public Task SendPasswordResetCodeAsync(string toEmail, string code, int validMinutes, CancellationToken ct = default) =>
+        SendAsync(
+            toEmail,
+            subject: $"ConexyAI: код для смены пароля {code}",
+            heading: "Смена пароля",
+            intro: "Введите этот код, чтобы задать новый пароль:",
+            ignoreNote: "Если вы не меняли пароль — просто проигнорируйте письмо: без кода старый пароль\n" +
+                        "продолжит работать.",
+            textTitle: "ConexyAI — смена пароля",
+            code,
+            validMinutes,
+            ct);
+
+    /// <summary>
+    /// Shared transport for every code e-mail: only the subject, the heading and the "not you?" note
+    /// differ, and those are exactly what tells the recipient which action they (or someone else) started.
+    /// </summary>
+    private async Task SendAsync(
+        string toEmail,
+        string subject,
+        string heading,
+        string intro,
+        string ignoreNote,
+        string textTitle,
+        string code,
+        int validMinutes,
+        CancellationToken ct)
     {
         if (!_options.IsConfigured)
         {
@@ -41,17 +81,17 @@ public class SmtpEmailSender : IEmailSender
         using var message = new MailMessage
         {
             From = new MailAddress(from, _options.FromName, Encoding.UTF8),
-            Subject = $"ConexyAI: код подтверждения {code}",
+            Subject = subject,
             SubjectEncoding = Encoding.UTF8,
             BodyEncoding = Encoding.UTF8,
             IsBodyHtml = true,
-            Body = BuildHtml(code, validMinutes),
+            Body = BuildHtml(heading, intro, ignoreNote, code, validMinutes),
         };
         message.To.Add(new MailAddress(toEmail));
         // A plain-text alternative keeps the message readable in clients that refuse HTML. The code
         // is the only thing that matters here, so the text version says exactly that.
         message.AlternateViews.Add(AlternateView.CreateAlternateViewFromString(
-            BuildText(code, validMinutes), Encoding.UTF8, "text/plain"));
+            BuildText(textTitle, ignoreNote, code, validMinutes), Encoding.UTF8, "text/plain"));
 
         using var client = new SmtpClient(_options.Host, _options.Port)
         {
@@ -66,42 +106,41 @@ public class SmtpEmailSender : IEmailSender
         {
             await client.SendMailAsync(message, ct);
             // PRIVACY_LOGS: the address is not logged, and neither is the code — only that a message
-            // went out, so a stuck sign-up can be told apart from a silent transport failure.
-            _logger.LogInformation("Email verification: code sent via {Host}:{Port}.", _options.Host, _options.Port);
+            // went out, so a stuck flow can be told apart from a silent transport failure.
+            _logger.LogInformation("Email code sent via {Host}:{Port}.", _options.Host, _options.Port);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogError(ex, "Email verification: SMTP send failed via {Host}:{Port}.", _options.Host, _options.Port);
+            _logger.LogError(ex, "Email code: SMTP send failed via {Host}:{Port}.", _options.Host, _options.Port);
             throw new EmailSendFailedException("SMTP send failed.", ex);
         }
     }
 
-    private static string BuildText(string code, int validMinutes) =>
+    private static string BuildText(string title, string ignoreNote, string code, int validMinutes) =>
         $"""
-         ConexyAI — подтверждение почты
+         {title}
 
          Ваш код: {code}
 
          Код действует {validMinutes} минут.
-         Если вы не регистрировались в ConexyAI, просто проигнорируйте это письмо: без кода доступ
-         к аккаунту не появится. Никому не сообщайте код — сотрудники ConexyAI его не спрашивают.
+         {ignoreNote} Никому не сообщайте код — сотрудники ConexyAI его не спрашивают.
          """;
 
     /// <summary>
     /// Minimal transactional layout: dark card, the code as the one large element, the expiry and the
     /// privacy note under it. Inline styles only — mail clients strip stylesheets.
     /// </summary>
-    private static string BuildHtml(string code, int validMinutes) =>
+    private static string BuildHtml(string heading, string intro, string ignoreNote, string code, int validMinutes) =>
         $"""
          <!doctype html>
          <html lang="ru">
            <body style="margin:0;padding:24px;background:#0a0a0a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
              <div style="max-width:420px;margin:0 auto;background:#141414;border:1px solid #262626;border-radius:14px;padding:28px 24px;color:#ece7ee;">
                <div style="font-size:15px;font-weight:600;letter-spacing:0.02em;margin-bottom:6px;">ConexyAI</div>
-               <div style="font-size:13px;color:#a3a3a3;margin-bottom:22px;">Подтверждение почты</div>
+               <div style="font-size:13px;color:#a3a3a3;margin-bottom:22px;">{WebUtility.HtmlEncode(heading)}</div>
 
                <div style="font-size:13px;color:#d4d4d4;line-height:1.5;margin-bottom:14px;">
-                 Введите этот код, чтобы завершить регистрацию:
+                 {WebUtility.HtmlEncode(intro)}
                </div>
 
                <div style="font-size:34px;font-weight:700;letter-spacing:10px;text-align:center;padding:18px 0 18px 10px;background:#0a0a0a;border:1px solid #262626;border-radius:12px;color:#ffffff;">
@@ -109,11 +148,10 @@ public class SmtpEmailSender : IEmailSender
                </div>
 
                <div style="font-size:12.5px;color:#a3a3a3;line-height:1.5;margin-top:18px;">
-                 Код действует {validMinutes} минут и подходит только для одного входа.
+                 Код действует {validMinutes} минут и подходит только для одного действия.
                </div>
                <div style="font-size:12.5px;color:#a3a3a3;line-height:1.5;margin-top:10px;">
-                 Если вы не регистрировались в ConexyAI — просто проигнорируйте письмо: без кода доступ
-                 к аккаунту не появится. Никому не сообщайте код, сотрудники ConexyAI его не спрашивают.
+                 {WebUtility.HtmlEncode(ignoreNote)} Никому не сообщайте код, сотрудники ConexyAI его не спрашивают.
                </div>
              </div>
            </body>

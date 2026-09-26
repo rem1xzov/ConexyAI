@@ -29,6 +29,13 @@ public static class AuthRateLimitPolicies
     /// <summary>POST /api/auth/resend-code — per client IP; the 60s cooldown is enforced per address too.</summary>
     public const string ResendCode = "auth-resend-code";
 
+    // PASSWORD_RESET: добавлено 2026-09-26
+    /// <summary>POST /api/auth/forgot-password — per client IP; it sends mail, so it is the tighter one.</summary>
+    public const string ForgotPassword = "auth-forgot-password";
+
+    /// <summary>POST /api/auth/reset-password — per client IP; the code is also attempt-limited per row.</summary>
+    public const string ResetPassword = "auth-reset-password";
+
     /// <summary>GET /api/auth/github/login + /callback — per client IP.</summary>
     public const string GitHubOAuth = "auth-github";
 
@@ -183,6 +190,12 @@ public static class AuthSecurityExtensions
         // Повторная отправка — 10 за 10 минут с одного IP (плюс кулдаун 60 сек на адрес и на IP).
         options.AddPolicy(AuthRateLimitPolicies.ResendCode,
             ctx => FixedWindow(ClientPartitionKey(ctx), permits: 10, TimeSpan.FromMinutes(10)));
+        // PASSWORD_RESET: старт сброса шлёт письмо, поэтому лимит такой же, как у регистрации.
+        options.AddPolicy(AuthRateLimitPolicies.ForgotPassword,
+            ctx => FixedWindow(ClientPartitionKey(ctx), permits: 10, TimeSpan.FromMinutes(10)));
+        // Проверка кода сброса — 20 за 10 минут (пять попыток на сам код остаются в БД).
+        options.AddPolicy(AuthRateLimitPolicies.ResetPassword,
+            ctx => FixedWindow(ClientPartitionKey(ctx), permits: 20, TimeSpan.FromMinutes(10)));
         options.AddPolicy(AuthRateLimitPolicies.GitHubOAuth,
             ctx => FixedWindow(ClientPartitionKey(ctx), permits: 20, TimeSpan.FromMinutes(1)));
         // Синтез речи: платный апстрим — 10 запросов в минуту на пользователя.

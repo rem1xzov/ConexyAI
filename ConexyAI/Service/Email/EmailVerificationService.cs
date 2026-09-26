@@ -27,6 +27,21 @@ public interface IEmailVerificationService
 
     /// <summary>Issues a fresh code for a pending sign-up, outside the cooldown.</summary>
     Task<VerificationChallenge> ResendAsync(string email, string? ip, CancellationToken ct = default);
+
+    // PASSWORD_RESET: добавлено 2026-09-26 — тот же жизненный цикл кода, другой поток.
+    /// <summary>
+    /// Starts a password reset: checks the address has an account and mails a code. The new password is
+    /// NOT taken here — it is chosen in <see cref="ResetPasswordAsync"/> together with the code, so the
+    /// mail can be in flight while the user types it.
+    /// </summary>
+    Task<VerificationChallenge> StartPasswordResetAsync(string email, string? ip, CancellationToken ct = default);
+
+    /// <summary>
+    /// Confirms a reset code and applies the new password. Revokes every existing session of the account
+    /// (see TOKEN_REVOCATION) — a password change has to kick out whoever else may be holding a token.
+    /// Returns the user with the new token version, ready to issue a fresh session.
+    /// </summary>
+    Task<User> ResetPasswordAsync(string email, string code, string newPassword, CancellationToken ct = default);
 }
 
 /// <summary>What the client needs to render the code step.</summary>
@@ -128,6 +143,7 @@ public class EmailVerificationService : IEmailVerificationService
             new EmailVerificationCodeEntity
             {
                 Email = normalized,
+                Purpose = EmailCodePurposes.SignUp,
                 CodeHash = BCrypt.Net.BCrypt.HashPassword(code),
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
                 ExpiresAt = now.AddMinutes(settings.CodeTtlMinutes),
@@ -137,9 +153,94 @@ public class EmailVerificationService : IEmailVerificationService
             },
             ct);
 
-        await DeliverAsync(normalized, code, settings, ct);
+        await DeliverAsync(normalized, code, settings, EmailCodePurposes.SignUp, ct);
         _logger.LogInformation("Email verification: sign-up started, code sent.");
         return new VerificationChallenge(normalized, settings.ResendCooldownSeconds);
+    }
+
+    // PASSWORD_RESET: добавлено 2026-09-26
+    public async Task<VerificationChallenge> StartPasswordResetAsync(
+        string email, string? ip, CancellationToken ct = default)
+    {
+        var settings = _options.Value;
+        if (!settings.IsConfigured)
+        {
+            throw new AuthException("email_not_configured", "Отправка писем не настроена на сервере.", 503);
+        }
+
+        var normalized = EmailAuthService.NormalizeEmail(email);
+        var user = await _users.GetByEmailAsync(normalized, ct);
+
+        // PASSWORD_RESET: the address is checked BEFORE the user is asked for a new password, so a typo
+        // is reported immediately instead of after the whole form. The price is account enumeration —
+        // this endpoint is rate-limited per IP and the address-level cooldown applies as well.
+        if (user is null)
+        {
+            throw new AuthException("email_not_found", "Этот email не зарегистрирован.", 400);
+        }
+
+        if (user.PasswordHash is null)
+        {
+            throw new AuthException(
+                "email_linked_to_github",
+                "Этот email привязан к входу через GitHub — пароля у него нет. Войдите через GitHub.",
+                409);
+        }
+
+        var now = _time.GetUtcNow().UtcDateTime;
+        await EnforceCooldownAsync(normalized, ip, now, ct);
+
+        var code = EmailCodePolicy.GenerateCode();
+        await _codes.ReplaceAsync(
+            new EmailVerificationCodeEntity
+            {
+                Email = normalized,
+                Purpose = EmailCodePurposes.PasswordReset,
+                CodeHash = BCrypt.Net.BCrypt.HashPassword(code),
+                // No password yet: the user chooses it together with the code.
+                PasswordHash = null,
+                ExpiresAt = now.AddMinutes(settings.CodeTtlMinutes),
+                AttemptsLeft = settings.MaxAttempts,
+                LastSentIp = ip,
+                CreatedAt = now,
+            },
+            ct);
+
+        await DeliverAsync(normalized, code, settings, EmailCodePurposes.PasswordReset, ct);
+        _logger.LogInformation("Password reset: code sent.");
+        return new VerificationChallenge(normalized, settings.ResendCooldownSeconds);
+    }
+
+    // PASSWORD_RESET: добавлено 2026-09-26
+    public async Task<User> ResetPasswordAsync(
+        string email, string code, string newPassword, CancellationToken ct = default)
+    {
+        var normalized = EmailAuthService.NormalizeEmail(email);
+        EmailAuthService.ValidatePassword(newPassword);
+
+        var row = await _codes.GetLatestAsync(normalized, EmailCodePurposes.PasswordReset, ct);
+        if (row is null)
+        {
+            throw new AuthException("code_expired", "Код не найден. Запросите новый.", 400);
+        }
+
+        await ConsumeCodeAsync(row, code, ct);
+
+        var user = await _users.GetByEmailAsync(normalized, ct)
+            ?? throw new AuthException("email_not_found", "Этот email не зарегистрирован.", 400);
+
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
+        await _users.UpdateAsync(user, ct);
+
+        // TOKEN_REVOCATION: a password change revokes every session of the account — including any the
+        // user does not own. The caller then issues a fresh session, so it must see the NEW version.
+        await _users.BumpTokenVersionAsync(user.Id, ct);
+        await _codes.RemoveAllForEmailAsync(normalized, EmailCodePurposes.PasswordReset, ct);
+        _logger.LogInformation("Password reset: password changed (user {UserId}).", user.Id);
+
+        // Read the row back instead of guessing the new version: `IssueSession` takes it from the
+        // entity, and the bump above happened in the database, not in this copy.
+        return await _users.GetByIdAsync(user.Id, ct) ?? user;
     }
 
     public async Task<User> VerifyAsync(string email, string code, CancellationToken ct = default)
@@ -148,18 +249,85 @@ public class EmailVerificationService : IEmailVerificationService
         var normalized = EmailAuthService.NormalizeEmail(email);
         var now = _time.GetUtcNow().UtcDateTime;
 
-        var row = await _codes.GetLatestAsync(normalized, ct);
+        var row = await _codes.GetLatestAsync(normalized, EmailCodePurposes.SignUp, ct);
         if (row is null)
         {
             throw new AuthException("code_expired", "Код не найден. Запросите новый.", 400);
         }
 
+        await ConsumeCodeAsync(row, code, ct);
+
+        // Confirmed: the account comes into existence here, already verified. The password hash is
+        // guaranteed to be present: only `signup` rows carry one, and those are the ones found above.
+        var passwordHash = row.PasswordHash
+            ?? throw new AuthException("code_expired", "Регистрация не начата. Заполните форму заново.", 400);
+
+        var user = await _users.GetByEmailAsync(normalized, ct);
+        if (user is null)
+        {
+            user = new User
+            {
+                Id = Guid.NewGuid(),
+                Email = normalized,
+                EmailConfirmed = true,
+                PasswordHash = passwordHash,
+                SubscriptionTier = SubscriptionTier.Free,
+                IsAdmin = false,
+                CreatedAt = row.CreatedAt,
+                LastLoginAt = now,
+                // PRIVACY_POLICY: добавлено 2026-09-25 — сюда попадают только подтверждённые
+                // регистрации, а сам register отклоняет запрос без согласия, так что факт согласия
+                // уже доказан. Время берём текущее — это момент создания аккаунта.
+                PolicyAcceptedAt = now,
+                PolicyVersion = LegalPolicy.CurrentVersion,
+            };
+            await _users.AddAsync(user, ct);
+            _logger.LogInformation("Email verification: account created for the confirmed address (user {UserId}).", user.Id);
+        }
+        else
+        {
+            // Only reachable if the row survived an account created by another path; the freshly
+            // chosen password is the one the user expects, so it wins.
+            user.EmailConfirmed = true;
+            user.PasswordHash = passwordHash;
+            user.LastLoginAt = now;
+            // PRIVACY_POLICY: согласие дано в этом же потоке регистрации, но уже имеющееся не трогаем —
+            // более ранняя отметка точнее говорит, с какой редакцией политики пользователь ознакомился.
+            user.PolicyAcceptedAt ??= now;
+            user.PolicyVersion ??= LegalPolicy.CurrentVersion;
+            await _users.UpdateAsync(user, ct);
+        }
+
+        // EMAIL_VERIFICATION_HOOK (ревью H1): only now is the address actually proven, so this is the
+        // first moment <c>ADMIN_ACCOUNTS</c> may be trusted. Never demotes: IsAdmin also comes from
+        // the admin panel.
+        if (_adminOptions.Value.IsSuperAdmin(user))
+        {
+            user.IsAdmin = true;
+            user.SubscriptionTier = SubscriptionTier.Admin;
+            await _users.UpdateAsync(user, ct);
+        }
+
+        await _codes.RemoveAllForEmailAsync(normalized, EmailCodePurposes.SignUp, ct);
+        _ = settings;
+        return user;
+    }
+
+    /// <summary>
+    /// The shared half of both confirmation flows: expiry, the attempt budget and the code itself.
+    /// Kept in one place on purpose — a sign-up code and a reset code differ only in what the caller
+    /// does after this returns, never in how they are checked.
+    /// </summary>
+    private async Task ConsumeCodeAsync(EmailVerificationCodeEntity row, string code, CancellationToken ct)
+    {
+        var now = _time.GetUtcNow().UtcDateTime;
+
         if (EmailCodePolicy.IsExpired(now, row.ExpiresAt))
         {
-            // The row is deliberately NOT deleted: its only remaining job is to carry the pending
-            // password hash so "отправить код повторно" can issue a new code for this same sign-up
-            // instead of making the user fill the whole form again. Expired rows are dropped by the
-            // next replace or by a successful confirmation.
+            // The row is deliberately NOT deleted: its remaining job is to carry the pending password
+            // hash so "отправить код повторно" can issue a new code for this same sign-up instead of
+            // making the user fill the whole form again. Expired rows are dropped by the next replace
+            // or by a successful confirmation.
             throw new AuthException("code_expired", "Код истёк. Запросите новый.", 400);
         }
 
@@ -186,57 +354,6 @@ public class EmailVerificationService : IEmailVerificationService
                 $"Неверный код. Осталось попыток: {row.AttemptsLeft}.",
                 400) { AttemptsLeft = row.AttemptsLeft };
         }
-
-        // Confirmed: the account comes into existence here, already verified.
-        var user = await _users.GetByEmailAsync(normalized, ct);
-        if (user is null)
-        {
-            user = new User
-            {
-                Id = Guid.NewGuid(),
-                Email = normalized,
-                EmailConfirmed = true,
-                PasswordHash = row.PasswordHash,
-                SubscriptionTier = SubscriptionTier.Free,
-                IsAdmin = false,
-                CreatedAt = row.CreatedAt,
-                LastLoginAt = now,
-                // PRIVACY_POLICY: добавлено 2026-09-25 — сюда попадают только подтверждённые
-                // регистрации, а сам register отклоняет запрос без согласия, так что факт согласия
-                // уже доказан. Время берём текущее — это момент создания аккаунта.
-                PolicyAcceptedAt = now,
-                PolicyVersion = LegalPolicy.CurrentVersion,
-            };
-            await _users.AddAsync(user, ct);
-            _logger.LogInformation("Email verification: account created for the confirmed address (user {UserId}).", user.Id);
-        }
-        else
-        {
-            // Only reachable if the row survived an account created by another path; the freshly
-            // chosen password is the one the user expects, so it wins.
-            user.EmailConfirmed = true;
-            user.PasswordHash = row.PasswordHash;
-            user.LastLoginAt = now;
-            // PRIVACY_POLICY: согласие дано в этом же потоке регистрации, но уже имеющееся не трогаем —
-            // более ранняя отметка точнее говорит, с какой редакцией политики пользователь ознакомился.
-            user.PolicyAcceptedAt ??= now;
-            user.PolicyVersion ??= LegalPolicy.CurrentVersion;
-            await _users.UpdateAsync(user, ct);
-        }
-
-        // EMAIL_VERIFICATION_HOOK (ревью H1): only now is the address actually proven, so this is the
-        // first moment <c>ADMIN_ACCOUNTS</c> may be trusted. Never demotes: IsAdmin also comes from
-        // the admin panel.
-        if (_adminOptions.Value.IsSuperAdmin(user))
-        {
-            user.IsAdmin = true;
-            user.SubscriptionTier = SubscriptionTier.Admin;
-            await _users.UpdateAsync(user, ct);
-        }
-
-        await _codes.RemoveAllForEmailAsync(normalized, ct);
-        _ = settings;
-        return user;
     }
 
     public async Task<VerificationChallenge> ResendAsync(string email, string? ip, CancellationToken ct = default)
@@ -250,7 +367,9 @@ public class EmailVerificationService : IEmailVerificationService
         var normalized = EmailAuthService.NormalizeEmail(email);
         var now = _time.GetUtcNow().UtcDateTime;
 
-        var row = await _codes.GetLatestAsync(normalized, ct);
+        // PASSWORD_RESET: без фильтра по purpose — повторная отправка должна работать и для регистрации,
+        // и для сброса пароля, а какой поток ждёт письма, говорит сама строка.
+        var row = await _codes.GetLatestAsync(normalized, purpose: null, ct);
         if (row is null)
         {
             // Nothing pending: the user has to start over (or the code was already used).
@@ -267,8 +386,8 @@ public class EmailVerificationService : IEmailVerificationService
         row.LastSentIp = ip;
         await _codes.UpdateAsync(row, ct);
 
-        await DeliverAsync(normalized, code, settings, ct);
-        _logger.LogInformation("Email verification: code re-sent.");
+        await DeliverAsync(normalized, code, settings, row.Purpose, ct);
+        _logger.LogInformation("Email verification: code re-sent ({Purpose}).", row.Purpose);
         return new VerificationChallenge(normalized, settings.ResendCooldownSeconds);
     }
 
@@ -280,7 +399,7 @@ public class EmailVerificationService : IEmailVerificationService
     {
         var settings = _options.Value;
 
-        var forEmail = await _codes.GetLatestAsync(email, ct);
+        var forEmail = await _codes.GetLatestAsync(email, purpose: null, ct);
         if (forEmail is not null)
         {
             ThrowIfCoolingDown(EmailCodePolicy.CooldownRemaining(now, forEmail.CreatedAt, settings.ResendCooldownSeconds));
@@ -312,18 +431,30 @@ public class EmailVerificationService : IEmailVerificationService
             remainingSeconds);
     }
 
-    private async Task DeliverAsync(string email, string code, SmtpOptions settings, CancellationToken ct)
+    /// <summary>
+    /// PASSWORD_RESET: sends the mail that matches the row's flow. A reset row must not receive the
+    /// "finish your sign-up" wording — the recipient is already registered and would report it as
+    /// phishing rather than read the code.
+    /// </summary>
+    private async Task DeliverAsync(string email, string code, SmtpOptions settings, string purpose, CancellationToken ct)
     {
         try
         {
-            await _mail.SendVerificationCodeAsync(email, code, settings.CodeTtlMinutes, ct);
+            if (purpose == EmailCodePurposes.PasswordReset)
+            {
+                await _mail.SendPasswordResetCodeAsync(email, code, settings.CodeTtlMinutes, ct);
+            }
+            else
+            {
+                await _mail.SendVerificationCodeAsync(email, code, settings.CodeTtlMinutes, ct);
+            }
         }
         catch (EmailSendFailedException ex)
         {
             // Nobody received this code, so it must not hold the address in its cooldown: drop it and
             // let the next attempt send a fresh one straight away.
-            await _codes.RemoveAllForEmailAsync(email, ct);
-            _logger.LogError(ex, "Email verification: could not deliver the code.");
+            await _codes.RemoveAllForEmailAsync(email, purpose, ct);
+            _logger.LogError(ex, "Email code: could not deliver ({Purpose}).", purpose);
             throw new AuthException("email_send_failed", "Не удалось отправить письмо. Попробуйте позже.", 502);
         }
     }

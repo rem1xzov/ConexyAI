@@ -4,25 +4,30 @@ using Microsoft.EntityFrameworkCore;
 namespace ConexyAI.Repository;
 
 /// <summary>
-/// EMAIL_VERIFICATION: persistence for pending sign-ups. The address has at most one live code, so
-/// every write replaces what was there before.
+/// EMAIL_VERIFICATION: persistence for pending sign-ups and password resets. One address has at most
+/// one live code per flow, so every write replaces what was there before.
 /// </summary>
 public interface IEmailVerificationRepository
 {
-    /// <summary>Newest code for an address, or <c>null</c> when nothing is pending for it.</summary>
-    Task<EmailVerificationCodeEntity?> GetLatestAsync(string email, CancellationToken ct = default);
+    /// <summary>
+    /// Newest code for an address, or <c>null</c> when nothing is pending for it. Pass <paramref name="purpose"/> to
+    /// look inside one flow, or <c>null</c> for the newest row of any flow (the resend path does that, since the
+    /// pending row itself says which flow needs the mail).
+    /// </summary>
+    Task<EmailVerificationCodeEntity?> GetLatestAsync(
+        string email, string? purpose = null, CancellationToken ct = default);
 
     /// <summary>Newest code requested from one IP — the other half of the resend cooldown.</summary>
     Task<EmailVerificationCodeEntity?> GetLatestForIpAsync(string ip, CancellationToken ct = default);
 
-    /// <summary>Drops every code of the address and stores this one instead.</summary>
+    /// <summary>Drops every code of the address in this row's flow and stores this one instead.</summary>
     Task ReplaceAsync(EmailVerificationCodeEntity row, CancellationToken ct = default);
 
     /// <summary>Persists a changed row (a spent attempt).</summary>
     Task UpdateAsync(EmailVerificationCodeEntity row, CancellationToken ct = default);
 
-    /// <summary>Removes every code of the address (used after a successful confirmation).</summary>
-    Task RemoveAllForEmailAsync(string email, CancellationToken ct = default);
+    /// <summary>Removes every code of the address in one flow (used after a successful confirmation).</summary>
+    Task RemoveAllForEmailAsync(string email, string purpose, CancellationToken ct = default);
 }
 
 public class EmailVerificationRepository : IEmailVerificationRepository
@@ -34,13 +39,14 @@ public class EmailVerificationRepository : IEmailVerificationRepository
         _context = context;
     }
 
-    public async Task<EmailVerificationCodeEntity?> GetLatestAsync(string email, CancellationToken ct = default)
+    public async Task<EmailVerificationCodeEntity?> GetLatestAsync(
+        string email, string? purpose = null, CancellationToken ct = default)
     {
         // Tracked (no AsNoTracking): the caller updates the row it gets back (a spent attempt, a
         // refreshed expiry), and a second detached copy of the same key would collide with the one
         // the context already holds.
         return await _context.EmailVerificationCodes
-            .Where(c => c.Email == email)
+            .Where(c => c.Email == email && (purpose == null || c.Purpose == purpose))
             .OrderByDescending(c => c.CreatedAt)
             .FirstOrDefaultAsync(ct);
     }
@@ -57,8 +63,10 @@ public class EmailVerificationRepository : IEmailVerificationRepository
     {
         // Load-and-remove instead of ExecuteDeleteAsync: the in-memory provider used by the test
         // suite does not support ExecuteDelete, and one address owns a handful of rows at most.
+        // Scoped to the row's own flow: a pending reset must survive starting a sign-up for the same
+        // address (and vice versa), otherwise one form would silently cancel the other.
         var stale = await _context.EmailVerificationCodes
-            .Where(c => c.Email == row.Email)
+            .Where(c => c.Email == row.Email && c.Purpose == row.Purpose)
             .ToListAsync(ct);
 
         if (stale.Count > 0)
@@ -76,10 +84,10 @@ public class EmailVerificationRepository : IEmailVerificationRepository
         await _context.SaveChangesAsync(ct);
     }
 
-    public async Task RemoveAllForEmailAsync(string email, CancellationToken ct = default)
+    public async Task RemoveAllForEmailAsync(string email, string purpose, CancellationToken ct = default)
     {
         var rows = await _context.EmailVerificationCodes
-            .Where(c => c.Email == email)
+            .Where(c => c.Email == email && c.Purpose == purpose)
             .ToListAsync(ct);
 
         if (rows.Count == 0)

@@ -54,6 +54,8 @@ internal static class AuthTests
         TestRegistry.Add("auth EMAIL_VERIFICATION: code flow, cooldown, attempts, expiry", EmailVerificationAsync);
         // PRIVACY_POLICY: добавлено 2026-09-26
         TestRegistry.Add("auth POLICY: register without consent is refused, consent is stored on the account", PolicyConsentAsync);
+        // PASSWORD_RESET: добавлено 2026-09-26
+        TestRegistry.Add("auth PASSWORD_RESET: unknown address refused, code changes the password and revokes sessions", PasswordResetAsync);
         TestRegistry.Add("auth H3: SpeechKit logs never contain recognized speech or full upstream bodies", SpeechLogsArePrivateAsync);
         TestRegistry.Add("auth L12: JWT signing key guard refuses placeholders outside Development", SigningKeyGuardAsync);
     }
@@ -327,11 +329,7 @@ internal static class AuthTests
         var client = host.Client;
         var mail = (RecordingEmailSender)host.App.Services.GetRequiredService<IEmailSender>();
 
-        async Task<string?> CodeOfAsync(HttpResponseMessage response)
-        {
-            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            return doc.RootElement.TryGetProperty("code", out var code) ? code.GetString() : null;
-        }
+        async Task<string?> CodeOfAsync(HttpResponseMessage response) => await ErrorCodeAsync(response);
 
         // Both "flag absent" (an old/foreign client) and "flag false" are refused.
         var missing = await client.PostAsJsonAsync(
@@ -365,6 +363,81 @@ internal static class AuthTests
             $"the stored policy version must be the current one, got {user.PolicyVersion ?? "<null>"}");
         Assert(user.PolicyAcceptedAt <= DateTime.UtcNow.AddSeconds(5),
             "the consent timestamp must be UTC and not in the future");
+    }
+
+    // ---------------------------------------------------------------- PASSWORD_RESET
+
+    // PASSWORD_RESET: добавлено 2026-09-26
+    /// <summary>
+    /// The whole reset flow over HTTP: an unknown address is named up front, a known one gets the reset
+    /// wording, the code is checked with the attempt budget, and the new password replaces the old one
+    /// while every existing session of the account is revoked.
+    /// </summary>
+    private static async Task PasswordResetAsync()
+    {
+        await using var host = await AuthHost.StartAsync();
+        var client = host.Client;
+        var mail = (RecordingEmailSender)host.App.Services.GetRequiredService<IEmailSender>();
+        const string Email = "reset@example.com";
+        const string NewPassword = "brand new correct horse";
+
+        var register = await client.PostAsJsonAsync(
+            "/api/auth/register", new { email = Email, password = Password, acceptedPolicy = true });
+        Assert(register.StatusCode == HttpStatusCode.OK, "the sign-up must start");
+        var verify = await client.PostAsJsonAsync(
+            "/api/auth/verify-email", new { email = Email, code = mail.LastCode });
+        Assert(verify.StatusCode == HttpStatusCode.OK, "the sign-up must confirm");
+        var sessionBeforeReset = (await verify.Content.ReadFromJsonAsync<TokenResponse>())!.Token;
+
+        // An address nobody registered is named right away, without asking for a password first.
+        var unknown = await client.PostAsJsonAsync("/api/auth/forgot-password", new { email = "nobody@example.com" });
+        Assert(unknown.StatusCode == HttpStatusCode.BadRequest && await ErrorCodeAsync(unknown) == "email_not_found",
+            $"an unknown address must be refused by name, got {(int)unknown.StatusCode}");
+        Assert(!mail.LastWasReset, "an unknown address must not receive a code");
+
+        var forgot = await client.PostAsJsonAsync("/api/auth/forgot-password", new { email = Email });
+        Assert(forgot.StatusCode == HttpStatusCode.OK, $"forgot-password must succeed, got {(int)forgot.StatusCode}");
+        Assert(mail.LastWasReset, "a reset must use the reset mail template, not the sign-up one");
+        var resetCode = mail.LastCode!;
+
+        // A wrong code spends an attempt and does not touch the password.
+        var wrong = await client.PostAsJsonAsync(
+            "/api/auth/reset-password", new { email = Email, code = "000000", newPassword = NewPassword });
+        Assert(wrong.StatusCode == HttpStatusCode.BadRequest && await ErrorCodeAsync(wrong) == "invalid_code",
+            $"a wrong code must be refused, got {(int)wrong.StatusCode}");
+
+        // A password that the login form would reject must be rejected here too — and without spending
+        // an attempt, so the correct code still works afterwards.
+        var tooShort = await client.PostAsJsonAsync(
+            "/api/auth/reset-password", new { email = Email, code = resetCode, newPassword = "short" });
+        Assert(tooShort.StatusCode == HttpStatusCode.BadRequest, $"a weak password must be refused, got {(int)tooShort.StatusCode}");
+
+        var reset = await client.PostAsJsonAsync(
+            "/api/auth/reset-password", new { email = Email, code = resetCode, newPassword = NewPassword });
+        Assert(reset.StatusCode == HttpStatusCode.OK, $"the reset must succeed, got {(int)reset.StatusCode}");
+        var sessionAfterReset = (await reset.Content.ReadFromJsonAsync<TokenResponse>())!.Token;
+        Assert(sessionAfterReset != sessionBeforeReset, "the reset must issue its own session");
+
+        // The password really changed: the old one is dead, the new one logs in.
+        var oldLogin = await client.PostAsJsonAsync("/api/auth/login", new { email = Email, password = Password });
+        Assert(oldLogin.StatusCode == HttpStatusCode.Unauthorized,
+            $"the old password must stop working, got {(int)oldLogin.StatusCode}");
+        var newLogin = await client.PostAsJsonAsync("/api/auth/login", new { email = Email, password = NewPassword });
+        Assert(newLogin.StatusCode == HttpStatusCode.OK, $"the new password must log in, got {(int)newLogin.StatusCode}");
+
+        // TOKEN_REVOCATION: whoever held a token before the reset lost it.
+        using var probe = new HttpRequestMessage(HttpMethod.Get, "/probe");
+        probe.Headers.Authorization = new AuthenticationHeaderValue("Bearer", sessionBeforeReset);
+        using var probeResponse = await client.SendAsync(probe);
+        Assert(probeResponse.StatusCode == HttpStatusCode.Unauthorized,
+            $"the pre-reset session must be revoked, got {(int)probeResponse.StatusCode}");
+    }
+
+    /// <summary>Reads the machine-readable <c>code</c> out of an auth error body.</summary>
+    private static async Task<string?> ErrorCodeAsync(HttpResponseMessage response)
+    {
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return doc.RootElement.TryGetProperty("code", out var code) ? code.GetString() : null;
     }
 
     // ---------------------------------------------------------------- M20
@@ -869,7 +942,16 @@ internal static class AuthTests
         public int Sends { get; private set; }
         public bool FailNext { get; set; }
 
-        public Task SendVerificationCodeAsync(string toEmail, string code, int validMinutes, CancellationToken ct = default)
+        // PASSWORD_RESET: какой шаблон письма попросили отправить — регистрационный или сборочный.
+        public bool LastWasReset { get; private set; }
+
+        public Task SendVerificationCodeAsync(string toEmail, string code, int validMinutes, CancellationToken ct = default) =>
+            Record(toEmail, code, reset: false);
+
+        public Task SendPasswordResetCodeAsync(string toEmail, string code, int validMinutes, CancellationToken ct = default) =>
+            Record(toEmail, code, reset: true);
+
+        private Task Record(string toEmail, string code, bool reset)
         {
             if (FailNext)
             {
@@ -879,6 +961,7 @@ internal static class AuthTests
 
             LastTo = toEmail;
             LastCode = code;
+            LastWasReset = reset;
             Sends += 1;
             return Task.CompletedTask;
         }

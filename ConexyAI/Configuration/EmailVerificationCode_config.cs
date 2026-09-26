@@ -17,15 +17,21 @@ public class EmailVerificationCode_config : IEntityTypeConfiguration<EmailVerifi
             .HasMaxLength(320)
             .IsRequired();
 
+        // PASSWORD_RESET: добавлено 2026-09-26 — какой поток владеет кодом (signup/reset).
+        builder.Property(x => x.Purpose)
+            .HasMaxLength(16)
+            .IsRequired();
+
         // BCrypt hashes are 60 characters today; the column is wider so a stronger cost or a
         // different scheme does not need a migration.
         builder.Property(x => x.CodeHash)
             .HasMaxLength(200)
             .IsRequired();
 
+        // PASSWORD_RESET: nullable с 2026-09-26 — у строки сброса пароля хэша ещё нет.
         builder.Property(x => x.PasswordHash)
             .HasMaxLength(200)
-            .IsRequired();
+            .IsRequired(false);
 
         builder.Property(x => x.LastSentIp)
             .HasMaxLength(64);

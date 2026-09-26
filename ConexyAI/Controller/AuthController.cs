@@ -271,6 +271,54 @@ public class AuthController : ControllerBase
         }
     }
 
+    // PASSWORD_RESET: добавлено 2026-09-26
+    /// <summary>
+    /// Starts a password reset. The address must already have a password account; the mailed code then
+    /// proves the requester owns it. No session is issued here — the password is chosen at
+    /// <see cref="ResetPassword"/>, together with that code.
+    /// </summary>
+    [HttpPost("forgot-password")]
+    [EnableRateLimiting(AuthRateLimitPolicies.ForgotPassword)]
+    public async Task<IActionResult> ForgotPassword([FromBody] EmailOnlyRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var challenge = await _emailVerification.StartPasswordResetAsync(request.Email, ClientIp(), ct);
+            return Ok(new
+            {
+                success = true,
+                email = challenge.Email,
+                resendCooldownSeconds = challenge.ResendCooldownSeconds,
+            });
+        }
+        catch (AuthException ex)
+        {
+            return AuthError(ex);
+        }
+    }
+
+    // PASSWORD_RESET: добавлено 2026-09-26
+    /// <summary>
+    /// Confirms the reset code and applies the new password. The account's existing sessions are revoked
+    /// in the process, and a fresh one is issued to the caller.
+    /// </summary>
+    [HttpPost("reset-password")]
+    [EnableRateLimiting(AuthRateLimitPolicies.ResetPassword)]
+    public async Task<IActionResult> ResetPassword([FromBody] PasswordResetRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var user = await _emailVerification.ResetPasswordAsync(
+                request.Email, request.Code, request.NewPassword, ct);
+            _logger.LogInformation("Password reset: password changed, session issued (user {UserId}).", user.Id);
+            return Ok(IssueSession(user));
+        }
+        catch (AuthException ex)
+        {
+            return AuthError(ex);
+        }
+    }
+
     // EMAIL_AUTH: добавлено 2026-09-19
     /// <summary>Logs in with an email/password account.</summary>
     [HttpPost("login")]
