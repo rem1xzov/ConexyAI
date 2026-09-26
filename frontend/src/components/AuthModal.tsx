@@ -39,6 +39,9 @@ export function AuthModal({ mode, onSubmit, onConfirmCode, onResendCode, onSwitc
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  // PRIVACY_POLICY: согласие с Политикой обработки персональных данных. Обязательно при регистрации:
+  // без галочки кнопка неактивна и форма не уходит на сервер.
+  const [accepted, setAccepted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -64,6 +67,12 @@ export function AuthModal({ mode, onSubmit, onConfirmCode, onResendCode, onSwitc
 
     if (isRegister && password !== confirm) {
       setError(t('auth.passwordsMismatch'));
+      return;
+    }
+
+    // PRIVACY_POLICY: сервер не знает про галочку, поэтому это последний барьер перед запросом.
+    if (isRegister && !accepted) {
+      setError(t('auth.policyRequired'));
       return;
     }
 
@@ -238,12 +247,40 @@ export function AuthModal({ mode, onSubmit, onConfirmCode, onResendCode, onSwitc
             />
           )}
 
+          {/* PRIVACY_POLICY: добавлено 2026-09-25 — обязательное согласие при регистрации. Ссылка
+              открывается в новой вкладке, чтобы не потерять уже введённые email и пароль. */}
+          {isRegister && (
+            <label className="auth-modal__consent">
+              <input
+                type="checkbox"
+                checked={accepted}
+                onChange={(e) => {
+                  setAccepted(e.target.checked);
+                  if (e.target.checked) setError(null);
+                }}
+                aria-label={t('auth.policyAria')}
+              />
+              <span>
+                {t('auth.policyPrefix')}{' '}
+                <a
+                  className="auth-modal__consent-link"
+                  href="#/privacy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {t('auth.policyLink')}
+                </a>{' '}
+                {t('auth.policySuffix')}
+              </span>
+            </label>
+          )}
+
           {error && <div className="auth-modal__error">{error}</div>}
 
           <button
             className="dialog-btn dialog-btn--primary auth-modal__submit"
             type="submit"
-            disabled={loading || !email.trim() || !password}
+            disabled={loading || !email.trim() || !password || (isRegister && !accepted)}
           >
             {loading ? t('auth.waiting') : isRegister ? t('auth.registerButton') : t('auth.loginButton')}
           </button>
@@ -253,9 +290,17 @@ export function AuthModal({ mode, onSubmit, onConfirmCode, onResendCode, onSwitc
           <span>{t('auth.or')}</span>
         </div>
 
-        <a className="auth-modal__github" href="/api/auth/github/login">
-          <GitHubIcon size={18} /> {t('auth.loginWithGithub')}
-        </a>
+        {/* PRIVACY_POLICY: вход через GitHub создаёт учётную запись в обход формы, поэтому в
+            режиме регистрации ссылка активна только после согласия с Политикой. */}
+        {isRegister && !accepted ? (
+          <div className="auth-modal__github auth-modal__github--locked" aria-disabled="true">
+            <GitHubIcon size={18} /> {t('auth.loginWithGithub')}
+          </div>
+        ) : (
+          <a className="auth-modal__github" href="/api/auth/github/login">
+            <GitHubIcon size={18} /> {t('auth.loginWithGithub')}
+          </a>
+        )}
 
         <button className="auth-modal__switch" onClick={onSwitchMode} type="button">
           {isRegister ? t('auth.switchToLogin') : t('auth.switchToRegister')}

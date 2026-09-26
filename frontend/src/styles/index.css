@@ -3591,6 +3591,38 @@ body {
   gap: 10px;
 }
 
+/* PRIVACY_POLICY: добавлено 2026-09-25 — обязательное согласие при регистрации. Выравниваем
+   флажок по первой строке текста, а не по центру блока: текст занимает 2–3 строки, а область
+   нажатия остаётся на всю ширину карточки. */
+.auth-modal__consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.auth-modal__consent input[type='checkbox'] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.auth-modal__consent-link {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.auth-modal__consent-link:hover {
+  text-decoration: none;
+}
+
 .auth-modal__error {
   font-size: 12.5px;
   color: var(--danger);
@@ -3642,6 +3674,13 @@ body {
 
 .auth-modal__github:hover {
   background: var(--bg-hover);
+}
+
+/* PRIVACY_POLICY: вход через GitHub заводит аккаунт в обход формы, поэтому до согласия с
+   Политикой ссылка выглядит выключенной и не является кликабельной. */
+.auth-modal__github--locked {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .auth-modal__switch {
@@ -5452,6 +5491,134 @@ body {
   gap: 10px;
   flex-wrap: wrap;
   justify-content: center;
+}
+
+/* ---------- PRIVACY_POLICY: добавлено 2026-09-25 ---------- */
+/* Публичный документ (`#/privacy`). Отдельный полноэкранный маршрут, без сайдбара и композера,
+   чтобы страницу можно было безопасно открыть в новой вкладке прямо из формы регистрации. */
+.legal-page {
+  min-height: 100vh;
+  min-height: 100dvh;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-main);
+  color: var(--text);
+}
+
+.legal-page__bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sidebar);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.legal-page__back {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.legal-page__back:hover {
+  background: var(--surface-2);
+}
+
+.legal-page__brand {
+  display: inline-flex;
+  align-items: center;
+}
+
+.legal-page__doc {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 20px 72px;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.legal-page__title {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: clamp(22px, 3.4vw, 30px);
+  line-height: 1.25;
+}
+
+.legal-page__meta {
+  margin: 0 0 24px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.legal-page__notice {
+  margin: 0 0 24px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.legal-page__doc h2 {
+  margin: 28px 0 10px;
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.legal-page__doc p {
+  margin: 0 0 12px;
+}
+
+.legal-page__doc ul {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+
+.legal-page__doc li {
+  margin-bottom: 6px;
+}
+
+.legal-page__doc a {
+  color: var(--accent);
+}
+
+.legal-page__doc a:hover {
+  text-decoration: underline;
+}
+
+/* Подпись оператора в конце документа: отделена от текста, чтобы её нельзя было принять за
+   часть раздела «Контакты». */
+.legal-page__operator {
+  margin-top: 32px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@media (max-width: 768px) {
+  .legal-page__doc {
+    padding: 24px 16px 64px;
+    font-size: 13.5px;
+  }
 }
 
 /* ---------- SUPPORT: добавлено 2026-09-19 ---------- */

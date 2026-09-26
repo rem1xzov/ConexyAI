@@ -50,7 +50,17 @@
     "switchToRegister": "No account? Sign up",
     "switchToLogin": "Already have an account? Log in",
     "passwordsMismatch": "Passwords do not match",
-    "or": "or"
+    "or": "or",
+    "policyPrefix": "I have read and agree to the",
+    "policyLink": "Personal Data Processing Policy",
+    "policySuffix": "and consent to the processing of my personal data, including the cross-border transfer of my prompt text to third-party AI infrastructure providers",
+    "policyRequired": "Please accept the Personal Data Processing Policy",
+    "policyAria": "Consent to the Personal Data Processing Policy"
+  },
+  "privacy": {
+    "title": "Personal Data Processing Policy",
+    "updated": "Last updated: {{date}}",
+    "englishNotice": "This legal document is provided in Russian only, as it governs the processing of personal data under Russian law. In case of any discrepancy, the Russian version prevails."
   },
   "account": {
     "settings": "Settings",

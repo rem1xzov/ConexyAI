@@ -27,6 +27,8 @@ import { ConexyLogo } from './components/ConexyLogo';
 import { ChatLayout, type ChatQuickChip } from './components/ChatLayout';
 // GUEST_HERO: добавлено 2026-09-20
 import { GuestHero } from './components/GuestHero';
+// PRIVACY_POLICY: добавлено 2026-09-25 — публичная страница политики обработки ПДн (`#/privacy`).
+import { PrivacyPolicy } from './components/PrivacyPolicy';
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 import { UsageIndicator } from './components/UsageIndicator';
 import { UpgradeModal } from './components/UpgradeModal';
@@ -402,6 +404,9 @@ export default function App() {
   }, []);
 
   const isAdminRoute = route.startsWith('#/admin');
+  // PRIVACY_POLICY: добавлено 2026-09-25 — документ доступен и гостю, поэтому маршрут проверяется
+  // независимо от профиля и токена.
+  const isPrivacyRoute = route.startsWith('#/privacy');
 
   // ADMIN_PANEL_FIX: добавлено 2026-09-23 — маршрут админки решается ЯВНО.
   // Раньше при `user === null` (профиль ещё не приехал или /auth/me упал) не выполнялось ни одно из
@@ -2502,6 +2507,16 @@ export default function App() {
   // и «нет прав», и только потом саму панель.
   if (adminView) {
     return adminView;
+  }
+
+  // PRIVACY_POLICY: добавлено 2026-09-25 — публичная страница политики обработки персональных
+  // данных. Как и экраны админки, стоит ПОСЛЕ последнего хука компонента (см. ADMIN_HOOKS_ORDER).
+  if (isPrivacyRoute) {
+    return (
+      <ErrorBoundary backLabel={t('common.back')} onBack={() => { window.location.hash = ''; }}>
+        <PrivacyPolicy onBack={() => { window.location.hash = ''; }} />
+      </ErrorBoundary>
+    );
   }
 
   // ADMIN_ERROR_BOUNDARY: добавлено 2026-09-23 — на самой панели рендер отделён от приложения,

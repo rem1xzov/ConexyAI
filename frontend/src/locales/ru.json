@@ -50,7 +50,17 @@
     "switchToRegister": "Нет аккаунта? Зарегистрироваться",
     "switchToLogin": "Уже есть аккаунт? Войти",
     "passwordsMismatch": "Пароли не совпадают",
-    "or": "или"
+    "or": "или",
+    "policyPrefix": "Я ознакомлен и согласен с",
+    "policyLink": "Политикой обработки персональных данных",
+    "policySuffix": "и даю согласие на обработку моих персональных данных, включая трансграничную передачу текста запросов сторонним поставщикам инфраструктуры ИИ",
+    "policyRequired": "Отметьте согласие с Политикой обработки персональных данных",
+    "policyAria": "Согласие с Политикой обработки персональных данных"
+  },
+  "privacy": {
+    "title": "Политика обработки персональных данных",
+    "updated": "Дата последнего обновления: {{date}}",
+    "englishNotice": "This legal document is provided in Russian only, as it governs the processing of personal data under Russian law. In case of any discrepancy, the Russian version prevails."
   },
   "account": {
     "settings": "Настройки",
