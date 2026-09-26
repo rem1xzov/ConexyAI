@@ -225,7 +225,7 @@ function replacesLastTurn(messages: ChatMessage[], userIndex: number): boolean {
 
 export default function App() {
   // EMAIL_AUTH: добавлено 2026-09-19
-  const { token, user, initializing, profileFailed, reloadProfile, error: authError, login, register, confirmEmail, resendCode, logout } = useAuth();
+  const { token, user, initializing, profileFailed, reloadProfile, error: authError, login, register, confirmEmail, resendCode, requestPasswordReset, resetPassword, logout } = useAuth();
   // SETTINGS: добавлено 2026-09-19
   const { t, i18n } = useTranslation();
   // MOBILE: добавлено 2026-09-19 — drives the responsive layout (sidebar overlay, agent tabs).
@@ -445,6 +445,8 @@ export default function App() {
                 onSubmit={handleAuthSubmit}
                 onConfirmCode={confirmEmail}
                 onResendCode={resendCode}
+                onRequestReset={requestPasswordReset}
+                onResetPassword={resetPassword}
                 onSwitchMode={() => setAuthModal(authModal === 'login' ? 'register' : 'login')}
                 onClose={() => setAuthModal(null)}
               />
@@ -2826,6 +2828,8 @@ export default function App() {
           onSubmit={handleAuthSubmit}
           onConfirmCode={confirmEmail}
           onResendCode={resendCode}
+          onRequestReset={requestPasswordReset}
+          onResetPassword={resetPassword}
           onSwitchMode={() => setAuthModal(authModal === 'login' ? 'register' : 'login')}
           onClose={() => setAuthModal(null)}
         />

@@ -74,6 +74,32 @@ export async function resendVerificationCode(email: string): Promise<{ resendCoo
   return data;
 }
 
+// PASSWORD_RESET: добавлено 2026-09-26
+/**
+ * Starts a password reset for an existing account. The server checks the address up front (it answers
+ * `email_not_found` for a stranger) and mails a 6-digit code; the new password is chosen in
+ * {@link resetPassword} together with that code.
+ */
+export async function forgotPassword(email: string): Promise<VerificationChallenge> {
+  const { data } = await axios.post<VerificationChallenge>('/api/auth/forgot-password', { email });
+  return data;
+}
+
+// PASSWORD_RESET: добавлено 2026-09-26
+/** Confirms the reset code and applies the new password; the session token comes back with it. */
+export async function resetPassword(
+  email: string,
+  code: string,
+  newPassword: string,
+): Promise<DevTokenResponse> {
+  const { data } = await axios.post<DevTokenResponse>('/api/auth/reset-password', {
+    email,
+    code,
+    newPassword,
+  });
+  return data;
+}
+
 // EMAIL_AUTH: добавлено 2026-09-19
 /** Logs in with an email/password account and returns its session token. */
 export async function login(email: string, password: string): Promise<DevTokenResponse> {

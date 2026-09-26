@@ -24,6 +24,30 @@ function Icon({ size = 18, className, children }: IconProps & { children: ReactN
   );
 }
 
+// PASSWORD_EYE: добавлено 2026-09-26
+/** Показать пароль: открытый глаз. */
+export function EyeIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </Icon>
+  );
+}
+
+// PASSWORD_EYE: добавлено 2026-09-26
+/** Скрыть пароль: глаз перечёркнут. */
+export function EyeOffIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M10.6 5.2A10.6 10.6 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-2.4 3.3" />
+      <path d="M6.6 6.7A16.6 16.6 0 0 0 2 12s3.6 7 10 7a10.5 10.5 0 0 0 4.3-.9" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+      <line x1="3" y1="3" x2="21" y2="21" />
+    </Icon>
+  );
+}
+
 export function MenuIcon(props: IconProps) {
   return (
     <Icon {...props}>

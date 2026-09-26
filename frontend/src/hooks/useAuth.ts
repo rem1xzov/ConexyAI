@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   getDevToken,
+  forgotPassword as apiForgotPassword,
   getMe,
   getSession,
   login as apiLogin,
   logout as apiLogout,
   resendVerificationCode as apiResendCode,
+  resetPassword as apiResetPassword,
   startRegistration as apiStartRegistration,
   verifyEmail as apiVerifyEmail,
   type VerificationChallenge,
@@ -443,6 +445,33 @@ export function useAuth() {
     [t],
   );
 
+  // PASSWORD_RESET: добавлено 2026-09-26
+  /** Начинает сброс пароля: сервер проверяет адрес и шлёт код, сессии ещё нет. */
+  const requestPasswordReset = useCallback(
+    async (email: string): Promise<number> => {
+      try {
+        const challenge = await apiForgotPassword(email);
+        return challenge.resendCooldownSeconds;
+      } catch (e) {
+        throw new Error(authErrorMessage(e, t));
+      }
+    },
+    [t],
+  );
+
+  // PASSWORD_RESET: добавлено 2026-09-26 — подтверждение кода вместе с новым паролем: сервер меняет
+  // пароль, отзывает все старые сессии и выдаёт новую, поэтому здесь появляется токен.
+  const resetPassword = useCallback(
+    async (email: string, code: string, newPassword: string) => {
+      try {
+        applyToken(await apiResetPassword(email, code, newPassword));
+      } catch (e) {
+        throw new Error(authErrorMessage(e, t));
+      }
+    },
+    [applyToken, t],
+  );
+
   // SESSION_REVOKED: изменено 2026-09-24 (M19) — выход отзывает токен на сервере (Bearer + cookie),
   // а локальное состояние аккаунта (чаты, хаб, ходы) App чистит по смене пользователя (H10).
   const logout = useCallback(async () => {
@@ -473,6 +502,9 @@ export function useAuth() {
     register,
     confirmEmail,
     resendCode,
+    // PASSWORD_RESET: добавлено 2026-09-26
+    requestPasswordReset,
+    resetPassword,
     logout,
   };
 }
