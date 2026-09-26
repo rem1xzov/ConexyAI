@@ -52,6 +52,8 @@ internal static class AuthTests
         TestRegistry.Add("auth M20: per-IP rate limit on /api/auth/login answers 429 JSON (HTTP)", LoginRateLimitOverHttpAsync);
         TestRegistry.Add("auth L7: speech text goes in the POST body and is capped", SpeechSynthesisHardeningAsync);
         TestRegistry.Add("auth EMAIL_VERIFICATION: code flow, cooldown, attempts, expiry", EmailVerificationAsync);
+        // PRIVACY_POLICY: добавлено 2026-09-26
+        TestRegistry.Add("auth POLICY: register without consent is refused, consent is stored on the account", PolicyConsentAsync);
         TestRegistry.Add("auth H3: SpeechKit logs never contain recognized speech or full upstream bodies", SpeechLogsArePrivateAsync);
         TestRegistry.Add("auth L12: JWT signing key guard refuses placeholders outside Development", SigningKeyGuardAsync);
     }
@@ -249,7 +251,10 @@ internal static class AuthTests
 
         // EMAIL_VERIFICATION: регистрация стала двухшаговой — сервер отвечает задачей на
         // подтверждение и НЕ выдаёт токен; сессия появляется только после кода из письма.
-        var register = await client.PostAsJsonAsync("/api/auth/register", new { email = "http-m19@example.com", password = Password });
+        // PRIVACY_POLICY: acceptedPolicy обязателен — без него register отвечает 400.
+        var register = await client.PostAsJsonAsync(
+            "/api/auth/register",
+            new { email = "http-m19@example.com", password = Password, acceptedPolicy = true });
         Assert(register.StatusCode == HttpStatusCode.OK, $"register must succeed, got {(int)register.StatusCode}");
         using (var doc = JsonDocument.Parse(await register.Content.ReadAsStringAsync()))
         {
@@ -307,6 +312,59 @@ internal static class AuthTests
         // Legacy token (no tv), correctly signed: rejected.
         var legacy = host.MintLegacyToken(Guid.NewGuid());
         Assert((await ProbeAsync(legacy)).Status == HttpStatusCode.Unauthorized, "a correctly signed legacy token without tv must be rejected");
+    }
+
+    // ---------------------------------------------------------------- PRIVACY_POLICY
+
+    // PRIVACY_POLICY: добавлено 2026-09-26
+    /// <summary>
+    /// The consent gate is enforced by the server, not only by the disabled button in the form, and
+    /// the accepted policy version is written onto the account when the code is confirmed.
+    /// </summary>
+    private static async Task PolicyConsentAsync()
+    {
+        await using var host = await AuthHost.StartAsync();
+        var client = host.Client;
+        var mail = (RecordingEmailSender)host.App.Services.GetRequiredService<IEmailSender>();
+
+        async Task<string?> CodeOfAsync(HttpResponseMessage response)
+        {
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            return doc.RootElement.TryGetProperty("code", out var code) ? code.GetString() : null;
+        }
+
+        // Both "flag absent" (an old/foreign client) and "flag false" are refused.
+        var missing = await client.PostAsJsonAsync(
+            "/api/auth/register", new { email = "no-consent@example.com", password = Password });
+        Assert(missing.StatusCode == HttpStatusCode.BadRequest,
+            $"register without the consent flag must be refused, got {(int)missing.StatusCode}");
+        Assert(await CodeOfAsync(missing) == "policy_not_accepted", "the refusal must carry the policy error code");
+
+        var denied = await client.PostAsJsonAsync(
+            "/api/auth/register", new { email = "no-consent@example.com", password = Password, acceptedPolicy = false });
+        Assert(denied.StatusCode == HttpStatusCode.BadRequest,
+            $"register with acceptedPolicy=false must be refused, got {(int)denied.StatusCode}");
+
+        // A refused attempt must leave nothing behind: no pending row, so no mail either.
+        Assert(mail.LastCode is null, "a refused registration must not send a code");
+
+        var accepted = await client.PostAsJsonAsync(
+            "/api/auth/register", new { email = "consent@example.com", password = Password, acceptedPolicy = true });
+        Assert(accepted.StatusCode == HttpStatusCode.OK,
+            $"register with consent must succeed, got {(int)accepted.StatusCode}");
+
+        var verify = await client.PostAsJsonAsync(
+            "/api/auth/verify-email", new { email = "consent@example.com", code = mail.LastCode });
+        Assert(verify.StatusCode == HttpStatusCode.OK, $"verify must succeed, got {(int)verify.StatusCode}");
+
+        await using var scope = host.App.Services.CreateAsyncScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+        var user = (await repo.GetByEmailAsync("consent@example.com"))!;
+        Assert(user.PolicyAcceptedAt is not null, "the consent timestamp must be stored on the account");
+        Assert(user.PolicyVersion == LegalPolicy.CurrentVersion,
+            $"the stored policy version must be the current one, got {user.PolicyVersion ?? "<null>"}");
+        Assert(user.PolicyAcceptedAt <= DateTime.UtcNow.AddSeconds(5),
+            "the consent timestamp must be UTC and not in the future");
     }
 
     // ---------------------------------------------------------------- M20

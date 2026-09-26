@@ -204,6 +204,16 @@ public class AuthController : ControllerBase
     [EnableRateLimiting(AuthRateLimitPolicies.Register)]
     public async Task<IActionResult> Register([FromBody] EmailPasswordRequest request, CancellationToken ct)
     {
+        // PRIVACY_POLICY: добавлено 2026-09-25 — согласие обязательно и проверяется здесь, а не только
+        // галочкой в форме: клиентская блокировка обходится обычным POST на этот эндпоинт.
+        if (!request.AcceptedPolicy)
+        {
+            return AuthError(new AuthException(
+                "policy_not_accepted",
+                "Для регистрации необходимо согласие с Политикой обработки персональных данных.",
+                400));
+        }
+
         try
         {
             var challenge = await _emailVerification.StartRegistrationAsync(

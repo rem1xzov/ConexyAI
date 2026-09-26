@@ -13,8 +13,11 @@ interface AuthModalProps {
    * Login, or the FIRST step of a sign-up. A sign-up resolves with the verification challenge
    * instead of a session: the password is stored server-side and a 6-digit code is on its way to the
    * address, so the form moves on to the code step (see EMAIL_VERIFICATION).
+   *
+   * PRIVACY_POLICY: <paramref name="acceptedPolicy"/> carries the consent tick; the backend refuses
+   * to start a sign-up without it, so the flag has to travel with the credentials.
    */
-  onSubmit: (email: string, password: string) => Promise<VerificationChallenge | void>;
+  onSubmit: (email: string, password: string, acceptedPolicy: boolean) => Promise<VerificationChallenge | void>;
   /** Confirms the emailed code — this is where the session actually appears. */
   onConfirmCode: (email: string, code: string) => Promise<void>;
   /** Asks for a fresh code; resolves with the cooldown the server enforces, in seconds. */
@@ -80,7 +83,7 @@ export function AuthModal({ mode, onSubmit, onConfirmCode, onResendCode, onSwitc
 
     setLoading(true);
     try {
-      const result = await onSubmit(email, password);
+      const result = await onSubmit(email, password, accepted);
       if (result) {
         setChallenge({ email: result.email });
         setCode('');

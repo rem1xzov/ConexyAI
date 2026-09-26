@@ -558,6 +558,7 @@
     "invalid_email": "Invalid email.",
     "invalid_password": "Password must be at least 8 characters.",
     "email_taken": "This email is already registered.",
+    "policy_not_accepted": "Signing up requires accepting the Personal Data Processing Policy.",
     "email_linked_to_github": "This email is linked to GitHub login.",
     "invalid_credentials": "Invalid email or password.",
     "ticket_not_found": "Ticket not found.",

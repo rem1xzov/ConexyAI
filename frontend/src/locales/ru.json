@@ -570,6 +570,7 @@
     "invalid_email": "Некорректный email.",
     "invalid_password": "Пароль должен содержать минимум 8 символов.",
     "email_taken": "Этот email уже зарегистрирован.",
+    "policy_not_accepted": "Для регистрации необходимо согласие с Политикой обработки персональных данных.",
     "email_linked_to_github": "Этот email привязан к входу через GitHub.",
     "invalid_credentials": "Неверный email или пароль.",
     "ticket_not_found": "Тикет не найден.",

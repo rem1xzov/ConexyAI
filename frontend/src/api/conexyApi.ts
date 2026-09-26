@@ -47,8 +47,18 @@ export interface VerificationChallenge {
 }
 
 /** Starts a sign-up: validates the address and password, mails a code. No token yet. */
-export async function startRegistration(email: string, password: string): Promise<VerificationChallenge> {
-  const { data } = await axios.post<VerificationChallenge>('/api/auth/register', { email, password });
+export async function startRegistration(
+  email: string,
+  password: string,
+  acceptedPolicy: boolean,
+): Promise<VerificationChallenge> {
+  // PRIVACY_POLICY: добавлено 2026-09-25 — сервер отказывает в регистрации без явного согласия,
+  // поэтому флаг обязателен в теле запроса, а не только в состоянии формы.
+  const { data } = await axios.post<VerificationChallenge>('/api/auth/register', {
+    email,
+    password,
+    acceptedPolicy,
+  });
   return data;
 }
 

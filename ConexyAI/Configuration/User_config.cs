@@ -36,5 +36,12 @@ public class User_config : IEntityTypeConfiguration<User>
         // Миграция добавит NOT NULL-колонку со значением 0 для существующих строк.
         builder.Property(x => x.TokenVersion).IsRequired();
         // --- /TOKEN_REVOCATION ---
+
+        // --- PRIVACY_POLICY: добавлено 2026-09-25 — согласие с политикой, см. User.PolicyAcceptedAt.
+        // Обе колонки nullable: у ранее зарегистрированных пользователей согласия нет, и это нормально —
+        // их доступ не должен пострадать от появления требования.
+        builder.Property(x => x.PolicyAcceptedAt).IsRequired(false);
+        builder.Property(x => x.PolicyVersion).IsRequired(false).HasMaxLength(32);
+        // --- /PRIVACY_POLICY ---
     }
 }

@@ -2,7 +2,13 @@ namespace ConexyAI.Contract;
 
 // EMAIL_AUTH: добавлено 2026-09-19
 /// <summary>Credentials for email/password registration and login.</summary>
-public record EmailPasswordRequest(string Email, string Password);
+/// <remarks>
+/// PRIVACY_POLICY: изменено 2026-09-25 — <paramref name="AcceptedPolicy"/> несёт отметку о согласии
+/// с Политикой обработки персональных данных. Поле опционально с дефолтом <c>false</c>, поэтому
+/// запросы входа и старые клиенты продолжают работать; регистрация без <c>true</c> отклоняется,
+/// чтобы сервер не полагался на клиентскую блокировку кнопки.
+/// </remarks>
+public record EmailPasswordRequest(string Email, string Password, bool AcceptedPolicy = false);
 
 // EMAIL_VERIFICATION: добавлено 2026-09-24
 /// <summary>

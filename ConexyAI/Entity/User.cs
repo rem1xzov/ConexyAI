@@ -33,6 +33,21 @@ public class User
 
     public DateTime LastLoginAt { get; set; } = DateTime.UtcNow;
 
+    // --- PRIVACY_POLICY: добавлено 2026-09-25 ---
+    /// <summary>
+    /// UTC moment the user accepted the Personal Data Processing Policy during sign-up. NULL for
+    /// accounts that predate the consent gate (and for GitHub sign-ups, which have no form); those
+    /// users keep their access and are never asked to re-accept retroactively.
+    /// </summary>
+    public DateTime? PolicyAcceptedAt { get; set; }
+
+    /// <summary>
+    /// Version of the policy the user accepted (see <c>LegalPolicy.CurrentVersion</c>), so that after
+    /// a wording change it stays possible to tell which text a given account agreed to.
+    /// </summary>
+    public string? PolicyVersion { get; set; }
+    // --- /PRIVACY_POLICY ---
+
     // --- TOKEN_REVOCATION: добавлено 2026-09-24 (ревью M19) ---
     /// <summary>
     /// Version of the user's sessions. Every JWT carries it in the <c>tv</c> claim and a request is

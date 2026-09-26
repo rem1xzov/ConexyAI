@@ -201,6 +201,11 @@ public class EmailVerificationService : IEmailVerificationService
                 IsAdmin = false,
                 CreatedAt = row.CreatedAt,
                 LastLoginAt = now,
+                // PRIVACY_POLICY: добавлено 2026-09-25 — сюда попадают только подтверждённые
+                // регистрации, а сам register отклоняет запрос без согласия, так что факт согласия
+                // уже доказан. Время берём текущее — это момент создания аккаунта.
+                PolicyAcceptedAt = now,
+                PolicyVersion = LegalPolicy.CurrentVersion,
             };
             await _users.AddAsync(user, ct);
             _logger.LogInformation("Email verification: account created for the confirmed address (user {UserId}).", user.Id);
@@ -212,6 +217,10 @@ public class EmailVerificationService : IEmailVerificationService
             user.EmailConfirmed = true;
             user.PasswordHash = row.PasswordHash;
             user.LastLoginAt = now;
+            // PRIVACY_POLICY: согласие дано в этом же потоке регистрации, но уже имеющееся не трогаем —
+            // более ранняя отметка точнее говорит, с какой редакцией политики пользователь ознакомился.
+            user.PolicyAcceptedAt ??= now;
+            user.PolicyVersion ??= LegalPolicy.CurrentVersion;
             await _users.UpdateAsync(user, ct);
         }
 

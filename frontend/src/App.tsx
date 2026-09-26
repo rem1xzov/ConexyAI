@@ -354,9 +354,14 @@ export default function App() {
   // EMAIL_AUTH / EMAIL_VERIFICATION: изменено 2026-09-24 — регистрация больше не заканчивается входом:
   // первый шаг возвращает задачу подтверждения, форма переходит к вводу кода, а модалка закрывается
   // уже после confirmEmail (сессия появляется там).
-  async function handleAuthSubmit(email: string, password: string): Promise<VerificationChallenge | void> {
+  async function handleAuthSubmit(
+    email: string,
+    password: string,
+    acceptedPolicy: boolean,
+  ): Promise<VerificationChallenge | void> {
     if (authModal === 'register') {
-      return register(email, password);
+      // PRIVACY_POLICY: флаг доходит до бэкенда, который сам отклоняет регистрацию без согласия.
+      return register(email, password, acceptedPolicy);
     }
     await login(email, password);
     setAuthModal(null);

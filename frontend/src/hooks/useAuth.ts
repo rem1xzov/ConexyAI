@@ -407,9 +407,9 @@ export function useAuth() {
   // EMAIL_VERIFICATION: изменено 2026-09-24 — регистрация возвращает задачу подтверждения, а не
   // сессию: пароль уходит на сервер, там он ждёт кода, и только confirmEmail выдаёт токен.
   const register = useCallback(
-    async (email: string, password: string): Promise<VerificationChallenge> => {
+    async (email: string, password: string, acceptedPolicy: boolean): Promise<VerificationChallenge> => {
       try {
-        return await apiStartRegistration(email, password);
+        return await apiStartRegistration(email, password, acceptedPolicy);
       } catch (e) {
         throw new Error(authErrorMessage(e, t));
       }
