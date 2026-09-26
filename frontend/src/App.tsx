@@ -27,8 +27,8 @@ import { ConexyLogo } from './components/ConexyLogo';
 import { ChatLayout, type ChatQuickChip } from './components/ChatLayout';
 // GUEST_HERO: добавлено 2026-09-20
 import { GuestHero } from './components/GuestHero';
-// PRIVACY_POLICY: добавлено 2026-09-25 — публичная страница политики обработки ПДн (`#/privacy`).
-import { PrivacyPolicy } from './components/PrivacyPolicy';
+// LEGAL_DOCS: добавлено 2026-09-25 — публичные правовые документы (`#/privacy`, `#/offer`, `#/refund`).
+import { LegalPage, legalDocFromHash } from './components/legal/LegalPage';
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 import { UsageIndicator } from './components/UsageIndicator';
 import { UpgradeModal } from './components/UpgradeModal';
@@ -404,9 +404,9 @@ export default function App() {
   }, []);
 
   const isAdminRoute = route.startsWith('#/admin');
-  // PRIVACY_POLICY: добавлено 2026-09-25 — документ доступен и гостю, поэтому маршрут проверяется
-  // независимо от профиля и токена.
-  const isPrivacyRoute = route.startsWith('#/privacy');
+  // LEGAL_DOCS: добавлено 2026-09-25 — правовые документы доступны и гостю, поэтому маршрут
+  // проверяется независимо от профиля и токена.
+  const legalDoc = legalDocFromHash(route);
 
   // ADMIN_PANEL_FIX: добавлено 2026-09-23 — маршрут админки решается ЯВНО.
   // Раньше при `user === null` (профиль ещё не приехал или /auth/me упал) не выполнялось ни одно из
@@ -2509,12 +2509,13 @@ export default function App() {
     return adminView;
   }
 
-  // PRIVACY_POLICY: добавлено 2026-09-25 — публичная страница политики обработки персональных
-  // данных. Как и экраны админки, стоит ПОСЛЕ последнего хука компонента (см. ADMIN_HOOKS_ORDER).
-  if (isPrivacyRoute) {
+  // LEGAL_DOCS: добавлено 2026-09-25 — публичные правовые документы (политика обработки ПДн,
+  // оферта, политика возврата). Как и экраны админки, стоят ПОСЛЕ последнего хука (ADMIN_HOOKS_ORDER).
+  if (legalDoc) {
+    const backToChat = () => { window.location.hash = ''; };
     return (
-      <ErrorBoundary backLabel={t('common.back')} onBack={() => { window.location.hash = ''; }}>
-        <PrivacyPolicy onBack={() => { window.location.hash = ''; }} />
+      <ErrorBoundary backLabel={t('common.back')} onBack={backToChat}>
+        <LegalPage doc={legalDoc} onBack={backToChat} />
       </ErrorBoundary>
     );
   }

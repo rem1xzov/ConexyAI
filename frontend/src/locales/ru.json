@@ -57,10 +57,16 @@
     "policyRequired": "Отметьте согласие с Политикой обработки персональных данных",
     "policyAria": "Согласие с Политикой обработки персональных данных"
   },
-  "privacy": {
-    "title": "Политика обработки персональных данных",
+  "legal": {
+    "published": "Дата публикации: {{date}}",
     "updated": "Дата последнего обновления: {{date}}",
-    "englishNotice": "This legal document is provided in Russian only, as it governs the processing of personal data under Russian law. In case of any discrepancy, the Russian version prevails."
+    "englishNotice": "This legal document is provided in Russian only, as it governs the services under Russian law. In case of any discrepancy, the Russian version prevails.",
+    "section": "Правовая информация",
+    "privacyTitle": "Политика обработки персональных данных",
+    "offerTitle": "Публичная оферта на оказание услуг сервиса CONEXYAI",
+    "offerLink": "Публичная оферта",
+    "refundTitle": "Политика возврата денежных средств",
+    "acceptNote": "Оплата Тарифа означает принятие следующих документов:"
   },
   "account": {
     "settings": "Настройки",

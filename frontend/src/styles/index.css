@@ -5493,9 +5493,10 @@ body {
   justify-content: center;
 }
 
-/* ---------- PRIVACY_POLICY: добавлено 2026-09-25 ---------- */
-/* Публичный документ (`#/privacy`). Отдельный полноэкранный маршрут, без сайдбара и композера,
-   чтобы страницу можно было безопасно открыть в новой вкладке прямо из формы регистрации. */
+/* ---------- LEGAL_DOCS: добавлено 2026-09-25 ---------- */
+/* Публичные документы (`#/privacy`, `#/offer`, `#/refund`). Отдельный полноэкранный маршрут, без
+   сайдбара и композера, чтобы документ можно было безопасно открыть в новой вкладке прямо из
+   формы регистрации, с экрана тарифов или из настроек. */
 .legal-page {
   min-height: 100vh;
   min-height: 100dvh;
@@ -5619,6 +5620,53 @@ body {
     padding: 24px 16px 64px;
     font-size: 13.5px;
   }
+}
+
+/* LEGAL_DOCS: строка ссылок на документы — внизу экрана тарифов и в настройках. */
+.legal-links {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.legal-links__note {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.legal-links__row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.legal-links__row a {
+  color: var(--accent);
+  font-size: 12.5px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+
+.legal-links__row a:hover {
+  text-decoration: none;
+}
+
+/* Настройки: ссылки идут столбиком, чтобы длинные названия документов читались целиком. */
+.legal-links__row--stacked {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.legal-links__row--stacked a {
+  white-space: normal;
+  text-align: left;
 }
 
 /* ---------- SUPPORT: добавлено 2026-09-19 ---------- */

@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { VerificationChallenge } from '../api/conexyApi';
+// LEGAL_DOCS: добавлено 2026-09-25 — путь документа не дублируется строкой, а берётся из общего места.
+import { LEGAL_PATHS } from './legal/LegalPage';
 import { CloseIcon, GitHubIcon } from './Icons';
 
 export type AuthMode = 'login' | 'register';
@@ -264,7 +266,7 @@ export function AuthModal({ mode, onSubmit, onConfirmCode, onResendCode, onSwitc
                 {t('auth.policyPrefix')}{' '}
                 <a
                   className="auth-modal__consent-link"
-                  href="#/privacy"
+                  href={LEGAL_PATHS.privacy}
                   target="_blank"
                   rel="noopener noreferrer"
                 >

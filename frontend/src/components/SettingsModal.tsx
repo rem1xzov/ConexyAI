@@ -15,6 +15,8 @@ import {
 import { humanError } from '../utils/humanError';
 import { ConfirmDialog } from './Dialog';
 import { CloseIcon, TrashIcon } from './Icons';
+// LEGAL_DOCS: добавлено 2026-09-25 — правовые документы доступны всегда, в том числе из настроек.
+import { LEGAL_PATHS } from './legal/LegalPage';
 
 export type SettingsSection = 'general' | 'personalization' | 'memory';
 
@@ -536,6 +538,23 @@ export function SettingsModal({
                         {t(l.key)}
                       </button>
                     ))}
+                  </div>
+                </div>
+
+                {/* LEGAL_DOCS: добавлено 2026-09-25 — документы должны быть доступны пользователю
+                    в любой момент, а не только при регистрации и оплате. */}
+                <div className="settings-modal__section">
+                  <div className="settings-modal__label">{t('legal.section')}</div>
+                  <div className="legal-links__row legal-links__row--stacked">
+                    <a href={LEGAL_PATHS.privacy} target="_blank" rel="noopener noreferrer">
+                      {t('legal.privacyTitle')}
+                    </a>
+                    <a href={LEGAL_PATHS.offer} target="_blank" rel="noopener noreferrer">
+                      {t('legal.offerLink')}
+                    </a>
+                    <a href={LEGAL_PATHS.refund} target="_blank" rel="noopener noreferrer">
+                      {t('legal.refundTitle')}
+                    </a>
                   </div>
                 </div>
               </div>

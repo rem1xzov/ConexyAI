@@ -1,5 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import type { LimitExceededInfo } from '../types/api';
+// LEGAL_DOCS: добавлено 2026-09-25 — акцепт Оферты прямо на экране тарифов.
+import { LEGAL_PATHS } from './legal/LegalPage';
 import { CheckIcon, CloseIcon } from './Icons';
 
 interface Plan {
@@ -109,6 +111,25 @@ export function UpgradeModal({ limitInfo, onClose, onBuy }: UpgradeModalProps) {
               )}
             </div>
           ))}
+        </div>
+
+        {/* LEGAL_DOCS: добавлено 2026-09-25 — оплата Тарифа является акцептом Оферты, поэтому
+            документы доступны прямо с экрана тарифов. Ссылки открываются в новой вкладке. */}
+        <div className="legal-links">
+          <p className="legal-links__note">{t('legal.acceptNote')}</p>
+          <div className="legal-links__row">
+            <a href={LEGAL_PATHS.offer} target="_blank" rel="noopener noreferrer">
+              {t('legal.offerLink')}
+            </a>
+            <span aria-hidden="true">·</span>
+            <a href={LEGAL_PATHS.refund} target="_blank" rel="noopener noreferrer">
+              {t('legal.refundTitle')}
+            </a>
+            <span aria-hidden="true">·</span>
+            <a href={LEGAL_PATHS.privacy} target="_blank" rel="noopener noreferrer">
+              {t('legal.privacyTitle')}
+            </a>
+          </div>
         </div>
       </div>
     </div>

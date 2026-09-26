@@ -57,10 +57,16 @@
     "policyRequired": "Please accept the Personal Data Processing Policy",
     "policyAria": "Consent to the Personal Data Processing Policy"
   },
-  "privacy": {
-    "title": "Personal Data Processing Policy",
+  "legal": {
+    "published": "Published: {{date}}",
     "updated": "Last updated: {{date}}",
-    "englishNotice": "This legal document is provided in Russian only, as it governs the processing of personal data under Russian law. In case of any discrepancy, the Russian version prevails."
+    "englishNotice": "This legal document is provided in Russian only, as it governs the services under Russian law. In case of any discrepancy, the Russian version prevails.",
+    "section": "Legal information",
+    "privacyTitle": "Personal Data Processing Policy",
+    "offerTitle": "Public offer for the CONEXYAI services",
+    "offerLink": "Public offer",
+    "refundTitle": "Refund policy",
+    "acceptNote": "Paying for a plan means accepting the following documents:"
   },
   "account": {
     "settings": "Settings",
