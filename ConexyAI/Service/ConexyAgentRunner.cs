@@ -191,8 +191,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         """;
 
     // ARTIFACTS: добавлено 2026-09-24 — общие фрагменты (артефакты C-9, Mermaid/LaTeX) дописываются к уставу.
+    // LOOP_GUARD: плюс правило минимализма — оно же противодействует петлям, которые ловит страж цикла.
     private const string CoworkSystemPrompt =
-        CoworkCharter + "\n\n" + PromptFragments.Artifacts + "\n\n" + PromptFragments.RichFormatting;
+        CoworkCharter + "\n\n" + PromptFragments.Artifacts + "\n\n" + PromptFragments.RichFormatting
+        + "\n\n" + PromptFragments.Minimalism;
 
     // Strict engineering charter for the autonomous Pro agent.
     private const string WorkerCharter =
@@ -319,8 +321,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         """;
 
     // ARTIFACTS: добавлено 2026-09-24 — общие фрагменты (артефакты C-9, Mermaid/LaTeX) дописываются к уставу.
+    // LOOP_GUARD: плюс правило минимализма — оно же противодействует петлям, которые ловит страж цикла.
     private const string WorkerSystemPrompt =
-        WorkerCharter + "\n\n" + PromptFragments.Artifacts + "\n\n" + PromptFragments.RichFormatting;
+        WorkerCharter + "\n\n" + PromptFragments.Artifacts + "\n\n" + PromptFragments.RichFormatting
+        + "\n\n" + PromptFragments.Minimalism;
 
     private const string CriticSystemPrompt =
         "You are a ruthless tech lead and security auditor. Review the task and the workspace changes produced by another agent. " +
@@ -421,7 +425,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _chatSearch = chatSearch;
 
         var configured = agentOptions.Value.MaxIterations;
-        _maxIterations = configured <= 0 ? 15 : configured;
+        // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
+        // настройки не давало молча другой предел.
+        _maxIterations = configured <= 0 ? 25 : configured;
 
         var auditSeconds = agentOptions.Value.AuditTimeoutSeconds;
         _auditTimeout = TimeSpan.FromSeconds(auditSeconds <= 0 ? 90 : auditSeconds);
@@ -493,6 +499,27 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // Инструменты этого прогона: по профилю режима; take_screenshot убирается, если Chromium нет.
         _tools = await ResolveToolsAsync(ct);
 
+        // LOOP_GUARD: защита от зацикливания живёт ровно один прогон — на следующий запуск состояние
+        // не переносится (петля — свойство конкретной задачи).
+        var loopGuard = new AgentLoopGuard();
+
+        // TOKEN_BREAKER: остаток квоты на старте прогона. Раньше лимит проверялся ТОЛЬКО до запуска,
+        // и внутри цикла зациклившийся агент выжигал миллионы токенов сверх тарифа (дефект M3:
+        // лимит 200k, расход 7M за один запуск).
+        var quota = await _subscriptionService.GetUsageAsync(job.UserId, ct);
+        var isCowork = job.ModelType == ConexyModelType.ConexyCowork;
+        var poolLimit = isCowork ? quota.CoworkLimit : quota.AgentLimit;
+        var poolUsed = isCowork ? quota.CoworkUsed : quota.AgentUsed;
+        var poolResetsAt = isCowork ? quota.CoworkResetsAt : quota.AgentResetsAt;
+
+        // Нулевой бюджет означает «в этом режиме его нет / не настроен», а не «можно ноль токенов»:
+        // такой прогон отсекает проверка ДО старта (CheckBeforeRunAsync), и она же владеет этим
+        // решением. Прерыватель сторожит РАСХОД реального бюджета, поэтому нулевой лимит для него —
+        // не повод обрывать прогон на первом же шаге (раньше так и происходило в тестах с заглушкой).
+        var remainingTokens = poolLimit <= 0 ? long.MaxValue : Math.Max(0, poolLimit - poolUsed);
+        var runTokens = 0L;
+        var tokenBudgetExceeded = false;
+
         for (var step = 1; step <= _maxIterations; step++)
         {
             completedSteps = step;
@@ -509,6 +536,25 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // COWORK_BUDGET: с 2026-09-26 важен и режим: Cowork тратит свой пул, Coder — агентский.
             await _subscriptionService.RecordAgentTokensAsync(job.UserId, job.ModelType, llmTurn.TotalTokens, ct);
             messages.Add(responseMessage);
+
+            // TOKEN_BREAKER: счёт идёт по ЭТОМУ прогону, а не по счётчику в БД: сброс окна посреди
+            // задачи не должен выглядеть как «лимит появился заново». Токены хода уже записаны
+            // строкой выше, поэтому при обрыве они не теряются.
+            runTokens += llmTurn.TotalTokens;
+            if (runTokens > remainingTokens)
+            {
+                tokenBudgetExceeded = true;
+                _logger.LogWarning(
+                    "Agent stopped by the token breaker: token_limit_exceeded task={TaskId} model={Model} runTokens={Run} remaining={Remaining} pool={Pool} step={Step}",
+                    taskId, job.ModelType, runTokens, remainingTokens, poolLimit, step);
+                await group.SendAsync(
+                    "OnLog",
+                    $"[Token Limit] Лимит токенов тарифа исчерпан: доступно {remainingTokens}, израсходовано за запуск {runTokens}. Генерация остановлена.",
+                    ct);
+                await SendAgentStatusAsync(
+                    taskId, "token_limit_exceeded", "Лимит токенов тарифа исчерпан — генерация остановлена", ct: ct);
+                break;
+            }
 
             // TASK_COMPLETION_DIAGNOSTICS: добавлено 2026-09-22 — по этой строке видно, крутится ли
             // агентский цикл после того, как ответ уже выглядит законченным (главная гипотеза
@@ -644,12 +690,23 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // COWORK_MODE: a tool outside the mode's profile is never executed, and a refused
                 // call must not show up in the "Commands executed" summary either.
                 var toolAllowed = IsToolAllowed(toolName);
-                if (toolAllowed)
+
+                // LOOP_GUARD: повтор одного и того же и исчерпанный интернет-бюджет проверяются ДО
+                // вызова инструмента. Проверка после запуска была бы бесполезной: команда уже
+                // выполнилась в четвёртый раз (и снова сожгла время), а отказ пришёл бы к её результату.
+                var refusal = toolAllowed ? loopGuard.Refuse(toolName, toolCall.Function.Arguments) : null;
+
+                if (toolAllowed && refusal is null)
                 {
                     RecordToolEffect(toolCall, changedFiles, executedCommands);
                 }
 
-                await group.SendAsync("OnLog", $"[Tool Call] Executing {toolName}...", ct);
+                await group.SendAsync(
+                    "OnLog",
+                    refusal is null
+                        ? $"[Tool Call] Executing {toolName}..."
+                        : $"[Loop Guard] {toolName} не выполняется: {refusal}",
+                    ct);
 
                 ConexyToolResult result;
                 // AGENT_TOOL_FAILURES: ЕДИНАЯ точка вызова инструмента. Раньше take_screenshot шёл в
@@ -659,14 +716,16 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // ЛЮБОЙ инструмент, и ни один из них не может прервать прогон исключением.
                 try
                 {
-                    result = !toolAllowed
-                        ? new ConexyToolResult(
-                            toolCall.Id,
-                            $"Tool '{toolName}' is not available in {_profile.Mode} mode.",
-                            true)
-                        : toolName == "take_screenshot"
-                            ? await HandleScreenshotAsync(chatId, toolCall, batchImages, group, ct)
-                            : await DispatchToolAsync(taskId, chatId, toolCall, ct);
+                    result = refusal is not null
+                        ? new ConexyToolResult(toolCall.Id, refusal, true)
+                        : !toolAllowed
+                            ? new ConexyToolResult(
+                                toolCall.Id,
+                                $"Tool '{toolName}' is not available in {_profile.Mode} mode.",
+                                true)
+                            : toolName == "take_screenshot"
+                                ? await HandleScreenshotAsync(chatId, toolCall, batchImages, group, ct)
+                                : await DispatchToolAsync(taskId, chatId, toolCall, ct);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -690,6 +749,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         toolCall.Id,
                         $"Tool error ({toolName}): {ex.Message}",
                         true);
+                }
+
+                // LOOP_GUARD: запоминаем результат ТОЛЬКО реально выполненного вызова — по нему и
+                // видно, что повтор ничего не меняет. Отказ в счёт не идёт, иначе он бы сам себя
+                // подтверждал и цикл держался бы вечно.
+                if (toolAllowed && refusal is null)
+                {
+                    loopGuard.Record(toolName, toolCall.Function.Arguments, result.Output);
                 }
 
                 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
@@ -786,7 +853,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         _logger.LogWarning(
             "Agent loop stopped early: reason={Reason} step={Step}/{Max} consecutiveToolFailures={Consecutive} totalToolFailures={Total} selfCorrections={Corrections} red={Red} auditReworks={Reworks} changedFiles={Files}",
-            toolBudgetExhausted ? "tool-failure-budget" : "iteration-cap",
+            tokenBudgetExceeded ? "token_limit_exceeded" : toolBudgetExhausted ? "tool-failure-budget" : "iteration-cap",
             completedSteps, _maxIterations, consecutiveToolFailures, totalToolFailures, selfCorrections, buildHealth.IsRed, auditReworks, changedFiles.Count);
 
         // SELF_CORRECTION: раньше красная сборка на этом пути бросала исключение — задача падала в
@@ -794,21 +861,28 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // ошибок — не повод выбрасывать ответ: отдаём написанное и честно говорим, что ещё падает.
         var accumulated = _streamedOutput.ToString().Trim();
         var stillFailing = buildHealth.IsRed ? buildHealth.BuildStillFailingNote(selfCorrections) : null;
-        if (stillFailing is not null)
+        // TOKEN_BREAKER: причина остановки обязана быть в самом ответе. Задача закрывается как
+        // выполненная (как и на исчерпании шагов/бюджета ошибок), поэтому без явного сообщения
+        // пользователь увидел бы просто оборванный текст.
+        var tokenLimitNote = tokenBudgetExceeded ? TokenLimitNote(remainingTokens, runTokens, poolResetsAt) : null;
+        var note = JoinNotes(tokenLimitNote, stillFailing);
+        if (note is not null)
         {
-            await StreamNoteAsync(group, accumulated, stillFailing, ct);
+            await StreamNoteAsync(group, accumulated, note, ct);
         }
 
         if (accumulated.Length > 0)
         {
-            return AppendNote(accumulated, stillFailing);
+            return AppendNote(accumulated, note);
         }
 
         return AppendNote(
-            toolBudgetExhausted
-                ? "Не удалось завершить задачу: инструменты, которые нужны агенту, не работают в этом окружении. Запустите задачу заново после устранения ограничения."
-                : "Task reached maximum autonomous iteration limit.",
-            stillFailing);
+            tokenBudgetExceeded
+                ? "Генерация остановлена: исчерпан лимит токенов вашего тарифа."
+                : toolBudgetExhausted
+                    ? "Не удалось завершить задачу: инструменты, которые нужны агенту, не работают в этом окружении. Запустите задачу заново после устранения ограничения."
+                    : "Task reached maximum autonomous iteration limit.",
+            note);
     }
 
     /// <summary>A tool this run may call: the mode's profile, and never the chat search in incognito.</summary>
@@ -867,6 +941,20 @@ public class ConexyAgentRunner : IConexyAgentRunner
         note is null
             ? text
             : string.IsNullOrWhiteSpace(text) ? note : text.TrimEnd() + "\n\n" + note;
+
+    // TOKEN_BREAKER: добавлено 2026-09-27
+    /// <summary>Что именно сказать пользователю, когда прогон оборвал лимит токенов тарифа.</summary>
+    private static string TokenLimitNote(long remainingTokens, long runTokens, DateTime resetsAt) =>
+        $"Генерация остановлена: исчерпан лимит токенов вашего тарифа " +
+        $"(доступно: {remainingTokens}, использовано: {runTokens}). " +
+        $"Оформите подписку или дождитесь сброса лимита ({resetsAt:dd.MM.yyyy HH:mm} UTC).";
+
+    /// <summary>Склеивает непустые примечания к ответу, сохраняя порядок.</summary>
+    private static string? JoinNotes(params string?[] notes)
+    {
+        var filled = notes.Where(n => !string.IsNullOrWhiteSpace(n)).ToArray();
+        return filled.Length == 0 ? null : string.Join("\n\n", filled);
+    }
 
     // PROJECT_RULES: добавлено 2026-09-24
     private sealed record ProjectRules(string Prompt, IReadOnlyList<string> Files);

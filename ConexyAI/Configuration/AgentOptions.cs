@@ -12,9 +12,11 @@ public class AgentOptions
     /// Maximum number of autonomous iterations (LLM round-trips) the agent may perform
     /// for a single task before giving up. This is also the safety bound that prevents a
     /// runaway agent loop from hanging the worker or burning API tokens indefinitely.
-    /// Must be &gt;= 1; a value of &lt;= 0 falls back to the default (15).
+    /// LOOP_GUARD: with the loop guard, the web budget and the token breaker in place there is no
+    /// reason for a large number here — 25 covers complex tasks, and everything above it used to be a
+    /// runaway loop burning quota. Must be &gt;= 1; a value of &lt;= 0 falls back to 25.
     /// </summary>
-    public int MaxIterations { get; set; } = 15;
+    public int MaxIterations { get; set; } = 25;
 
     /// <summary>
     /// AUDITOR_BUDGET: добавлено 2026-09-23. Hard upper bound, in seconds, for one Maker-Checker
