@@ -7,6 +7,8 @@ import type { OperatorProfile } from '../types/api';
  * напечатаны на самих страницах политики, оферты и политики возврата.
  */
 export async function getOperatorProfile(): Promise<OperatorProfile> {
-  const { data } = await http.get<OperatorProfile>('/api/legal/operator');
+  // Путь ОТНОСИТЕЛЬНО baseURL клиента (`/api`), как и в остальных модулях api/*: полный
+  // '/api/legal/operator' дал бы /api/api/legal/operator и 404.
+  const { data } = await http.get<OperatorProfile>('/legal/operator');
   return data;
 }
