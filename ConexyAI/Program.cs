@@ -142,6 +142,10 @@ builder.Services.Configure<SmtpOptions>(options =>
     builder.Configuration.GetSection(SmtpOptions.SectionName).Bind(options);
     options.Password = builder.Configuration[SmtpOptions.PasswordEnvVar] ?? "";
 });
+// LEGAL_DOCS: добавлено 2026-09-26 — реквизиты оператора для публичных правовых документов.
+// Приходят из окружения (Operator__Name, Operator__Inn, …), чтобы не попадать в репозиторий, образ
+// и JS-бандл сайта; в appsettings.json лежат только пустые значения.
+builder.Services.Configure<OperatorSettings>(builder.Configuration.GetSection(OperatorSettings.SectionName));
 // EMAIL_AUTH: добавлено 2026-09-19
 builder.Services.Configure<AdminAccountsOptions>(options =>
 {
@@ -291,6 +295,17 @@ await using (var scope = app.Services.CreateAsyncScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<DbConexy>();
     await dbContext.Database.MigrateAsync();
+}
+
+// LEGAL_DOCS: добавлено 2026-09-26 — реквизиты оператора приходят из окружения, и пустые значения
+// не ломают старт, а просто превращают политику, оферту и политику возврата в документы без ФИО и
+// ИНН. Это легко не заметить на живой странице, поэтому о пропущенных настройках предупреждаем в логах.
+var operatorSettings = app.Services.GetRequiredService<IOptions<OperatorSettings>>().Value;
+if (string.IsNullOrWhiteSpace(operatorSettings.Name) || string.IsNullOrWhiteSpace(operatorSettings.Inn))
+{
+    app.Logger.LogWarning(
+        "Legal pages: Operator__Name / Operator__Inn (и остальные Operator__*) не заданы — " +
+        "правовые документы будут опубликованы без реквизитов оператора.");
 }
 
 // Force the workspace service to initialize once at startup: it resolves the

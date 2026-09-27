@@ -121,6 +121,19 @@ services:
       Smtp__Password: ${SMTP_PASSWORD:-}
       Smtp__User: ${SMTP_USER:-conexy.ai.ru@gmail.com}
       Smtp__FromEmail: ${SMTP_FROM_EMAIL:-conexy.ai.ru@gmail.com}
+      # LEGAL_DOCS: реквизиты оператора для публичных правовых документов (политика ПДн, оферта,
+      # политика возврата). Значения лежат только в локальном .env на сервере (он в .gitignore),
+      # поэтому их можно менять без пересборки фронта. Пустые — страницы покажут пробелы вместо
+      # реквизитов; никаких значений по умолчанию здесь быть не должно.
+      Operator__Name: ${OPERATOR_NAME:-}
+      Operator__Inn: ${OPERATOR_INN:-}
+      Operator__Address: ${OPERATOR_ADDRESS:-}
+      Operator__Email: ${OPERATOR_EMAIL:-}
+      Operator__Phone: ${OPERATOR_PHONE:-}
+      Operator__PublishedAt: ${OPERATOR_PUBLISHED_AT:-}
+      Operator__UpdatedAt: ${OPERATOR_UPDATED_AT:-}
+      Operator__TransferCountries: ${OPERATOR_TRANSFER_COUNTRIES:-}
+      Operator__Site: ${OPERATOR_SITE:-conexyai.ru}
       GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
       ADMIN_ACCOUNTS: ${ADMIN_ACCOUNTS:-}
       WebSearch__JsonSeoApiKey: ${JSONSEO_API_KEY:-}

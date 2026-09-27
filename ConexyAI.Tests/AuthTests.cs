@@ -38,6 +38,8 @@ internal static class AuthTests
 {
     private const string AdminEmail = "owner@example.com";
     private const string Password = "correct horse battery";
+    // LEGAL_DOCS: добавлено 2026-09-26 — реквизиты, которые тестовый хост отдаёт как оператора.
+    private const string TestOperatorName = "Иванов Иван Иванович";
 
     [ModuleInitializer]
     internal static void Register()
@@ -56,6 +58,8 @@ internal static class AuthTests
         TestRegistry.Add("auth POLICY: register without consent is refused, consent is stored on the account", PolicyConsentAsync);
         // PASSWORD_RESET: добавлено 2026-09-26
         TestRegistry.Add("auth PASSWORD_RESET: unknown address refused, code changes the password and revokes sessions", PasswordResetAsync);
+        // LEGAL_DOCS: добавлено 2026-09-26
+        TestRegistry.Add("legal: operator details are served anonymously from the configuration", OperatorEndpointAsync);
         TestRegistry.Add("auth H3: SpeechKit logs never contain recognized speech or full upstream bodies", SpeechLogsArePrivateAsync);
         TestRegistry.Add("auth L12: JWT signing key guard refuses placeholders outside Development", SigningKeyGuardAsync);
     }
@@ -440,6 +444,39 @@ internal static class AuthTests
         return doc.RootElement.TryGetProperty("code", out var code) ? code.GetString() : null;
     }
 
+    // ---------------------------------------------------------------- LEGAL_DOCS
+
+    // LEGAL_DOCS: добавлено 2026-09-26
+    /// <summary>
+    /// Реквизиты оператора для правовых страниц отдаются анонимно и берутся из конфигурации сервера,
+    /// а не из JS-бандла: именно поэтому их можно менять без пересборки фронта. Тест сторожит и
+    /// состав ответа — страницам нужны ровно девять полей, а не всё, что когда-нибудь появится в
+    /// настройках.
+    /// </summary>
+    private static async Task OperatorEndpointAsync()
+    {
+        await using var host = await AuthHost.StartAsync();
+
+        // Без токена: те же сведения и так опубликованы на сайте.
+        using var response = await host.Client.GetAsync("/api/legal/operator");
+        Assert(response.StatusCode == HttpStatusCode.OK,
+            $"the operator endpoint must answer without a token, got {(int)response.StatusCode}");
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = doc.RootElement;
+
+        Assert(root.GetProperty("name").GetString() == TestOperatorName, "the name must come from the configuration");
+        Assert(root.GetProperty("inn").GetString() == "123456789012", "the inn must come from the configuration");
+        Assert(root.GetProperty("email").GetString() == "legal@example.com", "the email must come from the configuration");
+        Assert(root.GetProperty("phone").GetString() == "+7 000 000-00-00", "the phone must come from the configuration");
+        Assert(root.GetProperty("updatedAt").GetString() == "2026-10-01", "the date must come from the configuration");
+        // Site не задан в тестовых настройках, поэтому здесь виден именно дефолт модели.
+        Assert(root.GetProperty("site").GetString() == "conexyai.ru", "site falls back to its default");
+
+        var fields = root.EnumerateObject().Select(p => p.Name).ToArray();
+        Assert(fields.Length == 9, $"the payload must carry exactly the fields the pages use, got {fields.Length}: {string.Join(", ", fields)}");
+    }
+
     // ---------------------------------------------------------------- M20
 
     private static async Task LoginLockoutAsync()
@@ -792,6 +829,19 @@ internal static class AuthTests
         services.AddDbContext<DbConexy>(o => o.UseInMemoryDatabase(dbName, root));
         services.Configure<JwtOptions>(ConfigureJwt);
         services.Configure<AdminAccountsOptions>(o => ConfigureAdmins(o, admins));
+        // LEGAL_DOCS: добавлено 2026-09-26 — реквизиты оператора приходят из конфигурации
+        // (в бою — из окружения Operator__*), поэтому в тесте они заданы явно.
+        services.Configure<OperatorSettings>(o =>
+        {
+            o.Name = TestOperatorName;
+            o.Inn = "123456789012";
+            o.Address = "г. Тест, ул. Тестовая, 1";
+            o.Email = "legal@example.com";
+            o.Phone = "+7 000 000-00-00";
+            o.PublishedAt = "2026-10-01";
+            o.UpdatedAt = "2026-10-01";
+            o.TransferCountries = "Китайская Народная Республика";
+        });
         // EMAIL_VERIFICATION: добавлено 2026-09-25 — как на настроенном сервере; сам отправщик
         // подменён на RecordingEmailSender, поэтому письма никуда не уходят.
         services.Configure<SmtpOptions>(o =>
