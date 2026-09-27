@@ -218,6 +218,19 @@ public class ConexyBackgroundWorker : BackgroundService
             // prompt and tools itself.
             var isAgent = job.ModelType.IsAgent();
 
+            // USER_CONTEXT: добавлено 2026-09-27 — модель должна знать, кто с ней общается: админ или
+            // обычный пользователь, какой у него тариф и доступен ли Cowork. Тариф берём из подписки;
+            // если строки пользователя нет, остаются нейтральные значения по умолчанию.
+            var userRepository = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+            var user = await userRepository.GetByIdAsync(job.UserId, taskToken);
+            var usage = await subscriptionService.GetUsageAsync(job.UserId, taskToken);
+            job = job with
+            {
+                IsAdmin = user?.IsAdmin ?? false,
+                Tier = usage.Tier,
+                CoworkAvailable = usage.CoworkLimit > 0,
+            };
+
             // CONVERSATION_SERVICE: контекст строится ОДИН раз и используется и для запроса к
             // модели, и для записи хода — поэтому они не могут разойтись по chatId, userId или
             // режиму «продолжить».
@@ -225,7 +238,11 @@ public class ConexyBackgroundWorker : BackgroundService
                 TaskId: job.TaskId,
                 ChatId: job.ChatId,
                 UserId: job.UserId,
-                SystemPrompt: isAgent ? runner.GetSystemPrompt(job.ModelType) : BuildChatSystemPrompt(job),
+                // PRODUCT_KNOWLEDGE / USER_CONTEXT: к промпту любого режима дописываем описание самого
+                // продукта (что умеет, какие тарифы) и кто именно сейчас говорит с моделью.
+                SystemPrompt: (isAgent ? runner.GetSystemPrompt(job.ModelType) : BuildChatSystemPrompt(job))
+                    + "\n\n" + Prompts.PromptFragments.ProductKnowledge
+                    + "\n\n" + Prompts.PromptFragments.AudienceContext(job.IsAdmin, job.Tier),
                 // OFFICE_FORMATS: document attachments are read into the message for every mode (the
                 // model never saw them before), and the same text lands in the history.
                 UserMessage: AttachmentText.ComposeUserMessage(job.Prompt, job.Attachments),

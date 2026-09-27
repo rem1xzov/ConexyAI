@@ -27,5 +27,11 @@ public record ConexyJob(
     // едет в ConversationContext и записывается вместе с ходом в историю.
     string? ChatKind = null,
     // HISTORY_REPLAY: добавлено 2026-09-24 — ход заменяет последний ход чата (ревью M5).
-    bool Regenerate = false
+    bool Regenerate = false,
+    // USER_CONTEXT: добавлено 2026-09-27 — воркер обогащает задачу перед сборкой промпта, чтобы
+    // модель видела, кто перед ней (админ/тариф) и что ей доступно. Значения по умолчанию
+    // оставлены нейтральными: тесты конструируют ConexyJob без этих полей.
+    bool IsAdmin = false,
+    string? Tier = null,
+    bool CoworkAvailable = false
 );
