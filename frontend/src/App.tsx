@@ -634,6 +634,14 @@ export default function App() {
   const chatTab = !isAgent && !students;
   const incognitoActive = incognito && chatTab;
 
+  // LIMIT_LOCK: добавлено 2026-09-27 — пул токенов ТЕКУЩЕГО режима выбран полностью. Для агентских
+  // режимов это значит, что новый запуск всё равно откажет (429 LIMIT_EXCEEDED), поэтому ввод блокируется,
+  // а рядом появляется кнопка тарифов вместо тупика с обрывом генерации.
+  const agentPoolLimit = model === 'conexy-cowork' ? usage?.coworkLimit : usage?.agentLimit;
+  const agentPoolUsed = model === 'conexy-cowork' ? usage?.coworkUsed : usage?.agentUsed;
+  const agentLimitReached =
+    isAgent && usage !== null && (agentPoolLimit ?? 0) > 0 && (agentPoolUsed ?? 0) >= (agentPoolLimit ?? 0);
+
   const liveRef = useRef({} as {
     token: string | null;
     sessions: ChatSession[];
@@ -2751,6 +2759,15 @@ export default function App() {
                       </button>
                     </div>
                   )}
+                  {/* LIMIT_LOCK: пул режима выбран до конца — говорим об этом до ввода и даём выход. */}
+                  {agentLimitReached && (
+                    <div className="agent-limit-banner" role="status">
+                      <span className="agent-limit-banner__text">{t('usage.limitReached')}</span>
+                      <button className="agent-limit-banner__btn" type="button" onClick={handleUpgrade}>
+                        {t('usage.upgrade')}
+                      </button>
+                    </div>
+                  )}
                   <InputBar
                     model={model}
                     onModelChange={handleModelChange}
@@ -2764,7 +2781,7 @@ export default function App() {
                     locked={students}
                     coworkLocked={coworkLocked}
                     onCoworkLockedClick={handleUpgrade}
-                    disabled={!token || activeLoading}
+                    disabled={!token || activeLoading || agentLimitReached}
                     isGenerating={agentRunning}
                     onStop={handleStop}
                     // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17

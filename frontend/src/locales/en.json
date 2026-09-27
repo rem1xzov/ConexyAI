@@ -324,7 +324,11 @@
     "tokens": "{{used}} / {{limit}} tokens",
     "aria": "Usage limits",
     "tier": "Tier: {{tier}}",
-    "reset": "Reset: {{date}}"
+    "reset": "Reset: {{date}}",
+    "tooltip": "{{used}} of {{limit}} agent tokens used ({{percent}}%). Limit resets: {{date}}",
+    "exhausted": "Limit reached",
+    "limitReached": "Token limit reached — the agent cannot start until the limit resets",
+    "upgrade": "Increase the limit"
   },
   "toast": {
     "runProject": "Project is launching in a separate console window",

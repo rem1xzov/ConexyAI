@@ -19,13 +19,25 @@ function clampPct(n: number): number {
   return Math.max(0, Math.min(100, n));
 }
 
+// TOKEN_RING: добавлено 2026-09-27 — пороги расхода. До 70% цвет темы, 70–90% янтарный,
+// от 90% красный: цвет кольца должен читаться раньше цифры, потому что видно его издалека.
+const WARN_PCT = 70;
+const DANGER_PCT = 90;
+
+function ringColor(pct: number): string {
+  if (pct >= DANGER_PCT) return 'var(--danger)';
+  if (pct >= WARN_PCT) return 'var(--warn)';
+  return 'var(--accent)';
+}
+
 interface UsageIndicatorProps {
   usage: SubscriptionUsage | null;
 }
 
 /**
- * Circular (donut) usage indicator for the Agent tab, showing the agent token budget
- * (e.g. "27% · 268k/1M"). Clicking toggles a breakdown of all tier limits with reset dates.
+ * Token ring meter: the agent token budget of the current period as a ring plus a compact
+ * `used / limit` label. Hovering shows the exact numbers and the reset date; clicking opens the
+ * breakdown of every pool (flash, pro, agent, and cowork where the mode is included).
  */
 export function UsageIndicator({ usage }: UsageIndicatorProps) {
   const { t, i18n } = useTranslation();
@@ -46,6 +58,9 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
   }
 
   const pct = clampPct(usage.agentLimit > 0 ? (usage.agentUsed / usage.agentLimit) * 100 : 0);
+  // LIMIT_LOCK: бюджет выбран полностью — это состояние, а не просто «почти 100%».
+  const exhausted = usage.agentLimit > 0 && usage.agentUsed >= usage.agentLimit;
+  const color = ringColor(pct);
   const radius = 15;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference * (1 - pct / 100);
@@ -66,8 +81,15 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
       <button
         className="usage-indicator__donut"
         onClick={() => setOpen((o) => !o)}
-        title={t('usage.tokens', { used: formatCount(usage.agentUsed), limit: formatCount(usage.agentLimit) })}
+        // Точные числа и дата сброса — в подсказке, а не только в раскрытом списке.
+        title={t('usage.tooltip', {
+          used: usage.agentUsed.toLocaleString(i18n.language === 'en' ? 'en-US' : 'ru-RU'),
+          limit: usage.agentLimit.toLocaleString(i18n.language === 'en' ? 'en-US' : 'ru-RU'),
+          percent: Math.round(pct),
+          date: formatDate(usage.agentResetsAt, i18n.language),
+        })}
         aria-label={t('usage.aria')}
+        aria-pressed={open}
         type="button"
       >
         <svg width="36" height="36" viewBox="0 0 36 36">
@@ -77,7 +99,7 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
             cy="18"
             r={radius}
             fill="none"
-            stroke="var(--accent)"
+            stroke={color}
             strokeWidth="4"
             strokeLinecap="round"
             strokeDasharray={circumference}
@@ -85,8 +107,18 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
             transform="rotate(-90 18 18)"
           />
         </svg>
-        <span className="usage-indicator__text">{Math.round(pct)}%</span>
+        <span className={`usage-indicator__text ${exhausted ? 'usage-indicator__text--exhausted' : ''}`}>
+          {exhausted ? '!' : `${Math.round(pct)}%`}
+        </span>
       </button>
+
+      {/* Компактная подпись рядом с кольцом: «140k / 200k». На узких экранах её скрывает CSS —
+          там остаётся кольцо и подсказка. */}
+      <span className="usage-indicator__amount" title={t('usage.tokens', { used: formatCount(usage.agentUsed), limit: formatCount(usage.agentLimit) })}>
+        {exhausted
+          ? t('usage.exhausted')
+          : `${formatCount(usage.agentUsed)} / ${formatCount(usage.agentLimit)}`}
+      </span>
 
       {open && (
         <div className="usage-indicator__popover">
@@ -102,7 +134,10 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
                   </span>
                 </div>
                 <div className="usage-indicator__bar">
-                  <div className="usage-indicator__bar-fill" style={{ width: `${rpct}%` }} />
+                  <div
+                    className="usage-indicator__bar-fill"
+                    style={{ width: `${rpct}%`, background: ringColor(rpct) }}
+                  />
                 </div>
                 <div className="usage-indicator__reset">{t('usage.reset', { date: formatDate(r.resetsAt, i18n.language) })}</div>
               </div>

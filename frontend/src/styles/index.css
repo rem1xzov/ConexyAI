@@ -4015,6 +4015,48 @@ body {
   text-decoration: underline;
 }
 
+/* LIMIT_LOCK: плашка над композером, когда пул токенов режима выбран полностью. Сделана как у
+   agent-autoapprove (та же строка над полем ввода), но тревожным цветом: это не режим, а стоп. */
+.agent-limit-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+  background: rgba(255, 107, 122, 0.1);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.agent-limit-banner__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-limit-banner__btn {
+  flex-shrink: 0;
+  align-self: center;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.agent-limit-banner__btn:hover {
+  background: rgba(255, 107, 122, 0.16);
+}
+
 .cmd-card__output {
   margin-top: 2px;
 }
@@ -5149,6 +5191,21 @@ body {
   font-size: 9px;
   color: var(--text);
   font-weight: 600;
+}
+
+/* TOKEN_RING: исчерпанный бюджет — не «99%», а явное состояние. */
+.usage-indicator__text--exhausted {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* Компактная подпись рядом с кольцом: «140k / 200k». */
+.usage-indicator__amount {
+  margin-left: 8px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .usage-indicator__popover {
@@ -6388,6 +6445,11 @@ body {
   }
   .hero__subtitle {
     font-size: 14px;
+  }
+
+  /* TOKEN_RING: на телефоне в шапке тесно — оставляем кольцо и подсказку, числовая подпись уходит. */
+  .usage-indicator__amount {
+    display: none;
   }
 
   /* Upgrade modal -> stacked plan cards */
