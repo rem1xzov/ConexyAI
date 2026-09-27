@@ -3208,13 +3208,17 @@ body {
 
 .attachment-grid--duo,
 .attachment-grid--quad {
-  grid-template-columns: repeat(2, var(--att-cell));
+  /* ATTACHMENT_GRID_FIT: 1fr вместо фиксированной ширины плитки — иначе две колонки
+     по 34vw вылезали за пузырь на узком экране (mob). */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(100%, calc(var(--att-cell) * 2 + 6px));
 }
 
 .attachment-grid__cell {
   position: relative;
   display: block;
   width: 100%;
+  min-width: 0;
   height: var(--att-cell);
   padding: 0;
   border: 1px solid var(--border);
@@ -6583,6 +6587,14 @@ body {
   .message-actions__btn {
     width: 36px;
     height: 36px;
+  }
+
+  /* CONTINUE_MOBILE: у «Продолжить» и кнопок экспорта ширина должна остаться по тексту —
+     правило выше иначе зажимало их в 36px, и подпись вылезала за пределы кнопки. */
+  .message-actions__btn--continue {
+    width: auto;
+    min-width: 36px;
+    padding: 0 12px;
   }
 
   /* The model pill in the chat header is a primary control on a phone. */
