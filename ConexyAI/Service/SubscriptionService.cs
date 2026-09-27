@@ -18,11 +18,19 @@ public interface ISubscriptionService
     Task<SubscriptionUsageDto> GetUsageAsync(Guid userId, CancellationToken ct = default);
     Task<UsageDecision> CheckBeforeRunAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default);
     Task RecordRequestAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default);
-    Task RecordAgentTokensAsync(Guid userId, long tokens, CancellationToken ct = default);
+
+    // COWORK_BUDGET: с 2026-09-26 у Coder и Cowork разные бюджеты, поэтому тип модели обязателен:
+    // без него токены Cowork уходили бы в пул агента-кодера.
+    Task RecordAgentTokensAsync(Guid userId, ConexyModelType modelType, long tokens, CancellationToken ct = default);
 }
 
 public class SubscriptionService : ISubscriptionService
 {
+    // COWORK_BUDGET: имена лимитов уезжают клиенту в теле 429 (`limit`) и решают, что показать:
+    // «режим не входит в тариф» или «бюджет на этот период израсходован».
+    private const string CoworkPlanLimit = "cowork_plan";
+    private const string CoworkBudgetLimit = "cowork";
+
     private readonly IUsageRepository _repository;
     // ADMIN_UNLIMITED: добавлено 2026-09-19
     private readonly IUserRepository _userRepository;
@@ -39,26 +47,31 @@ public class SubscriptionService : ISubscriptionService
     {
         // ADMIN_UNLIMITED: добавлено 2026-09-19 — admins have no limits and never create a
         // UserUsageCounter row, so return a synthetic "Admin" snapshot without touching the DB.
-        if (await IsAdminAsync(userId, ct))
+        // TIER_SYNC: пользователь читается один раз на вызов — из него и признак админа, и тариф.
+        var user = await _userRepository.GetByIdAsync(userId, ct);
+        if (user?.IsAdmin == true)
             return AdminUsage();
 
-        var counter = await GetOrCreateAsync(userId, ct);
+        var counter = await GetOrCreateAsync(userId, user, ct);
         var limits = GetTierLimits(counter.Tier);
         return new SubscriptionUsageDto(
             counter.Tier.ToString(),
             counter.FlashRequestsUsed, limits.FlashRequestsPerWindow, counter.FlashWindowResetAt,
             counter.ProRequestsUsed, limits.ProRequestsPerWindow, counter.ProWindowResetAt,
-            counter.AgentTokensUsed, limits.AgentTokenBudget, counter.AgentWindowResetAt);
+            counter.AgentTokensUsed, limits.AgentTokenBudget, counter.AgentWindowResetAt,
+            // COWORK_BUDGET: отдельный пул; 0 в лимите — режим не входит в тариф.
+            counter.CoworkTokensUsed, limits.CoworkTokenBudget, counter.CoworkWindowResetAt);
     }
 
     public async Task<UsageDecision> CheckBeforeRunAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default)
     {
         // ADMIN_UNLIMITED: добавлено 2026-09-19 — admins bypass every limit and never read or
         // increment the UserUsageCounter.
-        if (await IsAdminAsync(userId, ct))
+        var user = await _userRepository.GetByIdAsync(userId, ct);
+        if (user?.IsAdmin == true)
             return new UsageDecision(UsageDecisionKind.Allowed);
 
-        var counter = await GetOrCreateAsync(userId, ct);
+        var counter = await GetOrCreateAsync(userId, user, ct);
         var limits = GetTierLimits(counter.Tier);
 
         switch (modelType)
@@ -78,10 +91,17 @@ public class SubscriptionService : ISubscriptionService
                 }
                 return new UsageDecision(UsageDecisionKind.Allowed);
 
-            // COWORK_MODE: Cowork is the same agent pipeline and draws on the same token budget —
-            // without this case it would fall through to `default` and be unlimited.
-            case ConexyModelType.ConexyCoder:
+            // COWORK_MODE / COWORK_BUDGET: изменено 2026-09-26 — Cowork вынесен в свой пул токенов и
+            // доступен только на платных тарифах. Раньше он шёл по бюджету агента и не был ограничен
+            // по тарифу вообще: на Free режим просто работал.
             case ConexyModelType.ConexyCowork:
+                if (!limits.CoworkEnabled)
+                    return new UsageDecision(UsageDecisionKind.LimitExceeded, CoworkPlanLimit, DateTime.UtcNow);
+                if (counter.CoworkTokensUsed >= limits.CoworkTokenBudget)
+                    return new UsageDecision(UsageDecisionKind.LimitExceeded, CoworkBudgetLimit, counter.CoworkWindowResetAt);
+                return new UsageDecision(UsageDecisionKind.Allowed);
+
+            case ConexyModelType.ConexyCoder:
                 if (counter.AgentTokensUsed >= limits.AgentTokenBudget)
                     return new UsageDecision(UsageDecisionKind.LimitExceeded, "agent", counter.AgentWindowResetAt);
                 return new UsageDecision(UsageDecisionKind.Allowed);
@@ -94,10 +114,11 @@ public class SubscriptionService : ISubscriptionService
     public async Task RecordRequestAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default)
     {
         // ADMIN_UNLIMITED: добавлено 2026-09-19 — admins never accrue usage.
-        if (await IsAdminAsync(userId, ct))
+        var user = await _userRepository.GetByIdAsync(userId, ct);
+        if (user?.IsAdmin == true)
             return;
 
-        var counter = await GetOrCreateAsync(userId, ct);
+        var counter = await GetOrCreateAsync(userId, user, ct);
         if (modelType == ConexyModelType.ConexyV1Pro)
             counter.ProRequestsUsed++;
         else if (modelType == ConexyModelType.ConexyV1Flash)
@@ -105,35 +126,64 @@ public class SubscriptionService : ISubscriptionService
         await _repository.UpsertAsync(counter, ct);
     }
 
-    public async Task RecordAgentTokensAsync(Guid userId, long tokens, CancellationToken ct = default)
+    public async Task RecordAgentTokensAsync(Guid userId, ConexyModelType modelType, long tokens, CancellationToken ct = default)
     {
         if (tokens <= 0) return;
 
         // ADMIN_UNLIMITED: добавлено 2026-09-19 — admins never accrue usage.
-        if (await IsAdminAsync(userId, ct))
+        var user = await _userRepository.GetByIdAsync(userId, ct);
+        if (user?.IsAdmin == true)
             return;
 
-        var counter = await GetOrCreateAsync(userId, ct);
-        counter.AgentTokensUsed += tokens;
+        var counter = await GetOrCreateAsync(userId, user, ct);
+
+        // COWORK_BUDGET: Cowork платит из своего бюджета, Coder — из агентского.
+        if (modelType == ConexyModelType.ConexyCowork)
+            counter.CoworkTokensUsed += tokens;
+        else
+            counter.AgentTokensUsed += tokens;
+
         await _repository.UpsertAsync(counter, ct);
     }
 
-    private async Task<UserUsageCounterEntity> GetOrCreateAsync(Guid userId, CancellationToken ct)
+    private async Task<UserUsageCounterEntity> GetOrCreateAsync(Guid userId, User? user, CancellationToken ct)
     {
+        // TIER_SYNC: тариф счётчика следует за тарифом пользователя. Раньше счётчик создавался
+        // бесплатным и таким же оставался навсегда: оплаченный тариф не применялся вообще, а с
+        // появлением платного Cowork это заперло бы режим и у тех, кто за него заплатил.
+        var tier = user?.SubscriptionTier ?? SubscriptionTier.Free;
+
         var counter = await _repository.GetAsync(userId, ct);
         var now = DateTime.UtcNow;
+        var limits = GetTierLimits(tier);
 
         if (counter is null)
         {
-            counter = NewCounter(userId, now);
+            counter = NewCounter(userId, tier, now);
+            await _repository.UpsertAsync(counter, ct);
+            return counter;
+        }
+
+        var changed = false;
+
+        if (counter.Tier != tier)
+        {
+            // Смена тарифа: счётчики обнуляем и окна открываем заново — лимиты нового тарифа должны
+            // быть доступны сразу, а не после остатка чужого периода.
+            counter.Tier = tier;
+            counter.FlashRequestsUsed = 0;
+            counter.ProRequestsUsed = 0;
+            counter.AgentTokensUsed = 0;
+            counter.CoworkTokensUsed = 0;
+            counter.FlashWindowResetAt = now.AddDays(limits.FlashWindowDays);
+            counter.ProWindowResetAt = now.AddDays(limits.ProWindowDays);
+            counter.AgentWindowResetAt = now.AddDays(limits.AgentWindowDays);
+            counter.CoworkWindowResetAt = now.AddDays(limits.CoworkWindowDays);
             await _repository.UpsertAsync(counter, ct);
             return counter;
         }
 
         // Lazy window resets — only persist when something actually changed.
-        var limits = GetTierLimits(counter.Tier);
-        var changed = false;
-
         if (now >= counter.FlashWindowResetAt)
         {
             counter.FlashRequestsUsed = 0;
@@ -152,6 +202,13 @@ public class SubscriptionService : ISubscriptionService
             counter.AgentWindowResetAt = now.AddDays(limits.AgentWindowDays);
             changed = true;
         }
+        // COWORK_BUDGET: своё окно у Cowork.
+        if (now >= counter.CoworkWindowResetAt)
+        {
+            counter.CoworkTokensUsed = 0;
+            counter.CoworkWindowResetAt = now.AddDays(limits.CoworkWindowDays);
+            changed = true;
+        }
 
         if (changed)
             await _repository.UpsertAsync(counter, ct);
@@ -159,37 +216,43 @@ public class SubscriptionService : ISubscriptionService
         return counter;
     }
 
-    private static UserUsageCounterEntity NewCounter(Guid userId, DateTime now)
+    private UserUsageCounterEntity NewCounter(Guid userId, SubscriptionTier tier, DateTime now)
     {
+        // TIER_SYNC: окна сразу считаем по тарифу пользователя, а не по бесплатному — карта
+        // «тариф → окна» живёт в конфигурации (GetTierLimits), дублировать её здесь нечем.
+        var limits = GetTierLimits(tier);
+
         return new UserUsageCounterEntity
         {
             UserId = userId,
-            Tier = SubscriptionTier.Free,
+            Tier = tier,
             FlashRequestsUsed = 0,
             ProRequestsUsed = 0,
             AgentTokensUsed = 0,
-            FlashWindowResetAt = now.AddDays(7),
-            ProWindowResetAt = now.AddDays(7),
-            AgentWindowResetAt = now.AddDays(30)
+            CoworkTokensUsed = 0,
+            FlashWindowResetAt = now.AddDays(limits.FlashWindowDays),
+            ProWindowResetAt = now.AddDays(limits.ProWindowDays),
+            AgentWindowResetAt = now.AddDays(limits.AgentWindowDays),
+            CoworkWindowResetAt = now.AddDays(limits.CoworkWindowDays)
         };
     }
 
     private TierLimits GetTierLimits(SubscriptionTier tier) => tier switch
     {
+        // TIER_GO: добавлено 2026-09-26
+        SubscriptionTier.Go => _options.Value.Go,
         SubscriptionTier.Pro => _options.Value.Pro,
         SubscriptionTier.ProMax => _options.Value.ProMax,
         _ => _options.Value.Free
     };
 
     // ADMIN_UNLIMITED: добавлено 2026-09-19
-    private async Task<bool> IsAdminAsync(Guid userId, CancellationToken ct)
-    {
-        var user = await _userRepository.GetByIdAsync(userId, ct);
-        return user?.IsAdmin == true;
-    }
+    // TIER_SYNC: признак админа больше не читается отдельным запросом — пользователь уже загружен
+    // в каждом публичном методе, и GetOrCreateAsync получает его же.
 
     private static SubscriptionUsageDto AdminUsage() =>
         new("Admin",
+            0, long.MaxValue, DateTime.MaxValue,
             0, long.MaxValue, DateTime.MaxValue,
             0, long.MaxValue, DateTime.MaxValue,
             0, long.MaxValue, DateTime.MaxValue);

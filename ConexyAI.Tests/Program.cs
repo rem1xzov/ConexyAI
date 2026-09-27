@@ -1680,6 +1680,8 @@ sealed class FakeSubscriptionService : ISubscriptionService
             "Free",
             0, 0, DateTime.UtcNow,
             0, 0, DateTime.UtcNow,
+            0, 0, DateTime.UtcNow,
+            // COWORK_BUDGET: у заглушки нулевой бюджет Cowork — эти тесты лимиты не проверяют.
             0, 0, DateTime.UtcNow));
 
     public Task<UsageDecision> CheckBeforeRunAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default) =>
@@ -1688,7 +1690,7 @@ sealed class FakeSubscriptionService : ISubscriptionService
     public Task RecordRequestAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default) =>
         Task.CompletedTask;
 
-    public Task RecordAgentTokensAsync(Guid userId, long tokens, CancellationToken ct = default) =>
+    public Task RecordAgentTokensAsync(Guid userId, ConexyModelType modelType, long tokens, CancellationToken ct = default) =>
         Task.CompletedTask;
 }
 

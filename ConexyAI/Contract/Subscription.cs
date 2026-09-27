@@ -25,7 +25,11 @@ public enum UsageDecisionKind
 /// <summary>Outcome of the pre-run limit check.</summary>
 public record UsageDecision(UsageDecisionKind Kind, string? LimitName = null, DateTime? ResetsAt = null);
 
-/// <summary>Current usage snapshot returned to the frontend for the donut indicator.</summary>
+/// <summary>
+/// Current usage snapshot returned to the frontend for the donut indicator.
+/// COWORK_BUDGET: у Cowork свой счётчик и свой бюджет — их показываем отдельными полями, чтобы
+/// индикатор не смешивал два разных пула токенов.
+/// </summary>
 public record SubscriptionUsageDto(
     string Tier,
     long FlashUsed,
@@ -36,4 +40,7 @@ public record SubscriptionUsageDto(
     DateTime ProResetsAt,
     long AgentUsed,
     long AgentLimit,
-    DateTime AgentResetsAt);
+    DateTime AgentResetsAt,
+    long CoworkUsed,
+    long CoworkLimit,
+    DateTime CoworkResetsAt);

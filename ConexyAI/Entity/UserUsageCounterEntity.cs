@@ -4,9 +4,9 @@ namespace ConexyAI.Entity;
 
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 /// <summary>
-/// Per-user usage counters keyed by subscription tier. Flash/pro counters count requests;
-/// the agent counter accumulates <c>usage.total_tokens</c> (input+output). Each counter has
-/// its own lazy window-reset timestamp.
+/// Per-user usage counters keyed by subscription tier. Flash/pro counters count requests; the agent
+/// counters accumulate <c>usage.total_tokens</c> (input+output). Each counter has its own lazy
+/// window-reset timestamp.
 /// </summary>
 public class UserUsageCounterEntity
 {
@@ -17,7 +17,12 @@ public class UserUsageCounterEntity
     public int ProRequestsUsed { get; set; }
     public long AgentTokensUsed { get; set; }
 
+    // COWORK_BUDGET: добавлено 2026-09-26 — отдельный счётчик Cowork, чтобы исследовательские
+    // прогоны не съедали бюджет агента-кодера и наоборот.
+    public long CoworkTokensUsed { get; set; }
+
     public DateTime FlashWindowResetAt { get; set; }
     public DateTime ProWindowResetAt { get; set; }
     public DateTime AgentWindowResetAt { get; set; }
+    public DateTime CoworkWindowResetAt { get; set; }
 }

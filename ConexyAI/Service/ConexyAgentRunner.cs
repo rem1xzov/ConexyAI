@@ -506,7 +506,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var llmTurn = await StreamAgentTurnAsync(taskId, messages, ct);
             var responseMessage = llmTurn.Message;
             // SUBSCRIPTION_TIERS: добавлено 2026-09-17 — internal agent tokens count toward the agent budget.
-            await _subscriptionService.RecordAgentTokensAsync(job.UserId, llmTurn.TotalTokens, ct);
+            // COWORK_BUDGET: с 2026-09-26 важен и режим: Cowork тратит свой пул, Coder — агентский.
+            await _subscriptionService.RecordAgentTokensAsync(job.UserId, job.ModelType, llmTurn.TotalTokens, ct);
             messages.Add(responseMessage);
 
             // TASK_COMPLETION_DIAGNOSTICS: добавлено 2026-09-22 — по этой строке видно, крутится ли
@@ -1768,7 +1769,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             var response = await _llmClient.SendChatAsync(ConexyModelType.ConexyV1Pro, messages, new List<object>(), _job.ReasoningEffort, _job.TaskId, auditCts.Token);
             // SUBSCRIPTION_TIERS: добавлено 2026-09-17 — critic tokens count toward the agent budget.
-            await _subscriptionService.RecordAgentTokensAsync(_job.UserId, response.TotalTokens, ct);
+            // COWORK_BUDGET: аудитор есть только у Coder (Cowork документы не ревьюит код), поэтому
+            // здесь типом всегда идёт режим прогона — на Coder это агентский пул, иного и быть не может.
+            await _subscriptionService.RecordAgentTokensAsync(_job.UserId, _job.ModelType, response.TotalTokens, ct);
             var verdict = ParseAuditVerdict(response.Message.Text ?? string.Empty);
 
             _logger.LogInformation(
