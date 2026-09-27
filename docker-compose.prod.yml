@@ -109,6 +109,9 @@ services:
       Jwt__SigningKey: ${JWT_SIGNING_KEY:?JWT_SIGNING_KEY is required}
       Jwt__Issuer: ${JWT_ISSUER:-ConexyAI}
       Jwt__Audience: ${JWT_AUDIENCE:-ConexyAI-Clients}
+      # SESSION_LIFETIME: срок жизни сессии в минутах (129600 = 90 дней). Cookie сессии живёт ровно
+      # столько же. Меняется здесь без пересборки фронта; после правки — пересоздать backend.
+      Jwt__AccessTokenLifetimeMinutes: ${JWT_ACCESS_TOKEN_LIFETIME_MINUTES:-129600}
       AiUpstream__DeepSeek__ApiKey: ${DEEPSEEK_API_KEY:?DEEPSEEK_API_KEY is required}
       AiUpstream__DeepSeek__BaseUrl: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
       AiUpstream__DeepSeek__FlashModel: ${DEEPSEEK_FLASH_MODEL:-deepseek-flash}

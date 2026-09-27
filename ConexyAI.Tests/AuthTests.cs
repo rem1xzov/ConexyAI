@@ -60,6 +60,8 @@ internal static class AuthTests
         TestRegistry.Add("auth PASSWORD_RESET: unknown address refused, code changes the password and revokes sessions", PasswordResetAsync);
         // LEGAL_DOCS: добавлено 2026-09-26
         TestRegistry.Add("legal: operator details are served anonymously from the configuration", OperatorEndpointAsync);
+        // SESSION_LIFETIME: добавлено 2026-09-26
+        TestRegistry.Add("auth SESSION_LIFETIME: the issued session lasts 90 days", TokenLifetimeAsync);
         TestRegistry.Add("auth H3: SpeechKit logs never contain recognized speech or full upstream bodies", SpeechLogsArePrivateAsync);
         TestRegistry.Add("auth L12: JWT signing key guard refuses placeholders outside Development", SigningKeyGuardAsync);
     }
@@ -435,6 +437,43 @@ internal static class AuthTests
         using var probeResponse = await client.SendAsync(probe);
         Assert(probeResponse.StatusCode == HttpStatusCode.Unauthorized,
             $"the pre-reset session must be revoked, got {(int)probeResponse.StatusCode}");
+    }
+
+    // ---------------------------------------------------------------- SESSION_LIFETIME
+
+    // SESSION_LIFETIME: добавлено 2026-09-26
+    /// <summary>
+    /// Сессия живёт 90 дней — и в ответе, и в самом токене. Короткий срок здесь означает, что
+    /// пользователя разлогинивает посреди работы, поэтому проверяем сразу три вещи: сколько минут
+    /// заявлено в DTO, сколько реально в claim'ах токена и насколько вперёд смотрит дата истечения.
+    /// </summary>
+    private static async Task TokenLifetimeAsync()
+    {
+        await using var host = await AuthHost.StartAsync();
+        var client = host.Client;
+        var mail = (RecordingEmailSender)host.App.Services.GetRequiredService<IEmailSender>();
+        const string Email = "lifetime@example.com";
+
+        var register = await client.PostAsJsonAsync(
+            "/api/auth/register", new { email = Email, password = Password, acceptedPolicy = true });
+        Assert(register.StatusCode == HttpStatusCode.OK, "the sign-up must start");
+        var verify = await client.PostAsJsonAsync(
+            "/api/auth/verify-email", new { email = Email, code = mail.LastCode });
+        Assert(verify.StatusCode == HttpStatusCode.OK, "the sign-up must confirm");
+        var session = (await verify.Content.ReadFromJsonAsync<TokenResponse>())!;
+
+        var expected = TimeSpan.FromDays(90);
+        Assert(session.LifetimeMinutes == (int)expected.TotalMinutes,
+            $"the session must be 90 days, got {session.LifetimeMinutes} minutes");
+
+        var jwt = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(session.Token);
+        var actual = jwt.ValidTo - jwt.ValidFrom;
+        Assert(actual > TimeSpan.FromDays(89) && actual <= expected,
+            $"the token itself must live 90 days, got {actual}");
+
+        var untilExpiry = session.ExpiresAtUtc - DateTime.UtcNow;
+        Assert(untilExpiry > TimeSpan.FromDays(89),
+            $"the reported expiry must be ~90 days ahead, got {untilExpiry}");
     }
 
     /// <summary>Reads the machine-readable <c>code</c> out of an auth error body.</summary>

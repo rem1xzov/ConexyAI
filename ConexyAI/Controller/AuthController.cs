@@ -449,7 +449,11 @@ public class AuthController : ControllerBase
     {
         // EMAIL_AUTH: добавлено 2026-09-19 — Expires is set explicitly so the browser treats
         // the cookie as persistent (not a session cookie). It lives exactly as long as the JWT
-        // (30 days), enabling "remember me" across browser restarts.
+        // (see JwtOptions.AccessTokenLifetimeMinutes — 90 days by default), enabling "remember me"
+        // across browser restarts.
+        // SESSION_LIFETIME: добавлено 2026-09-26 — если сайт открыт по http, а не по https, браузер
+        // выбрасывает эту Secure-cookie, и тогда сессия не переживёт даже перезагрузки страницы;
+        // клиент вытягивает это своим токеном, но причину стоит искать здесь.
         Response.Cookies.Append(AuthCookieName, token.Token, new CookieOptions
         {
             HttpOnly = true,
