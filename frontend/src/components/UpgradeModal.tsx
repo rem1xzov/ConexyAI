@@ -88,16 +88,16 @@ function formatRub(amount: number, lang: string): string {
 interface UpgradeModalProps {
   limitInfo: LimitExceededInfo | null;
   onClose: () => void;
-  onBuy: (planName: string) => void;
+  /** Идентификатор плана (Pro/ProMax/…), цены и сумма считаются на сервере. */
+  onBuy: (planId: string) => void;
+  /** Идёт создание платежа: кнопки блокируем, чтобы не создать два платежа двойным кликом. */
+  busy?: boolean;
 }
 
-// ADMIN_PANEL: добавлено 2026-09-19
-/**
- * Full upgrade modal with the plan cards (Free / Go / Pro / ProMax) and the annual ProMax block.
- * Shown when a limit is exceeded or when the user clicks "Улучшить план" in the account menu.
- * "Buy" buttons are stubs until real payment is wired up.
- */
-export function UpgradeModal({ limitInfo, onClose, onBuy }: UpgradeModalProps) {
+// YOOKASSA: изменено 2026-09-27 — кнопки покупки больше не заглушки: они создают реальный платёж
+// (см. App.handleUpgradeBuy) и уводят браузер на страницу оплаты ЮKassa. Сумма берётся из серверного
+// каталога планов, поэтому клиент присылает только идентификатор тарифа.
+export function UpgradeModal({ limitInfo, onClose, onBuy, busy = false }: UpgradeModalProps) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? i18n.language;
 
@@ -146,7 +146,8 @@ export function UpgradeModal({ limitInfo, onClose, onBuy }: UpgradeModalProps) {
               {plan.ctaKey ? (
                 <button
                   className="dialog-btn dialog-btn--primary upgrade-plan__cta"
-                  onClick={() => onBuy(plan.name)}
+                  onClick={() => onBuy(plan.id)}
+                  disabled={busy}
                   type="button"
                 >
                   {t(plan.ctaKey)}
@@ -187,7 +188,8 @@ export function UpgradeModal({ limitInfo, onClose, onBuy }: UpgradeModalProps) {
           </ul>
           <button
             className="dialog-btn dialog-btn--primary upgrade-plan__cta"
-            onClick={() => onBuy(t('upgrade.annualTitle'))}
+            onClick={() => onBuy('ProMaxAnnual')}
+            disabled={busy}
             type="button"
           >
             {t('upgrade.buyAnnual')}

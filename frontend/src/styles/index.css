@@ -7851,3 +7851,59 @@ html[data-theme="light"]:not([data-incognito="true"]) .artifact-panel {
   color: var(--text);
   font-size: 15px;
 }
+
+
+/* YOOKASSA: окно статуса платежа после возврата с оплаты. */
+.payment-modal {
+  max-width: 420px;
+  text-align: center;
+}
+
+.payment-modal__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 6px 6px;
+}
+
+.payment-modal__text {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.payment-modal__text--bad {
+  color: var(--danger, #f43f5e);
+}
+
+.payment-modal__hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.payment-modal__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+}
+
+.payment-modal__icon--ok {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.payment-modal__spinner {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  animation: inputbar-thumb-spin 0.7s linear infinite;
+}

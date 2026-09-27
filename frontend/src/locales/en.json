@@ -275,7 +275,6 @@
     "currentPlan": "Current plan",
     "perMonth": "{{price}}/mo",
     "perYear": "{{price}}/yr",
-    "soon": "{{plan}}: payments are coming soon",
     "annualTitle": "ProMax for a year",
     "annualBadge": "−{{percent}}%",
     "annualMonthly": "≈ {{price}}/mo when paid yearly",
@@ -297,6 +296,22 @@
       "coworkAvailable": "Cowork mode included",
       "coworkLocked": "Cowork — paid plans only"
     }
+  },
+  "payment": {
+    "title": "Plan payment",
+    "checking": "Processing your payment…",
+    "checkingHint": "This takes a few seconds. You can keep the page open — the plan activates automatically.",
+    "success": "Payment successful",
+    "successHint": "The {{tier}} plan is now active. Thank you!",
+    "successHintPlain": "The plan is now active. Thank you!",
+    "canceled": "Payment failed",
+    "canceledHint": "The payment was canceled or declined by the bank; nothing was charged. You can try again.",
+    "timeout": "Payment is still processing",
+    "timeoutHint": "The bank has not confirmed the payment yet. If you were charged, the plan will activate on its own — check back a little later.",
+    "retry": "Check again",
+    "close": "Got it",
+    "createFailed": "Could not start the payment. Please try again.",
+    "notConfigured": "Payments are not configured yet. Please contact support."
   },
   "support": {
     "title": "Support",

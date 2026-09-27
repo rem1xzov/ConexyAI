@@ -149,6 +149,25 @@ export interface LimitExceededInfo {
   resetsAt: string;
 }
 
+// YOOKASSA: добавлено 2026-09-27 — платежи за тарифы.
+/** Ответ на создание платежа: куда редиректить пользователя. */
+export interface CreatePaymentResponse {
+  paymentId: string;
+  status: string;
+  confirmationUrl: string;
+  amountRub: number;
+  planId: string;
+}
+
+/** Статус платежа для окна возврата: `pending` | `succeeded` | `canceled` и т.п. */
+export interface PaymentStatusResponse {
+  paymentId: string;
+  status: string;
+  planId: string;
+  tier: string;
+  amountRub: number;
+}
+
 export interface DevTokenResponse {
   token: string;
   expiresAtUtc: string;

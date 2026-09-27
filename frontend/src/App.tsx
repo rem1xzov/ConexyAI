@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
 import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, getTaskStatus, runTask, type VerificationChallenge } from './api/conexyApi';
+// YOOKASSA: добавлено 2026-09-27 — создание платежа и окно возврата после оплаты.
+import { createPayment } from './api/paymentsApi';
+import { PaymentReturnModal } from './components/PaymentReturnModal';
 import { isForbiddenJoinError, signalrService } from './services/signalrService';
 // TURN_SCOPE: добавлено 2026-09-24 (H6/H7)
 import { TurnRegistry, type TurnContext } from './services/turnRegistry';
@@ -278,6 +281,11 @@ export default function App() {
   const [authModal, setAuthModal] = useState<AuthMode | null>(null);
   // ADMIN_PANEL: добавлено 2026-09-19
   const [upgradeOpen, setUpgradeOpen] = useState(false);
+  // YOOKASSA: добавлено 2026-09-27
+  // Идёт создание платежа (кнопки тарифов блокируются) и id платежа, по которому мы вернулись
+  // с оплаты — для него открывается окно статуса.
+  const [paymentBusy, setPaymentBusy] = useState(false);
+  const [paymentReturnId, setPaymentReturnId] = useState<string | null>(null);
   const [route, setRoute] = useState(window.location.hash);
   // SUPPORT: добавлено 2026-09-19
   const [supportOpen, setSupportOpen] = useState(false);
@@ -392,8 +400,19 @@ export default function App() {
     setSupportOpen(true);
   }
 
-  function handleUpgradeBuy(planName: string) {
-    showToast(t('upgrade.soon', { plan: planName }));
+  function handleUpgradeBuy(planId: string) {
+    if (paymentBusy) return;
+    setPaymentBusy(true);
+    void createPayment(planId)
+      .then((result) => {
+        // Уходим на страницу оплаты ЮKassa; назад браузер вернётся на return_url (см. PaymentReturnModal).
+        window.location.href = result.confirmationUrl;
+      })
+      .catch((e) => {
+        setPaymentBusy(false);
+        const status = (e as { response?: { status?: number } })?.response?.status;
+        showToast(status === 503 ? t('payment.notConfigured') : t('payment.createFailed'));
+      });
   }
 
   // SETTINGS: добавлено 2026-09-19 — theme/language changes apply immediately and persist.
@@ -412,6 +431,26 @@ export default function App() {
     const onHash = () => setRoute(window.location.hash);
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  // YOOKASSA: добавлено 2026-09-27 — возврат с оплаты. ЮKassa редиректит на return_url с
+  // ?payment=return&pid=<наш id платежа>; параметры сразу убираем из адресной строки, чтобы
+  // перезагрузка страницы не открывала окно статуса заново.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('payment') !== 'return') return;
+
+    const pid = params.get('pid');
+    params.delete('payment');
+    params.delete('pid');
+    const query = params.toString();
+    window.history.replaceState(
+      {},
+      '',
+      `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`,
+    );
+
+    if (pid) setPaymentReturnId(pid);
   }, []);
 
   const isAdminRoute = route.startsWith('#/admin');
@@ -2841,9 +2880,18 @@ export default function App() {
           covers the chat while the agent waits for the user's decision. */}
 
       {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
+      {paymentReturnId && (
+        <PaymentReturnModal
+          paymentId={paymentReturnId}
+          onClose={() => setPaymentReturnId(null)}
+          onPaid={() => void refreshUsage()}
+        />
+      )}
+
       {upgradeOpen && (
         <UpgradeModal
           limitInfo={limitExceeded}
+          busy={paymentBusy}
           onClose={() => {
             setUpgradeOpen(false);
             setLimitExceeded(null);
