@@ -382,6 +382,12 @@ export default function App() {
     setUpgradeOpen(true);
   }
 
+  // COWORK_BUDGET: добавлено 2026-09-26 — Cowork доступен только на платных тарифах; признак берём
+  // из снимка лимитов (нулевой бюджет = режим не входит в тариф), чтобы фронт не знал списка тарифов.
+  // Пока снимок не приехал, ничего не блокируем: мигать замком на секунду хуже, чем показать режим,
+  // который сервер всё равно откажет с понятной причиной.
+  const coworkLocked = usage !== null && usage.coworkLimit <= 0;
+
   function handleOpenSupport() {
     setSupportOpen(true);
   }
@@ -2622,7 +2628,7 @@ export default function App() {
                   <ModelPicker
                     model={model}
                     onModelChange={handleModelChange}
-                    mode={mode}
+                    mode={isAgent ? 'code' : 'chat'}
                     thinking={thinking}
                     onThinkingChange={setThinking}
                     reasoningEffort={reasoningEffort}
@@ -2630,6 +2636,8 @@ export default function App() {
                     smartSearch={smartSearch}
                     onSmartSearchChange={setSmartSearch}
                     locked={students}
+                    coworkLocked={coworkLocked}
+                    onCoworkLockedClick={handleUpgrade}
                   />
                 </div>
                 {isAgent ? (
@@ -2754,6 +2762,8 @@ export default function App() {
                     smartSearch={smartSearch}
                     onSmartSearchChange={setSmartSearch}
                     locked={students}
+                    coworkLocked={coworkLocked}
+                    onCoworkLockedClick={handleUpgrade}
                     disabled={!token || activeLoading}
                     isGenerating={agentRunning}
                     onStop={handleStop}

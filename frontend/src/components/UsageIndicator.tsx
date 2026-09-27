@@ -54,6 +54,11 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
     { label: 'Flash', used: usage.flashUsed, limit: usage.flashLimit, resetsAt: usage.flashResetsAt },
     { label: 'Pro', used: usage.proUsed, limit: usage.proLimit, resetsAt: usage.proResetsAt },
     { label: 'Agent', used: usage.agentUsed, limit: usage.agentLimit, resetsAt: usage.agentResetsAt },
+    // COWORK_BUDGET: строка появляется только там, где режим реально входит в тариф (limit > 0) —
+    // на Free это была бы бессмысленная «0 / 0».
+    ...(usage.coworkLimit > 0
+      ? [{ label: 'Cowork', used: usage.coworkUsed, limit: usage.coworkLimit, resetsAt: usage.coworkResetsAt }]
+      : []),
   ];
 
   return (

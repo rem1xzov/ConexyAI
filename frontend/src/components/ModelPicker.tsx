@@ -58,6 +58,13 @@ interface ModelPickerProps {
    * locking the whole popover used to hide that toggle completely in students mode.
    */
   locked?: boolean;
+  // COWORK_BUDGET: добавлено 2026-09-26 — Cowork доступен только на платных тарифах.
+  /**
+   * Cowork is a paid mode. On the free tier the entry stays in the list (so it is visible that the
+   * mode exists) but cannot be picked: the click leads to the plans instead of silently doing nothing.
+   */
+  coworkLocked?: boolean;
+  onCoworkLockedClick?: () => void;
 }
 
 export function ModelPicker({
@@ -71,6 +78,8 @@ export function ModelPicker({
   smartSearch,
   onSmartSearchChange,
   locked,
+  coworkLocked,
+  onCoworkLockedClick,
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -97,9 +106,18 @@ export function ModelPicker({
 
   function select(m: ModelOption) {
     if (locked) return;
+    // COWORK_BUDGET: платный режим на бесплатном тарифе не выбирается, но и не молчит — ведём к тарифам.
+    if (m.value === 'conexy-cowork' && coworkLocked) {
+      setOpen(false);
+      onCoworkLockedClick?.();
+      return;
+    }
     onModelChange(m.value);
     setOpen(false);
   }
+
+  /** Строка заблокирована по тарифу: подсвечиваем бейджем, но клик оставляем рабочим. */
+  const isCoworkPaidLocked = (m: ModelOption) => m.value === 'conexy-cowork' && coworkLocked === true;
 
   return (
     <div className="modelpicker" ref={ref}>
@@ -123,12 +141,21 @@ export function ModelPicker({
               key={m.value}
               className={`modelpicker__item ${locked ? 'modelpicker__item--locked' : ''}`}
               onClick={() => select(m)}
+              // Только студенческая блокировка делает пункт некликабельным: у Cowork клик должен
+              // сработать — он открывает тарифы.
               disabled={locked}
-              title={locked ? t('model.modelLocked') : undefined}
+              title={
+                locked
+                  ? t('model.modelLocked')
+                  : isCoworkPaidLocked(m)
+                    ? t('model.coworkPaidHint')
+                    : undefined
+              }
               type="button"
             >
               <span className="modelpicker__name">
                 {m.label}
+                {isCoworkPaidLocked(m) && <span className="modelpicker__plan">{t('model.coworkPaid')}</span>}
                 {m.value === model && (
                   <span className="modelpicker__check">
                     <CheckIcon size={14} />

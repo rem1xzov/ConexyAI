@@ -29,6 +29,10 @@ interface InputBarProps {
   onSmartSearchChange: (value: boolean) => void;
   locked?: boolean;
   disabled?: boolean;
+  // COWORK_BUDGET: добавлено 2026-09-26 — пробрасываем в переключатель моделей платную блокировку
+  // Cowork (на десктопе он живёт именно здесь).
+  coworkLocked?: boolean;
+  onCoworkLockedClick?: () => void;
   isGenerating: boolean;
   onStop: () => void;
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
@@ -54,6 +58,8 @@ export function InputBar({
   onSmartSearchChange,
   locked,
   disabled,
+  coworkLocked,
+  onCoworkLockedClick,
   isGenerating,
   onStop,
   onSend,
@@ -727,6 +733,8 @@ export function InputBar({
             onReasoningEffortChange={onReasoningEffortChange}
             smartSearch={smartSearch}
             onSmartSearchChange={onSmartSearchChange}
+            coworkLocked={coworkLocked}
+            onCoworkLockedClick={onCoworkLockedClick}
             locked={locked}
           />
         )}

@@ -137,6 +137,11 @@ export interface SubscriptionUsage {
   agentUsed: number;
   agentLimit: number;
   agentResetsAt: string;
+  // COWORK_BUDGET: добавлено 2026-09-26 — у Cowork свой пул токенов. `coworkLimit === 0` означает,
+  // что режим не входит в тариф (на Free), и строку о нём показывать не нужно.
+  coworkUsed: number;
+  coworkLimit: number;
+  coworkResetsAt: string;
 }
 
 export interface LimitExceededInfo {

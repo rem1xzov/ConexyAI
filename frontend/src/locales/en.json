@@ -266,21 +266,35 @@
   "upgrade": {
     "title": "Upgrade your plan",
     "limitExceeded": "You've reached your limit. Upgrade your plan to continue.",
+    "coworkNeedsPlan": "Cowork is available on paid plans only — pick Go or above.",
+    "buyGo": "Buy Go",
     "buyPro": "Buy Pro",
     "buyProMax": "Buy ProMax",
+    "buyAnnual": "Buy for a year",
     "currentPlan": "Current plan",
     "perMonth": "{{price}}/mo",
+    "perYear": "{{price}}/yr",
     "soon": "{{plan}}: payments are coming soon",
+    "annualTitle": "ProMax for a year",
+    "annualBadge": "−{{percent}}%",
+    "annualMonthly": "≈ {{price}}/mo when paid yearly",
+    "annualSave": "Cheaper than paying monthly: {{full}} otherwise — you save {{save}}",
+    "annualIncludes": "Everything in ProMax",
     "features": {
       "free1": "100 Flash requests/week",
       "free2": "20 Pro requests/week",
       "free3": "200,000 agent tokens/month",
+      "go1": "150 Flash requests/week",
+      "go2": "50 Pro requests/week",
+      "go3": "500,000 agent tokens/week",
       "pro1": "250 Flash requests/week",
       "pro2": "150 Pro requests/week",
-      "pro3": "5,000,000 agent tokens/week",
+      "pro3": "1,000,000 agent tokens/week",
       "proMax1": "300 Flash requests/week",
       "proMax2": "200 Pro requests/week",
-      "proMax3": "10,000,000 agent tokens/week"
+      "proMax3": "2,500,000 agent tokens/week",
+      "coworkAvailable": "Cowork mode included",
+      "coworkLocked": "Cowork — paid plans only"
     }
   },
   "support": {
@@ -354,6 +368,8 @@
     "smartSearchDesc": "Look up current information on the web",
     "reasoningDepth": "Reasoning depth",
     "modelLocked": "The model is fixed in study mode — only its settings are available",
+    "coworkPaid": "paid plans",
+    "coworkPaidHint": "Cowork is available on paid plans — click to see them",
     "coworkDesc": "Research, documents, analysis: web and file search, reports and tables. No code."
   },
   "input": {
