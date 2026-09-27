@@ -300,17 +300,19 @@ export function useAuth() {
       } catch (e) {
         if (cancelled) return;
         if (statusOf(e) === 401) {
-          // SESSION_REVOKED: сервер сказал «сессии нет» (нет cookie, истекла или отозвана). В
-          // Development — dev-токен ТОГО ЖЕ пользователя; иначе сохранённый токен больше не
-          // используется: он так же недействителен, и с ним приложение зависало без меню аккаунта.
+          // SESSION_COOKIE_LOST: 401 от /auth/session означает только «нет валидной cookie» — а не
+          // «нет аккаунта». Cookie живёт отдельно от токена: её могут не проставить (http вместо https
+          // для Secure-cookie), потерять (блокировка cookie, ITP в Safari, чистка браузера) или она
+          // могла истечь раньше. Раньше при этом сохранённый токен ВЫБРАСЫВАЛСЯ, хотя жил своим сроком,
+          // — вход не переживал даже перезагрузку страницы, что и выглядело как «сессия кончается
+          // мгновенно». Пока токен не истёк (readStoredToken отсеивает истекшие), продолжаем с ним:
+          // если он действительно отозван, первый же запрос с ним даст 401 и штатная единая точка
+          // очистки (onUnauthorized) завершит сессию с понятным сообщением.
           const refreshed = await refresh();
           if (cancelled) return;
-          if (!refreshed) {
-            clearStoredAuth();
-            tokenRef.current = null;
-            setToken(null);
-            // Existing users meet this once after the deploy that made tokens revocable.
-            if (storedToken) showSessionExpired();
+          if (!refreshed && storedToken) {
+            tokenRef.current = storedToken;
+            setToken(storedToken);
           }
           setInitializing(false);
           return;
