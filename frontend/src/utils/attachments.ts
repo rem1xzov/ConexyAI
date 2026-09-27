@@ -79,12 +79,22 @@ export function isAllowedMime(contentType: string, fileName?: string): boolean {
   return ALLOWED_EXTENSIONS.has(extensionOf(fileName));
 }
 
-export function fileToAttachment(file: File): Promise<TaskAttachment> {
+export function fileToAttachment(
+  file: File,
+  // ATTACHMENT_PROGRESS: доля прочитанного (0..1) — по ней композер рисует ползунок загрузки.
+  onProgress?: (fraction: number) => void,
+): Promise<TaskAttachment> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
+    reader.onprogress = (e) => {
+      if (onProgress && e.lengthComputable && e.total > 0) {
+        onProgress(Math.min(1, e.loaded / e.total));
+      }
+    };
     reader.onload = () => {
       const result = reader.result as string; // "data:<mime>;base64,<data>"
       const comma = result.indexOf(',');
+      onProgress?.(1);
       resolve({
         fileName: file.name,
         contentBase64: comma >= 0 ? result.slice(comma + 1) : result,

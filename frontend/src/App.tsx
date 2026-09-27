@@ -2080,7 +2080,10 @@ export default function App() {
     setSessions((prev) =>
       updateSession(prev, sessionId, (s) => ({
         ...s,
-        title: s.title === defaultTitle(kind, live.t) ? prompt.slice(0, 40) : s.title,
+        title: s.title === defaultTitle(kind, live.t)
+          // ATTACHMENT_ONLY_SEND: у сообщения без текста (только фото) заголовком чата берём имя файла.
+          ? (prompt.trim() || attachments[0]?.fileName || '').slice(0, 40)
+          : s.title,
         status: 'Running',
         model: live.model,
         messages: continueMessageId
@@ -2231,7 +2234,8 @@ export default function App() {
   }, []);
 
   async function handleSend(prompt: string, attachments: TaskAttachment[]): Promise<SendOutcome> {
-    if (!prompt.trim() || !token) return { ok: false };
+    // ATTACHMENT_ONLY_SEND: пустой текст допустим, если есть вложение — отправить можно только фото.
+    if ((!prompt.trim() && attachments.length === 0) || !token) return { ok: false };
     // TURN_GUARD (H6): как и у regenerate/resend/edit — пока в открытом чате идёт ход, новый не
     // отправляется (текст остаётся в композере).
     if (activeSession && (registry.bySession(activeSession.id) || isSessionStreaming(activeSession))) {

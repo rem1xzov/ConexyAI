@@ -27,6 +27,8 @@ type DraftAttachment = TaskAttachment & {
   id: string;
   loading: boolean;
   previewUrl?: string;
+  // ATTACHMENT_PROGRESS: доля прочитанного файла (0..1) — из неё рисуется ползунок загрузки.
+  progress?: number;
 };
 
 interface InputBarProps {
@@ -186,7 +188,9 @@ export function InputBar({
 
   async function submit() {
     const prompt = value.trim();
-    if (!prompt || disabled) return;
+    // ATTACHMENT_ONLY_SEND: отправить можно и одно фото без текста — но не пустое сообщение.
+    const hasAttachments = attachments.length > 0;
+    if ((!prompt && !hasAttachments) || disabled) return;
 
     // ATTACHMENT_UPLOAD: пока файлы читаются, отправлять нечего — в теле ушёл бы пустой base64.
     if (uploading) {
@@ -299,17 +303,23 @@ export function InputBar({
         contentBase64: '',
         loading: true,
         previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+        progress: 0,
       };
       count++;
       rawTotal += file.size;
       setAttachments((prev) => [...prev, draft]);
 
       try {
-        const ready = await fileToAttachment(file);
+        const ready = await fileToAttachment(file, (fraction) => {
+          // ATTACHMENT_PROGRESS: обновляем только само вложение; остальные могут уже быть готовы.
+          setAttachments((prev) =>
+            prev.map((a) => (a.id === draft.id ? { ...a, progress: fraction } : a)),
+          );
+        });
         setAttachments((prev) =>
           prev.map((a) =>
             a.id === draft.id
-              ? { ...ready, id: draft.id, loading: false, previewUrl: draft.previewUrl }
+              ? { ...ready, id: draft.id, loading: false, previewUrl: draft.previewUrl, progress: 1 }
               : a,
           ),
         );
@@ -680,6 +690,16 @@ export function InputBar({
                 {a.loading && (
                   <div className="inputbar-thumb__loading" role="status" aria-label={t('input.uploading')}>
                     <span className="inputbar-thumb__spinner" aria-hidden="true" />
+                    {/* ATTACHMENT_PROGRESS: ползунок загрузки — видно, что файл ещё пишется. */}
+                    <span className="inputbar-thumb__percent" aria-hidden="true">
+                      {Math.round((a.progress ?? 0) * 100)}%
+                    </span>
+                    <div className="inputbar-thumb__bar" aria-hidden="true">
+                      <span
+                        className="inputbar-thumb__bar-fill"
+                        style={{ width: `${Math.round((a.progress ?? 0) * 100)}%` }}
+                      />
+                    </div>
                   </div>
                 )}
                 <button
@@ -840,7 +860,7 @@ export function InputBar({
             title={t('common.send')}
             aria-label={t('common.send')}
             className="send-btn"
-            disabled={disabled || !hasInputText || uploading}
+            disabled={disabled || uploading || (!hasInputText && attachments.length === 0)}
           >
             <span className="send-btn__icon">
               <VoiceWaveIcon size={16} />

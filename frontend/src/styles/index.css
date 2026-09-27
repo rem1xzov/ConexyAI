@@ -933,7 +933,7 @@ body {
 .inputbar-thumb {
   position: relative;
   flex: 0 0 auto;
-  width: 72px;
+  width: 112px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -941,9 +941,9 @@ body {
 
 .inputbar-thumb__media {
   position: relative;
-  width: 72px;
-  height: 72px;
-  border-radius: 12px;
+  width: 112px;
+  height: 84px;
+  border-radius: 14px;
   overflow: hidden;
   background: var(--bg-soft);
   border: 1px solid var(--border);
@@ -960,12 +960,12 @@ body {
 }
 
 .inputbar-thumb__file {
-  font-size: 26px;
+  font-size: 32px;
   line-height: 1;
 }
 
 .inputbar-thumb__name {
-  max-width: 72px;
+  max-width: 112px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -979,24 +979,49 @@ body {
   position: absolute;
   top: 0;
   left: 0;
-  width: 72px;
-  height: 72px;
-  border-radius: 12px;
+  width: 112px;
+  height: 84px;
+  border-radius: 14px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   background: rgba(15, 16, 20, 0.55);
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
 }
 
 .inputbar-thumb__spinner {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.25);
   border-top-color: var(--accent);
   animation: inputbar-thumb-spin 0.7s linear infinite;
+}
+
+/* ATTACHMENT_PROGRESS: процент и ползунок загрузки под спиннером. */
+.inputbar-thumb__percent {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+}
+
+.inputbar-thumb__bar {
+  width: 68px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.25);
+  overflow: hidden;
+}
+
+.inputbar-thumb__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.15s ease;
 }
 
 @keyframes inputbar-thumb-spin {
@@ -1005,14 +1030,13 @@ body {
   }
 }
 
-/* ATTACHMENT_UPLOAD: крестик лежит ВНУТРИ плитки и не обрезается — раньше он выходил
-   за границы превью и выглядел срезанным. */
+/* ATTACHMENT_UPLOAD: крестик лежит ВНУТРИ плитки и не обрезается. */
 .inputbar-thumb__remove {
   position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 18px;
-  height: 18px;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -6409,14 +6433,14 @@ body {
   .inputbar-thumb,
   .inputbar-thumb__media,
   .inputbar-thumb__loading {
-    width: 60px;
+    width: 96px;
   }
   .inputbar-thumb__media,
   .inputbar-thumb__loading {
-    height: 60px;
+    height: 72px;
   }
   .inputbar-thumb__name {
-    max-width: 60px;
+    max-width: 96px;
   }
   .inputbar__textarea {
     min-width: 0;
