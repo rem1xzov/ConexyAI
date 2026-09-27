@@ -8,8 +8,18 @@ import { useEffect, useRef, type RefObject } from 'react';
  * once, on release, to commit the final open/closed value.
  */
 
-/** A swipe must start this close to the left edge to open the drawer. */
-export const EDGE_ZONE_PX = 45;
+/**
+ * Fraction of the viewport, measured from the left edge, where a swipe may start to open the drawer.
+ * MOBILE_SWIPE_ZONE: это левая половина экрана, а не узкая полоса у края — раньше открыть чаты можно
+ * было, лишь начав жест в 45px от кромки, и этот край легко было промахнуть.
+ */
+export const OPEN_SWIPE_ZONE_RATIO = 0.5;
+
+/** True when a gesture starting at `clientX` is allowed to open the drawer. */
+export function isInOpenSwipeZone(clientX: number, viewportWidth: number): boolean {
+  return clientX <= viewportWidth * OPEN_SWIPE_ZONE_RATIO;
+}
+
 /** px per ms: above this the release counts as a flick and wins over the finger's position. */
 export const FLICK_VELOCITY = 0.5;
 /** Fraction of the drawer width that must be travelled to open it, when starting closed. */
@@ -154,9 +164,10 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
     const onTouchStart = (e: TouchEvent) => {
       if (!latest.current.enabled || e.touches.length !== 1) return;
       const touch = e.touches[0];
-      // Opening is an edge gesture; closing works from anywhere on the panel.
+      // MOBILE_SWIPE_ZONE: opening starts from the left half of the screen; closing works from
+      // anywhere on the panel.
       const opening = !latest.current.open;
-      if (opening && touch.clientX > EDGE_ZONE_PX) return;
+      if (opening && !isInOpenSwipeZone(touch.clientX, window.innerWidth)) return;
 
       // A new gesture takes over from whatever the last one left behind.
       if (settleTimer.current !== null) {
