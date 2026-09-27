@@ -1,22 +1,23 @@
 import { useTranslation } from 'react-i18next';
+import type { OperatorProfile } from '../../types/api';
 import { EmailLink } from './EmailLink';
 import { LegalLayout } from './LegalLayout';
-import { OPERATOR } from './operator';
 
-// LEGAL_DOCS: добавлено 2026-09-25
+// LEGAL_DOCS: добавлено 2026-09-25 / изменено 2026-09-26 — реквизиты приходят с бэкенда.
 /** Политика возврата денежных средств, открывается по `#/refund`. */
 interface RefundPolicyProps {
+  operator: OperatorProfile;
   onBack: () => void;
 }
 
-export function RefundPolicy({ onBack }: RefundPolicyProps) {
+export function RefundPolicy({ operator, onBack }: RefundPolicyProps) {
   const { t } = useTranslation();
 
   return (
-    <LegalLayout title={t('legal.refundTitle')} updatedAt={OPERATOR.updatedAt} onBack={onBack}>
+    <LegalLayout title={t('legal.refundTitle')} updatedAt={operator.updatedAt} onBack={onBack}>
       <p>
         Настоящая Политика описывает условия и порядок возврата денежных средств, уплаченных за доступ
-        к сервису CONEXYAI ({OPERATOR.site}).
+        к сервису CONEXYAI ({operator.site}).
       </p>
 
       <h2>1. Общие условия</h2>
@@ -45,7 +46,7 @@ export function RefundPolicy({ onBack }: RefundPolicyProps) {
 
       <h2>3. Как оформить возврат</h2>
       <p>
-        3.1. Для возврата средств Пользователь направляет запрос на email <EmailLink /> с указанием:
+        3.1. Для возврата средств Пользователь направляет запрос на email <EmailLink email={operator.email} /> с указанием:
       </p>
       <ul>
         <li>email/логина учётной записи, с которой производилась оплата;</li>
@@ -66,9 +67,9 @@ export function RefundPolicy({ onBack }: RefundPolicyProps) {
       <p>
         По всем вопросам, связанным с возвратом средств:
         <br />
-        Email: <EmailLink />
+        Email: <EmailLink email={operator.email} />
         <br />
-        Телефон: {OPERATOR.phone}
+        Телефон: {operator.phone}
       </p>
     </LegalLayout>
   );

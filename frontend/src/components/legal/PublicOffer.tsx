@@ -1,28 +1,29 @@
 import { useTranslation } from 'react-i18next';
+import type { OperatorProfile } from '../../types/api';
 import { EmailLink } from './EmailLink';
 import { LegalLayout } from './LegalLayout';
-import { OPERATOR } from './operator';
 
-// LEGAL_DOCS: добавлено 2026-09-25
+// LEGAL_DOCS: добавлено 2026-09-25 / изменено 2026-09-26 — реквизиты приходят с бэкенда.
 /** Публичная оферта (ст. 437 ГК РФ), открывается по `#/offer`. */
 interface PublicOfferProps {
+  operator: OperatorProfile;
   onBack: () => void;
 }
 
-export function PublicOffer({ onBack }: PublicOfferProps) {
+export function PublicOffer({ operator, onBack }: PublicOfferProps) {
   const { t } = useTranslation();
 
   return (
     <LegalLayout
       title={t('legal.offerTitle')}
-      publishedAt={OPERATOR.publishedAt}
-      updatedAt={OPERATOR.updatedAt}
+      publishedAt={operator.publishedAt}
+      updatedAt={operator.updatedAt}
       onBack={onBack}
     >
       <p>
         Настоящий документ является публичной офертой (далее — «Оферта») в соответствии со ст. 437
         Гражданского кодекса Российской Федерации и содержит все существенные условия предоставления
-        доступа к сервису CONEXYAI (далее — «Сервис»), размещённому по адресу {OPERATOR.site}.
+        доступа к сервису CONEXYAI (далее — «Сервис»), размещённому по адресу {operator.site}.
       </p>
       <p>
         Оплата Сервиса означает полное и безоговорочное принятие (акцепт) настоящей Оферты
@@ -31,13 +32,13 @@ export function PublicOffer({ onBack }: PublicOfferProps) {
 
       <h2>1. Термины</h2>
       <p>
-        <strong>Исполнитель</strong> — {OPERATOR.name}, зарегистрирован(а) в качестве плательщика
-        налога на профессиональный доход, ИНН {OPERATOR.inn}, действующий(ая) на основании справки о
+        <strong>Исполнитель</strong> — {operator.name}, зарегистрирован(а) в качестве плательщика
+        налога на профессиональный доход, ИНН {operator.inn}, действующий(ая) на основании справки о
         постановке на учёт в приложении «Мой налог».
       </p>
       <p>
         <strong>Сервис (CONEXYAI)</strong> — программное обеспечение, предоставляющее Пользователю
-        доступ через сайт {OPERATOR.site} к следующим функциональным режимам:
+        доступ через сайт {operator.site} к следующим функциональным режимам:
       </p>
       <ul>
         <li>обычный диалоговый режим (чат с AI-ассистентом);</li>
@@ -135,21 +136,21 @@ export function PublicOffer({ onBack }: PublicOfferProps) {
 
       <h2>6. Контакты и реквизиты</h2>
       <p>
-        Самозанятый: {OPERATOR.name}
+        Самозанятый: {operator.name}
         <br />
-        ИНН: {OPERATOR.inn}
+        ИНН: {operator.inn}
         <br />
-        Email: <EmailLink />
+        Email: <EmailLink email={operator.email} />
         <br />
-        Телефон: {OPERATOR.phone}
+        Телефон: {operator.phone}
         <br />
-        Адрес: {OPERATOR.address}
+        Адрес: {operator.address}
       </p>
 
       <h2>7. Заключительные положения</h2>
       <p>
         7.1. Исполнитель вправе в одностороннем порядке вносить изменения в настоящую Оферту.
-        Актуальная редакция всегда доступна на сайте {OPERATOR.site}.
+        Актуальная редакция всегда доступна на сайте {operator.site}.
       </p>
       <p>
         7.2. Все споры решаются путём переговоров, а при недостижении согласия — в порядке,

@@ -76,6 +76,7 @@
     "published": "Дата публикации: {{date}}",
     "updated": "Дата последнего обновления: {{date}}",
     "englishNotice": "This legal document is provided in Russian only, as it governs the services under Russian law. In case of any discrepancy, the Russian version prevails.",
+    "loadError": "Не удалось загрузить реквизиты оператора. Проверьте соединение и попробуйте ещё раз.",
     "section": "Правовая информация",
     "privacyTitle": "Политика обработки персональных данных",
     "offerTitle": "Публичная оферта на оказание услуг сервиса CONEXYAI",

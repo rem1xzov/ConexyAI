@@ -76,6 +76,7 @@
     "published": "Published: {{date}}",
     "updated": "Last updated: {{date}}",
     "englishNotice": "This legal document is provided in Russian only, as it governs the services under Russian law. In case of any discrepancy, the Russian version prevails.",
+    "loadError": "Could not load the operator details. Check your connection and try again.",
     "section": "Legal information",
     "privacyTitle": "Personal Data Processing Policy",
     "offerTitle": "Public offer for the CONEXYAI services",

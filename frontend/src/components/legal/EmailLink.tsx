@@ -1,7 +1,8 @@
-import { OPERATOR } from './operator';
-
-// LEGAL_DOCS: добавлено 2026-09-25
-/** Ссылка-почта оператора: общий адрес для обращений во всех документах. */
-export function EmailLink() {
-  return <a href={`mailto:${OPERATOR.email}`}>{OPERATOR.email}</a>;
+// LEGAL_DOCS: добавлено 2026-09-25 / изменено 2026-09-26
+/**
+ * Ссылка-почта оператора: общий адрес для обращений во всех документах. Приходит с бэкенда вместе
+ * с остальными реквизитами, поэтому копится не здесь, а в `Operator__Email` на сервере.
+ */
+export function EmailLink({ email }: { email: string }) {
+  return <a href={`mailto:${email}`}>{email}</a>;
 }

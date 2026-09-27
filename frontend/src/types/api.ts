@@ -26,6 +26,25 @@ export interface SendOutcome {
   reason?: 'busy' | 'forbidden' | 'loading';
 }
 
+// LEGAL_DOCS: добавлено 2026-09-26
+/**
+ * Operator details for the public legal pages, served by `GET /api/legal/operator`. They live in the
+ * server environment (`Operator__*`) rather than in the frontend bundle, so the data can be changed
+ * without rebuilding the site.
+ */
+export interface OperatorProfile {
+  name: string;
+  inn: string;
+  address: string;
+  email: string;
+  phone: string;
+  /** Дата публикации оферты; у остальных документов пусто. */
+  publishedAt: string;
+  updatedAt: string;
+  transferCountries: string;
+  site: string;
+}
+
 export interface ConexyRequest {
   model: ConexyModel;
   prompt: string;

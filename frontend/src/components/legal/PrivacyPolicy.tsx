@@ -1,27 +1,28 @@
 import { useTranslation } from 'react-i18next';
+import type { OperatorProfile } from '../../types/api';
 import { EmailLink } from './EmailLink';
 import { LegalLayout } from './LegalLayout';
-import { OPERATOR } from './operator';
 
-// LEGAL_DOCS: добавлено 2026-09-25 (перенесено из components/PrivacyPolicy.tsx)
+// LEGAL_DOCS: изменено 2026-09-26 — реквизиты оператора приезжают с бэкенда
+// (`GET /api/legal/operator`) и передаются странице пропсом, чтобы не попадать в JS-бандл.
 /**
  * Публичная «Политика обработки персональных данных» (152-ФЗ), открывается по `#/privacy`.
- * Реквизиты оператора живут в `./operator.ts`.
  */
 interface PrivacyPolicyProps {
+  operator: OperatorProfile;
   onBack: () => void;
 }
 
-export function PrivacyPolicy({ onBack }: PrivacyPolicyProps) {
+export function PrivacyPolicy({ operator, onBack }: PrivacyPolicyProps) {
   const { t } = useTranslation();
 
   return (
-    <LegalLayout title={t('legal.privacyTitle')} updatedAt={OPERATOR.updatedAt} onBack={onBack}>
+    <LegalLayout title={t('legal.privacyTitle')} updatedAt={operator.updatedAt} onBack={onBack}>
       <p>
         Настоящая Политика обработки персональных данных (далее — «Политика») действует в отношении
         всей информации, которую сервис CONEXYAI, размещённый на сайте{' '}
-        <a href={`https://${OPERATOR.site}`} target="_blank" rel="noopener noreferrer">
-          {OPERATOR.site}
+        <a href={`https://${operator.site}`} target="_blank" rel="noopener noreferrer">
+          {operator.site}
         </a>{' '}
         (далее — «Сервис»), может получить о Пользователе во время использования Сервиса.
       </p>
@@ -37,9 +38,9 @@ export function PrivacyPolicy({ onBack }: PrivacyPolicyProps) {
 
       <h2>1. Оператор персональных данных</h2>
       <p>
-        Оператором персональных данных является: {OPERATOR.name}, ИНН {OPERATOR.inn}, являющийся
-        плательщиком налога на профессиональный доход (самозанятым), адрес: {OPERATOR.address},
-        email: <EmailLink />.
+        Оператором персональных данных является: {operator.name}, ИНН {operator.inn}, являющийся
+        плательщиком налога на профессиональный доход (самозанятым), адрес: {operator.address},
+        email: <EmailLink email={operator.email} />.
       </p>
 
       <h2>2. Какие данные собираются</h2>
@@ -118,7 +119,7 @@ export function PrivacyPolicy({ onBack }: PrivacyPolicyProps) {
           если они являются неполными, устаревшими, недостоверными или незаконно полученными;
         </li>
         <li>
-          отозвать согласие на обработку персональных данных, направив запрос на email <EmailLink />.
+          отозвать согласие на обработку персональных данных, направив запрос на email <EmailLink email={operator.email} />.
           Отзыв согласия может повлечь невозможность дальнейшего использования Сервиса.
         </li>
       </ul>
@@ -128,7 +129,7 @@ export function PrivacyPolicy({ onBack }: PrivacyPolicyProps) {
         8.1. Для формирования ответов в рамках AI-функций Сервиса (чат, агентские задачи, Coder,
         Cowork) тексты запросов Пользователя передаются для обработки сторонним поставщикам
         инфраструктуры и моделей искусственного интеллекта, в том числе размещённым за пределами
-        территории Российской Федерации: {OPERATOR.transferCountries}.
+        территории Российской Федерации: {operator.transferCountries}.
       </p>
       <p>
         8.2. В рамках такой передачи третьей стороне (поставщику инфраструктуры/модели ИИ) передаётся
@@ -152,7 +153,7 @@ export function PrivacyPolicy({ onBack }: PrivacyPolicyProps) {
       </p>
       <p>
         8.5. Пользователь вправе отозвать согласие на трансграничную передачу данных, направив запрос
-        на email <EmailLink />. Отзыв согласия влечёт невозможность использования AI-функций Сервиса,
+        на email <EmailLink email={operator.email} />. Отзыв согласия влечёт невозможность использования AI-функций Сервиса,
         поскольку их работа технически требует обработки текста запроса моделью, размещённой за
         пределами РФ.
       </p>
@@ -169,8 +170,8 @@ export function PrivacyPolicy({ onBack }: PrivacyPolicyProps) {
       <p>
         Оператор вправе вносить изменения в настоящую Политику. Актуальная редакция всегда размещена
         на сайте{' '}
-        <a href={`https://${OPERATOR.site}`} target="_blank" rel="noopener noreferrer">
-          {OPERATOR.site}
+        <a href={`https://${operator.site}`} target="_blank" rel="noopener noreferrer">
+          {operator.site}
         </a>
         .
       </p>
@@ -179,11 +180,11 @@ export function PrivacyPolicy({ onBack }: PrivacyPolicyProps) {
       <p>
         По вопросам обработки персональных данных:
         <br />
-        Email: <EmailLink />
+        Email: <EmailLink email={operator.email} />
       </p>
 
       <p className="legal-page__operator">
-        Оператор: {OPERATOR.name}, ИНН {OPERATOR.inn}, {OPERATOR.address}
+        Оператор: {operator.name}, ИНН {operator.inn}, {operator.address}
       </p>
     </LegalLayout>
   );
