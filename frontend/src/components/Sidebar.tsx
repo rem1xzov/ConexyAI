@@ -236,8 +236,14 @@ export function Sidebar(props: SidebarProps) {
                         }}
                       >
                         <span className={`status-dot status-dot--${s.status.toLowerCase()}`} />
-                        {s.isPinned && <PinIcon size={13} className="chats__pin" />}
                         <span className="chats__title">{s.title}</span>
+                        {/* CHAT_PIN_ICON: булавка стоит в конце строки (как в референсе) — закреплённый
+                            чат видно сразу, а не только по порядку в списке. */}
+                        {s.isPinned && (
+                          <span className="chats__pin" title={t('sidebar.pinned')}>
+                            <PinIcon size={14} />
+                          </span>
+                        )}
                       </button>
                     )}
 

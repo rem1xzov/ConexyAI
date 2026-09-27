@@ -17,6 +17,18 @@ import { VoiceWaveIcon, MicIcon, PlusIcon, SendIcon, StopIcon, UploadIcon, Photo
 
 const MAX_ATTACHMENTS = 10;
 
+// ATTACHMENT_UPLOAD: добавлено 2026-09-27
+/**
+ * Вложение в композере. От <see cref="TaskAttachment"/> отличается только локальным состоянием:
+ * `loading` — файл ещё читается (его base64 не готов), `previewUrl` — мгновенное превью из object URL.
+ * В запрос уходят только поля TaskAttachment (см. `toMessageAttachment`).
+ */
+type DraftAttachment = TaskAttachment & {
+  id: string;
+  loading: boolean;
+  previewUrl?: string;
+};
+
 interface InputBarProps {
   model: ConexyModel;
   onModelChange: (model: ConexyModel) => void;
@@ -75,7 +87,9 @@ export function InputBar({
   const coarsePointer = useMediaQuery('(pointer: coarse)');
   const enterInsertsNewline = isMobile || coarsePointer;
   const [value, setValue] = useState('');
-  const [attachments, setAttachments] = useState<TaskAttachment[]>([]);
+  // ATTACHMENT_UPLOAD: черновик вложения несёт своё состояние. Файл появляется в списке сразу
+  // (с превью и спиннером), а base64 появляется позже — до этого отправлять нельзя.
+  const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [limitHint, setLimitHint] = useState(false);
@@ -174,6 +188,12 @@ export function InputBar({
     const prompt = value.trim();
     if (!prompt || disabled) return;
 
+    // ATTACHMENT_UPLOAD: пока файлы читаются, отправлять нечего — в теле ушёл бы пустой base64.
+    if (uploading) {
+      showAttachError(t('input.waitForUpload'));
+      return;
+    }
+
     // TURN_GUARD (H6): пока идёт ответ, Enter ничего не отправляет — текст остаётся в поле.
     if (isGenerating) {
       showAttachError(t('sync.waitForReply'));
@@ -243,12 +263,16 @@ export function InputBar({
   }
 
   async function addFiles(files: FileList | File[], skipMimeCheck = false) {
-    const next = [...attachments];
     const rejected: string[] = [];
     // ATTACHMENT_SIZE_LIMIT (M24): файл, который не влезает в лимит сообщения, отклоняется ДО
     // чтения — а не после загрузки всего запроса на сервер.
     const oversized: string[] = [];
-    let rawTotal = attachmentBytes(next);
+    // ATTACHMENT_UPLOAD: снимок текущего списка нужен только для подсчёта объёма и лимита штук;
+    // добавление идёт через setAttachments, потому что чтение файла асинхронное и список успевает
+    // измениться (пользователь может убрать вложение, пока остальные ещё читаются).
+    let rawTotal = attachmentBytes(attachments);
+    let count = attachments.length;
+
     for (const file of Array.from(files)) {
       // BUGFIX_ATTACHMENTS: a refused file used to be dropped without a word, which reads as
       // "the picker ignores .docx in the agent tab". Report it instead of swallowing it.
@@ -256,7 +280,7 @@ export function InputBar({
         rejected.push(file.name);
         continue;
       }
-      if (next.length >= MAX_ATTACHMENTS) {
+      if (count >= MAX_ATTACHMENTS) {
         setLimitHint(true);
         window.setTimeout(() => setLimitHint(false), 2500);
         break;
@@ -265,15 +289,38 @@ export function InputBar({
         oversized.push(file.name);
         continue;
       }
+
+      // Сразу показываем вложение: у картинок — мгновенное превью из object URL, у остальных —
+      // заглушка с именем. Так видно, что файл принят, ещё до чтения его содержимого.
+      const draft: DraftAttachment = {
+        id: `${Date.now()}-${count}-${file.name}`,
+        fileName: file.name,
+        contentType: file.type || 'application/octet-stream',
+        contentBase64: '',
+        loading: true,
+        previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+      };
+      count++;
+      rawTotal += file.size;
+      setAttachments((prev) => [...prev, draft]);
+
       try {
-        next.push(await fileToAttachment(file));
-        rawTotal += file.size;
+        const ready = await fileToAttachment(file);
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.id === draft.id
+              ? { ...ready, id: draft.id, loading: false, previewUrl: draft.previewUrl }
+              : a,
+          ),
+        );
       } catch (err) {
         console.error('[Attachments] failed to read file', file.name, err);
         rejected.push(file.name);
+        setAttachments((prev) => prev.filter((a) => a.id !== draft.id));
+        if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
       }
     }
-    setAttachments(next);
+
     setMenuOpen(false);
     const problems: string[] = [];
     if (rejected.length > 0) problems.push(t('input.unsupportedFiles', { names: rejected.join(', ') }));
@@ -287,6 +334,19 @@ export function InputBar({
       setAttachError(problems.join(' '));
       window.setTimeout(() => setAttachError(null), 8000);
     }
+  }
+
+  // ATTACHMENT_UPLOAD: пока хотя бы один файл читается, отправка ждёт — иначе в сообщение ушёл бы
+  // пустой (или недописанный) base64, а пользователь видел бы непонятную ошибку сервера.
+  const uploading = attachments.some((a) => a.loading);
+
+  /** Убирает вложение и освобождает превью-URL, если оно ещё было временным. */
+  function removeAttachment(id: string) {
+    setAttachments((prev) => {
+      const target = prev.find((a) => a.id === id);
+      if (target?.loading && target.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
   }
 
   // FILE_DROP (L11): файлы, брошенные на колонку чата, прикрепляются как выбранные через «+».
@@ -568,29 +628,6 @@ export function InputBar({
 
   return (
     <div className="inputbar-wrap">
-      {attachments.length > 0 && (
-        <div className="inputbar-attachments">
-          {attachments.map((a, i) => (
-            <div key={`${a.fileName}-${i}`} className="relative shrink-0 w-[120px]">
-              <div className="h-[80px] w-full rounded-lg chat-surface overflow-hidden">
-                {a.contentType.startsWith('image/') ? (
-                  <img src={`data:${a.contentType};base64,${a.contentBase64}`} alt={a.fileName} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-2xl">📄</div>
-                )}
-              </div>
-              <div className="mt-1 truncate text-[11px] chat-muted" title={a.fileName}>{a.fileName}</div>
-              <button
-                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full chat-btn-danger text-xs flex items-center justify-center"
-                onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                aria-label={t('input.removeFile', { name: a.fileName })}
-              >
-                <CloseIcon size={10} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
       {limitHint && (
         <div className="inputbar-limit">{t('input.maxFiles')}</div>
       )}
@@ -621,8 +658,45 @@ export function InputBar({
         </div>
       )}
 
-      <div className="inputbar">
-        <div className="attach-wrap" ref={menuRef}>
+      <div className={`inputbar ${attachments.length > 0 ? 'inputbar--attachments' : ''}`}>
+        {/* ATTACHMENT_UPLOAD: превью живёт ВНУТРИ композера (как в Gemini), а не отдельной полосой
+            над ним: так видно, что фото прикреплено к сообщению, а не висит само по себе. */}
+        {attachments.length > 0 && (
+          <div className="inputbar__attachments">
+            {attachments.map((a) => (
+              <div key={a.id} className="inputbar-thumb">
+                <div className="inputbar-thumb__media">
+                  {a.contentType.startsWith('image/') ? (
+                    <img
+                      src={a.previewUrl ?? `data:${a.contentType};base64,${a.contentBase64}`}
+                      alt={a.fileName}
+                      className="inputbar-thumb__img"
+                    />
+                  ) : (
+                    <div className="inputbar-thumb__file">📄</div>
+                  )}
+                </div>
+                <div className="inputbar-thumb__name" title={a.fileName}>{a.fileName}</div>
+                {a.loading && (
+                  <div className="inputbar-thumb__loading" role="status" aria-label={t('input.uploading')}>
+                    <span className="inputbar-thumb__spinner" aria-hidden="true" />
+                  </div>
+                )}
+                <button
+                  className="inputbar-thumb__remove"
+                  onClick={() => removeAttachment(a.id)}
+                  aria-label={t('input.removeFile', { name: a.fileName })}
+                  type="button"
+                >
+                  <CloseIcon size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="inputbar__row">
+          <div className="attach-wrap" ref={menuRef}>
           <button
             className="icon-btn attach-btn"
             onClick={() => setMenuOpen((o) => !o)}
@@ -766,7 +840,7 @@ export function InputBar({
             title={t('common.send')}
             aria-label={t('common.send')}
             className="send-btn"
-            disabled={disabled || !hasInputText}
+            disabled={disabled || !hasInputText || uploading}
           >
             <span className="send-btn__icon">
               <VoiceWaveIcon size={16} />
@@ -776,6 +850,7 @@ export function InputBar({
             </span>
           </button>
         )}
+        </div>
       </div>
     </div>
   );

@@ -149,6 +149,7 @@
     "shareUnavailable": "This chat is not stored on the server yet, so there is no link to share",
     "pin": "Pin",
     "unpin": "Unpin",
+    "pinned": "Pinned",
     "rename": "Rename",
     "delete": "Delete",
     "deleteConfirmTitle": "Delete this chat?",
@@ -397,6 +398,8 @@
     "placeholder": "Message…",
     "unsupportedFiles": "Couldn't attach: {{names}}. Images, PDFs, documents, spreadsheets and text files are supported.",
     "removeFile": "Remove {{name}}",
+    "uploading": "Uploading…",
+    "waitForUpload": "Wait for the files to finish uploading — they can't be sent yet.",
     "attachmentsTooLarge": "These files are too large to send. Reduce their size or attach fewer files — for example, send them one at a time.",
     "sendFailed": "Couldn't send the message. Please try again."
   },
