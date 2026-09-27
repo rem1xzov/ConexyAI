@@ -151,10 +151,11 @@ public class SubscriptionService : ISubscriptionService
         // TIER_SYNC: тариф счётчика следует за тарифом пользователя. Раньше счётчик создавался
         // бесплатным и таким же оставался навсегда: оплаченный тариф не применялся вообще, а с
         // появлением платного Cowork это заперло бы режим и у тех, кто за него заплатил.
-        var tier = user?.SubscriptionTier ?? SubscriptionTier.Free;
+        // YOOKASSA: тариф берём с учётом срока оплаты — просроченный платный тариф равен Free.
+        var now = DateTime.UtcNow;
+        var tier = EffectiveTier(user, now);
 
         var counter = await _repository.GetAsync(userId, ct);
-        var now = DateTime.UtcNow;
         var limits = GetTierLimits(tier);
 
         if (counter is null)
@@ -235,6 +236,17 @@ public class SubscriptionService : ISubscriptionService
             AgentWindowResetAt = now.AddDays(limits.AgentWindowDays),
             CoworkWindowResetAt = now.AddDays(limits.CoworkWindowDays)
         };
+    }
+
+    // YOOKASSA: добавлено 2026-09-27
+    /// <summary>Тариф с учётом срока оплаты: истёкший платный тариф считается Free.</summary>
+    private static SubscriptionTier EffectiveTier(User? user, DateTime now)
+    {
+        if (user is null) return SubscriptionTier.Free;
+        if (user.IsAdmin) return SubscriptionTier.Admin;
+        if (user.SubscriptionTier == SubscriptionTier.Free) return SubscriptionTier.Free;
+        if (user.SubscriptionExpiresAt is { } expires && expires <= now) return SubscriptionTier.Free;
+        return user.SubscriptionTier;
     }
 
     private TierLimits GetTierLimits(SubscriptionTier tier) => tier switch

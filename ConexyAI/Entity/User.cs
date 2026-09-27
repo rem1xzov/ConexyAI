@@ -25,6 +25,14 @@ public class User
 
     public SubscriptionTier SubscriptionTier { get; set; } = SubscriptionTier.Free;
 
+    // YOOKASSA: добавлено 2026-09-27
+    /// <summary>
+    /// До какого момента (UTC) действует оплаченный тариф. NULL — бессрочно (тариф выставлен вручную
+    /// или администратором). Автопродления нет: каждый платёж — разовый, успешная оплата ПРОДЛЕВАЕТ
+    /// доступ от текущей даты окончания (или от сейчас, если срок уже истёк).
+    /// </summary>
+    public DateTime? SubscriptionExpiresAt { get; set; }
+
     // EMAIL_AUTH: добавлено 2026-09-19
     /// <summary>Whether the user is an administrator (granted via AdminAccounts on login).</summary>
     public bool IsAdmin { get; set; }

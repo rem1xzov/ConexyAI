@@ -8,6 +8,8 @@ using ConexyAI.Service;
 using ConexyAI.Service.Auth;
 // EMAIL_VERIFICATION: добавлено 2026-09-24
 using ConexyAI.Service.Email;
+// YOOKASSA: добавлено 2026-09-27 — приём платежей.
+using ConexyAI.Service.Payments;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -146,6 +148,12 @@ builder.Services.Configure<SmtpOptions>(options =>
 // Приходят из окружения (Operator__Name, Operator__Inn, …), чтобы не попадать в репозиторий, образ
 // и JS-бандл сайта; в appsettings.json лежат только пустые значения.
 builder.Services.Configure<OperatorSettings>(builder.Configuration.GetSection(OperatorSettings.SectionName));
+// YOOKASSA: добавлено 2026-09-27 — приём платежей. shopId и секретный ключ приходят из окружения
+// (YooKassa__ShopId / YooKassa__SecretKey); в appsettings.json они пустые, потому что конфиг лежит
+// в репозитории и в образе. Каталог тарифов и цены — наоборот, серверный: сумму платежа клиент
+// прислать не может.
+builder.Services.Configure<YooKassaSettings>(builder.Configuration.GetSection(YooKassaSettings.SectionName));
+builder.Services.Configure<PaymentPlansOptions>(builder.Configuration.GetSection(PaymentPlansOptions.SectionName));
 // EMAIL_AUTH: добавлено 2026-09-19
 builder.Services.Configure<AdminAccountsOptions>(options =>
 {
@@ -227,6 +235,9 @@ builder.Services.AddSingleton<IPendingActionService, PendingActionService>();
 builder.Services.AddScoped<IUserMemoryRepository, UserMemoryRepository>();
 builder.Services.AddScoped<IUsageRepository, UsageRepository>();
 builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
+// YOOKASSA: добавлено 2026-09-27 — платежи: локальные записи, создание платежа и выдача тарифа.
+builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
+builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IUserMemoryService, UserMemoryService>();
 builder.Services.AddSingleton<IMemoryExtractionQueue, MemoryExtractionQueue>();
 // INCOGNITO_CHAT: добавлено 2026-09-20
@@ -288,6 +299,12 @@ builder.Services.AddHttpClient<ISpeechKitService, SpeechKitService>((sp, client)
     var options = sp.GetRequiredService<IOptions<SpeechKitOptions>>().Value;
     client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds > 0 ? options.TimeoutSeconds : 30);
 });
+// YOOKASSA: таймаут обращения к API платёжного провайдера.
+builder.Services.AddHttpClient<IYooKassaClient, YooKassaClient>((sp, client) =>
+{
+    var options = sp.GetRequiredService<IOptions<YooKassaSettings>>().Value;
+    client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds > 0 ? options.TimeoutSeconds : 30);
+});
 
 var app = builder.Build();
 
@@ -306,6 +323,21 @@ if (string.IsNullOrWhiteSpace(operatorSettings.Name) || string.IsNullOrWhiteSpac
     app.Logger.LogWarning(
         "Legal pages: Operator__Name / Operator__Inn (и остальные Operator__*) не заданы — " +
         "правовые документы будут опубликованы без реквизитов оператора.");
+}
+
+// YOOKASSA: добавлено 2026-09-27
+var yooKassaSettings = app.Services.GetRequiredService<IOptions<YooKassaSettings>>().Value;
+if (!yooKassaSettings.IsConfigured)
+{
+    app.Logger.LogWarning(
+        "Payments: YooKassa__ShopId / YooKassa__SecretKey не заданы — кнопки покупки тарифов " +
+        "будут отвечать ошибкой 503, оплата недоступна.");
+}
+else if (string.IsNullOrWhiteSpace(yooKassaSettings.NotificationIpRanges))
+{
+    app.Logger.LogWarning(
+        "Payments: YooKassa__NotificationIpRanges не задан — проверка источника вебхука по IP " +
+        "ОТКЛЮЧЕНА. Платёж всё равно подтверждается через API ЮKassa, но список подсетей лучше задать.");
 }
 
 // Force the workspace service to initialize once at startup: it resolves the

@@ -137,6 +137,14 @@ services:
       Operator__UpdatedAt: ${OPERATOR_UPDATED_AT:-}
       Operator__TransferCountries: ${OPERATOR_TRANSFER_COUNTRIES:-}
       Operator__Site: ${OPERATOR_SITE:-conexyai.ru}
+      # YOOKASSA: приём платежей за тарифы. shopId и секретный ключ — секреты магазина, поэтому
+      # только здесь из локального .env на сервере (он в .gitignore). Пустые → покупка отвечает 503.
+      YooKassa__ShopId: ${YOOKASSA_SHOP_ID:-}
+      YooKassa__SecretKey: ${YOOKASSA_SECRET_KEY:-}
+      # Подсети ЮKassa для вебхуков (CIDR через запятую). Пусто отключает проверку по IP — платёж
+      # всё равно подтверждается запросом в API ЮKassa.
+      YooKassa__NotificationIpRanges: ${YOOKASSA_NOTIFICATION_IPS:-}
+      YooKassa__ReturnUrlBase: ${YOOKASSA_RETURN_URL:-https://conexyai.ru/}
       GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
       ADMIN_ACCOUNTS: ${ADMIN_ACCOUNTS:-}
       WebSearch__JsonSeoApiKey: ${JSONSEO_API_KEY:-}

@@ -41,6 +41,9 @@ public class DbConexy : Microsoft.EntityFrameworkCore.DbContext
     // EMAIL_VERIFICATION: добавлено 2026-09-24 — неподтверждённые регистрации (код + хэш пароля).
     public DbSet<EmailVerificationCodeEntity> EmailVerificationCodes => Set<EmailVerificationCodeEntity>();
 
+    // YOOKASSA: добавлено 2026-09-27 — платежи за тарифы.
+    public DbSet<PaymentEntity> Payments => Set<PaymentEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

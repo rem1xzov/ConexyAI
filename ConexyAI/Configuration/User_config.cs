@@ -22,6 +22,8 @@ public class User_config : IEntityTypeConfiguration<User>
             .HasConversion<string>()
             .HasMaxLength(20)
             .IsRequired();
+        // YOOKASSA: добавлено 2026-09-27 — nullable: у бесплатных и «ручных» тарифов срока нет.
+        builder.Property(x => x.SubscriptionExpiresAt).IsRequired(false);
         // EMAIL_AUTH: добавлено 2026-09-19
         builder.Property(x => x.IsAdmin).IsRequired();
         builder.Property(x => x.CreatedAt).IsRequired();
