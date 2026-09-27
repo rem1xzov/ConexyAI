@@ -475,6 +475,13 @@ internal static class AuthTests
 
         var fields = root.EnumerateObject().Select(p => p.Name).ToArray();
         Assert(fields.Length == 9, $"the payload must carry exactly the fields the pages use, got {fields.Length}: {string.Join(", ", fields)}");
+
+        // LEGAL_CACHE: заголовок не должен ни пропасть, ни превратиться в no-store — именно он
+        // избавляет от запроса на каждое открытие страницы в новой вкладке.
+        Assert(response.Headers.CacheControl?.Public == true,
+            "the response must be cacheable by shared caches (`public`)");
+        Assert(response.Headers.CacheControl?.MaxAge == TimeSpan.FromMinutes(5),
+            $"the response must live five minutes, got {response.Headers.CacheControl?.MaxAge}");
     }
 
     // ---------------------------------------------------------------- M20
