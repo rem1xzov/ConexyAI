@@ -200,6 +200,28 @@ export interface AdminUsersResponse {
   users: AdminUser[];
 }
 
+// YOOKASSA: добавлено 2026-09-27 — сводка оплат для ручных чеков в «Мой налог».
+/** Одна строка сводки: дата оплаты, сумма, тариф и покупатель. */
+export interface AdminPaymentSummaryItem {
+  paymentId: string;
+  paidAt: string;
+  amountRub: number;
+  planId: string;
+  tier: string;
+  userId: string;
+  email: string | null;
+  username: string | null;
+}
+
+/** Успешные платежи за период и их общая сумма (`from`/`to` — московские даты). */
+export interface AdminPaymentSummary {
+  from: string;
+  to: string;
+  totalRub: number;
+  count: number;
+  payments: AdminPaymentSummaryItem[];
+}
+
 // SUPPORT: добавлено 2026-09-19
 export interface SupportMessage {
   id: string;

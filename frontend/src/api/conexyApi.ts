@@ -1,6 +1,7 @@
 import http from './client';
 import axios from 'axios';
 import type {
+  AdminPaymentSummary,
   AdminSupportTicket,
   AdminUsersResponse,
   ChatListResponse,
@@ -142,6 +143,15 @@ export async function revokeAdmin(id: string): Promise<void> {
 
 export async function deleteUser(id: string): Promise<void> {
   await http.delete(`/admin/users/${id}`);
+}
+
+// YOOKASSA: добавлено 2026-09-27 — сводка успешных оплат за период (для ручных чеков).
+/** `from`/`to` — московские даты в формате YYYY-MM-DD (обе включительно). */
+export async function getAdminPaymentsSummary(from: string, to: string): Promise<AdminPaymentSummary> {
+  const { data } = await http.get<AdminPaymentSummary>('/admin/payments/summary', {
+    params: { from, to },
+  });
+  return data;
 }
 
 // SUPPORT: добавлено 2026-09-19

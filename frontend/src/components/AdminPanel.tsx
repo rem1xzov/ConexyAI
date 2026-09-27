@@ -6,6 +6,8 @@ import { humanError } from '../utils/humanError';
 import { ConfirmDialog } from './Dialog';
 import { ShieldIcon } from './Icons';
 import { AdminSupport } from './AdminSupport';
+// YOOKASSA: добавлено 2026-09-27 — сводка оплат для ручных чеков в «Мой налог».
+import { AdminPayments } from './AdminPayments';
 
 interface AdminPanelProps {
   onBack: () => void;
@@ -45,7 +47,7 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
   const [pendingAction, setPendingAction] = useState<{ kind: 'makeAdmin' | 'revokeAdmin' | 'delete'; user: AdminUser } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   // SUPPORT: добавлено 2026-09-19
-  const [tab, setTab] = useState<'users' | 'support'>('users');
+  const [tab, setTab] = useState<'users' | 'support' | 'payments'>('users');
 
   function roleLabel(u: AdminUser): string {
     if (u.isSuperAdmin) return t('admin.roles.super');
@@ -167,6 +169,13 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
           >
             {t('admin.supportTab')}
           </button>
+          <button
+            className={`admin-tab ${tab === 'payments' ? 'admin-tab--active' : ''}`}
+            onClick={() => setTab('payments')}
+            type="button"
+          >
+            {t('admin.paymentsTab')}
+          </button>
         </div>
         <span className="admin__count">
           {tab === 'users' ? t('admin.userCount', { count: total }) : ''}
@@ -175,6 +184,8 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
 
       {tab === 'support' ? (
         <AdminSupport onToast={onToast} />
+      ) : tab === 'payments' ? (
+        <AdminPayments onToast={onToast} />
       ) : (
         <>
       {loading ? (

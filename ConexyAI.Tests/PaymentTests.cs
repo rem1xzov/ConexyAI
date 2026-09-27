@@ -25,6 +25,7 @@ internal static class PaymentTests
         TestRegistry.Add("payments: a confirmed payment grants the tier and extends the expiry", GrantsTierAsync);
         TestRegistry.Add("payments: an unconfirmed payment grants nothing", UnconfirmedGrantsNothingAsync);
         TestRegistry.Add("payments: an expired paid tier falls back to Free", ExpiredTierAsync);
+        TestRegistry.Add("payments: the summary returns only successful payments inside the period", SummaryPeriodAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -144,6 +145,46 @@ internal static class PaymentTests
         var usage = await service.GetUsageAsync(userId);
         Assert(usage.Tier == "Free", $"an expired paid tier must read as Free, got {usage.Tier}");
         Assert(usage.AgentLimit == 200_000, $"the free agent budget must apply after expiry, got {usage.AgentLimit}");
+    }
+
+    private static async Task SummaryPeriodAsync()
+    {
+        var dbName = "payments_" + Guid.NewGuid().ToString("N");
+        await using var context = NewContext(dbName);
+        var userId = Guid.NewGuid();
+        context.Users.Add(new User { Id = userId, Email = "buyer@example.com" });
+        await context.SaveChangesAsync();
+
+        var payments = new PaymentRepository(context);
+        var from = new DateTime(2026, 9, 27, 0, 0, 0, DateTimeKind.Utc);
+        var toExclusive = from.AddDays(1);
+
+        async Task Add(string providerId, DateTime? paidAt, int amount)
+        {
+            await payments.AddAsync(new PaymentEntity
+            {
+                UserId = userId,
+                PlanId = "Pro",
+                Tier = "Pro",
+                Months = 1,
+                AmountRub = amount,
+                ProviderPaymentId = providerId,
+                Status = paidAt is null ? "pending" : "succeeded",
+                IdempotenceKey = "key_" + providerId,
+                PaidAt = paidAt,
+            });
+        }
+
+        await Add("pay_lower", from, 990);                        // ровно начало периода — входит
+        await Add("pay_middle", from.AddHours(12), 1590);         // внутри периода — входит
+        await Add("pay_upper", toExclusive, 590);                // ровно конец (исключающий) — не входит
+        await Add("pay_unpaid", null, 590);                      // не оплачен — не входит
+
+        var rows = await payments.GetSucceededForPeriodAsync(from, toExclusive);
+        Assert(rows.Count == 2, $"only the two successful payments inside the period must return, got {rows.Count}");
+        Assert(rows.Sum(r => r.AmountRub) == 2580, $"the total must add up, got {rows.Sum(r => r.AmountRub)}");
+        Assert(rows[0].PaidAt <= rows[1].PaidAt, "rows must be ordered by payment time");
+        Assert(rows.All(r => r.Email == "buyer@example.com"), "the buyer email must be resolved for every row");
     }
 
     private static DbConexy NewContext(string dbName) =>

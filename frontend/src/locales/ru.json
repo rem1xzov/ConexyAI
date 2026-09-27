@@ -238,6 +238,7 @@
     "title": "Админ-панель",
     "usersTab": "Пользователи",
     "supportTab": "Обращения в поддержку",
+    "paymentsTab": "Оплаты",
     "userCount_one": "{{count}} пользователь",
     "userCount_few": "{{count}} пользователя",
     "userCount_many": "{{count}} пользователей",
@@ -268,6 +269,26 @@
       "super": "Суперадмин",
       "admin": "Админ",
       "user": "Пользователь"
+    },
+    "payments": {
+      "from": "С",
+      "to": "По",
+      "quickToday": "Сегодня",
+      "quickYesterday": "Вчера",
+      "quickWeek": "Эта неделя",
+      "total": "Итого за период",
+      "count_one": "{{count}} платёж",
+      "count_few": "{{count}} платежа",
+      "count_many": "{{count}} платежей",
+      "count_other": "{{count}} платежа",
+      "copy": "Копировать сумму",
+      "copied": "Сумма скопирована",
+      "copyFailed": "Не удалось скопировать сумму",
+      "empty": "За выбранный период успешных оплат нет",
+      "colDate": "Дата и время",
+      "colAmount": "Сумма",
+      "colPlan": "Тариф",
+      "colBuyer": "Покупатель"
     }
   },
   "upgrade": {

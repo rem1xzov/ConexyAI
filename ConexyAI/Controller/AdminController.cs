@@ -17,9 +17,18 @@ namespace ConexyAI.Controller;
 [Authorize]
 public class AdminController : ControllerBase
 {
+    // YOOKASSA: добавлено 2026-09-27 — границы периода для сводки оплат задаются в МСК, потому что
+    // чеки в «Мой налог» пробиваются по московским дням, а в базе всё хранится в UTC.
+    // Москва не переходит на летнее время, поэтому фиксированный сдвиг UTC+3 корректен всегда.
+    private static readonly TimeSpan MskOffset = TimeSpan.FromHours(3);
+    /// <summary>Максимальная ширина диапазона сводки — защита от выкачивания всей истории разом.</summary>
+    private const int MaxSummaryRangeDays = 366;
+
     private readonly IUserRepository _userRepository;
     private readonly IOptions<AdminAccountsOptions> _adminOptions;
     private readonly ILogger<AdminController> _logger;
+    // YOOKASSA: сводка успешных платежей.
+    private readonly IPaymentRepository _paymentRepository;
 
     // USER_DATA_CLEANUP: добавлено 2026-09-24 — ревью M9: файлы пользователя удаляются вместе с ним.
     private readonly IUserDataCleanupService _cleanup;
@@ -28,12 +37,14 @@ public class AdminController : ControllerBase
         IUserRepository userRepository,
         IOptions<AdminAccountsOptions> adminOptions,
         ILogger<AdminController> logger,
-        IUserDataCleanupService cleanup)
+        IUserDataCleanupService cleanup,
+        IPaymentRepository paymentRepository)
     {
         _cleanup = cleanup;
         _userRepository = userRepository;
         _adminOptions = adminOptions;
         _logger = logger;
+        _paymentRepository = paymentRepository;
     }
 
     /// <summary>Paginated list of users (admin only).</summary>
@@ -136,6 +147,51 @@ public class AdminController : ControllerBase
         _logger.LogInformation("Admin {Requester} deleted user {Target}.", User.GetUserId(), id);
         return Ok(new { success = true });
     }
+
+    /// <summary>
+    /// Сводка успешных платежей за период (только админ) — чтобы вручную пробить сводный чек в
+    /// приложении «Мой налог». Успешным считается платёж с проставленным <c>PaidAt</c> (он ставится
+    /// только после подтверждения статуса через API ЮKassa).
+    /// </summary>
+    [HttpGet("payments/summary")]
+    public async Task<ActionResult<AdminPaymentSummaryResponse>> GetPaymentsSummary(
+        [FromQuery] DateOnly? from,
+        [FromQuery] DateOnly? to,
+        CancellationToken ct)
+    {
+        if (!User.IsAdmin())
+            return Forbid();
+
+        // По умолчанию — сегодняшний день по Москве.
+        var today = DateOnly.FromDateTime(DateTime.UtcNow + MskOffset);
+        var fromDate = from ?? today;
+        var toDate = to ?? today;
+
+        if (fromDate > toDate)
+            return BadRequest(new { error = "INVALID_RANGE", message = "Дата начала позже даты конца." });
+        if (toDate.DayNumber - fromDate.DayNumber > MaxSummaryRangeDays)
+            return BadRequest(new { error = "RANGE_TOO_WIDE", message = "Слишком широкий диапазон дат." });
+
+        var fromUtc = ToUtcMidnight(fromDate);
+        var toUtcExclusive = ToUtcMidnight(toDate.AddDays(1));
+
+        var rows = await _paymentRepository.GetSucceededForPeriodAsync(fromUtc, toUtcExclusive, ct);
+        var items = rows
+            .Select(r => new AdminPaymentSummaryItem(
+                r.PaymentId, r.PaidAt, r.AmountRub, r.PlanId, r.Tier, r.UserId, r.Email, r.GitHubUsername))
+            .ToList();
+
+        return Ok(new AdminPaymentSummaryResponse(
+            fromDate,
+            toDate,
+            items.Sum(i => i.AmountRub),
+            items.Count,
+            items));
+    }
+
+    /// <summary>Полночь московского дня, выраженная в UTC (московские сутки начинаются в 21:00 UTC).</summary>
+    private static DateTime ToUtcMidnight(DateOnly date) =>
+        DateTime.SpecifyKind(date.ToDateTime(TimeOnly.MinValue).Add(-MskOffset), DateTimeKind.Utc);
 
     // ADMIN_VERIFIED_ONLY: 2026-09-24 (ревью H1) — суперадмин только по GitHub id/username или
     // ПОДТВЕРЖДЁННОМУ email. Иначе аккаунт, занявший email владельца через регистрацию, числился бы

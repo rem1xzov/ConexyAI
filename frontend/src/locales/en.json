@@ -234,6 +234,7 @@
     "title": "Admin panel",
     "usersTab": "Users",
     "supportTab": "Support requests",
+    "paymentsTab": "Payments",
     "userCount_one": "{{count}} user",
     "userCount_other": "{{count}} users",
     "noAccess": "No access to the admin panel. Sign in as an administrator.",
@@ -262,6 +263,24 @@
       "super": "Superadmin",
       "admin": "Admin",
       "user": "User"
+    },
+    "payments": {
+      "from": "From",
+      "to": "To",
+      "quickToday": "Today",
+      "quickYesterday": "Yesterday",
+      "quickWeek": "This week",
+      "total": "Total for the period",
+      "count_one": "{{count}} payment",
+      "count_other": "{{count}} payments",
+      "copy": "Copy the amount",
+      "copied": "Amount copied",
+      "copyFailed": "Could not copy the amount",
+      "empty": "No successful payments in the selected period",
+      "colDate": "Date and time",
+      "colAmount": "Amount",
+      "colPlan": "Plan",
+      "colBuyer": "Buyer"
     }
   },
   "upgrade": {
