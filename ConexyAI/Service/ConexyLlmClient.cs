@@ -30,6 +30,24 @@ public class ConexyLlmClient : IConexyLlmClient
     // running longer than MaxStreamDuration.
     private static readonly TimeSpan StreamIdleTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan MaxStreamDuration = TimeSpan.FromMinutes(10);
+    // FLASH_TIMEOUT: добавлено 2026-09-27
+    // Flash — быстрая модель: если она не выдала НИ ОДНОГО токена (включая reasoning) за 20 секунд,
+    // запрос считается зависшим. Раньше сторож смотрел только на сам факт строки ответа и keep-alive
+    // комментарии сбрасывали таймер, так что «думающая» минуту Flash так и не отвечала. Теперь мы
+    // считаем именно прогресс (контент/reasoning/usage), а не любую строку.
+    private static readonly TimeSpan FlashNoProgressTimeout = TimeSpan.FromSeconds(20);
+    private const string FlashTimeoutMessage =
+        "Превышен таймаут: модель Flash не ответила за 20 секунд. Обновите страницу и попробуйте снова.";
+    private const string StreamTimeoutMessage =
+        "Превышен таймаут: модель не отвечает слишком долго. Обновите страницу и попробуйте снова.";
+
+    /// <summary>Сколько модель может не выдавать прогресса, прежде чем поток обрывается.</summary>
+    public static TimeSpan NoProgressTimeoutFor(ConexyModelType modelType) =>
+        modelType == ConexyModelType.ConexyV1Flash ? FlashNoProgressTimeout : StreamIdleTimeout;
+
+    /// <summary>Пользовательское сообщение об обрыве потока по таймауту для этой модели.</summary>
+    public static string TimeoutMessageFor(ConexyModelType modelType) =>
+        modelType == ConexyModelType.ConexyV1Flash ? FlashTimeoutMessage : StreamTimeoutMessage;
     private const int MaxRetries = 3;
     private static readonly TimeSpan[] RetryDelays = { TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(8) };
 
@@ -228,6 +246,12 @@ public class ConexyLlmClient : IConexyLlmClient
             using var streamCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             var streamDeadline = DateTime.UtcNow + MaxStreamDuration;
 
+            // FLASH_TIMEOUT: у Flash свой, более короткий порог «нет прогресса». Считаем время с
+            // последнего meaningful-токена, а не с последней строки потока.
+            var progressTimeout = NoProgressTimeoutFor(modelType);
+            var timeoutMessage = TimeoutMessageFor(modelType);
+            var lastProgressAt = DateTime.UtcNow;
+
             // Accumulate streamed tool_call fragments by index so a completed tool
             // call can be yielded as one unit once the stream finishes.
             var toolCallAccumulators = new Dictionary<int, ToolCallAccumulator>();
@@ -243,11 +267,21 @@ public class ConexyLlmClient : IConexyLlmClient
                         $"Upstream LLM stream ran longer than {MaxStreamDuration.TotalMinutes:0} minutes.");
                 }
 
+                // FLASH_TIMEOUT: нет токенов дольше порога — модель зависла (либо шлёт только
+                // keep-alive). Обрываем поток понятной пользователю ошибкой.
+                if (DateTime.UtcNow - lastProgressAt > progressTimeout)
+                {
+                    _logger.LogError(
+                        "DeepSeek stream made no progress for {Seconds}s on task {TaskId}; aborting.",
+                        progressTimeout.TotalSeconds, taskId);
+                    throw new HttpRequestException(timeoutMessage);
+                }
+
                 string? line;
                 try
                 {
                     // Reset the idle timer for every chunk, including keep-alive comments.
-                    streamCts.CancelAfter(StreamIdleTimeout);
+                    streamCts.CancelAfter(progressTimeout);
                     line = await reader.ReadLineAsync(streamCts.Token);
                 }
                 catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
@@ -255,9 +289,8 @@ public class ConexyLlmClient : IConexyLlmClient
                     _logger.LogError(
                         ex,
                         "DeepSeek stream stalled: no data for {IdleSeconds}s on task {TaskId}.",
-                        StreamIdleTimeout.TotalSeconds, taskId);
-                    throw new HttpRequestException(
-                        $"Upstream LLM stopped sending data for more than {StreamIdleTimeout.TotalSeconds:0} seconds.", ex);
+                        progressTimeout.TotalSeconds, taskId);
+                    throw new HttpRequestException(timeoutMessage, ex);
                 }
 
                 if (line is null)
@@ -285,6 +318,8 @@ public class ConexyLlmClient : IConexyLlmClient
                 string? reasoning = null;
                 string? finishReason = null;
                 int? totalTokens = null;
+                // FLASH_TIMEOUT: признак того, что чанк был не пустышкой (keep-alive его не ставит).
+                var sawProgress = false;
                 try
                 {
                     using var doc = JsonDocument.Parse(data);
@@ -295,6 +330,7 @@ public class ConexyLlmClient : IConexyLlmClient
                         totalTokensEl.ValueKind == JsonValueKind.Number)
                     {
                         totalTokens = totalTokensEl.GetInt32();
+                        sawProgress = true;
                     }
 
                     if (doc.RootElement.TryGetProperty("choices", out var choices) &&
@@ -319,6 +355,7 @@ public class ConexyLlmClient : IConexyLlmClient
                             if (delta.TryGetProperty("tool_calls", out var toolCallsEl) && toolCallsEl.ValueKind == JsonValueKind.Array)
                             {
                                 AccumulateToolCalls(toolCallAccumulators, toolCallsEl);
+                                sawProgress = true;
                             }
                         }
                     }
@@ -326,6 +363,18 @@ public class ConexyLlmClient : IConexyLlmClient
                 catch (JsonException)
                 {
                     // Ignore malformed keep-alive or partial SSE chunks.
+                }
+
+                // FLASH_TIMEOUT: прогресс — это контент/reasoning/usage/tool_calls. Пустая строка или
+                // keep-alive комментарий таймер НЕ сбрасывает, именно поэтому «молчащая» модель
+                // теперь обрывается по таймауту, а не висит бесконечно.
+                if (!string.IsNullOrEmpty(content) || !string.IsNullOrEmpty(reasoning))
+                {
+                    sawProgress = true;
+                }
+                if (sawProgress)
+                {
+                    lastProgressAt = DateTime.UtcNow;
                 }
 
                 // PRIVACY_LOGS: ревью H3 — сырые SSE-чанки (текст ответа) больше не логируются: строка на

@@ -132,7 +132,13 @@ function MessageBubbleBase({
   // accordion, the plan and the answer bubble — which is exactly how the answer ended up glued to the
   // bottom, away from the tools it talked about.
   const parts = feedSummary(feed);
-  const showThinkingAccordion = (hasThinking || phase === 'thinking') && !hasSteps && !parts.thoughts;
+  // FLASH_NO_THINKING: Flash не рассуждает. Пауза до первого токена давала phase === 'thinking',
+  // и у быстрой модели висел аккордеон «Процесс размышлений» с заглушкой «Думаю…». Теперь для
+  // ходов Flash он показывается только при реально пришедших reasoning-токенах (их быть не
+  // должно — модель принудительно отключена на бэкенде). Для Pro аккордеон работает как раньше.
+  const modelReasons = message.model !== 'ConexyV1-flash';
+  const showThinkingAccordion =
+    (hasThinking || (phase === 'thinking' && modelReasons)) && !hasSteps && !parts.thoughts;
   // Live agent status, rendered as a pill only when no tool event already covers it.
   // INTERLEAVED_STREAM: offered for every phase now, not just `tool_calling`. Some phases stream no
   // text of their own — the auditor review is one — so this label is the only trace of them, and the

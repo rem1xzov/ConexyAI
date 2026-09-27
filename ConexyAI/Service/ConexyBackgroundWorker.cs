@@ -487,7 +487,10 @@ public class ConexyBackgroundWorker : BackgroundService
             {
                 await foreach (var delta in llmClient.StreamChatAsync(messages, job.ModelType, reasoningEffort, taskId: job.TaskId, ct: ct))
                 {
-                    if (!string.IsNullOrEmpty(delta.Reasoning))
+                    // FLASH_NO_THINKING: reasoning пересылаем только когда режим реально рассуждает
+                    // (Pro с включённым тумблером). Flash не думает — даже если апстрим пришлёт
+                    // reasoning-токены, пользователь их не увидит.
+                    if (reasoningEffort is not null && !string.IsNullOrEmpty(delta.Reasoning))
                     {
                         await group.SendAsync("OnThinkingToken", delta.Reasoning, ct);
                     }
@@ -588,7 +591,7 @@ public class ConexyBackgroundWorker : BackgroundService
             await foreach (var delta in llmClient.StreamChatAsync(
                 messages, job.ModelType, reasoningEffort, tools, "auto", job.TaskId, ct))
             {
-                if (!string.IsNullOrEmpty(delta.Reasoning))
+                if (reasoningEffort is not null && !string.IsNullOrEmpty(delta.Reasoning))
                 {
                     reasoning.Append(delta.Reasoning);
                     await group.SendAsync("OnThinkingToken", delta.Reasoning, ct);
