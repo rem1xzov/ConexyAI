@@ -12,6 +12,8 @@ import {
   pastedImageFile,
 } from '../utils/attachments';
 import { useIsMobile, useMediaQuery } from '../hooks/useMediaQuery';
+// VOICE_DUP_FIX: склейка распознанного текста по перекрытию (см. utils/voiceTranscript).
+import { mergeTranscript } from '../utils/voiceTranscript';
 import { ModelPicker } from './ModelPicker';
 import { VoiceWaveIcon, MicIcon, PlusIcon, SendIcon, StopIcon, UploadIcon, PhotoIcon, CameraIcon, CodeIcon, CloseIcon } from './Icons';
 
@@ -113,9 +115,9 @@ export function InputBar({
   const listeningRef = useRef(false);
   // Text that was already in the textarea when recording started.
   const baseTextRef = useRef('');
-  // VOICE_DUP_FIX: текст, окончательно распознанный за ВСЕ сессии записи (общий транскрипт).
-  const finalTextRef = useRef('');
-  // VOICE_DUP_FIX: окончательный текст ТЕКУЩЕЙ сессии; переносится в finalTextRef ровно один раз.
+  // VOICE_DUP_FIX: окончательно записанный транскрипт за ВСЕ сессии записи (склеивается по перекрытию).
+  const committedRef = useRef('');
+  // VOICE_DUP_FIX: окончательный текст ТЕКУЩЕЙ сессии; переносится в committedRef ровно один раз.
   const sessionFinalRef = useRef('');
   // Latest not-yet-finalized tail from the current recognizer session.
   const interimRef = useRef('');
@@ -370,17 +372,20 @@ export function InputBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalFiles]);
 
-  // VOICE_DUP_FIX: текст собирается ЗАНОВО из «распознано ранее» + «текущая сессия» + «незавершённый
-  // хвост», а не накапливается приращениями. Сборка идемпотентна: повторное событие или сбитый
-  // resultIndex больше не могут добавить одну и ту же фразу дважды.
+  // VOICE_DUP_FIX: текст собирается ЗАНОВО и склеивается с уже записанным ПО ПЕРЕКРЫТИЮ слов.
+  // Распознаватель после перезапуска сессии часто расшифровывает ту же фразу заново целиком — её
+  // начало совпадает с хвостом записанного, и без склейки получалась «лесенка»
+  // «Привет», «Привет как», «Привет как дела»: одна фраза, дописанная несколько раз.
   function applyTranscript() {
-    const spoken = joinTranscript(
-      joinTranscript(finalTextRef.current, sessionFinalRef.current),
-      interimRef.current,
-    ).trim();
+    const spoken = mergeTranscript(committedRef.current, sessionText()).trim();
     const base = baseTextRef.current;
     setValue(base ? (spoken ? `${base} ${spoken}` : base) : spoken);
     resizeTextarea();
+  }
+
+  /** Текст текущей сессии: окончательный + ещё не подтверждённый хвост. */
+  function sessionText(): string {
+    return joinTranscript(sessionFinalRef.current, interimRef.current);
   }
 
   // Speech segments carry inconsistent whitespace, so join them with exactly one space.
@@ -393,21 +398,12 @@ export function InputBar({
   }
 
   // VOICE_DUP_FIX: закрывает текущую сессию распознавания и переносит её текст в общий транскрипт
-  // РОВНО один раз.
-  //   includeInterim: true — только когда запись действительно заканчивается (нажата кнопка «стоп»):
-  //   незавершённый хвост сохраняем, потому что следующей сессии не будет.
-  //   includeInterim: false — при перезапуске сессии браузером: неподтверждённый хвост ОТБРАСЫВАЕМ,
-  //   потому что следующая сессия слышит ту же фразу заново. Если его вклеить, одна и та же фраза
-  //   добавляется к тексту снова и снова — именно так и появлялась «лесенка» повторов.
-  function commitSession(includeInterim: boolean) {
-    finalTextRef.current = joinTranscript(finalTextRef.current, sessionFinalRef.current);
+  // РОВНО один раз, склеивая по перекрытию. Раньше на каждом перезапуске хвост вклеивался как есть,
+  // а следующая сессия слышала ту же фразу снова — именно так и появлялись повторы.
+  function commitSession() {
+    committedRef.current = mergeTranscript(committedRef.current, sessionText());
     sessionFinalRef.current = '';
-    if (includeInterim) {
-      const tail = interimRef.current.trim();
-      interimRef.current = '';
-      if (tail) finalTextRef.current = joinTranscript(finalTextRef.current, tail);
-    }
-    // includeInterim = false (перезапуск сессии): незавершённый хвост НЕ вклеиваем и НЕ стираем.
+    interimRef.current = '';
   }
 
   function micErrorText(kind: string): string {
@@ -469,8 +465,8 @@ export function InputBar({
         // already stopped
       }
     }
-    // VOICE_DUP_FIX: запись завершена пользователем — сохраняем и незавершённый хвост последней фразы.
-    commitSession(true);
+    // VOICE_DUP_FIX: запись завершена — переносим текст сессии (включая последний хвост) в транскрипт.
+    commitSession();
     applyTranscript();
   }
 
@@ -523,7 +519,7 @@ export function InputBar({
     }
 
     baseTextRef.current = value.trim();
-    finalTextRef.current = '';
+    committedRef.current = '';
     sessionFinalRef.current = '';
     interimRef.current = '';
     emptySessionsRef.current = 0;
@@ -534,10 +530,10 @@ export function InputBar({
     // переиспользовался через start() после onend, и на длинном сообщении браузер снова присылал уже
     // распознанные результаты — из-за этого одна и та же фраза повторялась 4+ раз.
     function startSession() {
-      // Окончательный текст предыдущей сессии уже перенесён в commitSession; незавершённый хвост
-      // (interimRef) намеренно НЕ стираем — если эта сессия услышит ту же фразу заново, его просто
-      // заменит свежий interim (см. onresult), и повтора не будет.
+      // Текст предыдущей сессии уже перенесён в committedRef (commitSession), поэтому и окончательный
+      // текст, и хвост сессии начинаются с нуля.
       sessionFinalRef.current = '';
+      interimRef.current = '';
 
       const recognition = new SpeechRecognition();
       recognition.lang = 'ru-RU';
@@ -614,9 +610,9 @@ export function InputBar({
         });
         if (!listeningRef.current) return;
 
-        // VOICE_DUP_FIX: сессию закрывает сам браузер и сейчас же будет перезапуск — переносим только
-        // окончательно распознанное, а незавершённый хвост отбрасываем (иначе он повторится).
-        commitSession(false);
+        // VOICE_DUP_FIX: сессию закрывает сам браузер — переносим её текст в общий транскрипт
+        // один раз (склейка по перекрытию не даст одной фразе повториться).
+        commitSession();
         applyTranscript();
 
         // A session that produced nothing at all means the recognizer cannot actually work
