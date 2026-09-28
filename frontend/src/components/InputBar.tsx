@@ -383,9 +383,12 @@ export function InputBar({
     resizeTextarea();
   }
 
-  /** Текст текущей сессии: окончательный + ещё не подтверждённый хвост. */
+  /** Текст текущей сессии: окончательная часть + ещё не подтверждённый хвост. */
   function sessionText(): string {
-    return joinTranscript(sessionFinalRef.current, interimRef.current);
+    // VOICE_DUP_FIX: движок иногда присылает хвост, который ПОВТОРЯЕТ уже подтверждённые слова
+    // (финал «Привет» + хвост «Привет Как дела»). Простая склейка пробелом давала удвоение, поэтому
+    // склеиваем их той же склейкой по перекрытию.
+    return mergeTranscript(sessionFinalRef.current, interimRef.current);
   }
 
   // Speech segments carry inconsistent whitespace, so join them with exactly one space.
