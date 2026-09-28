@@ -999,25 +999,29 @@ body {
 }
 
 .inputbar-thumb__spinner {
-  width: 18px;
-  height: 18px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.25);
+  border: 3px solid rgba(255, 255, 255, 0.25);
   border-top-color: var(--accent);
+  /* ATTACHMENT_SPINNER: тень отделяет колесо от светлой фотографии под ним. */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
   animation: inputbar-thumb-spin 0.7s linear infinite;
 }
 
 /* ATTACHMENT_PROGRESS: процент и ползунок загрузки под спиннером. */
 .inputbar-thumb__percent {
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
 .inputbar-thumb__bar {
-  width: 68px;
-  height: 4px;
-  border-radius: 2px;
+  width: 76px;
+  height: 5px;
+  border-radius: 3px;
   background: rgba(255, 255, 255, 0.25);
   overflow: hidden;
 }

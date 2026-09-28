@@ -19,6 +19,27 @@ import { VoiceWaveIcon, MicIcon, PlusIcon, SendIcon, StopIcon, UploadIcon, Photo
 
 const MAX_ATTACHMENTS = 10;
 
+// ATTACHMENT_SPINNER: добавлено 2026-09-28
+/**
+ * Сколько индикатор загрузки вложения держится на экране минимум.
+ *
+ * Файл читается локально, и маленькая фотография готова за пару миллисекунд: React успевал
+ * схлопнуть обновления состояния, и колесико не показывалось вообще. Полсекунды — порог, на
+ * котором загрузка успевает «прочитаться» глазом и не выглядит миганием.
+ */
+const MIN_ATTACHMENT_SPINNER_MS = 500;
+
+/** Отдаёт управление браузеру, чтобы состояние «загружается» успело отрисоваться. */
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => window.setTimeout(resolve, 0));
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 // ATTACHMENT_UPLOAD: добавлено 2026-09-27
 /**
  * Вложение в композере. От <see cref="TaskAttachment"/> отличается только локальным состоянием:
@@ -278,6 +299,9 @@ export function InputBar({
     // измениться (пользователь может убрать вложение, пока остальные ещё читаются).
     let rawTotal = attachmentBytes(attachments);
     let count = attachments.length;
+    // ATTACHMENT_SPINNER: порог видимости индикатора считается на ВСЮ пачку, а не на каждый файл —
+    // иначе десять фотографий держали бы отправку полсекунды каждая.
+    const batchStartedAt = performance.now();
 
     for (const file of Array.from(files)) {
       // BUGFIX_ATTACHMENTS: a refused file used to be dropped without a word, which reads as
@@ -312,12 +336,21 @@ export function InputBar({
       setAttachments((prev) => [...prev, draft]);
 
       try {
+        // ATTACHMENT_SPINNER: сначала даём браузеру нарисовать состояние загрузки, и только потом
+        // читаем файл. Иначе на быстром чтении пользователь не видел никакого индикатора.
+        await nextPaint();
         const ready = await fileToAttachment(file, (fraction) => {
           // ATTACHMENT_PROGRESS: обновляем только само вложение; остальные могут уже быть готовы.
           setAttachments((prev) =>
             prev.map((a) => (a.id === draft.id ? { ...a, progress: fraction } : a)),
           );
         });
+
+        // ATTACHMENT_SPINNER: индикатор должен быть виден, а не мигать: додерживаем пачку до
+        // минимального времени показа.
+        const elapsed = performance.now() - batchStartedAt;
+        if (elapsed < MIN_ATTACHMENT_SPINNER_MS) await sleep(MIN_ATTACHMENT_SPINNER_MS - elapsed);
+
         setAttachments((prev) =>
           prev.map((a) =>
             a.id === draft.id
@@ -710,10 +743,9 @@ export function InputBar({
                 {a.loading && (
                   <div className="inputbar-thumb__loading" role="status" aria-label={t('input.uploading')}>
                     <span className="inputbar-thumb__spinner" aria-hidden="true" />
-                    {/* ATTACHMENT_PROGRESS: ползунок загрузки — видно, что файл ещё пишется. */}
-                    <span className="inputbar-thumb__percent" aria-hidden="true">
-                      {Math.round((a.progress ?? 0) * 100)}%
-                    </span>
+                    {/* ATTACHMENT_SPINNER: и колесо, и процент — чтобы загрузка была видна,
+                        а не просто «что-то произошло». */}
+                    <span className="inputbar-thumb__percent">{Math.round((a.progress ?? 0) * 100)}%</span>
                     <div className="inputbar-thumb__bar" aria-hidden="true">
                       <span
                         className="inputbar-thumb__bar-fill"
@@ -877,8 +909,8 @@ export function InputBar({
           <button
             type="submit"
             onClick={() => void submit()}
-            title={t('common.send')}
-            aria-label={t('common.send')}
+            title={uploading ? t('input.uploading') : t('common.send')}
+            aria-label={uploading ? t('input.uploading') : t('common.send')}
             className="send-btn"
             disabled={disabled || uploading || (!hasInputText && attachments.length === 0)}
           >
