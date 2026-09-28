@@ -210,6 +210,17 @@ public class ConexyLlmClient : IConexyLlmClient
         // PRIVACY_LOGS: ревью H3 — только метаданные, без содержимого.
         _logger.LogInformation("DeepSeek stream request [task {TaskId}]: model={Model} bodyBytes={Bytes}", taskId, payload.Model, json.Length);
 
+        // FLASH_TIMEOUT: добавлено 2026-09-28 — у Flash ограничен ВЕСЬ путь до первого токена,
+        // включая повторы и их задержки (2+4+8с). Раньше сторож «нет прогресса» работал на каждую
+        // попытку заново, поэтому при 429 от провайдера (общий ключ, несколько пользователей разом)
+        // ход не отвечал заметно дольше 20 секунд, а пользователь видел растущий таймер без ответа.
+        // После первого токена дедлайн снимается: длинный, но живой ответ резать нельзя.
+        using var firstTokenCts = modelType == ConexyModelType.ConexyV1Flash
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : null;
+        firstTokenCts?.CancelAfter(FlashNoProgressTimeout);
+        var sendToken = firstTokenCts?.Token ?? ct;
+
         // ResponseHeadersRead makes the stream available as soon as headers arrive —
         // tokens are pushed to SignalR incrementally instead of buffering the whole body.
         HttpResponseMessage response;
@@ -219,10 +230,18 @@ public class ConexyLlmClient : IConexyLlmClient
                 () => BuildRequest(baseUrl, apiKey, json, acceptSse: true),
                 HttpCompletionOption.ResponseHeadersRead,
                 taskId,
-                ct);
+                sendToken);
         }
         catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
         {
+            if (firstTokenCts is { IsCancellationRequested: true })
+            {
+                _logger.LogError(
+                    "Flash stream aborted: no first token within {Seconds}s on task {TaskId} (including retries).",
+                    FlashNoProgressTimeout.TotalSeconds, taskId);
+                throw new HttpRequestException(FlashTimeoutMessage, ex);
+            }
+
             _logger.LogError(ex, "DeepSeek stream request timed out after {Timeout}s", RequestTimeout.TotalSeconds);
             throw new HttpRequestException($"Upstream LLM stream timed out after {RequestTimeout.TotalSeconds} seconds.", ex);
         }
@@ -243,7 +262,11 @@ public class ConexyLlmClient : IConexyLlmClient
 
             // STALL_GUARD: linked token so an idle stream or an over-long stream aborts with a
             // readable error instead of leaving the user watching a spinner.
-            using var streamCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            // FLASH_TIMEOUT: сюда же подключён дедлайн до первого токена — пока он не снят, поток
+            // оборвётся по нему; после первого токена живёт только сторож простоя.
+            using var streamCts = firstTokenCts is null
+                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                : CancellationTokenSource.CreateLinkedTokenSource(ct, firstTokenCts.Token);
             var streamDeadline = DateTime.UtcNow + MaxStreamDuration;
 
             // FLASH_TIMEOUT: у Flash свой, более короткий порог «нет прогресса». Считаем время с
@@ -371,6 +394,9 @@ public class ConexyLlmClient : IConexyLlmClient
                 if (!string.IsNullOrEmpty(content) || !string.IsNullOrEmpty(reasoning))
                 {
                     sawProgress = true;
+                    // FLASH_TIMEOUT: первый токен пришёл — снимаем дедлайн до первого токена,
+                    // чтобы длинный (но живой) ответ не оборвался на 20-й секунде.
+                    firstTokenCts?.CancelAfter(Timeout.InfiniteTimeSpan);
                 }
                 if (sawProgress)
                 {
