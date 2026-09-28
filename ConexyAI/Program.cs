@@ -148,6 +148,16 @@ builder.Services.Configure<SmtpOptions>(options =>
 // Приходят из окружения (Operator__Name, Operator__Inn, …), чтобы не попадать в репозиторий, образ
 // и JS-бандл сайта; в appsettings.json лежат только пустые значения.
 builder.Services.Configure<OperatorSettings>(builder.Configuration.GetSection(OperatorSettings.SectionName));
+// LEGAL_DOCS: даты публикации/обновления документов не являются персональными данными, поэтому пустые
+// Operator__PublishedAt / Operator__UpdatedAt заполняем версией документов (LegalPolicy.CurrentVersion):
+// сайт всегда показывает актуальную дату, а на сервере не нужно держать ещё две переменные. Явно
+// заданное в окружении значение по-прежнему имеет приоритет и при пересборке правовых текстов
+// должно быть синхронизировано с LegalPolicy.CurrentVersion.
+builder.Services.PostConfigure<OperatorSettings>(options =>
+{
+    if (string.IsNullOrWhiteSpace(options.PublishedAt)) options.PublishedAt = LegalPolicy.CurrentVersion;
+    if (string.IsNullOrWhiteSpace(options.UpdatedAt)) options.UpdatedAt = LegalPolicy.CurrentVersion;
+});
 // YOOKASSA: добавлено 2026-09-27 — приём платежей. shopId и секретный ключ приходят из окружения
 // (YooKassa__ShopId / YooKassa__SecretKey); в appsettings.json они пустые, потому что конфиг лежит
 // в репозитории и в образе. Каталог тарифов и цены — наоборот, серверный: сумму платежа клиент

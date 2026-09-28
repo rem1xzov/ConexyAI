@@ -508,7 +508,7 @@ internal static class AuthTests
         Assert(root.GetProperty("inn").GetString() == "123456789012", "the inn must come from the configuration");
         Assert(root.GetProperty("email").GetString() == "legal@example.com", "the email must come from the configuration");
         Assert(root.GetProperty("phone").GetString() == "+7 000 000-00-00", "the phone must come from the configuration");
-        Assert(root.GetProperty("updatedAt").GetString() == "2026-10-01", "the date must come from the configuration");
+        Assert(root.GetProperty("updatedAt").GetString() == "2026-09-28", "the date must come from the configuration");
         // Site не задан в тестовых настройках, поэтому здесь виден именно дефолт модели.
         Assert(root.GetProperty("site").GetString() == "conexyai.ru", "site falls back to its default");
 
@@ -884,8 +884,8 @@ internal static class AuthTests
             o.Address = "г. Тест, ул. Тестовая, 1";
             o.Email = "legal@example.com";
             o.Phone = "+7 000 000-00-00";
-            o.PublishedAt = "2026-10-01";
-            o.UpdatedAt = "2026-10-01";
+            o.PublishedAt = "2026-09-28";
+            o.UpdatedAt = "2026-09-28";
             o.TransferCountries = "Китайская Народная Республика";
         });
         // EMAIL_VERIFICATION: добавлено 2026-09-25 — как на настроенном сервере; сам отправщик

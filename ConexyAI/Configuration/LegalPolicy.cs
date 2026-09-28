@@ -17,5 +17,5 @@ public static class LegalPolicy
     /// Держите в формате ISO-даты и синхронизируйте с датой последнего обновления документа
     /// (<c>Operator__UpdatedAt</c> в окружении сервера).
     /// </summary>
-    public const string CurrentVersion = "2026-10-01";
+    public const string CurrentVersion = "2026-09-28";
 }
