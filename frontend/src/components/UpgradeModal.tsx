@@ -58,7 +58,7 @@ const PLANS: Plan[] = [
     name: 'ProMax',
     priceRub: 1590,
     ctaKey: 'upgrade.buyProMax',
-    featureKeys: ['upgrade.features.proMax1', 'upgrade.features.proMax2', 'upgrade.features.proMax3'],
+    featureKeys: ['upgrade.features.proMax1', 'upgrade.features.proMax2', 'upgrade.features.proMax3', 'upgrade.features.orchestra'],
     coworkKey: 'upgrade.features.coworkAvailable',
     coworkLocked: false,
   },
@@ -181,6 +181,9 @@ export function UpgradeModal({ limitInfo, onClose, onBuy, busy = false }: Upgrad
           <ul className="upgrade-plan__features">
             <li className="upgrade-plan__feature">
               <CheckIcon size={14} /> {t('upgrade.annualIncludes')}
+            </li>
+            <li className="upgrade-plan__feature">
+              <CheckIcon size={14} /> {t('upgrade.features.orchestra')}
             </li>
             <li className="upgrade-plan__feature">
               <CheckIcon size={14} /> {t('upgrade.features.coworkAvailable')}

@@ -312,6 +312,7 @@
       "proMax1": "300 Flash requests/week",
       "proMax2": "200 Pro requests/week",
       "proMax3": "2,500,000 agent tokens/week",
+      "orchestra": "Agent orchestra: several helper agents on one task",
       "coworkAvailable": "Cowork mode included",
       "coworkLocked": "Cowork — paid plans only"
     }
