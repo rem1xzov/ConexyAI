@@ -157,6 +157,12 @@ html,
 body,
 #root {
   height: 100%;
+  /* MOBILE_VIEWPORT_FIX: страница не должна прокручиваться САМА — у каждого маршрута свой
+     скроллер (.app, .legal-page, .admin). Без этого главный экран на телефоне можно было
+     протянуть в пустую полосу, а на iOS он ещё и «резинил» вверх-вниз.
+     `overscroll-behavior` гасит оттягивание страницы, не мешая скроллу внутри контейнеров. */
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 /* MOBILE_VIEWPORT_FIX: добавлено 2026-09-26
@@ -5794,6 +5800,10 @@ body {
   gap: 14px;
   padding: 24px;
   background: var(--bg-main);
+  /* MOBILE_VIEWPORT_FIX: документ больше не прокручивается, поэтому длинный текст ошибки
+     должен листаться внутри самого экрана, а не оказываться срезанным. */
+  overflow-y: auto;
+  overscroll-behavior: none;
   color: var(--text);
   text-align: center;
   box-sizing: border-box;
@@ -7915,6 +7925,11 @@ html[data-theme="light"]:not([data-incognito="true"]) .artifact-panel {
   flex-direction: column;
   gap: 16px;
   padding: 4px 0 8px;
+  /* MOBILE_VIEWPORT_FIX: страница больше не прокручивается, поэтому длинная таблица должна
+     листаться внутри самой вкладки (как .admin__list). */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .admin-payments__filters {

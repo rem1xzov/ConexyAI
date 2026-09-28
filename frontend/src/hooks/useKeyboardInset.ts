@@ -17,8 +17,14 @@ import { useEffect, useRef } from 'react';
  *    viewport grow back is the only reliable signal that the keyboard is gone.
  */
 
-/** Anything smaller than this is browser chrome (URL bar), not a keyboard. */
-const MIN_KEYBOARD_PX = 60;
+/**
+ * Anything smaller than this is browser chrome (the URL/toolbar), not a keyboard.
+ * MOBILE_VIEWPORT_FIX: порог поднят с 60px. Тулбар Safari отнимает 60–120px и присутствует почти
+ * постоянно, поэтому с прежним порогом его принимали за клавиатуру: `--kb-inset` становился
+ * ненулевым, `.app` получал нижний отступ, и главный экран «съезжал» вверх при обычном обновлении
+ * страницы. Настоящая экранная клавиатура всегда выше 150px, так что детект не страдает.
+ */
+const MIN_KEYBOARD_PX = 150;
 /** Closing the keyboard hands back roughly this much height in one go. */
 const KEYBOARD_CLOSE_PX = 100;
 /** A rotation changes the width too, and its height jump is not a keyboard closing. */
