@@ -10,8 +10,7 @@ import { useEffect, useRef, type RefObject } from 'react';
 
 /**
  * Fraction of the viewport, measured from the left edge, where a swipe may start to open the drawer.
- * MOBILE_SWIPE_ZONE: это левая половина экрана, а не узкая полоса у края — раньше открыть чаты можно
- * было, лишь начав жест в 45px от кромки, и этот край легко было промахнуть.
+ * MOBILE_SWIPE_ZONE: это левая половина экрана, а не узкая полоса у края.
  */
 export const OPEN_SWIPE_ZONE_RATIO = 0.5;
 
@@ -22,6 +21,15 @@ export function isInOpenSwipeZone(clientX: number, viewportWidth: number): boole
 
 /** px per ms: above this the release counts as a flick and wins over the finger's position. */
 export const FLICK_VELOCITY = 0.5;
+/**
+ * DRAWER_ACCIDENT: минимальный путь пальца, при котором открытие вообще рассматривается.
+ *
+ * Из-за широкой зоны старта (левая половина экрана) случайное горизонтальное движение при обычном
+ * скролле выглядело как попытка открыть чаты. Теперь сдвиг на пару пикселей — это «палец задел
+ * экран», и панель возвращается на место. Закрытие этим порогом не ограничено: закрыть можно
+ * любым жестом, ошибиться тут не страшно.
+ */
+export const MIN_OPEN_TRAVEL_PX = 30;
 /** Fraction of the drawer width that must be travelled to open it, when starting closed. */
 export const OPEN_RATIO = 0.3;
 /** ...and to close it, when starting open: the mirror image, so 30% of the way back. */
@@ -35,6 +43,12 @@ const AXIS_SLOP_PX = 3;
 /** A little over the 0.25s CSS transition: after this the inline styles are dropped. */
 const SETTLE_MS = 280;
 const EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
+/**
+ * DRAWER_STUCK: если жест начался, но ни touchend, ни touchcancel не пришёл (системный жест
+ * Android, палец ушёл за край экрана), панель оставалась в промежуточном положении, и её
+ * приходилось закрывать вручную. Через эту паузу без движения жест доводится до конца сам.
+ */
+const DRAG_WATCHDOG_MS = 900;
 
 /** Drawer travel as a fraction (0 closed .. 1 open) for a horizontal drag of `dx` pixels. */
 export function drawerProgress(startProgress: number, dx: number, width: number): number {
@@ -44,9 +58,17 @@ export function drawerProgress(startProgress: number, dx: number, width: number)
 
 /**
  * Whether the drawer ends up open. A flick decides on its own; otherwise the position does, with
- * the threshold mirrored around the middle so closing needs the same 35% of travel as opening.
+ * the threshold mirrored around the middle so closing needs the same 30% of travel as opening.
+ *
+ * DRAWER_ACCIDENT: открытие требует осознанного жеста — короткий сдвиг панель не открывает.
  */
-export function shouldDrawerOpen(progress: number, startProgress: number, velocity: number): boolean {
+export function shouldDrawerOpen(
+  progress: number,
+  startProgress: number,
+  velocity: number,
+  travelPx = 0,
+): boolean {
+  if (startProgress === 0 && Math.abs(travelPx) < MIN_OPEN_TRAVEL_PX) return false;
   if (velocity > FLICK_VELOCITY) return true;
   if (velocity < -FLICK_VELOCITY) return false;
   return progress > (startProgress === 1 ? CLOSE_RATIO : OPEN_RATIO);
@@ -116,6 +138,7 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
 
   const dragRef = useRef<DragState | null>(null);
   const settleTimer = useRef<number | null>(null);
+  const watchdogTimer = useRef<number | null>(null);
 
   useEffect(() => {
     // The panel is exactly viewport-wide in the mobile layout, but the offset is written in pixels
@@ -161,19 +184,66 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
       }, SETTLE_MS);
     };
 
+    const clearWatchdog = () => {
+      if (watchdogTimer.current !== null) {
+        window.clearTimeout(watchdogTimer.current);
+        watchdogTimer.current = null;
+      }
+    };
+
+    /**
+     * DRAWER_STUCK: доводит активный жест до конца. Вызывается обычным touchend/touchcancel, а
+     * также сторожем и потерей фокуса — чтобы панель не оставалась в промежуточном положении.
+     */
+    const finishDrag = () => {
+      const drag = dragRef.current;
+      dragRef.current = null;
+      clearWatchdog();
+      if (!drag || drag.axis !== 'horizontal') return;
+
+      // Velocity over the whole gesture (px/ms) — steadier than the last frame alone, which would
+      // read as a huge flick whenever the finger pauses just before lifting.
+      const span = Math.max(drag.lastTime - drag.startedAt, 1);
+      const velocity = (drag.lastX - drag.startX) / span;
+
+      const open = shouldDrawerOpen(
+        drag.offsetPx / Math.max(drag.width, 1),
+        drag.startProgress,
+        velocity,
+        drag.lastX - drag.startX,
+      );
+      if (open !== latest.current.open) {
+        if (open) latest.current.onOpen();
+        else latest.current.onClose();
+      }
+      settle(open);
+    };
+
+    const armWatchdog = () => {
+      clearWatchdog();
+      watchdogTimer.current = window.setTimeout(() => {
+        watchdogTimer.current = null;
+        finishDrag();
+      }, DRAG_WATCHDOG_MS);
+    };
+
     const onTouchStart = (e: TouchEvent) => {
       if (!latest.current.enabled || e.touches.length !== 1) return;
+
+      // DRAWER_STUCK: не обрываем идущую анимацию возврата — доводим её сразу до конечного
+      // положения. Раньше таймер просто отменялся, и если новый жест оказывался вертикальным,
+      // панель замирала там, где её застали, и её приходилось убирать вручную.
+      if (settleTimer.current !== null) {
+        window.clearTimeout(settleTimer.current);
+        settleTimer.current = null;
+        handBackToCss();
+      }
+
       const touch = e.touches[0];
       // MOBILE_SWIPE_ZONE: opening starts from the left half of the screen; closing works from
       // anywhere on the panel.
       const opening = !latest.current.open;
       if (opening && !isInOpenSwipeZone(touch.clientX, window.innerWidth)) return;
-
-      // A new gesture takes over from whatever the last one left behind.
-      if (settleTimer.current !== null) {
-        window.clearTimeout(settleTimer.current);
-        settleTimer.current = null;
-      }
 
       const now = performance.now();
       dragRef.current = {
@@ -217,47 +287,32 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
       drag.lastX = touch.clientX;
       drag.lastTime = performance.now();
       paint(drag.offsetPx, false);
+      armWatchdog();
     };
 
-    const onTouchEnd = () => {
-      const drag = dragRef.current;
-      dragRef.current = null;
-      if (!drag || drag.axis !== 'horizontal') return;
+    const onTouchEnd = () => finishDrag();
+    const onTouchCancel = () => finishDrag();
 
-      // Velocity over the whole gesture (px/ms) — steadier than the last frame alone, which would
-      // read as a huge flick whenever the finger pauses just before lifting.
-      const span = Math.max(drag.lastTime - drag.startedAt, 1);
-      const velocity = (drag.lastX - drag.startX) / span;
-
-      const open = shouldDrawerOpen(
-        drag.offsetPx / Math.max(drag.width, 1),
-        drag.startProgress,
-        velocity,
-      );
-      if (open !== latest.current.open) {
-        if (open) latest.current.onOpen();
-        else latest.current.onClose();
-      }
-      settle(open);
-    };
-
-    const onTouchCancel = () => {
-      const drag = dragRef.current;
-      dragRef.current = null;
-      if (drag?.axis === 'horizontal') settle(latest.current.open);
-    };
+    // DRAWER_STUCK: если вкладка потеряла фокус или ушла в фон посреди жеста, touchend может не
+    // прийти вовсе — доводим жест сами, чтобы панель не осталась висеть полуоткрытой.
+    const onInterrupted = () => finishDrag();
 
     window.addEventListener('touchstart', onTouchStart, { passive: false });
     // Non-passive: the horizontal drag has to cancel the page's own scrolling.
     window.addEventListener('touchmove', onTouchMove, { passive: false });
     window.addEventListener('touchend', onTouchEnd);
     window.addEventListener('touchcancel', onTouchCancel);
+    window.addEventListener('blur', onInterrupted);
+    document.addEventListener('visibilitychange', onInterrupted);
     return () => {
       window.removeEventListener('touchstart', onTouchStart);
       window.removeEventListener('touchmove', onTouchMove);
       window.removeEventListener('touchend', onTouchEnd);
       window.removeEventListener('touchcancel', onTouchCancel);
+      window.removeEventListener('blur', onInterrupted);
+      document.removeEventListener('visibilitychange', onInterrupted);
       if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
+      if (watchdogTimer.current !== null) window.clearTimeout(watchdogTimer.current);
     };
   }, []);
 }
