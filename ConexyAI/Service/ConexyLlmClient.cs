@@ -475,21 +475,41 @@ public class ConexyLlmClient : IConexyLlmClient
                 throw;
             }
 
-            if (!IsRetryable(response.StatusCode) || attempt >= MaxRetries)
+            if (!IsRetryable(response.StatusCode))
             {
                 return response;
             }
 
-            var delay = RetryDelays[attempt];
+            var retryAfter = RetryAfterOf(response);
+            var status = response.StatusCode;
+
+            if (attempt >= MaxRetries)
+            {
+                // UPSTREAM_OVERLOAD: все повторы исчерпаны, а провайдер всё ещё перегружен. Отдаём
+                // пользователю понятную фразу вместо тела ответа провайдера — и обязательно
+                // избавляемся от response, иначе соединение останется висеть.
+                response.Dispose();
+                request.Dispose();
+
+                _logger.LogError(
+                    "DeepSeek still unavailable after {Attempts} attempts on task {TaskId}: {Status}.",
+                    MaxRetries + 1, taskId, (int)status);
+
+                throw new UpstreamBusyException(BusyMessage(status, retryAfter));
+            }
+
+            // Уважаем Retry-After, но не растягиваем ход: длинную паузу провайдера обещаем
+            // пользователю в тексте ошибки, а сами ждём не больше нашего бэкоффа.
+            var delay = retryAfter is { } suggested && suggested <= TimeSpan.FromSeconds(10)
+                ? suggested
+                : RetryDelays[attempt];
+
             response.Dispose();
             request.Dispose();
 
             _logger.LogWarning(
                 "DeepSeek API returned {Status}; retrying in {Delay}s (attempt {Attempt}/{Max})...",
-                (int)response.StatusCode,
-                delay.TotalSeconds,
-                attempt + 1,
-                MaxRetries);
+                (int)status, delay.TotalSeconds, attempt + 1, MaxRetries);
 
             if (taskId is { } id)
             {
@@ -502,6 +522,34 @@ public class ConexyLlmClient : IConexyLlmClient
 
             await Task.Delay(delay, ct);
         }
+    }
+
+    /// <summary>Подсказка провайдера, сколько подождать (секунды или абсолютная дата).</summary>
+    private static TimeSpan? RetryAfterOf(HttpResponseMessage response)
+    {
+        var header = response.Headers.RetryAfter;
+        if (header is null) return null;
+        if (header.Delta is { } delta) return delta > TimeSpan.Zero ? delta : null;
+        if (header.Date is { } date)
+        {
+            var wait = date - DateTimeOffset.UtcNow;
+            return wait > TimeSpan.Zero ? wait : null;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// UPSTREAM_OVERLOAD: фраза для пользователя. Без тела ответа провайдера и без технических
+    /// деталей — только причина и примерное время ожидания.
+    /// </summary>
+    public static string BusyMessage(HttpStatusCode status, TimeSpan? retryAfter)
+    {
+        var seconds = Math.Max(30, (int)Math.Ceiling((retryAfter ?? TimeSpan.FromMinutes(1)).TotalSeconds));
+        var wait = seconds >= 60 ? $"{Math.Max(1, seconds / 60)} мин." : $"{seconds} сек.";
+
+        return status == HttpStatusCode.TooManyRequests
+            ? $"Сейчас высокая нагрузка на ИИ. Подождите примерно {wait} и отправьте сообщение снова."
+            : $"Сервис ИИ временно недоступен. Попробуйте снова через {wait}.";
     }
 
     // PRIVACY_LOGS: тело ошибки upstream может цитировать запрос — в лог и клиенту идёт только начало.
