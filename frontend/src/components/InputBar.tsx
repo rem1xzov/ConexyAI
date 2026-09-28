@@ -113,12 +113,12 @@ export function InputBar({
   const listeningRef = useRef(false);
   // Text that was already in the textarea when recording started.
   const baseTextRef = useRef('');
-  // Everything finalized by the recognizer during this session (survives restarts).
+  // VOICE_DUP_FIX: текст, окончательно распознанный за ВСЕ сессии записи (общий транскрипт).
   const finalTextRef = useRef('');
+  // VOICE_DUP_FIX: окончательный текст ТЕКУЩЕЙ сессии; переносится в finalTextRef ровно один раз.
+  const sessionFinalRef = useRef('');
   // Latest not-yet-finalized tail from the current recognizer session.
   const interimRef = useRef('');
-  // Finalized text + the pending interim tail, so stopping never loses the last phrase.
-  const liveTextRef = useRef('');
   const restartTimerRef = useRef<number | null>(null);
   // Consecutive recognizer sessions that ended without a single result. Guards against
   // an endless start/stop loop that would keep the button "active" while nothing records.
@@ -370,8 +370,14 @@ export function InputBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalFiles]);
 
+  // VOICE_DUP_FIX: текст собирается ЗАНОВО из «распознано ранее» + «текущая сессия» + «незавершённый
+  // хвост», а не накапливается приращениями. Сборка идемпотентна: повторное событие или сбитый
+  // resultIndex больше не могут добавить одну и ту же фразу дважды.
   function applyTranscript() {
-    const spoken = liveTextRef.current.trim();
+    const spoken = joinTranscript(
+      joinTranscript(finalTextRef.current, sessionFinalRef.current),
+      interimRef.current,
+    ).trim();
     const base = baseTextRef.current;
     setValue(base ? (spoken ? `${base} ${spoken}` : base) : spoken);
     resizeTextarea();
@@ -386,14 +392,14 @@ export function InputBar({
     return `${a} ${b}`;
   }
 
-  // A recognizer session is dropped on restart, and its pending interim result with it.
-  // Fold that tail into the finalized text so nothing the user said disappears.
-  function commitInterim() {
-    const interim = interimRef.current.trim();
+  // VOICE_DUP_FIX: закрывает текущую сессию распознавания и переносит её текст в общий транскрипт
+  // РОВНО один раз. Именно отсутствие такой границы и давало повторы после каждого перезапуска.
+  function commitSession() {
+    finalTextRef.current = joinTranscript(finalTextRef.current, sessionFinalRef.current);
+    sessionFinalRef.current = '';
+    const tail = interimRef.current.trim();
     interimRef.current = '';
-    if (!interim) return;
-    finalTextRef.current = joinTranscript(finalTextRef.current, interim);
-    liveTextRef.current = finalTextRef.current;
+    if (tail) finalTextRef.current = joinTranscript(finalTextRef.current, tail);
   }
 
   function micErrorText(kind: string): string {
@@ -455,6 +461,9 @@ export function InputBar({
         // already stopped
       }
     }
+    // VOICE_DUP_FIX: текст, сказанный в последней фразе, не теряем и не дублируем — переносим его в
+    // общий транскрипт ровно один раз перед финальной отрисовкой поля.
+    commitSession();
     applyTranscript();
   }
 
@@ -508,122 +517,131 @@ export function InputBar({
 
     baseTextRef.current = value.trim();
     finalTextRef.current = '';
+    sessionFinalRef.current = '';
     interimRef.current = '';
-    liveTextRef.current = '';
     emptySessionsRef.current = 0;
     sessionHasResultRef.current = false;
     listeningRef.current = true;
 
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'ru-RU';
-    // Must stay `true`: with `false` the browser ends the session after the first
-    // pause in speech (or a short internal timeout), which is what used to stop the
-    // recording after roughly a second.
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
+    // VOICE_DUP_FIX: каждая сессия распознавания — НОВЫЙ объект SpeechRecognition. Раньше один объект
+    // переиспользовался через start() после onend, и на длинном сообщении браузер снова присылал уже
+    // распознанные результаты — из-за этого одна и та же фраза повторялась 4+ раз.
+    function startSession() {
+      // Новая сессия не наследует текст предыдущей.
+      sessionFinalRef.current = '';
+      interimRef.current = '';
 
-    recognition.onstart = () => {
-      console.info('[Voice] recognition started');
-      setIsRecording(true);
-    };
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'ru-RU';
+      // Must stay `true`: with `false` the browser ends the session after the first
+      // pause in speech (or a short internal timeout), which is what used to stop the
+      // recording after roughly a second.
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
 
-    recognition.onaudiostart = () => console.info('[Voice] audio capture started');
-    recognition.onspeechstart = () => console.info('[Voice] speech detected');
-    recognition.onspeechend = () => console.info('[Voice] speech ended');
+      recognition.onstart = () => {
+        console.info('[Voice] recognition started');
+        setIsRecording(true);
+      };
 
-    recognition.onresult = (event: any) => {
-      sessionHasResultRef.current = true;
-      emptySessionsRef.current = 0;
-      let interim = '';
-      let final = '';
-      // Start from resultIndex: earlier results were already committed to finalTextRef.
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i];
-        if (result.isFinal) final += result[0].transcript;
-        else interim += result[0].transcript;
-      }
-      if (final) finalTextRef.current = joinTranscript(finalTextRef.current, final);
-      interimRef.current = interim;
-      liveTextRef.current = joinTranscript(finalTextRef.current, interim);
-      applyTranscript();
-      console.info('[Voice] result', { final, interim });
-    };
+      recognition.onaudiostart = () => console.info('[Voice] audio capture started');
+      recognition.onspeechstart = () => console.info('[Voice] speech detected');
+      recognition.onspeechend = () => console.info('[Voice] speech ended');
 
-    recognition.onerror = (event: any) => {
-      console.error('[Voice] recognition error:', event.error, event);
-      switch (event.error) {
-        case 'not-allowed':
-        case 'service-not-allowed':
-          stopRecognition();
-          reportMicError({ name: 'NotAllowedError' });
-          break;
-        case 'audio-capture':
-          stopRecognition();
-          reportMicError({ name: 'NotFoundError' });
-          break;
-        case 'network':
-          stopRecognition();
-          reportMicError({ name: 'network' });
-          break;
-        case 'aborted':
-          // Fired by our own stop(); nothing to report.
-          break;
-        case 'no-speech':
-          // Transient; the restart in onend keeps listening.
-          break;
-        default:
-          stopRecognition();
-          reportMicError(event.error);
-          break;
-      }
-    };
-
-    // The browser may still end a continuous session on its own (long silence, network
-    // hiccup). Restart it so listening lasts until the user taps the mic again.
-    recognition.onend = () => {
-      console.info('[Voice] recognition ended', {
-        listening: listeningRef.current,
-        hadResult: sessionHasResultRef.current,
-      });
-      if (!listeningRef.current) return;
-
-      commitInterim();
-
-      // A session that produced nothing at all means the recognizer cannot actually work
-      // here (blocked service, dropped packets). Bail out instead of looping forever.
-      if (!sessionHasResultRef.current) {
-        emptySessionsRef.current += 1;
-        if (emptySessionsRef.current > 5) {
-          stopRecognition();
-          setMicError(micErrorText('failed'));
-          return;
+      recognition.onresult = (event: any) => {
+        sessionHasResultRef.current = true;
+        emptySessionsRef.current = 0;
+        // VOICE_DUP_FIX: текст сессии пересобирается ЦЕЛИКОМ из event.results, а не наращивается от
+        // event.resultIndex. Каждый индекс становится final ровно один раз, поэтому повторная
+        // доставка или сдвинутый resultIndex не могут продублировать уже распознанную фразу.
+        let sessionFinal = '';
+        let interim = '';
+        for (let i = 0; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (result.isFinal) sessionFinal = joinTranscript(sessionFinal, result[0].transcript);
+          else interim = joinTranscript(interim, result[0].transcript);
         }
-      }
-      sessionHasResultRef.current = false;
+        sessionFinalRef.current = sessionFinal;
+        interimRef.current = interim;
+        applyTranscript();
+        console.info('[Voice] result', { sessionFinal, interim });
+      };
 
-      restartTimerRef.current = window.setTimeout(() => {
-        restartTimerRef.current = null;
+      recognition.onerror = (event: any) => {
+        console.error('[Voice] recognition error:', event.error, event);
+        switch (event.error) {
+          case 'not-allowed':
+          case 'service-not-allowed':
+            stopRecognition();
+            reportMicError({ name: 'NotAllowedError' });
+            break;
+          case 'audio-capture':
+            stopRecognition();
+            reportMicError({ name: 'NotFoundError' });
+            break;
+          case 'network':
+            stopRecognition();
+            reportMicError({ name: 'network' });
+            break;
+          case 'aborted':
+            // Fired by our own stop(); nothing to report.
+            break;
+          case 'no-speech':
+            // Transient; the restart in onend keeps listening.
+            break;
+          default:
+            stopRecognition();
+            reportMicError(event.error);
+            break;
+        }
+      };
+
+      // The browser may still end a continuous session on its own (long silence, network
+      // hiccup). Restart it so listening lasts until the user taps the mic again.
+      recognition.onend = () => {
+        console.info('[Voice] recognition ended', {
+          listening: listeningRef.current,
+          hadResult: sessionHasResultRef.current,
+        });
         if (!listeningRef.current) return;
-        try {
-          recognition.start();
-        } catch (err) {
-          console.error('[Voice] restart failed:', err);
-          stopRecognition();
-          reportMicError(err);
-        }
-      }, 250);
-    };
 
-    recognitionRef.current = recognition;
-    try {
-      recognition.start();
-    } catch (err) {
-      recognitionRef.current = null;
-      listeningRef.current = false;
-      setIsRecording(false);
-      reportMicError(err);
+        // VOICE_DUP_FIX: закрываем сессию — её текст уходит в общий транскрипт РОВНО один раз.
+        commitSession();
+        applyTranscript();
+
+        // A session that produced nothing at all means the recognizer cannot actually work
+        // here (blocked service, dropped packets). Bail out instead of looping forever.
+        if (!sessionHasResultRef.current) {
+          emptySessionsRef.current += 1;
+          if (emptySessionsRef.current > 5) {
+            stopRecognition();
+            setMicError(micErrorText('failed'));
+            return;
+          }
+        }
+        sessionHasResultRef.current = false;
+
+        restartTimerRef.current = window.setTimeout(() => {
+          restartTimerRef.current = null;
+          if (!listeningRef.current) return;
+          // Новая сессия — новый объект распознавателя (см. VOICE_DUP_FIX выше).
+          startSession();
+        }, 250);
+      };
+
+      recognitionRef.current = recognition;
+      try {
+        recognition.start();
+      } catch (err) {
+        recognitionRef.current = null;
+        listeningRef.current = false;
+        setIsRecording(false);
+        reportMicError(err);
+      }
     }
+
+    startSession();
   }
 
   function handleMicErrorDismiss() {
