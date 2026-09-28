@@ -70,6 +70,10 @@ interface InputBarProps {
   // Cowork (на десктопе он живёт именно здесь).
   coworkLocked?: boolean;
   onCoworkLockedClick?: () => void;
+  // ORCHESTRA: добавлено 2026-09-28 — тумблер «Оркестр агентов» (только ProMax и только Coder).
+  orchestra?: boolean;
+  onOrchestraChange?: (value: boolean) => void;
+  orchestraAvailable?: boolean;
   isGenerating: boolean;
   onStop: () => void;
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
@@ -97,6 +101,9 @@ export function InputBar({
   disabled,
   coworkLocked,
   onCoworkLockedClick,
+  orchestra,
+  onOrchestraChange,
+  orchestraAvailable,
   isGenerating,
   onStop,
   onSend,
@@ -882,6 +889,9 @@ export function InputBar({
             coworkLocked={coworkLocked}
             onCoworkLockedClick={onCoworkLockedClick}
             locked={locked}
+            orchestra={orchestra}
+            onOrchestraChange={onOrchestraChange}
+            orchestraAvailable={orchestraAvailable}
           />
         )}
 

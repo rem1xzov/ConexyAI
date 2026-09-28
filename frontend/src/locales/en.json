@@ -404,6 +404,8 @@
     "thinking": "Reasoning",
     "thinkingDesc": "Show the chain of thought",
     "smartSearch": "Smart search",
+    "orchestra": "Agent orchestra",
+    "orchestraDesc": "Several helper agents research the task in parallel: better results, noticeably more tokens",
     "smartSearchDesc": "Look up current information on the web",
     "reasoningDepth": "Reasoning depth",
     "modelLocked": "The model is fixed in study mode — only its settings are available",

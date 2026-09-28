@@ -41,6 +41,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // AGENT_WEB_TOOLS: добавлено 2026-09-24 — чтение страниц (fetch_web_page) и поиск по прошлым чатам.
     private readonly IWebPageFetcher _webPageFetcher;
     private readonly IChatSearchRepository _chatSearch;
+    // ORCHESTRA: создаёт scope для помощников (см. SpawnAgentsAsync).
+    private readonly IServiceScopeFactory? _scopeFactory;
     private ConexyJob _job = null!;
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — накопленный поток ответа на случай остановки.
     private readonly StringBuilder _streamedOutput = new();
@@ -142,6 +144,49 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     // Profile of the current run (set in RunLoopAsync).
     private AgentProfile _profile = CoderProfile;
+
+    // ORCHESTRA: добавлено 2026-09-28 — «Оркестр агентов» для режима Coder.
+    //
+    // Ведущий агент получает инструмент spawn_agents и сам разбивает задачу на подзадачи. Помощники
+    // запускаются ПАРАЛЛЕЛЬНО, но только читают и ищут: писать в рабочую область и запускать команды
+    // им нельзя, иначе два агента затрут друг другу файлы. Всё, что нужно изменить, делает ведущий.
+    /// <summary>Инструмент, которым ведущий агент запускает помощников.</summary>
+    private const string SpawnAgentsTool = "spawn_agents";
+    /// <summary>Сколько шагов даётся одному помощнику: он только читает и ищет, без сборок.</summary>
+    private const int SubAgentMaxIterations = 8;
+    /// <summary>Верхняя граница числа помощников за один вызов.</summary>
+    private const int MaxOrchestraAgents = 4;
+
+    /// <summary>Устав помощника: исследовать заданное, вернуть сжатую выжимку с источниками.</summary>
+    private const string ResearchSystemPrompt =
+        """
+        Ты — агент-исследователь в оркестре ConexyAI. Ведущий агент выделил тебе один вопрос, и только на него ты отвечаешь.
+
+        Правила:
+        - Ты можешь только читать: просматривать файлы рабочей области, искать в загруженных документах и в интернете, читать страницы и прошлые чаты. Писать файлы, запускать команды и менять проект тебе нельзя.
+        - Работай целенаправленно: 2–6 вызовов инструментов обычно достаточно. Не сканируй весь проект, если вопрос этого не требует.
+        - В ответе — только выжимка по существу: конкретные факты, пути к файлам с номерами строк, ссылки, имена функций. Без воды и без пересказа процесса.
+        - Если чего-то не нашёл — так и напиши прямо, коротко перечислив, что проверил.
+        """;
+
+    /// <summary>Профиль помощника: только инструменты чтения и поиска.</summary>
+    private static readonly AgentProfile ResearchProfile = new(
+        "research",
+        ResearchSystemPrompt,
+        AllowedTools: new HashSet<string>(StringComparer.Ordinal)
+        {
+            "file_read",
+            "workspace_list_files",
+            "search_documents",
+            "read_document_chunk",
+            "read_document_file",
+            WebSearchTool.Name,
+            FetchWebPageTool.Name,
+            SearchUserChatsTool,
+        },
+        AuditsCode: false,
+        IncludesDate: true,
+        EnforcesPlan: false);
 
     // COWORK_MODE: добавлено 2026-09-23 — устав режима Cowork (нетехнические задачи).
     // DEEP_RESEARCH: переписано 2026-09-24 — Cowork как бизнес-партнёр: цикл исследования (несколько
@@ -403,7 +448,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
         IDocumentService documentService,
         IOptions<AgentOptions> agentOptions,
         IWebPageFetcher webPageFetcher,
-        IChatSearchRepository chatSearch)
+        IChatSearchRepository chatSearch,
+        // ORCHESTRA: фабрика scope нужна, чтобы запустить помощников в СВОИХ экземплярах раннера:
+        // у раннера на прогон своё состояние (задача, профиль, буфер ответа), и делить его между
+        // параллельными агентами нельзя. Необязательный — тесты собирают раннер вручную.
+        IServiceScopeFactory? scopeFactory = null)
     {
         _workspaceService = workspaceService;
         _visionService = visionService;
@@ -423,6 +472,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _documentService = documentService;
         _webPageFetcher = webPageFetcher;
         _chatSearch = chatSearch;
+        _scopeFactory = scopeFactory;
 
         var configured = agentOptions.Value.MaxIterations;
         // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
@@ -887,7 +937,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     /// <summary>A tool this run may call: the mode's profile, and never the chat search in incognito.</summary>
     private bool IsToolAllowed(string tool) =>
-        _profile.Allows(tool) &&
+        // ORCHESTRA: помощников запускает только ведущий агент и только с включённым оркестром.
+        // У профиля помощника этого инструмента нет — так исключён бесконечный рекурсивный запуск.
+        (tool == SpawnAgentsTool
+            ? _job.Orchestra && _profile.Allows(tool)
+            : _profile.Allows(tool)) &&
         // INCOGNITO_CHAT: an incognito turn must not read the user's other conversations, the same
         // rule the conversation service applies to memory and the cross-chat digest.
         !(tool == SearchUserChatsTool && _job.Incognito);
@@ -1038,6 +1092,141 @@ public class ConexyAgentRunner : IConexyAgentRunner
             : new ProjectRules(ProjectRulesPreamble + sections.ToString().TrimEnd(), files);
     }
 
+    // ORCHESTRA: добавлено 2026-09-28
+    /// <summary>
+    /// Запускает помощников параллельно и возвращает ведущему их выжимки одним результатом.
+    /// Каждый помощник идёт в СВОЁМ scope и своём экземпляре раннера: состояние прогона
+    /// (<c>_job</c>, профиль, буфер ответа) неделимо, а параллельные агенты не должны его делить.
+    /// </summary>
+    private async Task<ConexyToolResult> SpawnAgentsAsync(
+        Guid taskId,
+        Guid chatId,
+        JsonElement root,
+        string toolCallId,
+        CancellationToken ct)
+    {
+        var briefs = ParseAgentBriefs(root);
+        if (briefs.Count < 2)
+        {
+            return new ConexyToolResult(
+                toolCallId,
+                "spawn_agents requires 'briefs' with at least 2 self-contained research tasks.",
+                true);
+        }
+
+        if (_scopeFactory is null)
+        {
+            return new ConexyToolResult(toolCallId, "spawn_agents is unavailable in this environment.", true);
+        }
+
+        var group = _hubContext.Clients.Group($"task_{taskId}");
+        await group.SendAsync("OnLog", $"[Orchestra] Запускаю {briefs.Count} агентов-помощников параллельно…", ct);
+        await SendAgentStatusAsync(taskId, "thinking", $"Оркестр: {briefs.Count} агента исследуют задачу…", ct: ct);
+
+        var subJob = _job;
+
+        async Task<(int Index, string Brief, string Text)> RunOneAsync(int index, string brief)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var runner = scope.ServiceProvider.GetRequiredService<IConexyAgentRunner>();
+            try
+            {
+                await group.SendAsync("OnLog", $"[Orchestra] Агент {index + 1}: {brief}", ct);
+                var text = await runner.RunSubAgentAsync(subJob, brief, ct);
+                return (index, brief, string.IsNullOrWhiteSpace(text) ? "(ничего не найдено)" : text.Trim());
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Один упавший помощник не должен ронять весь оркестр: ведущему сообщаем об этом
+                // как об обычном результате инструмента.
+                _logger.LogWarning(ex, "Orchestra: agent {Index} failed task={TaskId}", index + 1, taskId);
+                return (index, brief, $"(агент {index + 1} завершился с ошибкой: {ex.Message})");
+            }
+        }
+
+        var results = await Task.WhenAll(briefs.Select((brief, index) => RunOneAsync(index, brief)));
+
+        var builder = new StringBuilder();
+        builder.Append("Помощники завершили работу. Их выжимки:\n");
+        foreach (var (index, brief, text) in results.OrderBy(r => r.Index))
+        {
+            builder.Append("\n## Агент ").Append(index + 1).Append(": ").Append(brief).Append('\n');
+            builder.Append(text).Append('\n');
+        }
+
+        await group.SendAsync("OnLog", "[Orchestra] Помощники закончили — собираю результат.", ct);
+        return new ConexyToolResult(toolCallId, builder.ToString(), false);
+    }
+
+    /// <summary>Разбирает список подзадач помощников: пустые отбрасываются, длина ограничена.</summary>
+    private static List<string> ParseAgentBriefs(JsonElement root)
+    {
+        if (!root.TryGetProperty("briefs", out var briefsEl) || briefsEl.ValueKind != JsonValueKind.Array)
+            return new List<string>();
+
+        return briefsEl
+            .EnumerateArray()
+            .Where(item => item.ValueKind == JsonValueKind.String)
+            .Select(item => item.GetString()?.Trim() ?? string.Empty)
+            .Where(text => text.Length > 0)
+            .Take(MaxOrchestraAgents)
+            .ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task<string> RunSubAgentAsync(ConexyJob job, string brief, CancellationToken ct = default)
+    {
+        // Помощник — отдельный прогон в этом экземпляре: свой профиль (только чтение), свой набор
+        // инструментов и своя короткая история. В основной ответ он ничего не стримит.
+        _job = job;
+        _profile = ResearchProfile;
+        _tools = await ResolveToolsAsync(ct);
+
+        var taskId = job.TaskId;
+        var chatId = job.ChatId;
+        var messages = new List<ChatMessage>
+        {
+            new("system", ResearchSystemPrompt),
+            new("user", brief),
+        };
+
+        var answer = new StringBuilder();
+        for (var step = 1; step <= SubAgentMaxIterations; step++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var turn = await StreamAgentTurnAsync(taskId, messages, ct, streamToClient: false);
+            // TOKEN_BREAKER: расход помощников идёт в тот же агентский пул тарифа — оркестр
+            // «расходует больше токенов» именно здесь, и это видно в учёте, а не только на словах.
+            await _subscriptionService.RecordAgentTokensAsync(job.UserId, job.ModelType, turn.TotalTokens, ct);
+            messages.Add(turn.Message);
+
+            if (turn.Message.ToolCalls is not { Count: > 0 })
+            {
+                answer.Append(ExtractTextContent(turn.Message));
+                break;
+            }
+
+            foreach (var call in turn.Message.ToolCalls)
+            {
+                var result = IsToolAllowed(call.Function.Name)
+                    ? await DispatchToolAsync(taskId, chatId, call, ct)
+                    : new ConexyToolResult(
+                        call.Id,
+                        $"Tool '{call.Function.Name}' is not available to a research agent — it only reads and searches.",
+                        true);
+
+                messages.Add(new ChatMessage(Role: "tool", Content: result.Output, ToolCallId: call.Id));
+            }
+        }
+
+        return answer.ToString();
+    }
+
     private async Task<ConexyToolResult> DispatchToolAsync(Guid taskId, Guid chatId, LlmToolCall toolCall, CancellationToken ct)
     {
         try
@@ -1047,6 +1236,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             switch (toolCall.Function.Name)
             {
+                // ORCHESTRA: ведущий агент раздаёт подзадачи помощникам и получает их выжимки
+                // одним результатом инструмента.
+                case SpawnAgentsTool:
+                {
+                    return await SpawnAgentsAsync(taskId, chatId, root, toolCall.Id, ct);
+                }
+
                 case "file_write":
                 {
                     var path = GetString(root, "path");
@@ -1477,7 +1673,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private async Task<(ChatMessage Message, int TotalTokens)> StreamAgentTurnAsync(
         Guid taskId,
         List<ChatMessage> messages,
-        CancellationToken ct)
+        CancellationToken ct,
+        // ORCHESTRA: помощник не стримит свой текст в чат — иначе его черновики влились бы в ответ
+        // ведущего. Через модель он идёт тем же путём, просто без публикации наружу.
+        bool streamToClient = true)
     {
         var group = _hubContext.Clients.Group($"task_{taskId}");
         var content = new StringBuilder();
@@ -1506,7 +1705,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     // Streaming is an optimisation, not a requirement: if the upstream rejects or
                     // breaks the stream before the first token, fall back to a plain completion so
                     // the agent still works (just without incremental output).
-                    await group.SendAsync("OnLog", $"[Stream] Incremental output unavailable ({ex.Message}); falling back to a plain completion.", ct);
+                    if (streamToClient) await group.SendAsync("OnLog", $"[Stream] Incremental output unavailable ({ex.Message}); falling back to a plain completion.", ct);
                     var fallback = await _llmClient.SendChatAsync(
                         _job.ModelType, messages, _tools, _job.ReasoningEffort, _job.TaskId, ct);
                     return (fallback.Message, fallback.TotalTokens);
@@ -1517,7 +1716,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 if (!string.IsNullOrEmpty(delta.Reasoning))
                 {
                     reasoning.Append(delta.Reasoning);
-                    await group.SendAsync("OnThinkingToken", delta.Reasoning, ct);
+                    if (streamToClient) await group.SendAsync("OnThinkingToken", delta.Reasoning, ct);
                 }
 
                 if (!string.IsNullOrEmpty(delta.Content))
@@ -1526,7 +1725,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     // PARTIAL_TURN_PERSIST: keeps the worker able to persist a stopped turn.
                     _streamedOutput.Append(delta.Content);
                     // Forwarded as it arrives: no aggregation, no buffering.
-                    await group.SendAsync("OnContentToken", delta.Content, ct);
+                    if (streamToClient) await group.SendAsync("OnContentToken", delta.Content, ct);
                 }
 
                 if (delta.ToolCalls is { Count: > 0 })
@@ -2128,6 +2327,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
     {
         var tools = new List<object>
         {
+        // ORCHESTRA: инструмент предлагается только при включённом оркестре и только режиму Coder
+        // (см. IsToolAllowed и ResolveToolsAsync).
+        Function(SpawnAgentsTool,
+            "Запустить 2–4 агента-помощников ПАРАЛЛЕЛЬНО для исследования разных частей задачи. Помощники умеют только читать и искать — файлы, документы, интернет, прошлые чаты — и возвращают краткие выжимки. Используй, когда задача разбивается на независимые вопросы (найти, где объявлено X; проверить, как Y используется; найти регламент Z) и когда важнее сэкономить время и шаги, чем токены. Каждая тема должна быть самодостаточной и не пересекаться с другими: помощники не пишут код — изменения вносишь ты сам после их ответов.",
+            new { type = "object", properties = new {
+                briefs = new { type = "array", items = new { type = "string" }, description = "От 2 до 4 подзадач для помощников. Формулируй конкретно: что найти, где искать и что вернуть." }
+            }, required = new[] { "briefs" } }),
         Function("file_read", "Read the full contents of a workspace file.",
             new { type = "object", properties = new { path = new { type = "string", description = "Relative path to the file within the workspace." } }, required = new[] { "path" } }),
         Function("file_write", "Write or overwrite a workspace file with the complete new content.",

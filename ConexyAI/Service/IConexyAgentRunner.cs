@@ -14,6 +14,10 @@ public interface IConexyAgentRunner
     // COWORK_MODE: у каждого агентского режима свой промпт, поэтому это метод от режима.
     string GetSystemPrompt(ConexyModelType modelType);
 
+    // ORCHESTRA: добавлено 2026-09-28 — прогон агента-помощника (только чтение и поиск).
+    // Возвращает его выжимку; используется инструментом spawn_agents в режиме Coder.
+    Task<string> RunSubAgentAsync(ConexyJob job, string brief, CancellationToken ct = default);
+
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22
     /// <summary>
     /// Everything the agent has already streamed to the client during the current run. The worker

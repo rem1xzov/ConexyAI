@@ -162,7 +162,7 @@ public class ConexyService : IConexyService
             }
 
             // Ставим задачу в фоновую очередь (GitHub-токен не сохраняется в БД, а передаётся только в памяти).
-            await _queueGuard.EnqueueReservedAsync(new ConexyJob(entity.Id, chatId, userId, modelType, request.Prompt, request.GitHubToken, request.GitHubRepo, request.Attachments, request.Thinking, request.ReasoningEffort, request.StudentsMode, request.SmartSearch, request.Incognito, request.AssistantPrefix, request.ChatKind, request.Regenerate), ct);
+            await _queueGuard.EnqueueReservedAsync(new ConexyJob(entity.Id, chatId, userId, modelType, request.Prompt, request.GitHubToken, request.GitHubRepo, request.Attachments, request.Thinking, request.ReasoningEffort, request.StudentsMode, request.SmartSearch, request.Incognito, request.AssistantPrefix, request.ChatKind, request.Regenerate, Orchestra: request.Orchestra), ct);
 
             return ToResponse(entity);
         }

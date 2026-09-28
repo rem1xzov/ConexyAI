@@ -240,6 +240,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ChatSessionKind>('chat');
   const [model, setModel] = useState<ConexyModel>('ConexyV1-flash');
   const [thinking, setThinking] = useState(false);
+  // ORCHESTRA: добавлено 2026-09-28 — «Оркестр агентов»: по умолчанию выключен.
+  const [orchestra, setOrchestra] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('high');
   const [smartSearch, setSmartSearch] = useState(false);
   // INCOGNITO_CHAT: добавлено 2026-09-20
@@ -396,6 +398,10 @@ export default function App() {
   // который сервер всё равно откажет с понятной причиной.
   const coworkLocked = usage !== null && usage.coworkLimit <= 0;
 
+  // ORCHESTRA: добавлено 2026-09-28 — «Оркестр агентов» есть только на ProMax (админ — как ProMax).
+  // Признак берём из снимка тарифа, который приходит с сервера, чтобы не дублировать правила тарифов.
+  const orchestraAvailable = usage?.tier === 'ProMax' || usage?.tier === 'Admin';
+
   function handleOpenSupport() {
     setSupportOpen(true);
   }
@@ -452,6 +458,12 @@ export default function App() {
 
     if (pid) setPaymentReturnId(pid);
   }, []);
+
+  // ORCHESTRA: если тариф перестал позволять оркестр (например, истёк ProMax), тумблер сбрасываем —
+  // иначе выключенная кнопка осталась бы включённой в состоянии и флаг уходил бы на сервер.
+  useEffect(() => {
+    if (!orchestraAvailable) setOrchestra(false);
+  }, [orchestraAvailable]);
 
   const isAdminRoute = route.startsWith('#/admin');
   // LEGAL_DOCS: добавлено 2026-09-25 — правовые документы доступны и гостю, поэтому маршрут
@@ -690,6 +702,8 @@ export default function App() {
     thinking: boolean;
     reasoningEffort: ReasoningEffort;
     smartSearch: boolean;
+    // ORCHESTRA: пожелание клиента; сервер сам решает, разрешён ли оркестр на тарифе.
+    orchestra: boolean;
     students: boolean;
     incognitoActive: boolean;
     sessionIncognito: boolean;
@@ -708,6 +722,7 @@ export default function App() {
     thinking,
     reasoningEffort,
     smartSearch,
+    orchestra,
     students,
     incognitoActive,
     sessionIncognito: activeSession?.incognito ?? false,
@@ -2176,6 +2191,8 @@ export default function App() {
         // чат учеников открылся в «Учениках», а не в общем чате.
         chatKind: live.sessions.find((s) => s.id === sessionId)?.kind ?? live.activeTab,
         regenerate: regenerate ? true : undefined,
+        // ORCHESTRA: флаг едет только для Coder; остальное решает сервер по тарифу.
+        orchestra: live.orchestra && live.model === 'conexy-coder' ? true : undefined,
       });
 
       const taskId = res.id;
@@ -2689,6 +2706,9 @@ export default function App() {
                     locked={students}
                     coworkLocked={coworkLocked}
                     onCoworkLockedClick={handleUpgrade}
+                    orchestra={orchestra}
+                    onOrchestraChange={setOrchestra}
+                    orchestraAvailable={orchestraAvailable}
                   />
                 </div>
                 {isAgent ? (
@@ -2824,6 +2844,9 @@ export default function App() {
                     locked={students}
                     coworkLocked={coworkLocked}
                     onCoworkLockedClick={handleUpgrade}
+                    orchestra={orchestra}
+                    onOrchestraChange={setOrchestra}
+                    orchestraAvailable={orchestraAvailable}
                     disabled={!token || activeLoading || agentLimitReached}
                     isGenerating={agentRunning}
                     onStop={handleStop}

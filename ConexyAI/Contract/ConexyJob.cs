@@ -33,5 +33,9 @@ public record ConexyJob(
     // оставлены нейтральными: тесты конструируют ConexyJob без этих полей.
     bool IsAdmin = false,
     string? Tier = null,
-    bool CoworkAvailable = false
+    bool CoworkAvailable = false,
+    // ORCHESTRA: добавлено 2026-09-28 — «Оркестр агентов»: несколько агентов-помощников на одну
+    // задачу. Доступен только ProMax и только в режиме Coder (см. OrchestraEligibility); воркер
+    // снимает флаг, если тариф его не позволяет.
+    bool Orchestra = false
 );

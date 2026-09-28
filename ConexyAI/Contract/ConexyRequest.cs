@@ -32,7 +32,11 @@ public record ConexyRequest(
     string? ChatKind = null,
     // HISTORY_REPLAY: добавлено 2026-09-24 — ревью M5: «Сгенерировать заново»/«Отправить ещё раз»
     // заменяют последний ход чата, а не дописывают вторую копию сообщения пользователя.
-    bool Regenerate = false
+    bool Regenerate = false,
+    // ORCHESTRA: добавлено 2026-09-28 — пожелание клиента включить «Оркестр агентов». Решение
+    // принимает сервер: оркестр доступен только ProMax и только режиму Coder (в остальных случаях
+    // флаг просто снимается).
+    bool Orchestra = false
 );
 
 /// <summary>An uploaded file/image attachment from the user.</summary>

@@ -65,6 +65,11 @@ interface ModelPickerProps {
    */
   coworkLocked?: boolean;
   onCoworkLockedClick?: () => void;
+  // ORCHESTRA: добавлено 2026-09-28 — «Оркестр агентов»: несколько агентов-помощников на одну
+  // задачу. Кнопка есть только на ProMax и только в режиме Coder; по умолчанию выключена.
+  orchestra?: boolean;
+  onOrchestraChange?: (value: boolean) => void;
+  orchestraAvailable?: boolean;
 }
 
 export function ModelPicker({
@@ -80,6 +85,9 @@ export function ModelPicker({
   locked,
   coworkLocked,
   onCoworkLockedClick,
+  orchestra = false,
+  onOrchestraChange,
+  orchestraAvailable = false,
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -98,6 +106,8 @@ export function ModelPicker({
   const options = mode === 'code' ? [CODER_MODEL, COWORK_MODEL] : [FLASH_MODEL, PRO_MODEL];
   const current = ALL_MODELS.find((o) => o.value === model) ?? options[0];
   const isAgent = mode === 'code';
+  // ORCHESTRA: кнопка есть только у Coder и только на ProMax — ни у чата, ни у Cowork её нет.
+  const showOrchestra = isAgent && model === 'conexy-coder' && orchestraAvailable;
   const showThinking = !isAgent && model === 'ConexyV1-pro';
   const showSmartSearch = !isAgent;
   // The reasoning depth only drives Coder's code auditor; Cowork has no auditor, so the control
@@ -199,6 +209,25 @@ export function ModelPicker({
                 <span className="modelpicker__thinking-label">
                   <span className="modelpicker__thinking-title">{t('model.smartSearch')}</span>
                   <span className="modelpicker__thinking-desc">{t('model.smartSearchDesc')}</span>
+                </span>
+              </button>
+            </>
+          )}
+
+          {showOrchestra && (
+            <>
+              <div className="modelpicker__divider" />
+              <button
+                className="modelpicker__thinking"
+                onClick={() => onOrchestraChange?.(!orchestra)}
+                type="button"
+              >
+                <span className={`modelpicker__checkbox ${orchestra ? 'modelpicker__checkbox--on' : ''}`}>
+                  {orchestra ? <CheckIcon size={12} /> : ''}
+                </span>
+                <span className="modelpicker__thinking-label">
+                  <span className="modelpicker__thinking-title">{t('model.orchestra')}</span>
+                  <span className="modelpicker__thinking-desc">{t('model.orchestraDesc')}</span>
                 </span>
               </button>
             </>

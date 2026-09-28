@@ -231,6 +231,14 @@ public class ConexyBackgroundWorker : BackgroundService
                 CoworkAvailable = usage.CoworkLimit > 0,
             };
 
+            // ORCHESTRA: оркестр — только ProMax и только в режиме Coder. Клиенту здесь не доверяем:
+            // флаг из запроса — лишь пожелание, а тариф проверяем по фактическим данным пользователя.
+            job = job with
+            {
+                Orchestra = job.Orchestra
+                    && OrchestraEligibility.IsAllowed(job.Tier, job.IsAdmin, job.ModelType),
+            };
+
             // CONVERSATION_SERVICE: контекст строится ОДИН раз и используется и для запроса к
             // модели, и для записи хода — поэтому они не могут разойтись по chatId, userId или
             // режиму «продолжить».

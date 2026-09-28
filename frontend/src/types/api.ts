@@ -67,6 +67,9 @@ export interface ConexyRequest {
   /** The tab this chat belongs to ('chat' | 'projects' | 'students'), persisted with the history so
    *  a chat synced to another device reopens in the same tab instead of the generic chat list. */
   chatKind?: ChatSessionKind;
+  // ORCHESTRA: добавлено 2026-09-28 — пожелание включить «Оркестр агентов». Решение принимает
+  // сервер: доступно только на ProMax и только режиму Coder, в остальных случаях флаг снимается.
+  orchestra?: boolean;
   // REGENERATE_REPLACES_TURN: добавлено 2026-09-24 (контракт C-10, review M5)
   /** The turn replaces the chat's LAST stored turn (regenerate, resend or edit of the last user
    *  message) instead of appending a duplicate user row. Never set for an ordinary new message. */
