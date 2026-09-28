@@ -391,14 +391,7 @@ export function InputBar({
     return mergeTranscript(sessionFinalRef.current, interimRef.current);
   }
 
-  // Speech segments carry inconsistent whitespace, so join them with exactly one space.
-  function joinTranscript(left: string, right: string): string {
-    const a = left.trim();
-    const b = right.trim();
-    if (!a) return b;
-    if (!b) return a;
-    return `${a} ${b}`;
-  }
+  // VOICE_DUP_FIX: склейка по перекрытию (см. mergeTranscript выше), а не сложение строк.
 
   // VOICE_DUP_FIX: закрывает текущую сессию распознавания и переносит её текст в общий транскрипт
   // РОВНО один раз, склеивая по перекрытию. Раньше на каждом перезапуске хвост вклеивался как есть,
@@ -559,15 +552,16 @@ export function InputBar({
       recognition.onresult = (event: any) => {
         sessionHasResultRef.current = true;
         emptySessionsRef.current = 0;
-        // VOICE_DUP_FIX: текст сессии пересобирается ЦЕЛИКОМ из event.results, а не наращивается от
-        // event.resultIndex. Каждый индекс становится final ровно один раз, поэтому повторная
-        // доставка или сдвинутый resultIndex не могут продублировать уже распознанную фразу.
+        // VOICE_DUP_FIX: куски ВНУТРИ одной сессии тоже склеиваем по перекрытию. Chrome на Android
+        // отдаёт «накопительные» результаты, где каждый следующий — надмножество предыдущего
+        // («Привет», «Привет Как», «Привет Как дела»); простое сложение строк давало удвоение,
+        // которое на ПК не воспроизводилось, потому что там куски не пересекаются.
         let sessionFinal = '';
         let interim = '';
         for (let i = 0; i < event.results.length; i++) {
           const result = event.results[i];
-          if (result.isFinal) sessionFinal = joinTranscript(sessionFinal, result[0].transcript);
-          else interim = joinTranscript(interim, result[0].transcript);
+          if (result.isFinal) sessionFinal = mergeTranscript(sessionFinal, result[0].transcript);
+          else interim = mergeTranscript(interim, result[0].transcript);
         }
         sessionFinalRef.current = sessionFinal;
         interimRef.current = interim;
