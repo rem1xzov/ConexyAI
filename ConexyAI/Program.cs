@@ -335,6 +335,19 @@ if (string.IsNullOrWhiteSpace(operatorSettings.Name) || string.IsNullOrWhiteSpac
         "правовые документы будут опубликованы без реквизитов оператора.");
 }
 
+// LEGAL_POLICY_VERSION: версия согласия (LegalPolicy.CurrentVersion) должна совпадать с датой
+// последней редакции документов (Operator__UpdatedAt). Если .env остался на прошлой редакции, а
+// версия в коде выросла, пользователи соглашаются с одной редакцией, а на сайте показана другая.
+// Расхождение легко пропустить, поэтому предупреждаем на старте.
+if (!string.Equals(operatorSettings.UpdatedAt, LegalPolicy.CurrentVersion, StringComparison.Ordinal))
+{
+    app.Logger.LogWarning(
+        "Legal pages: Operator__UpdatedAt ({Updated}) не совпадает с LegalPolicy.CurrentVersion ({Version}) — " +
+        "версия согласия и дата редакции документов разошлись.",
+        string.IsNullOrWhiteSpace(operatorSettings.UpdatedAt) ? "не задана" : operatorSettings.UpdatedAt,
+        LegalPolicy.CurrentVersion);
+}
+
 // YOOKASSA: добавлено 2026-09-27
 var yooKassaSettings = app.Services.GetRequiredService<IOptions<YooKassaSettings>>().Value;
 if (!yooKassaSettings.IsConfigured)
