@@ -731,6 +731,8 @@ internal static class AgentCapabilityTests
                 "Cowork carries the research cycle with sources and export");
             Assert(coder.Contains("fetch_web_page") && coder.Contains("todo_write") && coder.Contains("Цикл самоисправления"),
                 "Coder knows the page reader, the mandatory plan and the self-correction loop");
+            Assert(coder.Contains("НЕ ВЫДУМЫВАЙ ФАКТЫ") && coder.Contains("не уверен") && coder.Contains("web_search"),
+                "Coder is told not to invent facts and to check the web when unsure");
             foreach (var prompt in new[] { cowork, coder })
             {
                 Assert(prompt.Contains("<conexy_artifact identifier=") && prompt.Contains("text/mermaid") && prompt.Contains("application/code"),
