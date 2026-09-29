@@ -243,7 +243,10 @@ export default function App() {
   // ORCHESTRA: добавлено 2026-09-28 — «Оркестр агентов»: по умолчанию выключен.
   const [orchestra, setOrchestra] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('high');
-  const [smartSearch, setSmartSearch] = useState(false);
+  // SMART_SEARCH_DEFAULT: умный поиск включён по умолчанию во всех обычных моделях (flash/pro).
+  // Модель отвечает по своим знаниям и обращается к web_search только для факт-чекинга того, в чём
+  // не уверена (см. PromptFragments.SmartSearch на сервере). Пользователь всегда может выключить его.
+  const [smartSearch, setSmartSearch] = useState(true);
   // INCOGNITO_CHAT: добавлено 2026-09-20
   // Local-only switch for the plain chat tab. It is never persisted and is reset whenever the
   // user moves to another chat, so an incognito session can never be resumed or reused.
@@ -1792,7 +1795,9 @@ export default function App() {
     // keeps it discoverable instead of silently changing how the tutor answers. The chat tab keeps
     // the chat default (off).
     setThinking(next === 'students');
-    setSmartSearch(false);
+    // SMART_SEARCH_DEFAULT: умный поиск включён по умолчанию во всех моделях чата (flash/pro),
+    // поэтому переключение вкладки его не сбрасывает.
+    setSmartSearch(true);
     setReasoningEffort('high');
     // INCOGNITO_CHAT: switching tabs leaves the incognito mode behind with the old chat.
     setIncognito(false);

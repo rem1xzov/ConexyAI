@@ -84,15 +84,10 @@ public class ConexyBackgroundWorker : BackgroundService
         Команды для выполнения в терминале ВСЕГДА оформляй как код-блок (тройные бэктики с указанием языка, например ```powershell или ```bash), а не как инлайн-код (одинарные бэктики) внутри предложения — даже если это одна короткая команда.
         """;
 
-    // Added only when the Smart Search toggle is on (i.e. web_search is actually in the
-    // tool list for this request). Chat models were too cautious and would answer "I can't
-    // verify that" instead of using the available tool, so we make the expectation explicit.
-    private const string SmartSearchSystemPrompt =
-        """
-        Тебе доступен инструмент `web_search`. Пользователь включил «Умный поиск» — это означает, что он ожидает от тебя использования актуальной информации из интернета.
-        Используй `web_search`, когда вопрос касается: текущей даты/времени, недавних событий, актуальных версий/цен/статусов, любых фактов, которые могут быть неизвестны из твоих обучающих данных или могли измениться.
-        Не отказывайся от использования доступного инструмента из излишней осторожности — если сомневаешься, нужен ли поиск, лучше поищи и дай точный ответ, чем скажи, что не можешь ответить.
-        """;
+    // SMART_SEARCH_DEFAULT: добавлено 2026-09-29 — умный поиск включён по умолчанию у всех моделей
+    // чата (flash/pro). Сам текст правил (сначала свои знания, поиск — только для факт-чекинга)
+    // живёт в общем фрагменте PromptFragments.SmartSearch и дописывается лишь тогда, когда
+    // web_search реально в списке инструментов запроса.
 
     // Conservative cap for how many prior chat messages are sent to DeepSeek in a single
     // request, keeping well inside the context window. The full history stays in the DB;
@@ -463,7 +458,7 @@ public class ConexyBackgroundWorker : BackgroundService
         var messages = await conversation.BuildRequestAsync(context, ct);
         if (searchEnabled)
         {
-            messages.Insert(1, new("system", SmartSearchSystemPrompt));
+            messages.Insert(1, new("system", Prompts.PromptFragments.SmartSearch));
         }
 
         // Flash never reasons. Pro reasons only when the Thinking toggle is on — in students mode too:
