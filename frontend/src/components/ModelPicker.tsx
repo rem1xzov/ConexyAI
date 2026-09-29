@@ -70,6 +70,8 @@ interface ModelPickerProps {
   orchestra?: boolean;
   onOrchestraChange?: (value: boolean) => void;
   orchestraAvailable?: boolean;
+  // ORCHESTRA: действие кнопки «Обновить» у заблокированных пунктов (Cowork и оркестр).
+  onUpgradeClick?: () => void;
 }
 
 export function ModelPicker({
@@ -88,6 +90,7 @@ export function ModelPicker({
   orchestra = false,
   onOrchestraChange,
   orchestraAvailable = false,
+  onUpgradeClick,
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -106,8 +109,10 @@ export function ModelPicker({
   const options = mode === 'code' ? [CODER_MODEL, COWORK_MODEL] : [FLASH_MODEL, PRO_MODEL];
   const current = ALL_MODELS.find((o) => o.value === model) ?? options[0];
   const isAgent = mode === 'code';
-  // ORCHESTRA: кнопка есть только у Coder и только на ProMax — ни у чата, ни у Cowork её нет.
-  const showOrchestra = isAgent && model === 'conexy-coder' && orchestraAvailable;
+  // ORCHESTRA: строка оркестра есть только в режиме Coder. На младших тарифах она не исчезает, а
+  // показывается заблокированной с кнопкой «Обновить» — как у Claude: видно, что возможность есть,
+  // и сразу понятно, что её открывает.
+  const showOrchestra = isAgent && model === 'conexy-coder';
   const showThinking = !isAgent && model === 'ConexyV1-pro';
   const showSmartSearch = !isAgent;
   // The reasoning depth only drives Coder's code auditor; Cowork has no auditor, so the control
@@ -119,7 +124,7 @@ export function ModelPicker({
     // COWORK_BUDGET: платный режим на бесплатном тарифе не выбирается, но и не молчит — ведём к тарифам.
     if (m.value === 'conexy-cowork' && coworkLocked) {
       setOpen(false);
-      onCoworkLockedClick?.();
+      (onUpgradeClick ?? onCoworkLockedClick)?.();
       return;
     }
     onModelChange(m.value);
@@ -165,7 +170,6 @@ export function ModelPicker({
             >
               <span className="modelpicker__name">
                 {m.label}
-                {isCoworkPaidLocked(m) && <span className="modelpicker__plan">{t('model.coworkPaid')}</span>}
                 {m.value === model && (
                   <span className="modelpicker__check">
                     <CheckIcon size={14} />
@@ -173,6 +177,15 @@ export function ModelPicker({
                 )}
               </span>
               <span className="modelpicker__desc">{t(m.descKey)}</span>
+              {/* CLAUDE_LIKE_UPGRADE: заблокированный по тарифу пункт не молчит: под описанием —
+                  строка-подсказка и кнопка «Обновить». Кнопка — обычный span внутри строки: вложенный
+                  <button> внутри <button> — невалидный HTML. */}
+              {isCoworkPaidLocked(m) && (
+                <span className="modelpicker__locked-row">
+                  <span className="modelpicker__locked-hint">{t('model.coworkLockedHint')}</span>
+                  <span className="modelpicker__upgrade">{t('model.upgrade')}</span>
+                </span>
+              )}
             </button>
           ))}
 
@@ -218,17 +231,26 @@ export function ModelPicker({
             <>
               <div className="modelpicker__divider" />
               <button
-                className="modelpicker__thinking"
-                onClick={() => onOrchestraChange?.(!orchestra)}
+                className={`modelpicker__thinking ${orchestraAvailable ? '' : 'modelpicker__thinking--locked'}`}
+                onClick={() =>
+                  orchestraAvailable ? onOrchestraChange?.(!orchestra) : onUpgradeClick?.()
+                }
                 type="button"
               >
-                <span className={`modelpicker__checkbox ${orchestra ? 'modelpicker__checkbox--on' : ''}`}>
+                <span
+                  className={`modelpicker__checkbox ${orchestra ? 'modelpicker__checkbox--on' : ''} ${orchestraAvailable ? '' : 'modelpicker__checkbox--locked'}`}
+                >
                   {orchestra ? <CheckIcon size={12} /> : ''}
                 </span>
                 <span className="modelpicker__thinking-label">
                   <span className="modelpicker__thinking-title">{t('model.orchestra')}</span>
-                  <span className="modelpicker__thinking-desc">{t('model.orchestraDesc')}</span>
+                  <span className="modelpicker__thinking-desc">
+                    {orchestraAvailable ? t('model.orchestraDesc') : t('model.orchestraLocked')}
+                  </span>
                 </span>
+                {!orchestraAvailable && (
+                  <span className="modelpicker__upgrade">{t('model.upgrade')}</span>
+                )}
               </button>
             </>
           )}

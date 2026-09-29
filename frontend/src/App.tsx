@@ -2709,6 +2709,7 @@ export default function App() {
                     orchestra={orchestra}
                     onOrchestraChange={setOrchestra}
                     orchestraAvailable={orchestraAvailable}
+                    onUpgradeClick={handleUpgrade}
                   />
                 </div>
                 {isAgent ? (
@@ -2847,6 +2848,7 @@ export default function App() {
                     orchestra={orchestra}
                     onOrchestraChange={setOrchestra}
                     orchestraAvailable={orchestraAvailable}
+                    onUpgradeClick={handleUpgrade}
                     disabled={!token || activeLoading || agentLimitReached}
                     isGenerating={agentRunning}
                     onStop={handleStop}

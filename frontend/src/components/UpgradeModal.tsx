@@ -18,6 +18,9 @@ interface Plan {
    */
   coworkKey: string;
   coworkLocked: boolean;
+  // ORCHESTRA: оркестр агентов — только на ProMax, поэтому строка есть у каждого тарифа: где-то
+  // как доступная возможность, где-то как отсечённая — чтобы разницу между тарифами было видно.
+  orchestraLocked: boolean;
   highlight?: boolean;
 }
 
@@ -33,6 +36,7 @@ const PLANS: Plan[] = [
     featureKeys: ['upgrade.features.free1', 'upgrade.features.free2', 'upgrade.features.free3'],
     coworkKey: 'upgrade.features.coworkLocked',
     coworkLocked: true,
+    orchestraLocked: true,
   },
   {
     id: 'Go',
@@ -42,6 +46,7 @@ const PLANS: Plan[] = [
     featureKeys: ['upgrade.features.go1', 'upgrade.features.go2', 'upgrade.features.go3'],
     coworkKey: 'upgrade.features.coworkAvailable',
     coworkLocked: false,
+    orchestraLocked: true,
   },
   {
     id: 'Pro',
@@ -52,15 +57,17 @@ const PLANS: Plan[] = [
     featureKeys: ['upgrade.features.pro1', 'upgrade.features.pro2', 'upgrade.features.pro3'],
     coworkKey: 'upgrade.features.coworkAvailable',
     coworkLocked: false,
+    orchestraLocked: true,
   },
   {
     id: 'ProMax',
     name: 'ProMax',
     priceRub: 1590,
     ctaKey: 'upgrade.buyProMax',
-    featureKeys: ['upgrade.features.proMax1', 'upgrade.features.proMax2', 'upgrade.features.proMax3', 'upgrade.features.orchestra'],
+    featureKeys: ['upgrade.features.proMax1', 'upgrade.features.proMax2', 'upgrade.features.proMax3'],
     coworkKey: 'upgrade.features.coworkAvailable',
     coworkLocked: false,
+    orchestraLocked: false,
   },
 ];
 
@@ -141,6 +148,12 @@ export function UpgradeModal({ limitInfo, onClose, onBuy, busy = false }: Upgrad
                   className={`upgrade-plan__feature ${plan.coworkLocked ? 'upgrade-plan__feature--locked' : ''}`}
                 >
                   {plan.coworkLocked ? <LockMark /> : <CheckIcon size={14} />} {t(plan.coworkKey)}
+                </li>
+                <li
+                  className={`upgrade-plan__feature ${plan.orchestraLocked ? 'upgrade-plan__feature--locked' : ''}`}
+                >
+                  {plan.orchestraLocked ? <LockMark /> : <CheckIcon size={14} />}{' '}
+                  {t(plan.orchestraLocked ? 'upgrade.features.orchestraLocked' : 'upgrade.features.orchestra')}
                 </li>
               </ul>
               {plan.ctaKey ? (

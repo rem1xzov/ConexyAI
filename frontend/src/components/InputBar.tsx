@@ -74,6 +74,8 @@ interface InputBarProps {
   orchestra?: boolean;
   onOrchestraChange?: (value: boolean) => void;
   orchestraAvailable?: boolean;
+  // ORCHESTRA: действие кнопки «Обновить» у заблокированных пунктов (Cowork и оркестр).
+  onUpgradeClick?: () => void;
   isGenerating: boolean;
   onStop: () => void;
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
@@ -104,6 +106,7 @@ export function InputBar({
   orchestra,
   onOrchestraChange,
   orchestraAvailable,
+  onUpgradeClick,
   isGenerating,
   onStop,
   onSend,
@@ -892,6 +895,7 @@ export function InputBar({
             orchestra={orchestra}
             onOrchestraChange={onOrchestraChange}
             orchestraAvailable={orchestraAvailable}
+            onUpgradeClick={onUpgradeClick}
           />
         )}
 

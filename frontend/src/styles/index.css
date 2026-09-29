@@ -1306,6 +1306,51 @@ body {
   color: var(--muted);
 }
 
+/* CLAUDE_LIKE_UPGRADE: заблокированный по тарифу пункт (Cowork на Free, оркестр вне ProMax)
+   не молчит — под описанием идёт подсказка и аккуратная pill-кнопка «Обновить». Строка
+   гибкая: на узком экране кнопка переносится под текст, а не выдавливает его. */
+.modelpicker__thinking--locked {
+  cursor: pointer;
+  opacity: 0.72;
+}
+
+.modelpicker__thinking--locked:hover {
+  background: var(--surface-2);
+  opacity: 1;
+}
+
+.modelpicker__checkbox--locked {
+  border-style: dashed;
+  opacity: 0.6;
+}
+
+.modelpicker__locked-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.modelpicker__locked-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.modelpicker__upgrade {
+  margin-left: auto;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #0f1014;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .modelpicker__reasoning {
   display: flex;
   flex-direction: column;

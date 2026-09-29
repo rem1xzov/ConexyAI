@@ -313,6 +313,7 @@
       "proMax2": "200 Pro requests/week",
       "proMax3": "2,500,000 agent tokens/week",
       "orchestra": "Agent orchestra: several helper agents on one task",
+      "orchestraLocked": "Agent orchestra — ProMax only",
       "coworkAvailable": "Cowork mode included",
       "coworkLocked": "Cowork — paid plans only"
     }
@@ -407,6 +408,9 @@
     "smartSearch": "Smart search",
     "orchestra": "Agent orchestra",
     "orchestraDesc": "Several helper agents research the task in parallel: better results, noticeably more tokens",
+    "orchestraLocked": "Available on the ProMax plan",
+    "upgrade": "Upgrade",
+    "coworkLockedHint": "Available on paid plans",
     "smartSearchDesc": "Look up current information on the web",
     "reasoningDepth": "Reasoning depth",
     "modelLocked": "The model is fixed in study mode — only its settings are available",
