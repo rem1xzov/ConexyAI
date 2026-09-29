@@ -1674,15 +1674,21 @@ export default function App() {
   // The switch is offered only for a still-empty plain chat: once the first message is sent the
   // mode is locked in (the header keeps a passive badge so the user cannot forget it).
   const chatEmpty = (activeSession?.messages.length ?? 0) === 0 && !activeSession?.needsTranscript;
-  const showIncognitoToggle = chatTab && chatEmpty && Boolean(token);
   // Incognito chats are in-memory only, so they never reach the sidebar or localStorage.
   const visibleSessions = sessions.filter((s) => !s.incognito);
 
   // CLAUDE_LAYOUT: добавлено 2026-09-20
   // Every tab gets the centred start screen while its conversation is empty; the greeting and
   // the chips are adapted to the tab, and guests get the auth block instead.
-  const isGuest = !token && !initializing;
-  const stageEmpty = chatEmpty && !initializing;
+  // AUTH_GATE: «вошёл» — это токен И загруженный профиль. Токен без профиля (сессия отозвана или
+  // истекла, устройство офлайн) — ещё НЕ вход: иначе показывался обычный экран чата с приветствием
+  // по имени по умолчанию и активным полем ввода, в котором можно было печатать сообщения, которые
+  // всё равно не отправятся. Теперь в этом состоянии либо ожидание, либо приглашение войти.
+  const authenticated = Boolean(token && user);
+  const authPending = initializing || (Boolean(token) && !user && !profileFailed);
+  const isGuest = !authenticated && !authPending;
+  const stageEmpty = chatEmpty && !authPending;
+  const showIncognitoToggle = chatTab && chatEmpty && authenticated;
   // The compact header mark appears as soon as the conversation starts.
   const showHeaderLogo = chatTab && !chatEmpty;
 
@@ -1690,7 +1696,7 @@ export default function App() {
   // search); the agent tab shows passive hint chips instead — it runs autonomously and picks its
   // own reasoning depth. Students also shows hint chips, but its reasoning on/off switch is a real
   // control and lives in the model picker, like in the chat tab.
-  const quickChips: ChatQuickChip[] = !token
+  const quickChips: ChatQuickChip[] = !authenticated
     ? []
     : chatTab
       ? [
@@ -2768,7 +2774,7 @@ export default function App() {
                     onLogin={() => setAuthModal('login')}
                     onRegister={() => setAuthModal('register')}
                   />
-                ) : (
+                ) : authPending ? null : (
                   <div className="chat-hero-row">
                     <ConexyLogo size={36} />
                     <span className="chat-hero-greeting">{greeting}</span>
@@ -2777,7 +2783,7 @@ export default function App() {
               }
               chips={quickChips}
               feed={
-                token ? (
+                authenticated ? (
                   <ChatFeed
                     session={activeSession}
                     nickname={user?.displayName ? user.displayName.split('@')[0] : null}
@@ -2799,7 +2805,7 @@ export default function App() {
                       loadTranscript(activeSession.id);
                     }}
                   />
-                ) : initializing ? (
+                ) : authPending ? (
                   <div className="feed feed--empty">
                     <p className="muted">{t('common.loading')}</p>
                   </div>
@@ -2854,7 +2860,7 @@ export default function App() {
                     onOrchestraChange={setOrchestra}
                     orchestraAvailable={orchestraAvailable}
                     onUpgradeClick={handleUpgrade}
-                    disabled={!token || activeLoading || agentLimitReached}
+                    disabled={!authenticated || activeLoading || agentLimitReached}
                     isGenerating={agentRunning}
                     onStop={handleStop}
                     // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
