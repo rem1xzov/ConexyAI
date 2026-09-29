@@ -241,9 +241,11 @@ public class ConexyBackgroundWorker : BackgroundService
                 TaskId: job.TaskId,
                 ChatId: job.ChatId,
                 UserId: job.UserId,
-                // PRODUCT_KNOWLEDGE / USER_CONTEXT: к промпту любого режима дописываем описание самого
-                // продукта (что умеет, какие тарифы) и кто именно сейчас говорит с моделью.
+                // PRODUCT_KNOWLEDGE / USER_CONTEXT / CONTENT_POLICY: к промпту любого режима дописываем
+                // описание самого продукта (что умеет, какие тарифы), кто именно сейчас говорит с моделью
+                // и единую контент-политику — поэтому она действует поголовно: чат, Ученики, Coder, Cowork.
                 SystemPrompt: (isAgent ? runner.GetSystemPrompt(job.ModelType) : BuildChatSystemPrompt(job))
+                    + "\n\n" + Prompts.PromptFragments.ContentPolicy
                     + "\n\n" + Prompts.PromptFragments.ProductKnowledge
                     + "\n\n" + Prompts.PromptFragments.AudienceContext(job.IsAdmin, job.Tier),
                 // OFFICE_FORMATS: document attachments are read into the message for every mode (the
