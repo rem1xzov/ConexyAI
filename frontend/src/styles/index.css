@@ -5614,6 +5614,18 @@ body {
   white-space: nowrap;
 }
 
+/* ANNUAL_ULTRA: плашка «лимиты выше, чем у ProMax». Мягкий фон, чтобы не конкурировать с акцентным
+   бейджем скидки, но оставаться заметной. */
+.upgrade-annual__limits {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .upgrade-annual__prices {
   display: flex;
   align-items: baseline;

@@ -24,7 +24,7 @@ interface Plan {
   highlight?: boolean;
 }
 
-// SUBSCRIPTION_TIERS: изменено 2026-09-26 — четыре тарифа (Free/Go/Pro/ProMax) и годовой ProMax.
+// SUBSCRIPTION_TIERS: изменено 2026-09-26 — четыре тарифа (Free/Go/Pro/ProMax) и годовой Ultra.
 // Числа ЗДЕСЬ только для показа: реальные лимиты считает бэкенд по appsettings.json
 // (SubscriptionLimits), поэтому при правке лимитов нужно обновить и эти подписи.
 const PLANS: Plan[] = [
@@ -71,9 +71,8 @@ const PLANS: Plan[] = [
   },
 ];
 
-// ANNUAL_PROMAX: добавлено 2026-09-26 — годовой ProMax: 16 990 ₽ за 12 месяцев вместо
-// 1 590 ₽ × 12 = 19 080 ₽, то есть −11%. Процент считаем из цен, а не пишем числом: при правке
-// любой из них подпись «выгоднее» останется правдой.
+// ANNUAL_ULTRA: годовой Ultra — 16 990 ₽ за 12 месяцев вместо 1 590 ₽ × 12 = 19 080 ₽, то есть −11%.
+// Процент считаем из цен, а не пишем числом: при правке любой из них подпись «выгоднее» останется правдой.
 const ANNUAL_PRICE_RUB = 16_990;
 const ANNUAL_MONTHS = 12;
 
@@ -172,11 +171,15 @@ export function UpgradeModal({ limitInfo, onClose, onBuy, busy = false }: Upgrad
           ))}
         </div>
 
-        {/* ANNUAL_PROMAX: годовой ProMax — тот же набор, что у месячного, со скидкой. */}
+        {/* ANNUAL_ULTRA: годовой тариф Ultra — тот же набор, что у ProMax, со скидкой и повышенными
+            лимитами. Продаётся только на год; набор и поток оплаты как у прежнего годового ProMax. */}
         <div className="upgrade-annual">
           <div className="upgrade-annual__head">
             <div className="upgrade-annual__title">{t('upgrade.annualTitle')}</div>
             <span className="upgrade-annual__badge">{t('upgrade.annualBadge', { percent: annualDiscountPct })}</span>
+            {/* ANNUAL_ULTRA: плашка о том, что у Ultra лимиты выше, чем у ProMax. Конкретные числа
+                здесь НЕ приводим — они живут в конфиге тарифов. */}
+            <span className="upgrade-annual__limits">{t('upgrade.annualUltraLimits')}</span>
           </div>
           <div className="upgrade-annual__prices">
             <span className="upgrade-annual__price">{t('upgrade.perYear', { price: formatRub(ANNUAL_PRICE_RUB, lang) })}</span>

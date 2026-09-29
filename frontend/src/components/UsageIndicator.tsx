@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SubscriptionUsage } from '../types/api';
 
@@ -42,6 +42,19 @@ interface UsageIndicatorProps {
 export function UsageIndicator({ usage }: UsageIndicatorProps) {
   const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
+  // USAGE_CLICK_OUTSIDE: поповер лимитов должен закрываться кликом/тапом в любом месте экрана, а не
+  // только повторным нажатием на кольцо. Слушаем `pointerdown` (покрывает мышь и тач) и закрываем,
+  // если цель вне блока с кольцом и поповером.
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [open]);
 
   if (!usage) return null;
 
@@ -77,7 +90,7 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
   ];
 
   return (
-    <div className="usage-indicator">
+    <div className="usage-indicator" ref={rootRef}>
       <button
         className="usage-indicator__donut"
         onClick={() => setOpen((o) => !o)}
