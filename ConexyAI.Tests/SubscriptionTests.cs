@@ -135,6 +135,11 @@ internal static class SubscriptionTests
         Assert(denied.Kind == UsageDecisionKind.LimitExceeded && denied.LimitName == "cowork_plan",
             $"Cowork must be paid-only, got {denied.Kind}/{denied.LimitName}");
 
+        // AGENT_FREE_ACCESS: Coder — НЕ платный режим. У Free свой бюджет токенов, поэтому запуск
+        // агента и его рабочей области на бесплатном тарифе разрешён (платным является только Cowork).
+        Assert((await subs.CheckBeforeRunAsync(free, ConexyModelType.ConexyCoder)).Kind == UsageDecisionKind.Allowed,
+            "Coder must stay available on the free tier");
+
         // Платный тариф: режим открыт.
         var pro = await AddUserAsync(sp, SubscriptionTier.Pro);
         Assert((await subs.CheckBeforeRunAsync(pro, ConexyModelType.ConexyCowork)).Kind == UsageDecisionKind.Allowed,

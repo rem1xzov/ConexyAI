@@ -56,6 +56,13 @@ internal static class UserContextPromptTests
         {
             Assert(text.Contains(marker), $"product knowledge must mention '{marker}'");
         }
+        // AGENT_FREE_ACCESS: Coder и его рабочая область доступны на всех тарифах, у Free свой
+        // лимит токенов. Прежняя формулировка («агентские режимы ... входят в платные тарифы»)
+        // заставляла агента на бесплатном тарифе говорить, что доступа к рабочей области нет.
+        Assert(text.Contains("включая Free"), "Coder must be stated as available on Free");
+        Assert(text.Contains("платным является только Cowork"), "only Cowork must be paid-only");
+        Assert(!text.Contains("агентские режимы и Cowork входят в платные тарифы"),
+            "the old paid-only agent wording must be gone");
         return Task.CompletedTask;
     }
 }
