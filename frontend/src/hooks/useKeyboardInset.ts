@@ -102,6 +102,14 @@ export function useKeyboardInset({ enabled, onKeyboardClosed }: KeyboardInsetOpt
       if (active instanceof HTMLElement && active.hasAttribute('data-composer-input')) {
         active.blur();
       }
+      // MOBILE_LAYOUT: при закрытии клавиатуры Safari иногда оставляет визуальный вьюпорт смещённым
+      // вниз — тогда нижняя часть макета (композер) уезжает под нижнюю панель/индикатор. Сброс
+      // прокрутки документа возвращает вьюпорт на место; когда он и так на месте — это no-op.
+      try {
+        window.scrollTo(0, 0);
+      } catch {
+        /* scroll may be unavailable in odd embedders; the reset is best-effort */
+      }
       closedRef.current?.();
     };
 

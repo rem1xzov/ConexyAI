@@ -184,15 +184,15 @@ function MessageBubbleBase({
   if (isUser) {
     return (
       <div className="w-full max-w-3xl mx-auto my-4 flex flex-col items-end px-2">
-        <div className="w-fit max-w-[85%] chat-surface rounded-2xl px-5 py-3.5 shadow-sm">
+        <div className={`chat-surface rounded-2xl px-5 py-3.5 shadow-sm ${editing ? 'w-full max-w-[85%]' : 'w-fit max-w-[85%]'}`}>
           <div className="font-semibold text-xs chat-muted mb-1">{t('message.you')}</div>
           {/* ATTACHMENTS_IN_BUBBLE: the files travel with this message, inside its bubble —
               images as a compact grid, anything else as a file chip. */}
           {attachments.length > 0 && !editing && <AttachmentGrid attachments={attachments} />}
           {editing ? (
-            <div className="min-w-[320px]">
+            <div className="w-full min-w-0">
               <textarea
-                className="w-full min-w-[320px] chat-input rounded-lg px-3 py-2 text-base leading-relaxed outline-none resize-y"
+                className="w-full min-w-0 chat-input rounded-lg px-3 py-2 text-base leading-relaxed outline-none resize-y"
                 rows={3}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}

@@ -431,6 +431,7 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   background: var(--bg-main);
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
@@ -441,6 +442,7 @@ body {
   /* Allows the feed to shrink inside its wrapper so the inner overflow actually scrolls. */
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 24px;
   display: flex;
   flex-direction: column;
@@ -1775,6 +1777,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 .main__body--ide {
@@ -6741,14 +6744,21 @@ body {
    пользователь не мог отличить «задача ещё идёт» от «связь потеряна». */
 .conn-banner {
   position: fixed;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
+  /* Не залезаем под «остров»/строку статуса на телефоне. */
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  /* CONN_BANNER_MOBILE: центрируем через left+right и auto-поля, а НЕ через `left: 50%` +
+     `translateX(-50%)`. У абсолютного элемента с `left: 50%` и авто-шириной доступная ширина
+     shrink-to-fit — это половина экрана, поэтому длинный текст сжимался в узкую колонку
+     («Не / удалось / восстановить…»). Здесь доступная ширина — весь экран минус отступы,
+     а `width: fit-content` не даёт баннеру растянуться на весь экран, когда текст короткий. */
+  left: 16px;
+  right: 16px;
+  margin: 0 auto;
+  width: fit-content;
   z-index: 600;
   display: flex;
   align-items: center;
-  /* CONN_BANNER_MOBILE: on a narrow phone the text keeps the full width and the action wraps onto
-     its own line instead of squeezing the message into a column. */
+  /* flex-wrap: на узком телефоне кнопка переезжает на свою строку вместо сжатия сообщения. */
   flex-wrap: wrap;
   gap: 10px;
   max-width: min(720px, calc(100vw - 32px));
@@ -6770,11 +6780,11 @@ body {
 @keyframes connBannerIn {
   from {
     opacity: 0;
-    transform: translateX(-50%) translateY(-6px);
+    transform: translateY(-6px);
   }
   to {
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
+    transform: translateY(0);
   }
 }
 
