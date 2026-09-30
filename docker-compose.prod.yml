@@ -193,6 +193,10 @@ services:
         condition: service_healthy
     ports:
       - "${HTTP_PORT:-80}:80"
+      - "443:443"
+    volumes:
+      # Сертификаты Let's Encrypt с хоста (HTTPS терминируется в контейнерном nginx, см. frontend/nginx.conf).
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     networks:
       - frontend
     healthcheck:
