@@ -1904,7 +1904,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var token = ResolveGitHubToken();
 
         if (string.IsNullOrWhiteSpace(token))
-            return new ConexyToolResult(toolCall.Id, "github_action requires a GitHub PAT (set GitHub:PersonalAccessToken or GITHUB_PAT).", true);
+            return new ConexyToolResult(
+                toolCall.Id,
+                "github_action requires the user's own GitHub token. Ask the user to add a Personal Access Token in Settings → GitHub.",
+                true);
 
         switch (operation)
         {
@@ -1942,7 +1945,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 var repo = Optional(root, "repo") ?? Optional(root, "repo_url");
                 var changedFiles = GetStringArray(root, "changed_files");
 
-                var res = await _workspaceService.GitCommitPushAsync(_job.ChatId, commitMessage, branch, token, repo, changedFiles, ct);
+                // GITHUB_PAT_PER_USER: коммит подписываем аккаунтом пользователя, чей токен пушит.
+                var identity = await _githubService.GetIdentityAsync(token, ct);
+                var authorName = identity?.Login;
+                var authorEmail = identity is null
+                    ? null
+                    : $"{identity.Id}+{identity.Login}@users.noreply.github.com";
+
+                var res = await _workspaceService.GitCommitPushAsync(
+                    _job.ChatId, commitMessage, branch, token,
+                    repoUrl: repo, changedFiles: changedFiles,
+                    authorName: authorName, authorEmail: authorEmail, ct: ct);
                 await LogAsync(_job.TaskId, $"[Git Commit & Push] branch={branch}", ct);
                 return new ConexyToolResult(toolCall.Id, res.Success ? res.Message! : res.Error!, !res.Success);
             }
@@ -2124,10 +2137,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         return AuditVerdict.ApprovedVerdict;
     }
 
+    // GITHUB_PAT_PER_USER: только личный токен пользователя. Серверный PAT больше НЕ подставляется —
+    // иначе коммиты уходили бы от имени оператора, чего мы и хотели избежать.
     private string? ResolveGitHubToken() =>
-        !string.IsNullOrWhiteSpace(_job.GitHubToken)
-            ? _job.GitHubToken
-            : _githubService.GetConfiguredToken();
+        string.IsNullOrWhiteSpace(_job.GitHubToken) ? null : _job.GitHubToken;
 
     private async Task LogAsync(Guid taskId, string message, CancellationToken ct)
     {

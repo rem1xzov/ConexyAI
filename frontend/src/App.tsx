@@ -9,6 +9,8 @@ import { isForbiddenJoinError, signalrService } from './services/signalrService'
 // TURN_SCOPE: добавлено 2026-09-24 (H6/H7)
 import { TurnRegistry, type TurnContext } from './services/turnRegistry';
 import { useAuth } from './hooks/useAuth';
+// GITHUB_PAT_PER_USER: личный токен пользователя для git-операций агента.
+import { readGitHubToken, clearGitHubToken } from './utils/githubToken';
 import { useIsMobile } from './hooks/useMediaQuery';
 // FILE_DROP: добавлено 2026-09-24 (L11)
 import { useFileDropZone, usePreventWindowFileDrop } from './hooks/useFileDrop';
@@ -384,6 +386,8 @@ export default function App() {
   // SESSION_ISOLATION: всё локальное состояние аккаунта чистится по смене userId (см. эффект ниже),
   // поэтому выход — это просто сброс токена.
   function handleLogout() {
+    // GITHUB_PAT_PER_USER: личный токен не должен достаться следующему аккаунту в этом браузере.
+    clearGitHubToken();
     void logout();
   }
 
@@ -2205,6 +2209,11 @@ export default function App() {
         regenerate: regenerate ? true : undefined,
         // ORCHESTRA: флаг едет только для Coder; остальное решает сервер по тарифу.
         orchestra: live.orchestra && live.model === 'conexy-coder' ? true : undefined,
+        // GITHUB_PAT_PER_USER: личный токен едет только для агентских режимов (у чата нет git-инструментов).
+        githubToken:
+          live.model === 'conexy-coder' || live.model === 'conexy-cowork'
+            ? (readGitHubToken() ?? undefined)
+            : undefined,
       });
 
       const taskId = res.id;

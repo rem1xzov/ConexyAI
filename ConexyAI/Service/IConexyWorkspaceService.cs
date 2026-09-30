@@ -30,6 +30,10 @@ public interface IConexyWorkspaceService
     Task<GitOperationResult> GitCreateBranchAsync(Guid chatId, string branchName, CancellationToken ct = default);
 
     /// <summary>Stages the given files, commits them and pushes to the target branch.</summary>
+    /// <remarks>
+    /// GITHUB_PAT_PER_USER: <paramref name="authorName"/>/<paramref name="authorEmail"/> — личность
+    /// пользователя из его GitHub-токена, чтобы коммит был подписан им, а не общим «Conexy AI Agent».
+    /// </remarks>
     Task<GitOperationResult> GitCommitPushAsync(
         Guid chatId,
         string commitMessage,
@@ -37,6 +41,8 @@ public interface IConexyWorkspaceService
         string token,
         string? repoUrl = null,
         IReadOnlyList<string>? changedFiles = null,
+        string? authorName = null,
+        string? authorEmail = null,
         CancellationToken ct = default);
 
     /// <summary>Resolves the <c>owner/repo</c> of the workspace repository from the git remote.</summary>

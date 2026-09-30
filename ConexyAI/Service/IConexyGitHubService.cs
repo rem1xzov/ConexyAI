@@ -16,8 +16,8 @@ public interface IConexyGitHubService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Returns the PAT resolved from configuration or the environment, or null when absent.
-    /// This lets the agent run GitHub workflows without the caller forwarding a token.
+    /// Возвращает аккаунт GitHub, которому принадлежит токен, или <c>null</c>, если токен пуст
+    /// либо GitHub его отклонил. По этому аккаунту агент подписывает коммиты (GITHUB_PAT_PER_USER).
     /// </summary>
-    string? GetConfiguredToken();
+    Task<GitHubIdentity?> GetIdentityAsync(string token, CancellationToken ct = default);
 }

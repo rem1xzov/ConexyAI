@@ -165,7 +165,15 @@
     "themeDark": "Dark",
     "themeSystem": "System",
     "langRu": "Русский",
-    "langEn": "English"
+    "langEn": "English",
+    "githubTab": "GitHub",
+    "githubLabel": "Personal GitHub token",
+    "githubHint": "Lets the agent clone repositories, commit and open pull requests as you. Stored only in this browser and sent only to GitHub; never saved on the server. Needs repository rights (classic scope repo, or fine-grained Contents + Pull requests).",
+    "githubPlaceholder": "ghp_… or github_pat_…",
+    "githubSave": "Save",
+    "githubClear": "Remove",
+    "githubSaved": "Saved",
+    "githubCreate": "Create a token on GitHub"
   },
   "memory": {
     "tab": "Memory",

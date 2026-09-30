@@ -1,6 +1,4 @@
-using ConexyAI.Configuration;
 using ConexyAI.Contract;
-using Microsoft.Extensions.Options;
 using Octokit;
 
 namespace ConexyAI.Service;
@@ -8,15 +6,34 @@ namespace ConexyAI.Service;
 public class ConexyGitHubService : IConexyGitHubService
 {
     private readonly IConexyWorkspaceService _workspaceService;
-    private readonly string? _configuredToken;
 
-    public ConexyGitHubService(IConexyWorkspaceService workspaceService, IOptions<GitHubOptions> options)
+    public ConexyGitHubService(IConexyWorkspaceService workspaceService)
     {
         _workspaceService = workspaceService;
-        _configuredToken = ResolveConfiguredToken(options.Value.PersonalAccessToken);
     }
 
-    public string? GetConfiguredToken() => _configuredToken;
+    // GITHUB_PAT_PER_USER: личный токен пользователя определяет, от чьего имени агент коммитит.
+    public async Task<GitHubIdentity?> GetIdentityAsync(string token, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return null;
+
+        try
+        {
+            var client = new GitHubClient(new ProductHeaderValue("ConexyAI-Agent"))
+            {
+                Credentials = new Credentials(token)
+            };
+
+            var user = await client.User.Current();
+            return new GitHubIdentity(user.Login, user.Id);
+        }
+        catch
+        {
+            // Невалидный/просроченный токен — идентичность неизвестна, коммит останется
+            // подписан именем по умолчанию, но операция всё равно упрётся в авторизацию на push.
+            return null;
+        }
+    }
 
     public async Task<GitOperationResult> CreatePullRequestAsync(
         Guid taskId,
@@ -56,13 +73,5 @@ public class ConexyGitHubService : IConexyGitHubService
         {
             return new GitOperationResult(false, null, ex.Message);
         }
-    }
-
-    private static string? ResolveConfiguredToken(string configured)
-    {
-        if (!string.IsNullOrWhiteSpace(configured)) return configured;
-
-        return Environment.GetEnvironmentVariable("GITHUB_PAT")
-            ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN");
     }
 }

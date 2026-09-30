@@ -397,6 +397,8 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         string token,
         string? repoUrl = null,
         IReadOnlyList<string>? changedFiles = null,
+        string? authorName = null,
+        string? authorEmail = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(commitMessage))
@@ -425,8 +427,13 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         if (unsafeRepo is not null)
             return new GitOperationResult(false, null, unsafeRepo);
 
-        var configName = await RunGitAsync(workspaceDir, new[] { "config", "user.name", "Conexy AI Agent" }, token: null, ct, TimeSpan.FromSeconds(60));
-        var configEmail = await RunGitAsync(workspaceDir, new[] { "config", "user.email", "agent@conexy.ai" }, token: null, ct, TimeSpan.FromSeconds(60));
+        // GITHUB_PAT_PER_USER: личность коммита берём из GitHub-аккаунта пользователя, чей токен
+        // реально пушит. Раньше здесь жёстко стоял «Conexy AI Agent», поэтому все коммиты всех
+        // пользователей выглядели как коммиты одного служебного аккаунта.
+        var commitAuthor = string.IsNullOrWhiteSpace(authorName) ? "Conexy AI Agent" : authorName;
+        var commitEmail = string.IsNullOrWhiteSpace(authorEmail) ? "agent@conexy.ai" : authorEmail;
+        var configName = await RunGitAsync(workspaceDir, new[] { "config", "user.name", commitAuthor }, token: null, ct, TimeSpan.FromSeconds(60));
+        var configEmail = await RunGitAsync(workspaceDir, new[] { "config", "user.email", commitEmail }, token: null, ct, TimeSpan.FromSeconds(60));
         if (!configName.Success || !configEmail.Success)
             return new GitOperationResult(false, null, "Failed to configure git identity.");
 

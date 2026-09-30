@@ -165,7 +165,15 @@
     "themeDark": "Тёмная",
     "themeSystem": "Системная",
     "langRu": "Русский",
-    "langEn": "English"
+    "langEn": "English",
+    "githubTab": "GitHub",
+    "githubLabel": "Личный токен GitHub",
+    "githubHint": "Нужен агенту, чтобы клонировать репозитории, коммитить и открывать pull request от вашего имени. Хранится только в этом браузере и передаётся лишь в GitHub; на сервере не сохраняется. Нужны права на репозитории (classic scope repo или fine-grained Contents + Pull requests).",
+    "githubPlaceholder": "ghp_… или github_pat_…",
+    "githubSave": "Сохранить",
+    "githubClear": "Удалить",
+    "githubSaved": "Сохранено",
+    "githubCreate": "Создать токен на GitHub"
   },
   "memory": {
     "tab": "Память",

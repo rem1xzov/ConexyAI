@@ -13,12 +13,14 @@ import {
   type UserPreferences,
 } from '../api/userApi';
 import { humanError } from '../utils/humanError';
+// GITHUB_PAT_PER_USER: личный GitHub-токен для git-операций агента.
+import { clearGitHubToken, readGitHubToken, storeGitHubToken } from '../utils/githubToken';
 import { ConfirmDialog } from './Dialog';
 import { CloseIcon, TrashIcon } from './Icons';
 // LEGAL_DOCS: добавлено 2026-09-25 — правовые документы доступны всегда, в том числе из настроек.
 import { LEGAL_PATHS } from './legal/LegalPage';
 
-export type SettingsSection = 'general' | 'personalization' | 'memory';
+export type SettingsSection = 'general' | 'personalization' | 'memory' | 'github';
 
 interface SettingsModalProps {
   theme: Theme;
@@ -45,6 +47,7 @@ const SECTIONS: { value: SettingsSection; key: string }[] = [
   { value: 'general', key: 'prefs.tabGeneral' },
   { value: 'personalization', key: 'prefs.tabPersonalization' },
   { value: 'memory', key: 'memory.tab' },
+  { value: 'github', key: 'settings.githubTab' },
 ];
 
 function statusOf(e: unknown): number | undefined {
@@ -452,6 +455,69 @@ function MemorySection({ active }: { active: boolean }) {
 
 // SETTINGS: добавлено 2026-09-19; разделы «Персонализация» и «Память» — 2026-09-24.
 /** Settings modal: theme/language, custom instructions and the user's memory. */
+// GITHUB_PAT_PER_USER: добавлено 2026-09-30 — личный токен GitHub для агента. Хранится в этом
+// браузере и уезжает с каждой агентской задачей, поэтому коммиты/PR идут от аккаунта пользователя,
+// а не от общего серверного PAT.
+function GitHubSection() {
+  const { t } = useTranslation();
+  const [token, setToken] = useState(() => readGitHubToken() ?? '');
+  const [saved, setSaved] = useState(false);
+  const stored = readGitHubToken();
+  const dirty = token.trim() !== (stored ?? '');
+
+  function flashSaved() {
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 2000);
+  }
+
+  function save() {
+    const value = token.trim();
+    storeGitHubToken(value);
+    setToken(value);
+    flashSaved();
+  }
+
+  function remove() {
+    clearGitHubToken();
+    setToken('');
+    flashSaved();
+  }
+
+  return (
+    <div className="settings-panel">
+      <div className="settings-modal__section">
+        <div className="settings-modal__label">{t('settings.githubLabel')}</div>
+        <input
+          className="dialog-input settings-github__input"
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={t('settings.githubPlaceholder')}
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+        />
+        <p className="settings-github__hint">{t('settings.githubHint')}</p>
+        <div className="settings-github__actions">
+          <button className="dialog-btn dialog-btn--primary" type="button" onClick={save} disabled={!dirty}>
+            {t('settings.githubSave')}
+          </button>
+          {stored && (
+            <button className="dialog-btn" type="button" onClick={remove}>
+              {t('settings.githubClear')}
+            </button>
+          )}
+          {saved && <span className="settings-github__saved">{t('settings.githubSaved')}</span>}
+        </div>
+        <p className="settings-github__hint">
+          <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer">
+            {t('settings.githubCreate')}
+          </a>
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function SettingsModal({
   theme,
   language,
@@ -567,6 +633,10 @@ export function SettingsModal({
 
             <div hidden={section !== 'memory'}>
               <MemorySection active={section === 'memory'} />
+            </div>
+
+            <div hidden={section !== 'github'}>
+              <GitHubSection />
             </div>
           </div>
         </div>

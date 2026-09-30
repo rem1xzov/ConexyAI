@@ -412,17 +412,10 @@ app.Run();
 static void LogEnvironmentPrerequisites(WebApplication app)
 {
     var logger = app.Logger;
-    var configuration = app.Configuration;
 
-    // GitHub PAT (env var or settings) — required for github_action workflows.
-    var pat = configuration["GitHub:PersonalAccessToken"]
-        ?? Environment.GetEnvironmentVariable("GITHUB_PAT")
-        ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-
-    if (string.IsNullOrWhiteSpace(pat))
-    {
-        logger.LogWarning("GitHub PAT is not configured. Set GitHub:PersonalAccessToken in appsettings.json or the GITHUB_PAT environment variable to enable the github_action tool.");
-    }
+    // GITHUB_PAT_PER_USER: серверный PAT больше НЕ нужен для github_action — каждый пользователь
+    // вводит свой токен в настройках, и коммиты идут от его аккаунта. Проверка/предупреждение убраны,
+    // чтобы не путать: без личного токена инструмент просто откажет с подсказкой.
 
     // Playwright Chromium — required for take_screenshot.
     // AGENT_TOOL_FAILURES: добавлено 2026-09-23. Раньше здесь утверждалось, что Chromium «ставится при
