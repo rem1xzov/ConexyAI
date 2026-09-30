@@ -350,6 +350,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
             клонировать обычным `bash: git clone` — это без авторизации). Не ищи токен в `bash`,
             `env`, файлах `~/.git-credentials`, `.netrc` или переменных окружения и не пытайся обойти
             ограничение — его там нет и не должно быть.
+            Если ты клонировал репозиторий в подпапку (в `clone_repo` был `target_folder`), передавай
+            эту же папку параметром `repo_folder` в `create_branch`, `commit_and_push` и
+            `create_pull_request`; инструмент сам найдёт её, если в рабочей области ровно один
+            репозиторий. Не отвечай «workspace is not a git repository», если `github_action` нашёл
+            репозиторий самостоятельно — просто продолжай работу.
             Если `github_action` отвечает, что токена нет или он отклонён, — останови работу и прямо
             скажи пользователю: «Чтобы я мог клонировать/пушить и открывать PR от вашего имени,
             добавьте свой GitHub Personal Access Token в настройках приложения: Настройки → GitHub,
@@ -1948,7 +1953,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 if (string.IsNullOrWhiteSpace(branchName))
                     return new ConexyToolResult(toolCall.Id, "create_branch requires 'branch_name'.", true);
 
-                var res = await _workspaceService.GitCreateBranchAsync(_job.ChatId, branchName, ct);
+                var branchRepoFolder = Optional(root, "repo_folder");
+                var res = await _workspaceService.GitCreateBranchAsync(_job.ChatId, branchName, branchRepoFolder, ct);
                 await LogAsync(_job.TaskId, $"[Git Branch] {branchName}", ct);
                 return new ConexyToolResult(toolCall.Id, res.Success ? res.Message! : res.Error!, !res.Success);
             }
@@ -1962,6 +1968,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
                 var repo = Optional(root, "repo") ?? Optional(root, "repo_url");
                 var changedFiles = GetStringArray(root, "changed_files");
+                var commitRepoFolder = Optional(root, "repo_folder");
 
                 // GITHUB_PAT_PER_USER: коммит подписываем аккаунтом пользователя, чей токен пушит.
                 var identity = await _githubService.GetIdentityAsync(token, ct);
@@ -1973,7 +1980,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 var res = await _workspaceService.GitCommitPushAsync(
                     _job.ChatId, commitMessage, branch, token,
                     repoUrl: repo, changedFiles: changedFiles,
-                    authorName: authorName, authorEmail: authorEmail, ct: ct);
+                    authorName: authorName, authorEmail: authorEmail, repoFolder: commitRepoFolder, ct: ct);
                 await LogAsync(_job.TaskId, $"[Git Commit & Push] branch={branch}", ct);
                 return new ConexyToolResult(toolCall.Id, res.Success ? res.Message! : res.Error!, !res.Success);
             }
@@ -1988,11 +1995,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 var headBranch = Optional(root, "head_branch") ?? Optional(root, "branch");
                 var baseBranch = GetString(root, "base_branch", "main");
                 var repo = Optional(root, "repo") ?? Optional(root, "repo_url");
+                var prRepoFolder = Optional(root, "repo_folder");
 
                 if (string.IsNullOrWhiteSpace(headBranch))
                     return new ConexyToolResult(toolCall.Id, "create_pull_request requires 'head_branch'.", true);
 
-                var res = await _githubService.CreatePullRequestAsync(_job.ChatId, token, title, body, headBranch, baseBranch, repo, ct);
+                var res = await _githubService.CreatePullRequestAsync(_job.ChatId, token, title, body, headBranch, baseBranch, repo, prRepoFolder, ct);
                 await LogAsync(_job.TaskId, $"[Git PR] {headBranch} -> {baseBranch}", ct);
 
                 var message = res.Success ? res.Message! : res.Error!;
@@ -2407,11 +2415,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     skip_reason = new { type = "string", description = "Required when status = skipped" }
                 }, required = new[] { "id", "content", "status" } } }
             }, required = new[] { "todos" } }),
-        Function("github_action", "Perform a GitHub workflow operation (authenticated clone, branch, commit+push, pull request) with the user's OWN Personal Access Token. The token lives only server-side for this tool: the sandbox has no git credentials. If it answers that the token is missing or rejected, stop and tell the user to add a Personal Access Token in Settings → GitHub.",
+        Function("github_action", "Perform a GitHub workflow operation (authenticated clone, branch, commit+push, pull request) with the user's OWN Personal Access Token. The token lives only server-side for this tool: the sandbox has no git credentials. After clone_repo with target_folder, pass the same folder as repo_folder to create_branch/commit_and_push/create_pull_request (they also auto-detect it when the workspace holds a single repo). If it answers that the token is missing or rejected, stop and tell the user to add a Personal Access Token in Settings → GitHub.",
             new { type = "object", properties = new {
                 operation = new { type = "string", @enum = new[] { "clone_repo", "create_branch", "commit_and_push", "create_pull_request" } },
                 repo_url = new { type = "string", description = "Repository URL (owner/repo or full URL)" },
-                target_folder = new { type = "string", description = "Target folder for clone_repo" },
+                target_folder = new { type = "string", description = "Target folder for clone_repo (relative to the workspace)" },
+                repo_folder = new { type = "string", description = "Folder of the cloned repository inside the workspace, used by create_branch/commit_and_push/create_pull_request when the repo is not at the workspace root" },
                 repo = new { type = "string", description = "Repository as owner/repo" },
                 branch = new { type = "string", description = "Branch name" },
                 branch_name = new { type = "string", description = "Branch name to create" },

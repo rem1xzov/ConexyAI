@@ -27,7 +27,11 @@ public interface IConexyWorkspaceService
     Task<GitOperationResult> GitCloneAsync(Guid chatId, string repoUrl, string token, string? targetFolder = null, string? branch = null, CancellationToken ct = default);
 
     /// <summary>Creates and switches to a new branch in the workspace repository.</summary>
-    Task<GitOperationResult> GitCreateBranchAsync(Guid chatId, string branchName, CancellationToken ct = default);
+    /// <remarks>
+    /// GITHUB_REPO_SUBDIR: <paramref name="repoFolder"/> — относительный путь к каталогу репозитория
+    /// внутри воркспейса. Если не задан, репозиторий ищется в корне, а затем в единственной подпапке.
+    /// </remarks>
+    Task<GitOperationResult> GitCreateBranchAsync(Guid chatId, string branchName, string? repoFolder = null, CancellationToken ct = default);
 
     /// <summary>Stages the given files, commits them and pushes to the target branch.</summary>
     /// <remarks>
@@ -43,10 +47,11 @@ public interface IConexyWorkspaceService
         IReadOnlyList<string>? changedFiles = null,
         string? authorName = null,
         string? authorEmail = null,
+        string? repoFolder = null,
         CancellationToken ct = default);
 
     /// <summary>Resolves the <c>owner/repo</c> of the workspace repository from the git remote.</summary>
-    Task<(string? Owner, string? Repo)> ResolveRepositoryAsync(Guid chatId, string? repoUrl, CancellationToken ct = default);
+    Task<(string? Owner, string? Repo)> ResolveRepositoryAsync(Guid chatId, string? repoUrl, string? repoFolder = null, CancellationToken ct = default);
 
     /// <summary>Deletes the task sandbox directory (used on fatal failure or on demand).</summary>
     Task CleanupWorkspaceAsync(Guid chatId, CancellationToken ct = default);

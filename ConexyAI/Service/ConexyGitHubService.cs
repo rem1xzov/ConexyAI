@@ -43,6 +43,7 @@ public class ConexyGitHubService : IConexyGitHubService
         string headBranch,
         string baseBranch,
         string? repo = null,
+        string? repoFolder = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(token))
@@ -51,7 +52,7 @@ public class ConexyGitHubService : IConexyGitHubService
         if (string.IsNullOrWhiteSpace(title))
             return new GitOperationResult(false, null, "Pull request title is required.");
 
-        var (owner, repoName) = await _workspaceService.ResolveRepositoryAsync(taskId, repo, ct);
+        var (owner, repoName) = await _workspaceService.ResolveRepositoryAsync(taskId, repo, repoFolder, ct);
         if (owner == null || repoName == null)
             return new GitOperationResult(false, null, "Could not determine the target GitHub repository.");
 

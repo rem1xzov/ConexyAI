@@ -41,6 +41,7 @@ internal static class SecurityTests
         Add("M8: a turn finishing after its chat was deleted does not resurrect it", TestDeletedChatNotResurrectedAsync);
         Add("M17: stop reports running / queued / not found", TestStopOutcomesAsync);
         Add("M10/C2: host git ignores repo hooks and fsmonitor and strips stored tokens", TestGitHardeningAsync, GitAvailable);
+        Add("GITHUB_REPO_SUBDIR: branch/commit find a repository in a workspace subfolder", TestGitRepoSubfolderAsync, GitInstalled);
     }
 
     // Program.cs has a top-level Assert local function that would shadow a `using static`; a class
@@ -55,6 +56,11 @@ internal static class SecurityTests
     private static string? GitAvailable()
     {
         if (!OperatingSystem.IsLinux()) return "requires Linux";
+        return GitInstalled();
+    }
+
+    private static string? GitInstalled()
+    {
         try
         {
             using var p = Process.Start(new ProcessStartInfo("git", "--version") { RedirectStandardOutput = true, UseShellExecute = false });
@@ -656,6 +662,53 @@ internal static class SecurityTests
         {
             Cleanup(root);
         }
+    }
+
+    // ---- GITHUB_REPO_SUBDIR ----
+
+    // Агент клонирует репозиторий в подпапку воркспейса (clone_repo + target_folder). Раньше ветка
+    // и коммит работали только в корне и падали с «The workspace is not a git repository».
+    private static async Task TestGitRepoSubfolderAsync()
+    {
+        var root = TempRoot();
+        try
+        {
+            var workspace = Workspace(root);
+            var chatId = Guid.NewGuid();
+            var workspaceDir = workspace.GetTaskWorkspacePath(chatId);
+            var repoDir = Path.Combine(workspaceDir, "app");
+            Directory.CreateDirectory(repoDir);
+            RunGit(repoDir, "init", "-q");
+            await File.WriteAllTextAsync(Path.Combine(repoDir, "a.txt"), "a");
+
+            // Без repo_folder: единственный вложенный репозиторий находится автоматически.
+            var auto = await workspace.GitCreateBranchAsync(chatId, "feature/auto");
+            Assert(auto.Success, "a repo in a single subfolder is found automatically: " + auto.Error);
+            Assert(CurrentBranch(repoDir) == "feature/auto", "the branch is created in the subfolder repository (got '" + CurrentBranch(repoDir) + "')");
+
+            // С явным repo_folder.
+            var explicitFolder = await workspace.GitCreateBranchAsync(chatId, "feature/explicit", repoFolder: "app");
+            Assert(explicitFolder.Success, "an explicit repo_folder is honoured: " + explicitFolder.Error);
+            Assert(CurrentBranch(repoDir) == "feature/explicit", "the explicit folder points at the subfolder repository");
+
+            // Несуществующий repo_folder (и ни одного вложенного репозитория в корне) — внятный отказ.
+            var missing = await workspace.GitCreateBranchAsync(chatId, "feature/missing", repoFolder: "nope");
+            Assert(!missing.Success, "a missing repo_folder is refused");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    private static string CurrentBranch(string dir)
+    {
+        var psi = new ProcessStartInfo("git") { WorkingDirectory = dir, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var a in new[] { "branch", "--show-current" }) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        var output = p.StandardOutput.ReadToEnd().Trim();
+        p.WaitForExit();
+        return output;
     }
 
     private static void RunGit(string dir, params string[] args)

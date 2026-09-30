@@ -314,6 +314,40 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         return failed;
     }
 
+    // GITHUB_REPO_SUBDIR: добавлено 2026-09-30.
+    //
+    // Агент обычно клонирует репозиторий В ПОДПАПКУ воркспейса (clone_repo с target_folder,
+    // например "ConexyAI"), а ветка и коммит работали жёстко в корне воркспейса. В корне .git нет,
+    // и инструмент отвечал «The workspace is not a git repository», хотя репозиторий лежал рядом.
+    // Теперь каталог репозитория определяется так: явный repo_folder → корень, если это репозиторий →
+    // единственная подпапка верхнего уровня с .git. Если репозиториев несколько или ни одного —
+    // возвращается корень, и внятную ошибку выдаёт PrepareRepositoryAsync.
+    private string ResolveRepositoryDirectory(Guid chatId, string? repoFolder)
+    {
+        var workspaceDir = GetTaskWorkspacePath(chatId);
+
+        if (!string.IsNullOrWhiteSpace(repoFolder))
+            return ResolveSafePath(chatId, repoFolder);
+
+        if (IsRepositoryDirectory(workspaceDir))
+            return workspaceDir;
+
+        List<string> candidates;
+        try
+        {
+            candidates = Directory.EnumerateDirectories(workspaceDir).Where(IsRepositoryDirectory).ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return workspaceDir;
+        }
+
+        return candidates.Count == 1 ? candidates[0] : workspaceDir;
+    }
+
+    private static bool IsRepositoryDirectory(string dir) =>
+        Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git"));
+
     public async Task<GitOperationResult> GitCloneAsync(
         Guid chatId,
         string repoUrl,
@@ -369,7 +403,7 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         return new GitOperationResult(true, $"Repository cloned into workspace.", null);
     }
 
-    public async Task<GitOperationResult> GitCreateBranchAsync(Guid chatId, string branchName, CancellationToken ct = default)
+    public async Task<GitOperationResult> GitCreateBranchAsync(Guid chatId, string branchName, string? repoFolder = null, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(branchName))
             return new GitOperationResult(false, null, "Branch name is required.");
@@ -378,7 +412,7 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
 
         using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
 
-        var workspaceDir = GetTaskWorkspacePath(chatId);
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
         var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
         if (unsafeRepo is not null)
             return new GitOperationResult(false, null, unsafeRepo);
@@ -399,6 +433,7 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         IReadOnlyList<string>? changedFiles = null,
         string? authorName = null,
         string? authorEmail = null,
+        string? repoFolder = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(commitMessage))
@@ -414,11 +449,12 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
 
         using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
 
-        var workspaceDir = GetTaskWorkspacePath(chatId);
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
 
-        // Init if the workspace is not yet a repository (agent wrote files without cloning).
+        // Init if the target directory is not yet a repository (agent wrote files without cloning).
         if (!Directory.Exists(Path.Combine(workspaceDir, ".git")) && !File.Exists(Path.Combine(workspaceDir, ".git")))
         {
+            Directory.CreateDirectory(workspaceDir);
             var init = await RunGitAsync(workspaceDir, new[] { "init" }, token: null, ct, TimeSpan.FromSeconds(60));
             if (!init.Success) return new GitOperationResult(false, null, init.StdErr);
         }
@@ -479,7 +515,7 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         return new GitOperationResult(true, "Changes pushed successfully.", null);
     }
 
-    public async Task<(string? Owner, string? Repo)> ResolveRepositoryAsync(Guid chatId, string? repoUrl, CancellationToken ct = default)
+    public async Task<(string? Owner, string? Repo)> ResolveRepositoryAsync(Guid chatId, string? repoUrl, string? repoFolder = null, CancellationToken ct = default)
     {
         if (!string.IsNullOrWhiteSpace(repoUrl))
         {
@@ -487,7 +523,7 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         }
 
         using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
-        var workspaceDir = GetTaskWorkspacePath(chatId);
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
         if (await PrepareRepositoryAsync(workspaceDir, ct) is not null)
             return (null, null);
 

@@ -13,6 +13,7 @@ public interface IConexyGitHubService
         string headBranch,
         string baseBranch,
         string? repo = null,
+        string? repoFolder = null,
         CancellationToken ct = default);
 
     /// <summary>
