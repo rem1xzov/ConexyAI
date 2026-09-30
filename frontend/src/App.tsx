@@ -2523,10 +2523,11 @@ export default function App() {
     </span>
   ) : null;
 
-  // CHAT_ACTIONS: действия шапки чата (артефакты, новый чат, меню чата). Появляются, только когда в
-  // открытом чате есть хотя бы одно сообщение — на пк и на мобилке одинаково.
+  // CHAT_ACTIONS: действия шапки чата (новый чат, меню чата). Показываются, когда чат не пуст —
+  // то же условие, по которому показывается логотип, поэтому они есть везде, где есть переписка,
+  // и на пк, и на мобилке.
   const chatActions =
-    activeSession && activeSession.messages.length > 0 ? (
+    activeSession && !chatEmpty ? (
       <ChatHeaderActions
         session={activeSession}
         onNewChat={handleNewChat}

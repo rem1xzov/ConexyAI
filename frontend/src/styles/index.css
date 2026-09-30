@@ -6447,12 +6447,19 @@ body {
     padding-left: 56px;
   }
 
-  /* CHAT_ACTIONS: на телефоне левая часть шапки сжимается, а кнопки действий всегда остаются
-     видимыми справа — их не должно выдавливать за экран выбором модели или логотипом. */
+  /* CHAT_ACTIONS: кнопки действий вынесены абсолютом в правый верхний угол шапки — тогда их не
+     может сдвинуть или выдавить за экран ни выбор модели, ни логотип. Слева оставляем место,
+     чтобы содержимое не заезжало под кнопки. */
+  .chat-header__actions {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    margin-left: 0;
+  }
   .chat-header__left {
-    flex: 1 1 auto;
     min-width: 0;
-    overflow: hidden;
+    padding-right: 104px;
   }
   .chat-actions__btn {
     width: 40px;
