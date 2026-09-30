@@ -491,7 +491,7 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
 
         var status = await RunGitAsync(workspaceDir, new[] { "status", "--porcelain" }, token: null, ct, TimeSpan.FromSeconds(60));
         if (string.IsNullOrWhiteSpace(status.StdOut))
-            return new GitOperationResult(true, "No changes to commit.", null);
+            return new GitOperationResult(true, "No changes to commit: the working tree is clean, nothing was pushed. Create or edit files first.", null);
 
         var addArgs = new List<string> { "add" };
         if (changedFiles is { Count: > 0 })

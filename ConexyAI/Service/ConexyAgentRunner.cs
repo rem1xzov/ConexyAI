@@ -2019,9 +2019,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             case "create_branch":
             {
-                var branchName = GetString(root, "branch_name");
+                var branchName = GetBranchArg(root);
                 if (string.IsNullOrWhiteSpace(branchName))
-                    return new ConexyToolResult(toolCall.Id, "create_branch requires 'branch_name'.", true);
+                    return new ConexyToolResult(toolCall.Id, "create_branch requires a branch name ('branch_name' or 'branch').", true);
 
                 var branchRepoFolder = Optional(root, "repo_folder");
                 var res = await _workspaceService.GitCreateBranchAsync(_job.ChatId, branchName, branchRepoFolder, ct);
@@ -2032,9 +2032,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
             case "commit_and_push":
             {
                 var commitMessage = GetString(root, "commit_message");
-                var branch = GetString(root, "branch");
+                var branch = GetBranchArg(root);
                 if (string.IsNullOrWhiteSpace(commitMessage) || string.IsNullOrWhiteSpace(branch))
-                    return new ConexyToolResult(toolCall.Id, "commit_and_push requires 'commit_message' and 'branch'.", true);
+                    return new ConexyToolResult(toolCall.Id, "commit_and_push requires 'commit_message' and a branch name ('branch' or 'branch_name').", true);
 
                 var repo = Optional(root, "repo") ?? Optional(root, "repo_url");
                 var changedFiles = GetStringArray(root, "changed_files");
@@ -2057,9 +2057,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             case "delete_branch":
             {
-                var branchName = GetString(root, "branch_name");
+                var branchName = GetBranchArg(root);
                 if (string.IsNullOrWhiteSpace(branchName))
-                    return new ConexyToolResult(toolCall.Id, "delete_branch requires 'branch_name'.", true);
+                    return new ConexyToolResult(toolCall.Id, "delete_branch requires a branch name ('branch_name' or 'branch').", true);
 
                 var deleteRepoFolder = Optional(root, "repo_folder");
                 var deleteRemote = OptionalBool(root, "delete_remote") ?? true;
@@ -2297,6 +2297,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
         return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
+    // GITHUB_BRANCH_ALIAS: добавлено 2026-09-30. Модель (и человек) постоянно передавали имя ветки
+    // то как `branch`, то как `branch_name`, и операция падала на «requires 'branch_name'».
+    // Теперь имена взаимозаменяемы во всех операциях с ветками.
+    private static string GetBranchArg(JsonElement root) =>
+        Optional(root, "branch_name") ?? Optional(root, "branch") ?? string.Empty;
+
     private static bool? OptionalBool(JsonElement root, string name)
     {
         if (!root.TryGetProperty(name, out var el))
@@ -2521,8 +2527,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 target_folder = new { type = "string", description = "Target folder for clone_repo (relative to the workspace)" },
                 repo_folder = new { type = "string", description = "Folder of the cloned repository inside the workspace, used by create_branch/commit_and_push/create_pull_request when the repo is not at the workspace root" },
                 repo = new { type = "string", description = "Repository as owner/repo" },
-                branch = new { type = "string", description = "Branch name" },
-                branch_name = new { type = "string", description = "Branch name to create" },
+                branch = new { type = "string", description = "Git branch name (also accepted as 'branch_name')" },
+                branch_name = new { type = "string", description = "Git branch name (also accepted as 'branch')" },
                 delete_remote = new { type = "boolean", description = "For delete_branch: also delete the branch on origin (default true)" },
                 commit_message = new { type = "string", description = "Commit message" },
                 changed_files = new { type = "array", items = new { type = "string" }, description = "Files to stage (defaults to all)" },
