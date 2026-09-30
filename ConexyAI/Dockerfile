@@ -31,8 +31,11 @@ COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build /app/publish .
 
 # curl is used by the Docker healthcheck (/api/health).
+# GITHUB_ACTION_HOST_GIT: git is required for github_action (clone / branch / commit+push run on the
+# backend host). The aspnet image ships without it, so the tool used to fail with a vague
+# "Could not read the repository configuration" — install it here. ca-certificates comes with git.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # The aspnet image ships with a non-root 'app' user (uid 1654). Give it a writable home

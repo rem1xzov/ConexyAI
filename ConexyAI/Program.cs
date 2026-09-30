@@ -417,6 +417,30 @@ static void LogEnvironmentPrerequisites(WebApplication app)
     // вводит свой токен в настройках, и коммиты идут от его аккаунта. Проверка/предупреждение убраны,
     // чтобы не путать: без личного токена инструмент просто откажет с подсказкой.
 
+    // GITHUB_ACTION_HOST_GIT: github_action запускает git НА ХОСТЕ бэкенда (клонирование, ветки,
+    // commit+push). Runtime-образ dotnet/aspnet не содержит git, а без него инструмент падал с
+    // невнятным «Could not read the repository configuration» — это просто "git не найден".
+    // Проверяем и говорим прямо, вместо того чтобы молча ломаться у каждого пользователя.
+    try
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git", "--version")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        using var git = System.Diagnostics.Process.Start(psi);
+        if (git is not null && git.WaitForExit(5000) && git.ExitCode == 0)
+            logger.LogInformation("git is available on the backend host: github_action can clone, branch and push.");
+        else
+            logger.LogWarning("git is NOT available on the backend host: github_action will fail for every user. Install git in the runtime image (see ConexyAI/Dockerfile).");
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "git is NOT available on the backend host: github_action will fail for every user. Install git in the runtime image (see ConexyAI/Dockerfile).");
+    }
+
     // Playwright Chromium — required for take_screenshot.
     // AGENT_TOOL_FAILURES: добавлено 2026-09-23. Раньше здесь утверждалось, что Chromium «ставится при
     // первом использовании» через npx — но runtime-образ это dotnet/aspnet без node/npm/npx, то есть
