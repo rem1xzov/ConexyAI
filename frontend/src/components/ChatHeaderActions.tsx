@@ -1,13 +1,12 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatSession } from '../types/chat';
-import { useArtifactSelector, toggleArtifactList } from './artifacts/store';
 import { ConfirmDialog, PromptDialog } from './Dialog';
-import { EditIcon, FileIcon, PinIcon, PlusIcon, ShareIcon, ThreeDotsIcon, TrashIcon } from './Icons';
+import { EditIcon, PinIcon, PlusIcon, ShareIcon, ThreeDotsIcon, TrashIcon } from './Icons';
 
-// CHAT_ACTIONS: добавлено 2026-09-29 — действия шапки чата (артефакты, новый чат, меню чата).
-// Показываются, только когда в чате есть хотя бы одно сообщение; по умолчанию их нет. Меню
-// повторяет то, что уже есть у чата в боковой панели: поделиться, закрепить, переименовать, удалить.
+// CHAT_ACTIONS: добавлено 2026-09-29 — действия шапки чата (новый чат, меню чата). Показываются,
+// только когда в чате есть хотя бы одно сообщение; по умолчанию их нет. Меню повторяет то, что уже
+// есть у чата в боковой панели: поделиться, закрепить, переименовать, удалить.
 interface ChatHeaderActionsProps {
   session: ChatSession;
   onNewChat: () => void;
@@ -29,8 +28,6 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  // ARTIFACT_LIST: кнопка «файлы» подсвечена, когда открыт список артефактов.
-  const listOpen = useArtifactSelector((s) => s.listOpen);
   const moreRef = useRef<HTMLDivElement>(null);
 
   // Click/tap anywhere outside the menu closes it.
@@ -45,17 +42,6 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
 
   return (
     <div className="chat-actions">
-      <button
-        type="button"
-        className={`chat-actions__btn ${listOpen ? 'chat-actions__btn--on' : ''}`}
-        onClick={() => toggleArtifactList()}
-        title={t('render.artifactsTitle')}
-        aria-label={t('render.artifactsTitle')}
-        aria-pressed={listOpen}
-      >
-        <FileIcon size={18} />
-      </button>
-
       <button
         type="button"
         className="chat-actions__btn"

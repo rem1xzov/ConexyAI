@@ -9,7 +9,7 @@ import {
   type ArtifactKind,
 } from '../../utils/artifacts';
 import { triggerDownload } from '../../utils/download';
-import { ChevronDownIcon, CloseIcon, DownloadIcon, FileIcon } from '../Icons';
+import { ChevronDownIcon, CloseIcon, DownloadIcon } from '../Icons';
 import { Markdown } from '../Markdown';
 import { CopyButton } from '../markdown/CodeBlock';
 import { HighlightedCode } from '../markdown/HighlightedCode';
@@ -18,15 +18,11 @@ import { ArtifactIcon } from './ArtifactIcon';
 import { artifactTypeLabel } from './ArtifactCard';
 import {
   closeArtifact,
-  closeArtifactList,
   getArtifactState,
-  listArtifacts,
-  openArtifact,
   resolveOpenArtifact,
   selectArtifactVersion,
   setArtifactTab,
   useArtifactState,
-  type ArtifactEntry,
   type ArtifactTab,
 } from './store';
 
@@ -86,14 +82,7 @@ function ArtifactPanel() {
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const lastFocusNonce = useRef(state.focusNonce);
 
-  const listOpen = state.listOpen;
-  const isOpen = resolved !== null || listOpen;
-
-  // Closing the panel means "close the list" when the list is what is showing.
-  function closeCurrent() {
-    if (getArtifactState().listOpen) closeArtifactList();
-    else closeArtifact();
-  }
+  const isOpen = resolved !== null;
 
   // Focus: an explicit open moves focus into the panel (and remembers where it came from); an
   // automatic open during streaming never steals focus from the composer.
@@ -122,7 +111,7 @@ function ArtifactPanel() {
       const modal = document.querySelector('[aria-modal="true"]');
       if (modal && !panelRef.current?.contains(modal)) return;
       e.preventDefault();
-      closeCurrent();
+      closeArtifact();
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -147,99 +136,6 @@ function ArtifactPanel() {
       document.body.style.overflow = previous;
     };
   }, [isOpen, mobile]);
-
-  if (!resolved && !listOpen) return null;
-
-  // ARTIFACT_LIST: список всех артефактов чата. Показывается из кнопки «файлы» в шапке; на
-  // десктопе — та же правая панель, на телефоне — во весь экран. Пустое состояние не молчит.
-  if (listOpen && !resolved) {
-    const items = listArtifacts(state);
-    const downloadEntry = (entry: ArtifactEntry) => {
-      const name = artifactFileName({
-        title: entry.title,
-        identifier: entry.identifier,
-        type: entry.type,
-        language: entry.language,
-      });
-      triggerDownload(new Blob([entry.content], { type: artifactMime(entry.type) }), name);
-    };
-    const listPanel = (
-      <aside
-        ref={panelRef}
-        className={`artifact-panel ${mobile ? 'artifact-panel--mobile' : ''}`}
-        role="dialog"
-        aria-modal={mobile ? 'true' : 'false'}
-        aria-labelledby="artifact-panel-title"
-      >
-        <header className="artifact-panel__header">
-          <div className="artifact-panel__heading">
-            <span className="artifact-panel__icon" aria-hidden="true">
-              <FileIcon size={18} />
-            </span>
-            <div className="artifact-panel__titles">
-              <h2 id="artifact-panel-title" className="artifact-panel__title">
-                {t('render.artifactsTitle')}
-              </h2>
-            </div>
-            <button
-              ref={closeRef}
-              type="button"
-              className="artifact-panel__iconbtn"
-              onClick={closeArtifactList}
-              aria-label={t('render.close')}
-              title={t('render.close')}
-            >
-              <CloseIcon size={18} />
-            </button>
-          </div>
-        </header>
-
-        {items.length === 0 ? (
-          <div className="artifact-panel__placeholder">{t('render.artifactsEmpty')}</div>
-        ) : (
-          <div className="artifact-panel__list">
-            {items.map((entry) => (
-              <div key={entry.identifier} className="artifact-row">
-                <button
-                  type="button"
-                  className="artifact-row__open"
-                  onClick={() => openArtifact(entry.identifier)}
-                >
-                  <span className="artifact-row__icon" aria-hidden="true">
-                    <ArtifactIcon type={entry.type} size={18} />
-                  </span>
-                  <span className="artifact-row__meta">
-                    <span className="artifact-row__title">{entry.title || t('render.artifactUntitled')}</span>
-                    <span className="artifact-row__sub">{artifactTypeLabel(t, entry.type, entry.language)}</span>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="artifact-row__dl"
-                  onClick={() => downloadEntry(entry)}
-                  aria-label={t('render.download')}
-                  title={t('render.download')}
-                >
-                  <DownloadIcon size={16} />
-                </button>
-              </div>
-            ))}
-            {items.length > 1 && (
-              <button
-                type="button"
-                className="artifact-panel__btn artifact-panel__download-all"
-                onClick={() => items.forEach(downloadEntry)}
-              >
-                <DownloadIcon size={14} />
-                <span>{t('render.downloadAll')}</span>
-              </button>
-            )}
-          </div>
-        )}
-      </aside>
-    );
-    return createPortal(listPanel, document.body);
-  }
 
   if (!resolved) return null;
 
