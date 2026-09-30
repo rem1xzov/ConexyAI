@@ -47,6 +47,9 @@ export interface ArtifactState {
   tab: ArtifactTab;
   /** Bumped on every explicit (user) open so the panel knows to move focus. */
   focusNonce: number;
+  // ARTIFACT_LIST: открыт список всех артефактов чата (кнопка «файлы» в шапке). Список и отдельный
+  // артефакт взаимоисключающие: открытие одного закрывает другое.
+  listOpen: boolean;
 }
 
 let state: ArtifactState = {
@@ -55,6 +58,7 @@ let state: ArtifactState = {
   adhoc: null,
   tab: 'preview',
   focusNonce: 0,
+  listOpen: false,
 };
 
 const listeners = new Set<() => void>();
@@ -167,6 +171,7 @@ export function openArtifact(identifier: string, key: string | null = null, opti
     ...state,
     open: { identifier, key, auto },
     adhoc: null,
+    listOpen: false,
     // Streaming artifacts start on the code (that is what is arriving); finished ones on preview.
     tab: previewable && (!target || target.complete) ? 'preview' : 'code',
     focusNonce: auto ? state.focusNonce : state.focusNonce + 1,
@@ -179,6 +184,7 @@ export function openAdhocArtifact(artifact: AdhocArtifact): void {
     ...state,
     open: { identifier: null, key: null, auto: false },
     adhoc: artifact,
+    listOpen: false,
     tab: hasPreview(artifact.type) ? 'preview' : 'code',
     focusNonce: state.focusNonce + 1,
   });
@@ -197,6 +203,35 @@ export function setArtifactTab(tab: ArtifactTab): void {
 export function closeArtifact(): void {
   if (!state.open) return;
   setState({ ...state, open: null, adhoc: null });
+}
+
+// ARTIFACT_LIST: список артефактов чата.
+/** Opens the list (and closes any single artifact) or closes it. */
+export function toggleArtifactList(): void {
+  const open = !state.listOpen;
+  setState({
+    ...state,
+    listOpen: open,
+    open: open ? null : state.open,
+    adhoc: open ? null : state.adhoc,
+    focusNonce: open ? state.focusNonce + 1 : state.focusNonce,
+  });
+}
+
+/** Closes the list panel. */
+export function closeArtifactList(): void {
+  if (!state.listOpen) return;
+  setState({ ...state, listOpen: false });
+}
+
+/** Latest version of every artifact registered in the current chat, newest first. */
+export function listArtifacts(s: ArtifactState): ArtifactEntry[] {
+  const latest = new Map<string, ArtifactEntry>();
+  s.entries.forEach((entry) => {
+    const prev = latest.get(entry.identifier);
+    if (!prev || prev.order < entry.order) latest.set(entry.identifier, entry);
+  });
+  return [...latest.values()].sort((a, b) => b.order - a.order);
 }
 
 /** Resolves what the panel should show right now, or null. */

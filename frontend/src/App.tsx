@@ -17,6 +17,7 @@ import { useDrawerSwipe } from './hooks/useDrawerSwipe';
 import { useKeyboardInset } from './hooks/useKeyboardInset';
 import { Sidebar } from './components/Sidebar';
 import { ChatFeed } from './components/ChatFeed';
+import { ChatHeaderActions } from './components/ChatHeaderActions';
 import { InputBar } from './components/InputBar';
 import { ModelPicker } from './components/ModelPicker';
 import { WorkspacePanel } from './components/WorkspacePanel';
@@ -2522,6 +2523,20 @@ export default function App() {
     </span>
   ) : null;
 
+  // CHAT_ACTIONS: действия шапки чата (артефакты, новый чат, меню чата). Появляются, только когда в
+  // открытом чате есть хотя бы одно сообщение — на пк и на мобилке одинаково.
+  const chatActions =
+    activeSession && activeSession.messages.length > 0 ? (
+      <ChatHeaderActions
+        session={activeSession}
+        onNewChat={handleNewChat}
+        onShare={handleShareSession}
+        onPin={handlePinSession}
+        onRename={handleRenameSession}
+        onDelete={(id) => guardLeave(() => void handleDeleteSession(id))}
+      />
+    ) : null;
+
   // INCOGNITO_AURA: добавлено 2026-09-20
   // The incognito look is document-level state, so the amber aura can sit behind everything
   // (sidebar included) with the theme variables switching to the black/yellow palette.
@@ -2723,14 +2738,15 @@ export default function App() {
                     onUpgradeClick={handleUpgrade}
                   />
                 </div>
-                {isAgent ? (
-                  <div className="chat-header__actions">
-                    {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
+                <div className="chat-header__actions">
+                  {isAgent ? (
+                    /* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */
                     <UsageIndicator usage={usage} />
-                  </div>
-                ) : (
-                  incognitoControl
-                )}
+                  ) : (
+                    incognitoControl
+                  )}
+                  {chatActions}
+                </div>
               </div>
             )}
             {/* Desktop agent toolbar (the model picker stays in the composer). */}
@@ -2746,11 +2762,13 @@ export default function App() {
                 </button>
                 {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
                 <UsageIndicator usage={usage} />
+                {chatActions}
               </div>
             )}
-            {/* INCOGNITO_CHAT / LOGO_SWEEP: desktop chat header. Holds the compact mark that the
-                start-screen logo collapses into, plus the incognito control. */}
-            {!isMobile && !isAgent && !students && (
+            {/* INCOGNITO_CHAT / LOGO_SWEEP / CHAT_ACTIONS: desktop chat header (chat and students —
+                the actions must be reachable on desktop too). Holds the compact mark that the
+                start-screen logo collapses into, the incognito control and the chat actions. */}
+            {!isMobile && !isAgent && (
               <div className="chat-header chat-header--chat">
                 <div className="chat-header__left">
                   {showHeaderLogo && (
@@ -2759,7 +2777,10 @@ export default function App() {
                     </span>
                   )}
                 </div>
-                {incognitoControl}
+                <div className="chat-header__actions">
+                  {incognitoControl}
+                  {chatActions}
+                </div>
               </div>
             )}
             <ChatLayout
