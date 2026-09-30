@@ -42,6 +42,7 @@ internal static class SecurityTests
         Add("M17: stop reports running / queued / not found", TestStopOutcomesAsync);
         Add("M10/C2: host git ignores repo hooks and fsmonitor and strips stored tokens", TestGitHardeningAsync, GitAvailable);
         Add("GITHUB_REPO_SUBDIR: branch/commit find a repository in a workspace subfolder", TestGitRepoSubfolderAsync, GitInstalled);
+        Add("GITHUB_DELETE_BRANCH: deletes a branch and refuses protected ones", TestGitDeleteBranchAsync, GitInstalled);
     }
 
     // Program.cs has a top-level Assert local function that would shadow a `using static`; a class
@@ -709,6 +710,53 @@ internal static class SecurityTests
         var output = p.StandardOutput.ReadToEnd().Trim();
         p.WaitForExit();
         return output;
+    }
+
+    // GITHUB_DELETE_BRANCH: у github_action не было операции удаления ветки, хотя пользователь её просил.
+    private static async Task TestGitDeleteBranchAsync()
+    {
+        var root = TempRoot();
+        try
+        {
+            var workspace = Workspace(root);
+            var chatId = Guid.NewGuid();
+            var workspaceDir = workspace.GetTaskWorkspacePath(chatId);
+            var repoDir = Path.Combine(workspaceDir, "app");
+            Directory.CreateDirectory(repoDir);
+            RunGit(repoDir, "init", "-q");
+            await File.WriteAllTextAsync(Path.Combine(repoDir, "a.txt"), "a");
+            RunGit(repoDir, "add", "-A");
+            RunGit(repoDir, "-c", "user.email=a@b.c", "-c", "user.name=t", "commit", "-q", "-m", "init");
+            RunGit(repoDir, "checkout", "-q", "-b", "feature/temp");
+
+            // Удаление ТЕКУЩЕЙ ветки: инструмент обязан уйти на базовую и затем удалить её.
+            var deleted = await workspace.GitDeleteBranchAsync(chatId, "feature/temp", repoFolder: "app", deleteRemote: false, token: "");
+            Assert(deleted.Success, "deleting the current local branch works: " + deleted.Error);
+            Assert(CurrentBranch(repoDir) != "feature/temp", "the tool switched away from the deleted branch");
+            Assert(!LocalBranchExists(repoDir, "feature/temp"), "the branch is gone");
+
+            // Основная ветка не должна удаляться.
+            var protectedBranch = await workspace.GitDeleteBranchAsync(chatId, "main", repoFolder: "app", deleteRemote: false, token: "");
+            Assert(!protectedBranch.Success, "deleting main is refused");
+
+            // Отсутствующая ветка — не ошибка.
+            var missing = await workspace.GitDeleteBranchAsync(chatId, "nope", repoFolder: "app", deleteRemote: false, token: "");
+            Assert(missing.Success, "a missing branch is not an error");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    private static bool LocalBranchExists(string dir, string branch)
+    {
+        var psi = new ProcessStartInfo("git") { WorkingDirectory = dir, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var a in new[] { "rev-parse", "--verify", "--quiet", "refs/heads/" + branch }) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        p.StandardOutput.ReadToEnd();
+        p.WaitForExit();
+        return p.ExitCode == 0;
     }
 
     private static void RunGit(string dir, params string[] args)

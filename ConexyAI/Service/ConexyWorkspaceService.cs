@@ -515,6 +515,88 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         return new GitOperationResult(true, "Changes pushed successfully.", null);
     }
 
+    // GITHUB_DELETE_BRANCH: добавлено 2026-09-30. У github_action не было операции удаления ветки,
+    // хотя пользователи её просят («создай ветку, потом удали на GitHub»), и агент вместо честного
+    // отказа выдумывал успех. Удаляет ветку на origin (по флагу) и локально.
+    public async Task<GitOperationResult> GitDeleteBranchAsync(
+        Guid chatId,
+        string branchName,
+        string? repoFolder,
+        bool deleteRemote,
+        string token,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(branchName))
+            return new GitOperationResult(false, null, "Branch name is required.");
+        if (!IsSafeRefName(branchName))
+            return new GitOperationResult(false, null, "Invalid branch name.");
+
+        // Удаление основной ветки — слишком легко потерять работу; отказываем всегда.
+        var trimmed = branchName.Trim();
+        if (trimmed is "main" or "master" or "HEAD" || trimmed.StartsWith("origin/", StringComparison.Ordinal))
+            return new GitOperationResult(false, null, $"Refusing to delete the protected branch '{trimmed}'.");
+
+        if (deleteRemote && string.IsNullOrWhiteSpace(token))
+            return new GitOperationResult(false, null, "GitHub token is required to delete a remote branch.");
+
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
+
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
+        var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
+        if (unsafeRepo is not null)
+            return new GitOperationResult(false, null, unsafeRepo);
+
+        // Локально нельзя удалить ветку, на которой стоим, — сначала уходим на базовую.
+        var current = await RunGitAsync(workspaceDir, new[] { "rev-parse", "--abbrev-ref", "HEAD" }, token: null, ct, TimeSpan.FromSeconds(30));
+        if (current.Success && string.Equals(current.StdOut.Trim(), branchName, StringComparison.Ordinal))
+        {
+            var baseBranch = await ResolveDefaultBranchAsync(workspaceDir, ct);
+            var checkout = await RunGitAsync(workspaceDir, new[] { "checkout", baseBranch }, token: null, ct, TimeSpan.FromSeconds(60));
+            if (!checkout.Success)
+                return new GitOperationResult(false, null, $"Cannot delete the current branch: failed to switch to '{baseBranch}'. {checkout.StdErr}");
+        }
+
+        var messages = new List<string>();
+
+        if (deleteRemote)
+        {
+            var remote = await RunGitAsync(workspaceDir, new[] { "push", "origin", "--delete", branchName }, token, ct, TimeSpan.FromSeconds(120));
+            if (!remote.Success)
+                return new GitOperationResult(false, null, remote.StdErr);
+            messages.Add($"Deleted remote branch '{branchName}'.");
+        }
+
+        // Локальная ветка может отсутствовать (её не создавали в этом воркспейсе) — это не ошибка.
+        var local = await RunGitAsync(workspaceDir, new[] { "branch", "-D", branchName }, token: null, ct, TimeSpan.FromSeconds(60));
+        if (local.Success)
+            messages.Add($"Deleted local branch '{branchName}'.");
+
+        return new GitOperationResult(
+            true,
+            messages.Count > 0 ? string.Join(" ", messages) : $"Branch '{branchName}' was not present locally or on origin.",
+            null);
+    }
+
+    /// <summary>Имя базовой ветки репозитория (origin/HEAD), с фолбэком на main/master.</summary>
+    private async Task<string> ResolveDefaultBranchAsync(string workspaceDir, CancellationToken ct)
+    {
+        var head = await RunGitAsync(workspaceDir, new[] { "symbolic-ref", "--short", "refs/remotes/origin/HEAD" }, token: null, ct, TimeSpan.FromSeconds(30));
+        var name = head.Success ? head.StdOut.Trim() : string.Empty;
+        if (name.StartsWith("origin/", StringComparison.Ordinal))
+            name = name["origin/".Length..];
+        if (!string.IsNullOrWhiteSpace(name))
+            return name;
+
+        foreach (var candidate in new[] { "main", "master" })
+        {
+            var exists = await RunGitAsync(workspaceDir, new[] { "rev-parse", "--verify", candidate }, token: null, ct, TimeSpan.FromSeconds(30));
+            if (exists.Success)
+                return candidate;
+        }
+
+        return "main";
+    }
+
     public async Task<(string? Owner, string? Repo)> ResolveRepositoryAsync(Guid chatId, string? repoUrl, string? repoFolder = null, CancellationToken ct = default)
     {
         if (!string.IsNullOrWhiteSpace(repoUrl))

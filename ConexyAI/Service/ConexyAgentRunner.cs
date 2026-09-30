@@ -344,8 +344,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
             привычек, но не отменяют правил безопасности и подтверждения команд.
 
         14. **GitHub — только через `github_action`.** Клонирование репозитория с авторизацией,
-            создание ветки, коммит с отправкой (`push`) и pull request выполняй инструментом
-            `github_action`, а не `bash`-командами `git`. Личный токен пользователя доступен ТОЛЬКО
+            создание ветки, коммит с отправкой (`push`), удаление ветки (в том числе на GitHub —
+            операция `delete_branch`) и pull request выполняй инструментом `github_action`, а не
+            `bash`-командами `git`. Личный токен пользователя доступен ТОЛЬКО
             этому инструменту; внутри песочницы креденшелов нет, поэтому `bash: git push` и
             клонирование приватных репозиториев там работать не будут (публичные репозитории можно
             клонировать обычным `bash: git clone` — это без авторизации). Не ищи токен в `bash`,
@@ -567,6 +568,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var consecutiveToolFailures = 0;
         var totalToolFailures = 0;
         var toolFailureCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        // TOOL_INTEGRITY: добавлено 2026-09-30 — сколько раз КАЖДЫЙ инструмент реально выполнился
+        // (и сколько из них с ошибкой). По этому счёту формируется машинная приписка к ответу: модель
+        // может написать в тексте что угодно, но эта сводка строится системой, а не моделью, и прямо
+        // противоречит выдуманным «успехам» (главная жалоба: агент рапортовал о push, которого не было).
+        var executedToolCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var nudgedTools = new HashSet<string>(StringComparer.Ordinal);
         var toolBudgetExhausted = false;
         var completedSteps = 0;
@@ -722,6 +728,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 var answer = string.IsNullOrWhiteSpace(finalText)
                     ? redNote is null ? "Готово. Задача выполнена." : string.Empty
                     : finalText;
+
+                // TOOL_INTEGRITY: машинная (не модельная) приписка о том, что реально вызывалось.
+                var integrityNote = BuildToolIntegrityNote(executedToolCounts, toolFailureCounts, finalText);
                 await SendAgentStatusAsync(taskId, "idle", "Готово", ct: ct);
                 if (string.IsNullOrWhiteSpace(finalText) && answer.Length > 0)
                 {
@@ -731,6 +740,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 if (redNote is not null)
                 {
                     await StreamNoteAsync(group, answer, redNote, ct);
+                }
+
+                if (integrityNote is not null)
+                {
+                    await StreamNoteAsync(group, answer, integrityNote, ct);
                 }
 
                 await group.SendAsync("OnLog", "[Agent Completed] Solution finalized.", ct);
@@ -744,11 +758,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // No file modifications were made: the model's text is the whole answer.
                 if (changedFiles.Count == 0)
                 {
-                    return AppendNote(answer, redNote);
+                    return AppendNote(answer, JoinNotes(redNote, integrityNote));
                 }
 
                 // File changes were made: return the final report plus a summary card.
-                return BuildFinalReport(AppendNote(finalText, redNote), changedFiles, executedCommands);
+                return BuildFinalReport(AppendNote(finalText, JoinNotes(redNote, integrityNote)), changedFiles, executedCommands);
             }
 
             // AGENT_TOOL_FAILURES: инструменты, упавшие именно в этом ходе (для одного сообщения
@@ -832,6 +846,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 if (toolAllowed && refusal is null)
                 {
                     loopGuard.Record(toolName, toolCall.Function.Arguments, result.Output);
+                    // TOOL_INTEGRITY: считаем именно РЕАЛЬНО доведённые до вызова инструменты.
+                    executedToolCounts[toolName] = executedToolCounts.GetValueOrDefault(toolName) + 1;
                 }
 
                 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
@@ -940,7 +956,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // выполненная (как и на исчерпании шагов/бюджета ошибок), поэтому без явного сообщения
         // пользователь увидел бы просто оборванный текст.
         var tokenLimitNote = tokenBudgetExceeded ? TokenLimitNote(remainingTokens, runTokens, poolResetsAt) : null;
-        var note = JoinNotes(tokenLimitNote, stillFailing);
+        var stopIntegrityNote = BuildToolIntegrityNote(executedToolCounts, toolFailureCounts, accumulated);
+        var note = JoinNotes(tokenLimitNote, stillFailing, stopIntegrityNote);
         if (note is not null)
         {
             await StreamNoteAsync(group, accumulated, note, ct);
@@ -1033,6 +1050,54 @@ public class ConexyAgentRunner : IConexyAgentRunner
     {
         var filled = notes.Where(n => !string.IsNullOrWhiteSpace(n)).ToArray();
         return filled.Length == 0 ? null : string.Join("\n\n", filled);
+    }
+
+    // TOOL_INTEGRITY: добавлено 2026-09-30.
+    //
+    // Модель может написать в тексте, что вызвала инструмент и что «push прошёл», даже если вызова не
+    // было (наблюдалось вживую). Эта сводка строится СИСТЕМОЙ по фактическим вызовам и прямо
+    // противоречит выдуманным успехам. Добавляется только когда есть что опровергать и только в
+    // режиме с доступом к github_action, поэтому обычные ответы Cowork/чата не шумят.
+    private static readonly string[] ToolClaimMarkers =
+    {
+        "github_action", "Switched to branch", "Deleted branch", "Pushed '",
+        "to origin", "Created pull request", "pull request #", "git push",
+        "git clone", "git commit", "запушен", "запушил", "закоммитил",
+    };
+
+    private string? BuildToolIntegrityNote(
+        IReadOnlyDictionary<string, int> executedTools,
+        IReadOnlyDictionary<string, int> failedTools,
+        string? finalText)
+    {
+        // Только там, где github_action вообще доступен: иначе упоминание git в обычном ответе
+        // приводило бы к ложной («опровергающей») приписке.
+        if (!_profile.Allows("github_action"))
+            return null;
+        if (string.IsNullOrWhiteSpace(finalText))
+            return null;
+        if (!ToolClaimMarkers.Any(m => finalText.Contains(m, StringComparison.OrdinalIgnoreCase)))
+            return null;
+
+        var githubCalls = executedTools.GetValueOrDefault("github_action");
+        var githubFailures = failedTools.GetValueOrDefault("github_action");
+
+        if (githubCalls == 0)
+        {
+            return executedTools.Count > 0
+                ? "Проверено системой: за этот прогон инструмент `github_action` не вызывался ни разу — " +
+                  "если в ответе выше сказано, что операции с GitHub (клонирование, ветки, push, PR) выполнены, это неверно."
+                : "Проверено системой: за этот прогон не было вызвано ни одного инструмента — " +
+                  "если в ответе выше сказано, что что-то было запущено или выполнено, это неверно.";
+        }
+
+        if (githubFailures >= githubCalls)
+        {
+            return $"Проверено системой: все вызовы `github_action` ({githubCalls}) завершились ошибкой — " +
+                   "операция с GitHub не выполнена, даже если в ответе сказано иначе.";
+        }
+
+        return null;
     }
 
     // PROJECT_RULES: добавлено 2026-09-24
@@ -1990,6 +2055,20 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 return new ConexyToolResult(toolCall.Id, res.Success ? res.Message! : res.Error!, !res.Success);
             }
 
+            case "delete_branch":
+            {
+                var branchName = GetString(root, "branch_name");
+                if (string.IsNullOrWhiteSpace(branchName))
+                    return new ConexyToolResult(toolCall.Id, "delete_branch requires 'branch_name'.", true);
+
+                var deleteRepoFolder = Optional(root, "repo_folder");
+                var deleteRemote = OptionalBool(root, "delete_remote") ?? true;
+
+                var res = await _workspaceService.GitDeleteBranchAsync(_job.ChatId, branchName, deleteRepoFolder, deleteRemote, token, ct);
+                await LogAsync(_job.TaskId, $"[Git Delete Branch] {branchName} (remote={deleteRemote})", ct);
+                return new ConexyToolResult(toolCall.Id, res.Success ? res.Message! : res.Error!, !res.Success);
+            }
+
             case "create_pull_request":
             {
                 var title = GetString(root, "title");
@@ -2218,6 +2297,21 @@ public class ConexyAgentRunner : IConexyAgentRunner
         return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
+    private static bool? OptionalBool(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var el))
+            return null;
+        return el.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            // Модели иногда присылают "true"/"false" строкой или 0/1 — принимаем и это.
+            JsonValueKind.String => bool.TryParse(el.GetString(), out var parsed) ? parsed : null,
+            JsonValueKind.Number => el.TryGetInt32(out var number) ? number != 0 : null,
+            _ => null,
+        };
+    }
+
     private static int GetInt(JsonElement root, string name, int fallback)
     {
         return root.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var v)
@@ -2420,15 +2514,16 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     skip_reason = new { type = "string", description = "Required when status = skipped" }
                 }, required = new[] { "id", "content", "status" } } }
             }, required = new[] { "todos" } }),
-        Function("github_action", "Perform a GitHub workflow operation (authenticated clone, branch, commit+push, pull request) with the user's OWN Personal Access Token. The token lives only server-side for this tool: the sandbox has no git credentials. After clone_repo with target_folder, pass the same folder as repo_folder to create_branch/commit_and_push/create_pull_request (they also auto-detect it when the workspace holds a single repo). If it answers that the token is missing or rejected, stop and tell the user to add a Personal Access Token in Settings → GitHub.",
+        Function("github_action", "Perform a GitHub workflow operation (authenticated clone, branch, commit+push, delete branch, pull request) with the user's OWN Personal Access Token. The token lives only server-side for this tool: the sandbox has no git credentials. After clone_repo with target_folder, pass the same folder as repo_folder to create_branch/commit_and_push/create_pull_request (they also auto-detect it when the workspace holds a single repo). If it answers that the token is missing or rejected, stop and tell the user to add a Personal Access Token in Settings → GitHub.",
             new { type = "object", properties = new {
-                operation = new { type = "string", @enum = new[] { "clone_repo", "create_branch", "commit_and_push", "create_pull_request" } },
+                operation = new { type = "string", @enum = new[] { "clone_repo", "create_branch", "commit_and_push", "delete_branch", "create_pull_request" } },
                 repo_url = new { type = "string", description = "Repository URL (owner/repo or full URL)" },
                 target_folder = new { type = "string", description = "Target folder for clone_repo (relative to the workspace)" },
                 repo_folder = new { type = "string", description = "Folder of the cloned repository inside the workspace, used by create_branch/commit_and_push/create_pull_request when the repo is not at the workspace root" },
                 repo = new { type = "string", description = "Repository as owner/repo" },
                 branch = new { type = "string", description = "Branch name" },
                 branch_name = new { type = "string", description = "Branch name to create" },
+                delete_remote = new { type = "boolean", description = "For delete_branch: also delete the branch on origin (default true)" },
                 commit_message = new { type = "string", description = "Commit message" },
                 changed_files = new { type = "array", items = new { type = "string" }, description = "Files to stage (defaults to all)" },
                 title = new { type = "string", description = "Pull request title" },

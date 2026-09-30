@@ -50,6 +50,16 @@ public interface IConexyWorkspaceService
         string? repoFolder = null,
         CancellationToken ct = default);
 
+    /// <summary>Deletes a branch locally and, when <paramref name="deleteRemote"/> is set, on origin.</summary>
+    /// <remarks>GITHUB_DELETE_BRANCH: добавлено 2026-09-30 — у github_action не было операции удаления ветки.</remarks>
+    Task<GitOperationResult> GitDeleteBranchAsync(
+        Guid chatId,
+        string branchName,
+        string? repoFolder,
+        bool deleteRemote,
+        string token,
+        CancellationToken ct = default);
+
     /// <summary>Resolves the <c>owner/repo</c> of the workspace repository from the git remote.</summary>
     Task<(string? Owner, string? Repo)> ResolveRepositoryAsync(Guid chatId, string? repoUrl, string? repoFolder = null, CancellationToken ct = default);
 
