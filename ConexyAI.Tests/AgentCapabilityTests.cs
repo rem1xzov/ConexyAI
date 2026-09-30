@@ -733,6 +733,8 @@ internal static class AgentCapabilityTests
                 "Coder knows the page reader, the mandatory plan and the self-correction loop");
             Assert(coder.Contains("НЕ ВЫДУМЫВАЙ ФАКТЫ") && coder.Contains("не уверен") && coder.Contains("web_search"),
                 "Coder is told not to invent facts and to check the web when unsure");
+            Assert(coder.Contains("github_action") && coder.Contains("Настройки → GitHub"),
+                "Coder must use github_action for GitHub and point the user to Settings → GitHub when the token is missing");
             foreach (var prompt in new[] { cowork, coder })
             {
                 Assert(prompt.Contains("<conexy_artifact identifier=") && prompt.Contains("text/mermaid") && prompt.Contains("application/code"),

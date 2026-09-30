@@ -260,7 +260,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         Любой созданный файл должен физически появиться в файловой системе воркспейса.
 
         ИНСТРУМЕНТЫ:
-        Ты работаешь инструментами: `str_replace_editor` (view/create/str_replace/insert/undo), `bash`, `web_search` (поиск актуальной информации в интернете), `fetch_web_page` (чтение страницы по URL), `search_user_chats` (поиск по прошлым чатам пользователя) и системная память задачи (`todo_write`).
+        Ты работаешь инструментами: `str_replace_editor` (view/create/str_replace/insert/undo), `bash`, `github_action` (операции с GitHub от имени пользователя по его личному токену: клонирование, ветки, commit+push, pull request), `web_search` (поиск актуальной информации в интернете), `fetch_web_page` (чтение страницы по URL), `search_user_chats` (поиск по прошлым чатам пользователя) и системная память задачи (`todo_write`).
         Для документов: `create_document` создаёт .docx/.xlsx/.pptx из Markdown, `read_document_file` читает текст .docx/.xlsx/.pptx/.pdf (не открывай их через `view` — это двоичные файлы).
 
         ## Правила использования инструментов
@@ -341,6 +341,20 @@ public class ConexyAgentRunner : IConexyAgentRunner
             `CLAUDE.md`, `.conexy/rules.md` из корня рабочей области) — это требования владельца
             репозитория: стиль кода, команды сборки и тестов, архитектура, запреты. Они важнее твоих
             привычек, но не отменяют правил безопасности и подтверждения команд.
+
+        14. **GitHub — только через `github_action`.** Клонирование репозитория с авторизацией,
+            создание ветки, коммит с отправкой (`push`) и pull request выполняй инструментом
+            `github_action`, а не `bash`-командами `git`. Личный токен пользователя доступен ТОЛЬКО
+            этому инструменту; внутри песочницы креденшелов нет, поэтому `bash: git push` и
+            клонирование приватных репозиториев там работать не будут (публичные репозитории можно
+            клонировать обычным `bash: git clone` — это без авторизации). Не ищи токен в `bash`,
+            `env`, файлах `~/.git-credentials`, `.netrc` или переменных окружения и не пытайся обойти
+            ограничение — его там нет и не должно быть.
+            Если `github_action` отвечает, что токена нет или он отклонён, — останови работу и прямо
+            скажи пользователю: «Чтобы я мог клонировать/пушить и открывать PR от вашего имени,
+            добавьте свой GitHub Personal Access Token в настройках приложения: Настройки → GitHub,
+            и повторите запрос». Кратко поясни, зачем он: после этого коммиты и PR пойдут от его
+            аккаунта, а не от служебного; без токена доступно только чтение публичных репозиториев.
 
         ## ПРАВИЛА РАБОТЫ С ДОКУМЕНТАМИ И БАЗОЙ ЗНАНИЙ (RAG):
 
@@ -1906,7 +1920,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
         if (string.IsNullOrWhiteSpace(token))
             return new ConexyToolResult(
                 toolCall.Id,
-                "github_action requires the user's own GitHub token. Ask the user to add a Personal Access Token in Settings → GitHub.",
+                "GitHub token is not configured. Do not keep probing for it (there are no credentials in the " +
+                "sandbox). Stop the GitHub part and tell the user: open Settings → GitHub in the app, paste " +
+                "your Personal Access Token (classic with the 'repo' scope, or fine-grained with Contents " +
+                "and Pull requests) and repeat the request — then clones, commits and pull requests will go " +
+                "under your account. Without a token only public repositories can be read.",
                 true);
 
         switch (operation)
@@ -2389,7 +2407,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     skip_reason = new { type = "string", description = "Required when status = skipped" }
                 }, required = new[] { "id", "content", "status" } } }
             }, required = new[] { "todos" } }),
-        Function("github_action", "Perform a GitHub workflow operation using the configured PAT.",
+        Function("github_action", "Perform a GitHub workflow operation (authenticated clone, branch, commit+push, pull request) with the user's OWN Personal Access Token. The token lives only server-side for this tool: the sandbox has no git credentials. If it answers that the token is missing or rejected, stop and tell the user to add a Personal Access Token in Settings → GitHub.",
             new { type = "object", properties = new {
                 operation = new { type = "string", @enum = new[] { "clone_repo", "create_branch", "commit_and_push", "create_pull_request" } },
                 repo_url = new { type = "string", description = "Repository URL (owner/repo or full URL)" },
