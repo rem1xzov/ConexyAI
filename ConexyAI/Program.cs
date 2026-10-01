@@ -250,6 +250,8 @@ builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IUserMemoryService, UserMemoryService>();
 builder.Services.AddSingleton<IMemoryExtractionQueue, MemoryExtractionQueue>();
+// CHAT_TITLE_TOPIC: очередь названий чатов (генерация идёт воркером ниже).
+builder.Services.AddSingleton<IChatTitleQueue, ChatTitleQueue>();
 // INCOGNITO_CHAT: добавлено 2026-09-20
 builder.Services.AddSingleton<IIncognitoChatStore, IncognitoChatStore>();
 // INCOGNITO_CHAT: добавлено 2026-09-24 — ревью M7: файлы просроченных инкогнито-тредов удаляются.
@@ -293,6 +295,8 @@ builder.Services.AddSingleton<ITokenService, JwtTokenService>();
 builder.Services.AddHostedService<ConexyBackgroundWorker>();
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 builder.Services.AddHostedService<MemoryExtractionWorker>();
+// CHAT_TITLE_TOPIC: фоновое название чата по теме (flash-модель, лимиты пользователя не тратит).
+builder.Services.AddHostedService<ChatTitleWorker>();
 builder.Services.AddHttpClient<IConexyLlmClient, ConexyLlmClient>();
 builder.Services.AddHttpClient<IWebSearchService, JsonSeoSearchService>();
 // AGENT_WEB_TOOLS: добавлено 2026-09-24 — начало блока агентских инструментов (ws/be-agent).

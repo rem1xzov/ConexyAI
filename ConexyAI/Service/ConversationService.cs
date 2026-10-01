@@ -151,6 +151,8 @@ public class ConversationService : IConversationService
     // сервиса без них продолжали работать).
     private readonly IUserPreferencesService? _preferences;
     private readonly IChatAccessService? _chatAccess;
+    // CHAT_TITLE_TOPIC: необязательна (как и _chatAccess), чтобы тестовые сборки без неё работали.
+    private readonly IChatTitleQueue? _titleQueue;
 
     public ConversationService(
         IChatHistoryRepository chatHistory,
@@ -160,10 +162,12 @@ public class ConversationService : IConversationService
         IOptions<ConversationOptions> options,
         ILogger<ConversationService> logger,
         IUserPreferencesService? preferences = null,
-        IChatAccessService? chatAccess = null)
+        IChatAccessService? chatAccess = null,
+        IChatTitleQueue? titleQueue = null)
     {
         _preferences = preferences;
         _chatAccess = chatAccess;
+        _titleQueue = titleQueue;
         _chatHistory = chatHistory;
         _incognitoChat = incognitoChat;
         _memory = memory;
@@ -371,6 +375,13 @@ public class ConversationService : IConversationService
         if (userMessageCount == 1 || (userMessageCount > 0 && userMessageCount % threshold == 0))
         {
             _memory.EnqueueExtraction(context.UserId, context.ChatId);
+        }
+
+        // CHAT_TITLE_TOPIC: на ПЕРВОМ сообщении запускаем фоновую генерацию названия по теме. Первое
+        // сообщение уже сохранено; воркер подставит название, только если пользователь ещё не назвал чат.
+        if (userMessageCount == 1 && _titleQueue is not null && !string.IsNullOrWhiteSpace(context.UserMessage))
+        {
+            await _titleQueue.EnqueueAsync(new ChatTitleJob(context.UserId, context.ChatId, context.UserMessage), ct);
         }
     }
 
