@@ -6803,6 +6803,18 @@ body {
     max-height: 100dvh;
   }
 
+  /* SETTINGS_MOBILE: вкладки «Общие / Лимиты / Персонализация / Память / GitHub» в один ряд не
+     влезают — последняя уезжала за край и была недоступна. Разрешаем перенос и даём кнопкам
+     расти по тексту, а не сжиматься до нечитаемого. */
+  .settings-tabs {
+    flex-wrap: wrap;
+  }
+  .settings-tabs .settings-seg {
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+  }
+
   /* Hero greeting -> smaller font */
   .hero__title {
     font-size: 24px;
