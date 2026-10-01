@@ -52,7 +52,7 @@ internal static class UserContextPromptTests
     private static Task ProductKnowledgeAsync()
     {
         var text = PromptFragments.ProductKnowledge;
-        foreach (var marker in new[] { "Чат", "Ученики", "Coder", "Cowork", "ConexyV1-flash", "Free", "ProMax" })
+        foreach (var marker in new[] { "Чат", "Ученики", "Coder", "Cowork", "ConexyV1-flash", "Free", "ProMax", "Ultra" })
         {
             Assert(text.Contains(marker), $"product knowledge must mention '{marker}'");
         }

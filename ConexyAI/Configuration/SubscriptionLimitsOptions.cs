@@ -18,6 +18,9 @@ public class SubscriptionLimitsOptions
 
     public TierLimits Pro { get; set; } = new();
     public TierLimits ProMax { get; set; } = new();
+
+    // ANNUAL_ULTRA: добавлено 2026-10-01 — годовой тариф Ultra (самые большие лимиты).
+    public TierLimits Ultra { get; set; } = new();
 }
 
 public class TierLimits

@@ -26,6 +26,9 @@ internal static class OrchestraTests
             "an admin must be allowed");
         Assert(OrchestraEligibility.IsAllowed("ProMax", true, ConexyModelType.ConexyCoder),
             "an admin on ProMax must be allowed");
+        // ANNUAL_ULTRA: годовой тариф выше ProMax — оркестр ему тоже доступен.
+        Assert(OrchestraEligibility.IsAllowed("Ultra", false, ConexyModelType.ConexyCoder),
+            "Ultra must be allowed in the coder mode");
 
         // Младшие тарифы — нельзя.
         foreach (var tier in new[] { "Free", "Go", "Pro", "" })

@@ -45,14 +45,15 @@ public class SubscriptionService : ISubscriptionService
 
     public async Task<SubscriptionUsageDto> GetUsageAsync(Guid userId, CancellationToken ct = default)
     {
-        // ADMIN_UNLIMITED: добавлено 2026-09-19 — admins have no limits and never create a
-        // UserUsageCounter row, so return a synthetic "Admin" snapshot without touching the DB.
-        // TIER_SYNC: пользователь читается один раз на вызов — из него и признак админа, и тариф.
+        // ADMIN_UNLIMITED: изменено 2026-10-01 — админам по-прежнему ничего не ограничивает, но теперь
+        // ИХ расход тоже считается, чтобы тот же кружок был осмысленным (раньше отдавался синтетический
+        // ноль без записи в БД). Лимиты при этом отдаются как «бесконечные».
         var user = await _userRepository.GetByIdAsync(userId, ct);
-        if (user?.IsAdmin == true)
-            return AdminUsage();
-
         var counter = await GetOrCreateAsync(userId, user, ct);
+
+        if (user?.IsAdmin == true)
+            return AdminUsage(counter);
+
         var limits = GetTierLimits(counter.Tier);
         return new SubscriptionUsageDto(
             counter.Tier.ToString(),
@@ -113,11 +114,9 @@ public class SubscriptionService : ISubscriptionService
 
     public async Task RecordRequestAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default)
     {
-        // ADMIN_UNLIMITED: добавлено 2026-09-19 — admins never accrue usage.
+        // ADMIN_UNLIMITED: изменено 2026-10-01 — расход админа теперь учитывается (для кружка),
+        // но ни на что не влияет: CheckBeforeRunAsync для админа всегда разрешает запуск.
         var user = await _userRepository.GetByIdAsync(userId, ct);
-        if (user?.IsAdmin == true)
-            return;
-
         var counter = await GetOrCreateAsync(userId, user, ct);
         if (modelType == ConexyModelType.ConexyV1Pro)
             counter.ProRequestsUsed++;
@@ -130,11 +129,8 @@ public class SubscriptionService : ISubscriptionService
     {
         if (tokens <= 0) return;
 
-        // ADMIN_UNLIMITED: добавлено 2026-09-19 — admins never accrue usage.
+        // ADMIN_UNLIMITED: изменено 2026-10-01 — расход админа учитывается, но не блокирует.
         var user = await _userRepository.GetByIdAsync(userId, ct);
-        if (user?.IsAdmin == true)
-            return;
-
         var counter = await GetOrCreateAsync(userId, user, ct);
 
         // COWORK_BUDGET: Cowork платит из своего бюджета, Coder — из агентского.
@@ -255,17 +251,19 @@ public class SubscriptionService : ISubscriptionService
         SubscriptionTier.Go => _options.Value.Go,
         SubscriptionTier.Pro => _options.Value.Pro,
         SubscriptionTier.ProMax => _options.Value.ProMax,
+        // ANNUAL_ULTRA: добавлено 2026-10-01
+        SubscriptionTier.Ultra => _options.Value.Ultra,
+        // ADMIN_UNLIMITED: окна админского счётчика берём у Ultra; лимиты всё равно заменяются на ∞.
+        SubscriptionTier.Admin => _options.Value.Ultra,
         _ => _options.Value.Free
     };
 
-    // ADMIN_UNLIMITED: добавлено 2026-09-19
-    // TIER_SYNC: признак админа больше не читается отдельным запросом — пользователь уже загружен
-    // в каждом публичном методе, и GetOrCreateAsync получает его же.
-
-    private static SubscriptionUsageDto AdminUsage() =>
+    // ADMIN_UNLIMITED: изменено 2026-10-01 — расход админа реальный, а лимиты «бесконечные»,
+    // поэтому один и тот же кружок работает и у обычного пользователя, и у админа.
+    private static SubscriptionUsageDto AdminUsage(UserUsageCounterEntity counter) =>
         new("Admin",
-            0, long.MaxValue, DateTime.MaxValue,
-            0, long.MaxValue, DateTime.MaxValue,
-            0, long.MaxValue, DateTime.MaxValue,
-            0, long.MaxValue, DateTime.MaxValue);
+            counter.FlashRequestsUsed, long.MaxValue, counter.FlashWindowResetAt,
+            counter.ProRequestsUsed, long.MaxValue, counter.ProWindowResetAt,
+            counter.AgentTokensUsed, long.MaxValue, counter.AgentWindowResetAt,
+            counter.CoworkTokensUsed, long.MaxValue, counter.CoworkWindowResetAt);
 }

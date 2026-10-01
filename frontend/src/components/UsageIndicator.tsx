@@ -9,6 +9,16 @@ function formatCount(n: number): string {
   return String(n);
 }
 
+// ADMIN_UNLIMITED: бэкенд отдаёт админам лимит как long.MaxValue (бесконечность). В JS такое число
+// теряет точность, поэтому всё, что выше 1e15, показываем как «∞», а не как гигантское число.
+const INFINITE_LIMIT = 1e15;
+function isInfiniteLimit(limit: number): boolean {
+  return limit >= INFINITE_LIMIT;
+}
+function formatLimit(limit: number): string {
+  return isInfiniteLimit(limit) ? '∞' : formatCount(limit);
+}
+
 function formatDate(iso: string, lang: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -58,21 +68,12 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
 
   if (!usage) return null;
 
-  // ADMIN_UNLIMITED: добавлено 2026-09-19 — admins have no limits; show a badge instead of
-  // a percentage.
-  if (usage.tier === 'Admin') {
-    return (
-      <div className="usage-indicator">
-        <span className="usage-indicator__admin" title={t('usage.adminTitle')}>
-          {t('usage.admin')}
-        </span>
-      </div>
-    );
-  }
-
-  const pct = clampPct(usage.agentLimit > 0 ? (usage.agentUsed / usage.agentLimit) * 100 : 0);
+  const infinite = isInfiniteLimit(usage.agentLimit);
+  const pct = infinite
+    ? 0
+    : clampPct(usage.agentLimit > 0 ? (usage.agentUsed / usage.agentLimit) * 100 : 0);
   // LIMIT_LOCK: бюджет выбран полностью — это состояние, а не просто «почти 100%».
-  const exhausted = usage.agentLimit > 0 && usage.agentUsed >= usage.agentLimit;
+  const exhausted = !infinite && usage.agentLimit > 0 && usage.agentUsed >= usage.agentLimit;
   const color = ringColor(pct);
   const radius = 15;
   const circumference = 2 * Math.PI * radius;
@@ -97,7 +98,7 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
         // Точные числа и дата сброса — в подсказке, а не только в раскрытом списке.
         title={t('usage.tooltip', {
           used: usage.agentUsed.toLocaleString(i18n.language === 'en' ? 'en-US' : 'ru-RU'),
-          limit: usage.agentLimit.toLocaleString(i18n.language === 'en' ? 'en-US' : 'ru-RU'),
+          limit: formatLimit(usage.agentLimit),
           percent: Math.round(pct),
           date: formatDate(usage.agentResetsAt, i18n.language),
         })}
@@ -127,23 +128,23 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
 
       {/* Компактная подпись рядом с кольцом: «140k / 200k». На узких экранах её скрывает CSS —
           там остаётся кольцо и подсказка. */}
-      <span className="usage-indicator__amount" title={t('usage.tokens', { used: formatCount(usage.agentUsed), limit: formatCount(usage.agentLimit) })}>
+      <span className="usage-indicator__amount" title={t('usage.tokens', { used: formatCount(usage.agentUsed), limit: formatLimit(usage.agentLimit) })}>
         {exhausted
           ? t('usage.exhausted')
-          : `${formatCount(usage.agentUsed)} / ${formatCount(usage.agentLimit)}`}
+          : `${formatCount(usage.agentUsed)} / ${formatLimit(usage.agentLimit)}`}
       </span>
 
       {open && (
         <div className="usage-indicator__popover">
           <div className="usage-indicator__tier">{t('usage.tier', { tier: usage.tier })}</div>
           {rows.map((r) => {
-            const rpct = clampPct(r.limit > 0 ? (r.used / r.limit) * 100 : 0);
+            const rpct = clampPct(r.limit > 0 && !isInfiniteLimit(r.limit) ? (r.used / r.limit) * 100 : 0);
             return (
               <div key={r.label} className="usage-indicator__row">
                 <div className="usage-indicator__row-head">
                   <span className="usage-indicator__label">{r.label}</span>
                   <span className="usage-indicator__value">
-                    {formatCount(r.used)} / {formatCount(r.limit)}
+                    {formatCount(r.used)} / {formatLimit(r.limit)}
                   </span>
                 </div>
                 <div className="usage-indicator__bar">

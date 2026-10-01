@@ -15,7 +15,7 @@ public class PaymentEntity
     /// <summary>Идентификатор плана из каталога (Pro, ProMaxAnnual, …).</summary>
     public string PlanId { get; set; } = string.Empty;
 
-    /// <summary>Выдаваемый тариф (Go/Pro/ProMax) — снимок на момент покупки.</summary>
+    /// <summary>Выдаваемый тариф (Go/Pro/ProMax/Ultra) — снимок на момент покупки.</summary>
     public string Tier { get; set; } = string.Empty;
 
     /// <summary>На сколько месяцев выдаётся доступ (из каталога планов).</summary>

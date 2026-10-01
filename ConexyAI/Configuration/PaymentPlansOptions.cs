@@ -21,7 +21,7 @@ public class PaymentPlansOptions
 /// <summary>Один покупаемый тариф: сколько списать, что выдать и на сколько.</summary>
 public class PaymentPlan
 {
-    /// <summary>Выдаваемый тариф. Должен совпадать с именем <see cref="Model.SubscriptionTier"/> (Go/Pro/ProMax).</summary>
+    /// <summary>Выдаваемый тариф. Должен совпадать с именем <see cref="Model.SubscriptionTier"/> (Go/Pro/ProMax/Ultra).</summary>
     public string Tier { get; set; } = string.Empty;
 
     /// <summary>Сумма к списанию в рублях (целое число рублей).</summary>

@@ -24,6 +24,8 @@ public static class OrchestraEligibility
     {
         if (modelType != ConexyModelType.ConexyCoder) return false;
         if (isAdmin) return true;
-        return string.Equals(tier, RequiredTier, StringComparison.OrdinalIgnoreCase);
+        // ANNUAL_ULTRA: годовой Ultra выше ProMax, поэтому оркестр ему тоже доступен.
+        return string.Equals(tier, RequiredTier, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(tier, "Ultra", StringComparison.OrdinalIgnoreCase);
     }
 }

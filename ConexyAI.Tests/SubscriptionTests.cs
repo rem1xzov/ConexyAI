@@ -24,6 +24,7 @@ internal static class SubscriptionTests
     {
         TestRegistry.Add("subs TIER_SYNC: the counter follows the user's tier, its limits and windows", TierSyncAsync);
         TestRegistry.Add("subs COWORK: paid plans only, with a token budget of its own", CoworkAsync);
+        TestRegistry.Add("subs ADMIN: admins are unlimited but their usage is tracked", AdminAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -45,10 +46,11 @@ internal static class SubscriptionTests
         {
             // Числа те же, что в appsettings.json, но заданы здесь явно: этот тест проверяет ЛОГИКУ
             // лимитов, а не то, что кто-то не переписал конфиг.
-            o.Free = Limits(100, 20, 200 * K, 0, coworkEnabled: false, agentWindowDays: 30);
-            o.Go = Limits(150, 50, 500 * K, 200 * K, coworkEnabled: true);
-            o.Pro = Limits(250, 150, 1_000 * K, 500 * K, coworkEnabled: true);
-            o.ProMax = Limits(300, 200, 2_500 * K, 750 * K, coworkEnabled: true);
+            o.Free = Limits(100, 20, 400 * K, 0, coworkEnabled: false, agentWindowDays: 30);
+            o.Go = Limits(150, 50, 1_000 * K, 1_000 * K, coworkEnabled: true);
+            o.Pro = Limits(250, 150, 2_000 * K, 2_000 * K, coworkEnabled: true);
+            o.ProMax = Limits(300, 200, 3_500 * K, 3_500 * K, coworkEnabled: true);
+            o.Ultra = Limits(300, 200, 4_000 * K, 4_000 * K, coworkEnabled: true);
         });
         services.AddScoped<ISubscriptionService, SubscriptionService>();
         return services.BuildServiceProvider();
@@ -93,17 +95,23 @@ internal static class SubscriptionTests
         var proMax = await AddUserAsync(sp, SubscriptionTier.ProMax);
         var proMaxUsage = await subs.GetUsageAsync(proMax);
         Assert(proMaxUsage.Tier == "ProMax", $"the counter must adopt the user's tier, got {proMaxUsage.Tier}");
-        Assert(proMaxUsage.AgentLimit == 2_500 * K, $"ProMax agent budget must be 2.5M, got {proMaxUsage.AgentLimit}");
-        Assert(proMaxUsage.CoworkLimit == 750 * K, $"ProMax cowork budget must be 750k, got {proMaxUsage.CoworkLimit}");
+        Assert(proMaxUsage.AgentLimit == 3_500 * K, $"ProMax agent budget must be 3.5M, got {proMaxUsage.AgentLimit}");
+        Assert(proMaxUsage.CoworkLimit == 3_500 * K, $"ProMax cowork budget must equal the agent budget, got {proMaxUsage.CoworkLimit}");
         Assert(proMaxUsage.FlashLimit == 300 && proMaxUsage.ProLimit == 200,
             "the flash/pro request limits must stay as they were");
+
+        // ANNUAL_ULTRA: годовой тариф — самая большая полка.
+        var ultra = await AddUserAsync(sp, SubscriptionTier.Ultra);
+        var ultraUsage = await subs.GetUsageAsync(ultra);
+        Assert(ultraUsage.Tier == "Ultra", $"Ultra must be a tier of its own, got {ultraUsage.Tier}");
+        Assert(ultraUsage.AgentLimit == 4_000 * K && ultraUsage.CoworkLimit == 4_000 * K, "Ultra token budgets");
 
         // Go: свои числа запросов и токенов.
         var go = await AddUserAsync(sp, SubscriptionTier.Go);
         var goUsage = await subs.GetUsageAsync(go);
         Assert(goUsage.Tier == "Go", $"Go must be a tier of its own, got {goUsage.Tier}");
         Assert(goUsage.FlashLimit == 150 && goUsage.ProLimit == 50, "Go request limits");
-        Assert(goUsage.AgentLimit == 500 * K && goUsage.CoworkLimit == 200 * K, "Go token budgets");
+        Assert(goUsage.AgentLimit == 1_000 * K && goUsage.CoworkLimit == 1_000 * K, "Go token budgets");
 
         // Смена тарифа (как после оплаты): счётчик переезжает, старый расход не переносится.
         await subs.RecordRequestAsync(go, ConexyModelType.ConexyV1Flash);
@@ -119,7 +127,7 @@ internal static class SubscriptionTests
         var upgraded = await subs.GetUsageAsync(go);
         Assert(upgraded.Tier == "Pro", $"the upgrade must reach the counter, got {upgraded.Tier}");
         Assert(upgraded.FlashUsed == 0, $"a tier change must reset the counters, got {upgraded.FlashUsed}");
-        Assert(upgraded.AgentLimit == 1_000 * K, $"Pro agent budget must be 1M, got {upgraded.AgentLimit}");
+        Assert(upgraded.AgentLimit == 2_000 * K, $"Pro agent budget must be 2M, got {upgraded.AgentLimit}");
     }
 
     private static async Task CoworkAsync()
@@ -146,9 +154,9 @@ internal static class SubscriptionTests
             "Cowork must be allowed on a paid plan");
 
         // Токены Cowork идут в свой пул и не трогают бюджет агента.
-        await subs.RecordAgentTokensAsync(pro, ConexyModelType.ConexyCowork, 500 * K);
+        await subs.RecordAgentTokensAsync(pro, ConexyModelType.ConexyCowork, 2_000 * K);
         var usage = await subs.GetUsageAsync(pro);
-        Assert(usage.CoworkUsed == 500 * K, $"cowork tokens must land in the cowork pool, got {usage.CoworkUsed}");
+        Assert(usage.CoworkUsed == 2_000 * K, $"cowork tokens must land in the cowork pool, got {usage.CoworkUsed}");
         Assert(usage.AgentUsed == 0, $"cowork must not spend the agent budget, got {usage.AgentUsed}");
 
         // Исчерпанный бюджет Cowork: своя причина и дата сброса.
@@ -159,5 +167,38 @@ internal static class SubscriptionTests
         // Агент-кодер того же пользователя продолжает работать: пулы независимы.
         Assert((await subs.CheckBeforeRunAsync(pro, ConexyModelType.ConexyCoder)).Kind == UsageDecisionKind.Allowed,
             "the coding agent must be unaffected by the cowork budget");
+    }
+
+    // ADMIN_UNLIMITED: с 2026-10-01 расход админа учитывается (для кружка), но ни на что не влияет.
+    private static async Task AdminAsync()
+    {
+        await using var provider = BuildServices();
+        await using var scope = provider.CreateAsyncScope();
+        var sp = scope.ServiceProvider;
+        var subs = sp.GetRequiredService<ISubscriptionService>();
+
+        var admin = new User
+        {
+            Id = Guid.NewGuid(),
+            Email = $"admin-{Guid.NewGuid():N}@example.com",
+            EmailConfirmed = true,
+            IsAdmin = true,
+            SubscriptionTier = SubscriptionTier.Free,
+        };
+        await sp.GetRequiredService<IUserRepository>().AddAsync(admin);
+
+        await subs.RecordAgentTokensAsync(admin.Id, ConexyModelType.ConexyCoder, 123_456);
+        var usage = await subs.GetUsageAsync(admin.Id);
+        Assert(usage.Tier == "Admin", $"an admin must read as Admin, got {usage.Tier}");
+        Assert(usage.AgentUsed == 123_456, $"admin usage must be tracked, got {usage.AgentUsed}");
+        Assert(usage.AgentLimit == long.MaxValue, "the admin agent limit must be infinite");
+        Assert(usage.CoworkLimit == long.MaxValue, "the admin cowork limit must be infinite (Cowork is open)");
+
+        // Безлимит — запуск разрешён даже при огромном расходе.
+        await subs.RecordAgentTokensAsync(admin.Id, ConexyModelType.ConexyCoder, 1_000_000_000L);
+        Assert((await subs.CheckBeforeRunAsync(admin.Id, ConexyModelType.ConexyCoder)).Kind == UsageDecisionKind.Allowed,
+            "an admin must never be blocked by the agent budget");
+        Assert((await subs.CheckBeforeRunAsync(admin.Id, ConexyModelType.ConexyCowork)).Kind == UsageDecisionKind.Allowed,
+            "an admin always has Cowork");
     }
 }

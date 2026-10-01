@@ -312,18 +312,18 @@
     "features": {
       "free1": "100 Flash requests/week",
       "free2": "20 Pro requests/week",
-      "free3": "200,000 agent tokens/month",
+      "free3": "400,000 agent tokens/month",
       "go1": "150 Flash requests/week",
       "go2": "50 Pro requests/week",
-      "go3": "500,000 agent tokens/week",
+      "go3": "1,000,000 agent tokens/week",
       "pro1": "250 Flash requests/week",
       "pro2": "150 Pro requests/week",
-      "pro3": "1,000,000 agent tokens/week",
+      "pro3": "2,000,000 agent tokens/week",
       "proMax1": "300 Flash requests/week",
       "proMax2": "200 Pro requests/week",
-      "proMax3": "2,500,000 agent tokens/week",
+      "proMax3": "3,500,000 agent tokens/week",
       "orchestra": "Agent orchestra: several helper agents on one task",
-      "orchestraLocked": "Agent orchestra — ProMax only",
+      "orchestraLocked": "Agent orchestra — ProMax and Ultra only",
       "coworkAvailable": "Cowork mode included",
       "coworkLocked": "Cowork — paid plans only"
     }
