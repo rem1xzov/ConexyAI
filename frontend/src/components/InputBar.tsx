@@ -210,6 +210,14 @@ export function InputBar({
     }
   }
 
+  // COMPOSER_EDIT / GROWING_COMPOSER: подгоняем высоту по ЛЮБОМУ изменению текста, включая
+  // программную подстановку (правка сообщения) — иначе длинный текст оставался в одну строку и
+  // его было не видно ни на телефоне, ни на ПК. Обработчик onChange зовёт то же самое, но он не
+  // срабатывает при setValue, поэтому нужен именно эффект по value.
+  useEffect(() => {
+    resizeTextarea();
+  }, [value]);
+
   // COMPOSER_EDIT: открыть выбранное сообщение прямо в поле ввода и поставить курсор в конец.
   // При ОТМЕНЕ возвращаем черновик, который был в поле до входа в правку.
   const valueRef = useRef(value);
@@ -223,7 +231,6 @@ export function InputBar({
       // Правка — это только текст: черновик вложений сюда не переносится.
       setAttachments([]);
       const frame = window.requestAnimationFrame(() => {
-        resizeTextarea();
         const el = textareaRef.current;
         if (el) {
           el.focus();
