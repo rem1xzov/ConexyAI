@@ -2949,7 +2949,9 @@ export default function App() {
             </>
           )}
         </div>
-        <StatusBar agentStatus={agentStatus} activity={agentActivity} cursor={cursorInfo} />
+        {/* STATUS_BAR_AGENT_ONLY: строка «Завершено/Подключено» нужна только агентским режимам
+            (Coder и Cowork); в обычном чате, Pro и Учениках она не показывается. */}
+        {isAgent && <StatusBar agentStatus={agentStatus} activity={agentActivity} cursor={cursorInfo} />}
       </main>
 
       {toast && <div className="toast">{toast}</div>}

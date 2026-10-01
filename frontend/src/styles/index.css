@@ -6620,7 +6620,9 @@ body {
   }
   .inputbar__row {
     gap: 6px;
-    align-items: center;
+    /* COMPOSER_ACTIONS_BOTTOM: кнопки (+ / микрофон / отправить) держатся внизу и не всплывают
+       к середине, когда поле выросло под длинный текст при правке. */
+    align-items: flex-end;
   }
   .inputbar-thumb,
   .inputbar-thumb__media,
@@ -6638,7 +6640,8 @@ body {
     min-width: 0;
     /* MOBILE_COMPOSER_PILL: 16px, чтобы iOS не зумил страницу при фокусе. */
     font-size: 16px;
-    padding: 4px 2px;
+    /* COMPOSER_ACTIONS_BOTTOM: одна строка ≈ высоте круглых кнопок (36px). */
+    padding: 7px 2px;
   }
   .inputbar__textarea::placeholder {
     white-space: nowrap;
