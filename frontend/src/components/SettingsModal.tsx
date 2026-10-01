@@ -17,10 +17,12 @@ import { humanError } from '../utils/humanError';
 import { clearGitHubToken, readGitHubToken, storeGitHubToken } from '../utils/githubToken';
 import { ConfirmDialog } from './Dialog';
 import { CloseIcon, TrashIcon } from './Icons';
+// USAGE_LIMITS_SECTION: добавлено 2026-10-01 — лимиты Flash/Pro переехали из кольца в настройки.
+import type { SubscriptionUsage } from '../types/api';
 // LEGAL_DOCS: добавлено 2026-09-25 — правовые документы доступны всегда, в том числе из настроек.
 import { LEGAL_PATHS } from './legal/LegalPage';
 
-export type SettingsSection = 'general' | 'personalization' | 'memory' | 'github';
+export type SettingsSection = 'general' | 'limits' | 'personalization' | 'memory' | 'github';
 
 interface SettingsModalProps {
   theme: Theme;
@@ -30,6 +32,8 @@ interface SettingsModalProps {
   onClose: () => void;
   /** Section to open first (defaults to "general"). */
   initialSection?: SettingsSection;
+  // USAGE_LIMITS_SECTION: снимок расхода для раздела «Лимиты» (может быть null, пока не загружен).
+  usage?: SubscriptionUsage | null;
 }
 
 const THEMES: { value: Theme; key: string }[] = [
@@ -45,6 +49,7 @@ const LANGS: { value: string; key: string }[] = [
 
 const SECTIONS: { value: SettingsSection; key: string }[] = [
   { value: 'general', key: 'prefs.tabGeneral' },
+  { value: 'limits', key: 'prefs.tabLimits' },
   { value: 'personalization', key: 'prefs.tabPersonalization' },
   { value: 'memory', key: 'memory.tab' },
   { value: 'github', key: 'settings.githubTab' },
@@ -525,6 +530,7 @@ export function SettingsModal({
   onLanguageChange,
   onClose,
   initialSection = 'general',
+  usage = null,
 }: SettingsModalProps) {
   const { t } = useTranslation();
   const [section, setSection] = useState<SettingsSection>(initialSection);
@@ -627,6 +633,10 @@ export function SettingsModal({
             </div>
 
             {/* Sections stay mounted (only hidden) so switching tabs never drops typed text. */}
+            <div hidden={section !== 'limits'}>
+              <LimitsSection usage={usage} />
+            </div>
+
             <div hidden={section !== 'personalization'}>
               <PersonalizationSection active={section === 'personalization'} onDirtyChange={setPrefsDirty} />
             </div>
@@ -656,5 +666,83 @@ export function SettingsModal({
         />
       )}
     </>
+  );
+}
+
+// USAGE_LIMITS_SECTION: добавлено 2026-10-01
+//
+// Лимиты Flash и Pro уехали из кольца в настройки: там для них достаточно простой линии
+// «израсходовано / дано» (как в Gemini), а кольцо теперь показывает только агентские пулы.
+function formatLimitCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (n >= 1_000) return `${Math.round(n / 1000)}k`;
+  return String(n);
+}
+
+// Бэкенд отдаёт админам лимит как long.MaxValue; такое число в JS теряет точность — всё выше 1e15
+// показываем как «∞».
+const INFINITE_LIMIT = 1e15;
+
+function LimitsSection({ usage }: { usage: SubscriptionUsage | null }) {
+  const { t, i18n } = useTranslation();
+
+  if (!usage) {
+    return (
+      <div className="settings-panel">
+        <div className="settings-modal__section">
+          <div className="settings-modal__label">{t('limits.title')}</div>
+          <p className="limits-intro">{t('limits.loading')}</p>
+        </div>
+      </div>
+    );
+  }
+
+  const lang = i18n.resolvedLanguage ?? i18n.language;
+  const formatDate = (iso: string) => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleDateString(lang === 'en' ? 'en-US' : 'ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  };
+
+  const rows = [
+    { key: 'agent', label: t('limits.agent'), used: usage.agentUsed, limit: usage.agentLimit, resetsAt: usage.agentResetsAt },
+    ...(usage.coworkLimit > 0
+      ? [{ key: 'cowork', label: t('limits.cowork'), used: usage.coworkUsed, limit: usage.coworkLimit, resetsAt: usage.coworkResetsAt }]
+      : []),
+    { key: 'flash', label: t('limits.flash'), used: usage.flashUsed, limit: usage.flashLimit, resetsAt: usage.flashResetsAt },
+    { key: 'pro', label: t('limits.pro'), used: usage.proUsed, limit: usage.proLimit, resetsAt: usage.proResetsAt },
+  ];
+
+  return (
+    <div className="settings-panel">
+      <div className="settings-modal__section">
+        <div className="settings-modal__label">{t('limits.title')}</div>
+        <p className="limits-intro">{t('limits.intro')}</p>
+      </div>
+
+      <div className="limits-cards">
+        {rows.map((r) => {
+          const infinite = r.limit >= INFINITE_LIMIT;
+          const pct = infinite || r.limit <= 0 ? 0 : Math.min(100, (r.used / r.limit) * 100);
+          return (
+            <div key={r.key} className="limits-card">
+              <div className="limits-card__head">
+                <span className="limits-card__title">{r.label}</span>
+                <span className="limits-card__pct">
+                  {infinite ? t('limits.unlimited') : t('limits.used', { percent: Math.round(pct) })}
+                </span>
+              </div>
+              <div className="limits-card__bar">
+                <div className="limits-card__fill" style={{ width: `${pct}%` }} />
+              </div>
+              <div className="limits-card__meta">
+                <span>{formatLimitCount(r.used)} / {infinite ? '∞' : formatLimitCount(r.limit)}</span>
+                <span>{t('limits.resets', { date: formatDate(r.resetsAt) })}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }

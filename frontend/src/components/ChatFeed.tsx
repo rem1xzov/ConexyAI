@@ -11,6 +11,8 @@ interface ChatFeedProps {
   onRegenerate?: (assistantMessageId: string) => void;
   onResend?: (messageId: string) => void;
   onEditMessage?: (messageId: string, newContent: string) => void;
+  // COMPOSER_EDIT: на телефоне редактирование открывается в поле ввода сообщения.
+  onBeginEdit?: (messageId: string, content: string) => void;
   // COMMAND_CONFIRM: добавлено 2026-09-20
   onCommandDecision?: CommandDecisionHandler;
   // NEW_CHAT_LOGO: добавлено 2026-09-20
@@ -37,6 +39,7 @@ export function ChatFeed({
   onRegenerate,
   onResend,
   onEditMessage,
+  onBeginEdit,
   onCommandDecision,
   onNewChat,
   onContinue,
@@ -220,6 +223,7 @@ export function ChatFeed({
             onRegenerate={onRegenerate}
             onResend={onResend}
             onEditMessage={onEditMessage}
+            onBeginEdit={onBeginEdit}
             onCommandDecision={onCommandDecision}
             isLast={index === session.messages.length - 1}
             isLastUserMessage={index === lastUserIndex}

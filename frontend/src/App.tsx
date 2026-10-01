@@ -285,6 +285,12 @@ export default function App() {
   // SUBSCRIPTION_TIERS: добавлено 2026-09-17
   const [usage, setUsage] = useState<SubscriptionUsage | null>(null);
   const [limitExceeded, setLimitExceeded] = useState<LimitExceededInfo | null>(null);
+  // COMPOSER_EDIT: добавлено 2026-10-01 — сообщение, открытое на правку в композере (телефон).
+  const [composerEdit, setComposerEdit] = useState<{ id: string; content: string } | null>(null);
+  // Правка не должна «переезжать» на другой чат: при смене открытого чата режим сбрасывается.
+  useEffect(() => {
+    setComposerEdit(null);
+  }, [activeId]);
   // EMAIL_AUTH: добавлено 2026-09-19
   const [authModal, setAuthModal] = useState<AuthMode | null>(null);
   // ADMIN_PANEL: добавлено 2026-09-19
@@ -2390,6 +2396,18 @@ export default function App() {
     void startCompletion(session.id, newContent, [], true, undefined, regenerate).then(notifyOutcome);
   }, [startCompletion, notifyOutcome, sessionBusy]);
 
+  // COMPOSER_EDIT: мобильный путь правки — сообщение открывается в поле ввода, а не в пузыре.
+  const handleBeginEdit = useCallback((messageId: string, content: string) => {
+    setComposerEdit({ id: messageId, content });
+  }, []);
+
+  const handleSubmitEdit = useCallback((messageId: string, text: string) => {
+    setComposerEdit(null);
+    handleEditMessage(messageId, text);
+  }, [handleEditMessage]);
+
+  const handleCancelEdit = useCallback(() => setComposerEdit(null), []);
+
   // CONTINUE_GENERATION: добавлено 2026-09-21
   // BUGFIX_CONTINUE_CLICK: добавлено 2026-09-22 — раньше здесь были «тихие» return'ы (нет
   // токена, идёт стрим, пустой частичный ответ), из-за которых клик по «Продолжить» выглядел
@@ -2821,6 +2839,7 @@ export default function App() {
                     onRegenerate={handleRegenerate}
                     onResend={handleResend}
                     onEditMessage={handleEditMessage}
+                    onBeginEdit={handleBeginEdit}
                     onCommandDecision={handleCommandDecision}
                     onNewChat={handleNewChat}
                     onContinue={handleContinue}
@@ -2898,6 +2917,9 @@ export default function App() {
                     // onOpenLive={() => setIsLiveOpen(true)}
                     onSend={handleSend}
                     externalFiles={droppedFiles}
+                    editTarget={composerEdit}
+                    onSubmitEdit={handleSubmitEdit}
+                    onCancelEdit={handleCancelEdit}
                     onComposerFocus={() => setComposerFocused(true)}
                     onComposerBlur={() => setComposerFocused(false)}
                   />
@@ -3009,6 +3031,7 @@ export default function App() {
           onThemeChange={handleThemeChange}
           onLanguageChange={handleLanguageChange}
           onClose={() => setSettingsOpen(false)}
+          usage={usage}
         />
       )}
       </div>

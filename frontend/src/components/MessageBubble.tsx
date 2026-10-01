@@ -16,12 +16,17 @@ import { AssistantContent } from './artifacts/AssistantContent';
 import { ProducedFiles } from './ProducedFiles';
 import { MessageActions } from './MessageActions';
 import { UserMessageActions } from './UserMessageActions';
+import { useIsMobile } from '../hooks/useMediaQuery';
 
 interface MessageBubbleProps {
   message: ChatMessage;
   onRegenerate?: (assistantMessageId: string) => void;
   onResend?: (messageId: string) => void;
   onEditMessage?: (messageId: string, newContent: string) => void;
+  // COMPOSER_EDIT: добавлено 2026-10-01 — на телефоне редактирование уезжает в поле ввода
+  // сообщения (как в Gemini), а не живёт inline в пузыре.
+  /** Mobile: open this user message for editing inside the composer. */
+  onBeginEdit?: (messageId: string, content: string) => void;
   // COMMAND_CONFIRM: добавлено 2026-09-20
   onCommandDecision?: CommandDecisionHandler;
   // NEW_CHAT_LOGO: добавлено 2026-09-20
@@ -71,6 +76,7 @@ function MessageBubbleBase({
   onRegenerate,
   onResend,
   onEditMessage,
+  onBeginEdit,
   onCommandDecision,
   isLast = false,
   isLastUserMessage = false,
@@ -81,6 +87,8 @@ function MessageBubbleBase({
   agentTurn = false,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
+  // COMPOSER_EDIT: на телефоне правим сообщение в композере, на десктопе — inline в пузыре.
+  const isMobile = useIsMobile();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
@@ -155,6 +163,11 @@ function MessageBubbleBase({
   const exportContent = useMemo(() => (isUser ? content : artifactsToMarkdown(content)), [isUser, content]);
 
   function startEdit() {
+    // COMPOSER_EDIT: на узком экране передаём сообщение наверх — его откроет композер.
+    if (isMobile && onBeginEdit) {
+      onBeginEdit(message.id, content);
+      return;
+    }
     setDraft(content);
     setEditing(true);
   }

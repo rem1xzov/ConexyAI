@@ -87,6 +87,14 @@ interface InputBarProps {
   // FOCUS_MODE: the start screen collapses its greeting while the composer has focus (mobile only).
   onComposerFocus?: () => void;
   onComposerBlur?: () => void;
+  // COMPOSER_EDIT: добавлено 2026-10-01 — на телефоне «Изменить» открывает сообщение прямо в
+  // композере (как в Gemini), а не в inline-редакторе внутри пузыря.
+  /** Сообщение, открытое на редактирование в композере (null — обычный ввод). */
+  editTarget?: { id: string; content: string } | null;
+  /** Отправить правку этого сообщения (вместо отправки нового). */
+  onSubmitEdit?: (messageId: string, text: string) => void;
+  /** Выйти из режима редактирования без изменений. */
+  onCancelEdit?: () => void;
 }
 
 export function InputBar({
@@ -113,6 +121,9 @@ export function InputBar({
   externalFiles,
   onComposerFocus,
   onComposerBlur,
+  editTarget,
+  onSubmitEdit,
+  onCancelEdit,
 }: InputBarProps) {
   const { t } = useTranslation();
   // The model picker lives in the chat header on mobile and inline here on desktop.
@@ -199,6 +210,38 @@ export function InputBar({
     }
   }
 
+  // COMPOSER_EDIT: открыть выбранное сообщение прямо в поле ввода и поставить курсор в конец.
+  // При ОТМЕНЕ возвращаем черновик, который был в поле до входа в правку.
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const editPrevRef = useRef<{ content: string; previous: string } | null>(null);
+
+  useEffect(() => {
+    if (editTarget) {
+      editPrevRef.current = { content: editTarget.content, previous: valueRef.current };
+      setValue(editTarget.content);
+      // Правка — это только текст: черновик вложений сюда не переносится.
+      setAttachments([]);
+      const frame = window.requestAnimationFrame(() => {
+        resizeTextarea();
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(el.value.length, el.value.length);
+        }
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
+
+    const prev = editPrevRef.current;
+    if (prev) {
+      editPrevRef.current = null;
+      // Если поле всё ещё содержит текст правки — это отмена, а не отправка (та очистила поле).
+      setValue((current) => (current === prev.content ? prev.previous : current));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editTarget?.id]);
+
   // ATTACHMENT_SIZE_LIMIT: единый способ показать/убрать баннер над полем ввода.
   function showAttachError(message: string) {
     setAttachError(message);
@@ -221,6 +264,20 @@ export function InputBar({
 
   async function submit() {
     const prompt = value.trim();
+
+    // COMPOSER_EDIT: в режиме правки кнопка отправки сохраняет ИЗМЕНЕНИЕ сообщения, а не новый запрос.
+    if (editTarget) {
+      if (!prompt || disabled) return;
+      if (isGenerating) {
+        showAttachError(t('sync.waitForReply'));
+        return;
+      }
+      onSubmitEdit?.(editTarget.id, prompt);
+      setValue('');
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+      return;
+    }
+
     // ATTACHMENT_ONLY_SEND: отправить можно и одно фото без текста — но не пустое сообщение.
     const hasAttachments = attachments.length > 0;
     if ((!prompt && !hasAttachments) || disabled) return;
@@ -731,7 +788,22 @@ export function InputBar({
         </div>
       )}
 
-      <div className={`inputbar ${attachments.length > 0 ? 'inputbar--attachments' : ''}`}>
+      {editTarget && (
+        <div className="inputbar-edit" role="status">
+          <span className="inputbar-edit__label">{t('input.editingMessage')}</span>
+          <button
+            className="inputbar-edit__cancel"
+            onClick={() => onCancelEdit?.()}
+            aria-label={t('common.cancel')}
+            title={t('common.cancel')}
+            type="button"
+          >
+            <CloseIcon size={13} />
+          </button>
+        </div>
+      )}
+
+      <div className={`inputbar ${attachments.length > 0 ? 'inputbar--attachments' : ''} ${editTarget ? 'inputbar--editing' : ''}`}>
         {/* ATTACHMENT_UPLOAD: превью живёт ВНУТРИ композера (как в Gemini), а не отдельной полосой
             над ним: так видно, что фото прикреплено к сообщению, а не висит само по себе. */}
         {attachments.length > 0 && (

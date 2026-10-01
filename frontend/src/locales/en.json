@@ -198,6 +198,7 @@
   },
   "prefs": {
     "tabGeneral": "General",
+    "tabLimits": "Limits",
     "tabPersonalization": "Personalization",
     "intro": "These instructions are added to every conversation, in every mode (Chat, Pro, Coder, Cowork, Students).",
     "aboutMe": "About me",
@@ -365,6 +366,18 @@
     "openTicketError": "Failed to open request",
     "closeError": "Failed to close request"
   },
+  "limits": {
+    "title": "Limits",
+    "intro": "Your plan's limits determine how much you can use over time. The ring in the header shows the agent pools (Coder and Cowork).",
+    "loading": "Loading limits…",
+    "agent": "Coder agent",
+    "cowork": "Cowork",
+    "flash": "Flash requests",
+    "pro": "Pro requests",
+    "used": "{{percent}}% used",
+    "unlimited": "Unlimited",
+    "resets": "Resets {{date}}"
+  },
   "usage": {
     "admin": "∞ Admin",
     "adminTitle": "Admin — unlimited",
@@ -447,6 +460,7 @@
     "takePhoto": "Take photo",
     "importCode": "Import code",
     "placeholder": "Message…",
+    "editingMessage": "Editing message",
     "unsupportedFiles": "Couldn't attach: {{names}}. Images, PDFs, documents, spreadsheets and text files are supported.",
     "removeFile": "Remove {{name}}",
     "uploading": "Uploading…",
