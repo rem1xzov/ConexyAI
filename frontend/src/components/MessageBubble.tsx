@@ -324,6 +324,10 @@ function MessageBubbleBase({
         />
       )}
 
+      {/* AI_DISCLAIMER: добавлено 2026-10-01 — честная приписка под каждым ответом модели
+          (чат, flash/pro, Coder, Cowork). Показываем только у завершённого ответа. */}
+      {!streaming && <p className="msg-disclaimer">{t('message.disclaimer')}</p>}
+
       {/* NEW_CHAT_LOGO: добавлено 2026-09-20 — after generation the reply ends with a static
           mark that opens a new conversation (with a hint bubble on hover / keyboard focus). */}
       {isLast && !streaming && (

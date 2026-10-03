@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { Theme } from '../theme';
 import {
   PREFERENCE_MAX_LENGTH,
+  PREFERENCE_NAME_MAX_LENGTH,
   clearMemory,
   deleteMemoryFact,
   getMemory,
@@ -34,6 +35,8 @@ interface SettingsModalProps {
   initialSection?: SettingsSection;
   // USAGE_LIMITS_SECTION: снимок расхода для раздела «Лимиты» (может быть null, пока не загружен).
   usage?: SubscriptionUsage | null;
+  // USER_NAME: сохранённые настройки — приветствие на старте обновляется без перезагрузки.
+  onPreferencesSaved?: (prefs: UserPreferences) => void;
 }
 
 const THEMES: { value: Theme; key: string }[] = [
@@ -75,11 +78,15 @@ function errorCodeOf(e: unknown): string | undefined {
 interface PersonalizationSectionProps {
   active: boolean;
   onDirtyChange: (dirty: boolean) => void;
+  // USER_NAME: отдаём сохранённые настройки наверх, чтобы приветствие обновилось без перезагрузки.
+  onSaved?: (prefs: UserPreferences) => void;
 }
 
-function PersonalizationSection({ active, onDirtyChange }: PersonalizationSectionProps) {
+function PersonalizationSection({ active, onDirtyChange, onSaved }: PersonalizationSectionProps) {
   const { t } = useTranslation();
   const [loaded, setLoaded] = useState<UserPreferences | null>(null);
+  // USER_NAME: имя — короткое однострочное поле, отдельно от свободных текстов.
+  const [name, setName] = useState('');
   const [aboutMe, setAboutMe] = useState('');
   const [responseStyle, setResponseStyle] = useState('');
   const [loading, setLoading] = useState(false);
@@ -95,6 +102,7 @@ function PersonalizationSection({ active, onDirtyChange }: PersonalizationSectio
     try {
       const prefs = await getPreferences();
       setLoaded(prefs);
+      setName(prefs.name);
       setAboutMe(prefs.aboutMe);
       setResponseStyle(prefs.responseStyle);
     } catch (e) {
@@ -113,8 +121,10 @@ function PersonalizationSection({ active, onDirtyChange }: PersonalizationSectio
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
-  const dirty = loaded !== null && (aboutMe !== loaded.aboutMe || responseStyle !== loaded.responseStyle);
-  const tooLong = aboutMe.length > PREFERENCE_MAX_LENGTH || responseStyle.length > PREFERENCE_MAX_LENGTH;
+  const dirty = loaded !== null && (name !== loaded.name || aboutMe !== loaded.aboutMe || responseStyle !== loaded.responseStyle);
+  const tooLong = name.length > PREFERENCE_NAME_MAX_LENGTH
+    || aboutMe.length > PREFERENCE_MAX_LENGTH
+    || responseStyle.length > PREFERENCE_MAX_LENGTH;
 
   useEffect(() => {
     onDirtyChange(dirty);
@@ -126,12 +136,15 @@ function PersonalizationSection({ active, onDirtyChange }: PersonalizationSectio
     setSaveError(null);
     setSavedAt(null);
     try {
-      const stored = await savePreferences({ aboutMe, responseStyle });
+      const stored = await savePreferences({ name, aboutMe, responseStyle });
       setLoaded(stored);
       // Keep what the user sees in sync with what the server actually stored (it may trim).
+      setName(stored.name);
       setAboutMe(stored.aboutMe);
       setResponseStyle(stored.responseStyle);
       setSavedAt(Date.now());
+      // USER_NAME: сразу отдаём наверх, чтобы приветствие на старте уже было с новым именем.
+      onSaved?.(stored);
     } catch (e) {
       if (statusOf(e) === 400 && errorCodeOf(e) === 'TOO_LONG') {
         setSaveError(t('prefs.tooLong', { max: PREFERENCE_MAX_LENGTH }));
@@ -189,6 +202,30 @@ function PersonalizationSection({ active, onDirtyChange }: PersonalizationSectio
   return (
     <div className="settings-panel">
       <p className="settings-panel__intro">{t('prefs.intro')}</p>
+
+      {/* USER_NAME: блок «Имя» — им подписывается приветствие на стартовом экране. */}
+      <div className="settings-field">
+        <label className="settings-field__label" htmlFor="prefs-name">
+          {t('prefs.name')}
+        </label>
+        <div className="settings-field__hint" id="prefs-name-hint">
+          {t('prefs.nameHint')}
+        </div>
+        <input
+          id="prefs-name"
+          className="dialog-input"
+          type="text"
+          value={name}
+          placeholder={t('prefs.namePlaceholder')}
+          maxLength={PREFERENCE_NAME_MAX_LENGTH}
+          aria-describedby="prefs-name-hint"
+          onChange={(e) => {
+            setName(e.target.value);
+            setSavedAt(null);
+            setSaveError(null);
+          }}
+        />
+      </div>
 
       {fields.map((f) => {
         const over = f.value.length > PREFERENCE_MAX_LENGTH;
@@ -531,6 +568,7 @@ export function SettingsModal({
   onClose,
   initialSection = 'general',
   usage = null,
+  onPreferencesSaved,
 }: SettingsModalProps) {
   const { t } = useTranslation();
   const [section, setSection] = useState<SettingsSection>(initialSection);
@@ -638,7 +676,11 @@ export function SettingsModal({
             </div>
 
             <div hidden={section !== 'personalization'}>
-              <PersonalizationSection active={section === 'personalization'} onDirtyChange={setPrefsDirty} />
+              <PersonalizationSection
+                active={section === 'personalization'}
+                onDirtyChange={setPrefsDirty}
+                onSaved={onPreferencesSaved}
+              />
             </div>
 
             <div hidden={section !== 'memory'}>

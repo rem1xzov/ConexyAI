@@ -4,6 +4,8 @@ import { setAuthToken } from './api/client';
 import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, getTaskStatus, runTask, type VerificationChallenge } from './api/conexyApi';
 // YOOKASSA: добавлено 2026-09-27 — создание платежа и окно возврата после оплаты.
 import { createPayment } from './api/paymentsApi';
+// USER_NAME: имя из персонализации подписывает приветствие на стартовом экране.
+import { getPreferences, type UserPreferences } from './api/userApi';
 import { PaymentReturnModal } from './components/PaymentReturnModal';
 import { isForbiddenJoinError, signalrService } from './services/signalrService';
 // TURN_SCOPE: добавлено 2026-09-24 (H6/H7)
@@ -287,6 +289,8 @@ export default function App() {
   const [limitExceeded, setLimitExceeded] = useState<LimitExceededInfo | null>(null);
   // COMPOSER_EDIT: добавлено 2026-10-01 — сообщение, открытое на правку в композере (телефон).
   const [composerEdit, setComposerEdit] = useState<{ id: string; content: string } | null>(null);
+  // USER_NAME: имя из настроек персонализации — им подписывается приветствие. Пусто — берём из email.
+  const [preferredName, setPreferredName] = useState<string | null>(null);
   // Правка не должна «переезжать» на другой чат: при смене открытого чата режим сбрасывается.
   useEffect(() => {
     setComposerEdit(null);
@@ -1698,6 +1702,26 @@ export default function App() {
   const authenticated = Boolean(token && user);
   const authPending = initializing || (Boolean(token) && !user && !profileFailed);
   const isGuest = !authenticated && !authPending;
+
+  // USER_NAME: подтягиваем имя из персонализации для приветствия. Ошибку глотаем — приветствие
+  // просто останется на прежнем (email-производном) варианте.
+  useEffect(() => {
+    if (!token) {
+      setPreferredName(null);
+      return;
+    }
+    let cancelled = false;
+    getPreferences()
+      .then((p) => {
+        if (!cancelled) setPreferredName(p.name.trim() ? p.name.trim() : null);
+      })
+      .catch(() => {
+        if (!cancelled) setPreferredName(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, userId]);
   const stageEmpty = chatEmpty && !authPending;
   const showIncognitoToggle = chatTab && chatEmpty && authenticated;
   // The compact header mark appears as soon as the conversation starts.
@@ -1749,7 +1773,9 @@ export default function App() {
           ];
 
   // LOGO_SWEEP: the start screen greets by time of day, next to the mark (Claude-style row).
-  const displayName = user?.displayName ? user.displayName.split('@')[0] : null;
+  // USER_NAME: имя из персонализации важнее производного от email.
+  const emailName = user?.displayName ? user.displayName.split('@')[0] : null;
+  const displayName = preferredName ?? emailName;
   const greeting = t(greetingKey(activeTab), { name: displayName ?? t('chat.defaultName') });
 
   // Latest agent progress for the IDE bottom panel (the task checklist).
@@ -2835,7 +2861,7 @@ export default function App() {
                 authenticated ? (
                   <ChatFeed
                     session={activeSession}
-                    nickname={user?.displayName ? user.displayName.split('@')[0] : null}
+                    nickname={displayName ?? null}
                     onRegenerate={handleRegenerate}
                     onResend={handleResend}
                     onEditMessage={handleEditMessage}
@@ -3034,6 +3060,7 @@ export default function App() {
           onLanguageChange={handleLanguageChange}
           onClose={() => setSettingsOpen(false)}
           usage={usage}
+          onPreferencesSaved={(p: UserPreferences) => setPreferredName(p.name.trim() ? p.name.trim() : null)}
         />
       )}
       </div>

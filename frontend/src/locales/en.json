@@ -201,6 +201,9 @@
     "tabLimits": "Limits",
     "tabPersonalization": "Personalization",
     "intro": "These instructions are added to every conversation, in every mode (Chat, Pro, Coder, Cowork, Students).",
+    "name": "Name",
+    "nameHint": "How to address you — this name signs the greeting on the start screen. Empty means the name is taken from your email.",
+    "namePlaceholder": "e.g. Alex",
     "aboutMe": "About me",
     "aboutMeHint": "Your stack, role and preferences.",
     "aboutMePlaceholder": "e.g. Backend developer, .NET 9 and PostgreSQL; I prefer clean architecture and small pull requests.",
@@ -526,6 +529,7 @@
   },
   "message": {
     "you": "You",
+    "disclaimer": "Conexy is not a human and can make mistakes. Always check the answers.",
     "thinking": "Thinking…",
     "showThinking": "Thought process",
     "copy": "Copy",

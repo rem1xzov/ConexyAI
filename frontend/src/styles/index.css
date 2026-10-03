@@ -8352,3 +8352,19 @@ html[data-theme="light"]:not([data-incognito="true"]) .artifact-panel {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* AI_DISCLAIMER: приписка под каждым ответом модели (чат, flash/pro, Coder, Cowork). Переносится
+   по словам и ужимается на узких экранах, чтобы текст всегда был виден целиком. */
+.msg-disclaimer {
+  margin: 8px 0 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 768px) {
+  .msg-disclaimer {
+    font-size: 11.5px;
+  }
+}

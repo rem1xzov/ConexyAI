@@ -20,6 +20,8 @@ export interface MemoryState {
 
 /** Custom instructions injected into the system prompt of every mode. */
 export interface UserPreferences {
+  /** USER_NAME: как обращаться к пользователю (приветствие и системный промпт). */
+  name: string;
   /** "About me": stack, role, preferences. */
   aboutMe: string;
   /** "How ConexyAI should respond": length, language, tone, formatting. */
@@ -28,6 +30,9 @@ export interface UserPreferences {
 
 /** Server-side limit for each preferences field (longer values are rejected with TOO_LONG). */
 export const PREFERENCE_MAX_LENGTH = 1500;
+
+/** USER_NAME: имя короче свободных текстов — это просто обращение. */
+export const PREFERENCE_NAME_MAX_LENGTH = 80;
 
 function normalizeFact(raw: Partial<MemoryFact> | null | undefined): MemoryFact | null {
   if (!raw || typeof raw.id !== 'string' || !raw.id) return null;
@@ -64,6 +69,7 @@ export async function setMemoryEnabled(enabled: boolean): Promise<void> {
 export async function getPreferences(): Promise<UserPreferences> {
   const { data } = await http.get<Partial<UserPreferences>>('/user/preferences');
   return {
+    name: typeof data?.name === 'string' ? data.name : '',
     aboutMe: typeof data?.aboutMe === 'string' ? data.aboutMe : '',
     responseStyle: typeof data?.responseStyle === 'string' ? data.responseStyle : '',
   };
@@ -73,6 +79,7 @@ export async function getPreferences(): Promise<UserPreferences> {
 export async function savePreferences(prefs: UserPreferences): Promise<UserPreferences> {
   const { data } = await http.put<Partial<UserPreferences>>('/user/preferences', prefs);
   return {
+    name: typeof data?.name === 'string' ? data.name : prefs.name,
     aboutMe: typeof data?.aboutMe === 'string' ? data.aboutMe : prefs.aboutMe,
     responseStyle: typeof data?.responseStyle === 'string' ? data.responseStyle : prefs.responseStyle,
   };
