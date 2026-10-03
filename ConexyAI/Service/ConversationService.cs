@@ -59,7 +59,11 @@ public sealed record ConversationContext(
     int? HistoryDepth = null,
     string? ChatKind = null,
     // HISTORY_REPLAY: добавлено 2026-09-24 — ревью M5: ход заменяет последний ход чата.
-    bool Regenerate = false
+    bool Regenerate = false,
+    // TOKEN_ECONOMY: добавлено 2026-10-01 — подключать ли дорогие блоки контекста (персонализация,
+    // память, другие чаты). false — для короткой реплики без личного запроса; решение принимает
+    // вызывающий через PromptEconomy.NeedsAuxiliaryContext.
+    bool AuxiliaryContext = true
 );
 
 public interface IConversationService
@@ -201,7 +205,8 @@ public class ConversationService : IConversationService
         // USER_PREFERENCES: добавлено 2026-09-24 — ТЗ 2, §5: «Обо мне» и «Как отвечать» из профиля идут
         // в системный промпт КАЖДОГО режима. Инкогнито их тоже получает: это настройки, заданные самим
         // пользователем, а не память о его диалогах.
-        if (_preferences is not null)
+        // TOKEN_ECONOMY: для короткой реплики без личного запроса блок пропускается (см. PromptEconomy).
+        if (context.AuxiliaryContext && _preferences is not null)
         {
             var preferencesBlock = await _preferences.BuildPromptBlockAsync(context.UserId, ct);
             if (!string.IsNullOrEmpty(preferencesBlock))
@@ -214,7 +219,7 @@ public class ConversationService : IConversationService
         // otherwise the profile would leak into a "forgotten" chat.
         // MEMORY_CONTROL: ревью H5 — блок экранирован и помечен как данные только для чтения (см.
         // UserMemoryService.BuildPromptBlock), а при выключенной памяти пуст.
-        if (!context.Incognito)
+        if (context.AuxiliaryContext && !context.Incognito)
         {
             var memoryBlock = await _memory.BuildPromptBlockAsync(context.UserId, ct);
             if (!string.IsNullOrEmpty(memoryBlock))
@@ -224,7 +229,7 @@ public class ConversationService : IConversationService
         // CROSS_CHAT_CONTEXT: добавлено 2026-09-23 — the other chats, for every mode at once. Until now
         // a new chat knew nothing about the previous ones except extracted facts, and those only
         // appeared after the 7th message of a chat. Incognito neither reads nor feeds this.
-        if (!context.Incognito && _options.RecentChatsInContext > 0)
+        if (context.AuxiliaryContext && !context.Incognito && _options.RecentChatsInContext > 0)
         {
             var recentChats = await _chatHistory.GetRecentChatsAsync(
                 context.UserId, context.ChatId, _options.RecentChatsInContext, ct);

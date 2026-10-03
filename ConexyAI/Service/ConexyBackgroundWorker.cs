@@ -234,6 +234,11 @@ public class ConexyBackgroundWorker : BackgroundService
                     && OrchestraEligibility.IsAllowed(job.Tier, job.IsAdmin, job.ModelType),
             };
 
+            // TOKEN_ECONOMY: на приветствие агент отвечает КОРОТКИМ промптом без устава, а инструменты
+            // ему не предлагаются (см. ConexyAgentRunner.ResolveToolsAsync) — иначе «привет» стоило бы
+            // десятки тысяч токенов.
+            var smallTalk = job.Attachments is not { Count: > 0 } && PromptEconomy.IsSmallTalk(job.Prompt);
+
             // CONVERSATION_SERVICE: контекст строится ОДИН раз и используется и для запроса к
             // модели, и для записи хода — поэтому они не могут разойтись по chatId, userId или
             // режиму «продолжить».
@@ -244,7 +249,9 @@ public class ConexyBackgroundWorker : BackgroundService
                 // PRODUCT_KNOWLEDGE / USER_CONTEXT / CONTENT_POLICY: к промпту любого режима дописываем
                 // описание самого продукта (что умеет, какие тарифы), кто именно сейчас говорит с моделью
                 // и единую контент-политику — поэтому она действует поголовно: чат, Ученики, Coder, Cowork.
-                SystemPrompt: (isAgent ? runner.GetSystemPrompt(job.ModelType) : BuildChatSystemPrompt(job))
+                SystemPrompt: (isAgent
+                        ? smallTalk ? PromptEconomy.SmallTalkAgentPrompt : runner.GetSystemPrompt(job.ModelType)
+                        : BuildChatSystemPrompt(job))
                     + "\n\n" + Prompts.PromptFragments.ContentPolicy
                     + "\n\n" + Prompts.PromptFragments.ProductKnowledge
                     + "\n\n" + Prompts.PromptFragments.AudienceContext(job.IsAdmin, job.Tier),
@@ -257,7 +264,12 @@ public class ConexyBackgroundWorker : BackgroundService
                 // CHAT_KIND_SYNC: добавлено 2026-09-23 — режим чата доезжает до записи истории.
                 ChatKind: job.ChatKind,
                 // HISTORY_REPLAY: добавлено 2026-09-24 — ревью M5.
-                Regenerate: job.Regenerate);
+                Regenerate: job.Regenerate,
+                // TOKEN_ECONOMY: короткая реплика без личного запроса (и без вложений) идёт без
+                // дорогих блоков контекста — персонализации, памяти и других чатов. На «привет»
+                // агент больше не платит за них. См. PromptEconomy.
+                AuxiliaryContext: job.Attachments is { Count: > 0 }
+                    || PromptEconomy.NeedsAuxiliaryContext(job.Prompt));
 
             var outcome = TurnOutcome.Completed;
             var result = string.Empty;
