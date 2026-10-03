@@ -90,7 +90,7 @@ public class UserController : ControllerBase
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
         var prefs = await _preferences.GetAsync(userId, ct);
-        return Ok(new PreferencesDto(prefs.AboutMe, prefs.ResponseStyle));
+        return Ok(new PreferencesDto(prefs.Name, prefs.AboutMe, prefs.ResponseStyle));
     }
 
     /// <summary>Saves the custom instructions (each field at most 1500 characters).</summary>
@@ -103,11 +103,14 @@ public class UserController : ControllerBase
         if (dto is null)
             return BadRequest(new { error = "Body is required." });
 
+        if ((dto.Name?.Trim().Length ?? 0) > UserPreferences_config.MaxNameLength)
+            return BadRequest(new { error = "NAME_TOO_LONG", max = UserPreferences_config.MaxNameLength });
+
         if ((dto.AboutMe?.Trim().Length ?? 0) > UserPreferences_config.MaxTextLength
             || (dto.ResponseStyle?.Trim().Length ?? 0) > UserPreferences_config.MaxTextLength)
             return BadRequest(new { error = "TOO_LONG", max = UserPreferences_config.MaxTextLength });
 
-        var saved = await _preferences.SaveInstructionsAsync(userId, dto.AboutMe, dto.ResponseStyle, ct);
-        return Ok(new PreferencesDto(saved.AboutMe, saved.ResponseStyle));
+        var saved = await _preferences.SaveInstructionsAsync(userId, dto.Name, dto.AboutMe, dto.ResponseStyle, ct);
+        return Ok(new PreferencesDto(saved.Name, saved.AboutMe, saved.ResponseStyle));
     }
 }

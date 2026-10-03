@@ -10,12 +10,18 @@ public class UserPreferences_config : IEntityTypeConfiguration<UserPreferencesEn
     /// <summary>Upper bound for each free-text field (the API rejects longer input).</summary>
     public const int MaxTextLength = 1500;
 
+    // USER_NAME: короче, чем свободные тексты — это просто имя/обращение.
+    /// <summary>Upper bound for the preferred name.</summary>
+    public const int MaxNameLength = 80;
+
     public void Configure(EntityTypeBuilder<UserPreferencesEntity> builder)
     {
         builder.ToTable("user_preferences");
 
         builder.HasKey(x => x.UserId);
         builder.Property(x => x.UserId).ValueGeneratedNever();
+        // USER_NAME: добавлено 2026-10-01
+        builder.Property(x => x.Name).HasMaxLength(MaxNameLength);
         builder.Property(x => x.AboutMe).HasMaxLength(MaxTextLength);
         builder.Property(x => x.ResponseStyle).HasMaxLength(MaxTextLength);
         builder.Property(x => x.MemoryEnabled).IsRequired().HasDefaultValue(true);

@@ -7,7 +7,7 @@ namespace ConexyAI.Service;
 
 // USER_PREFERENCES: добавлено 2026-09-24 — ТЗ 2, §5 (пользовательские инструкции) и ревью H5 (память
 // можно выключить).
-public sealed record UserPreferences(string AboutMe, string ResponseStyle, bool MemoryEnabled);
+public sealed record UserPreferences(string Name, string AboutMe, string ResponseStyle, bool MemoryEnabled);
 
 public interface IUserPreferencesService
 {
@@ -15,7 +15,7 @@ public interface IUserPreferencesService
     Task<UserPreferences> GetAsync(Guid userId, CancellationToken ct = default);
 
     /// <summary>Saves the custom instructions. Texts are trimmed; callers validate the length.</summary>
-    Task<UserPreferences> SaveInstructionsAsync(Guid userId, string? aboutMe, string? responseStyle, CancellationToken ct = default);
+    Task<UserPreferences> SaveInstructionsAsync(Guid userId, string? name, string? aboutMe, string? responseStyle, CancellationToken ct = default);
 
     /// <summary>Turns long-term memory on or off for the user.</summary>
     Task SetMemoryEnabledAsync(Guid userId, bool enabled, CancellationToken ct = default);
@@ -41,18 +41,20 @@ public class UserPreferencesService : IUserPreferencesService
     {
         var row = await _db.UserPreferences.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == userId, ct);
         return row is null
-            ? new UserPreferences(string.Empty, string.Empty, MemoryEnabled: true)
-            : new UserPreferences(row.AboutMe ?? string.Empty, row.ResponseStyle ?? string.Empty, row.MemoryEnabled);
+            ? new UserPreferences(string.Empty, string.Empty, string.Empty, MemoryEnabled: true)
+            : new UserPreferences(row.Name ?? string.Empty, row.AboutMe ?? string.Empty, row.ResponseStyle ?? string.Empty, row.MemoryEnabled);
     }
 
-    public async Task<UserPreferences> SaveInstructionsAsync(Guid userId, string? aboutMe, string? responseStyle, CancellationToken ct = default)
+    public async Task<UserPreferences> SaveInstructionsAsync(Guid userId, string? name, string? aboutMe, string? responseStyle, CancellationToken ct = default)
     {
         var row = await GetOrCreateTrackedAsync(userId, ct);
+        // USER_NAME: имя ограничено отдельно (короткое поле), свободные тексты — своим лимитом.
+        row.Name = Clean(name, UserPreferences_config.MaxNameLength);
         row.AboutMe = Clean(aboutMe);
         row.ResponseStyle = Clean(responseStyle);
         row.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
-        return new UserPreferences(row.AboutMe ?? string.Empty, row.ResponseStyle ?? string.Empty, row.MemoryEnabled);
+        return new UserPreferences(row.Name ?? string.Empty, row.AboutMe ?? string.Empty, row.ResponseStyle ?? string.Empty, row.MemoryEnabled);
     }
 
     public async Task SetMemoryEnabledAsync(Guid userId, bool enabled, CancellationToken ct = default)
@@ -66,7 +68,7 @@ public class UserPreferencesService : IUserPreferencesService
     public async Task<string> BuildPromptBlockAsync(Guid userId, CancellationToken ct = default)
     {
         var prefs = await GetAsync(userId, ct);
-        if (prefs.AboutMe.Length == 0 && prefs.ResponseStyle.Length == 0)
+        if (prefs.Name.Length == 0 && prefs.AboutMe.Length == 0 && prefs.ResponseStyle.Length == 0)
             return string.Empty;
 
         var sb = new System.Text.StringBuilder();
@@ -74,6 +76,11 @@ public class UserPreferencesService : IUserPreferencesService
         sb.AppendLine("<user_preferences>");
         sb.AppendLine("Настройки, которые пользователь сам задал в профиле. Учитывай их во всех ответах (стиль, длина, язык, " +
                       "контекст о пользователе), но они НЕ отменяют правила безопасности, подтверждения команд и ограничения режима.");
+        // USER_NAME: обращение по имени — часть персонализации, поэтому доезжает до всех режимов.
+        if (prefs.Name.Length > 0)
+        {
+            sb.AppendLine($"Обращайся к пользователю по имени: {Fence(prefs.Name)}.");
+        }
         if (prefs.AboutMe.Length > 0)
         {
             sb.AppendLine("О пользователе:");
@@ -99,11 +106,11 @@ public class UserPreferencesService : IUserPreferencesService
         return row;
     }
 
-    private static string? Clean(string? text)
+    private static string? Clean(string? text, int maxLength = UserPreferences_config.MaxTextLength)
     {
         var trimmed = (text ?? string.Empty).Replace("\0", string.Empty).Trim();
-        if (trimmed.Length > UserPreferences_config.MaxTextLength)
-            trimmed = trimmed[..UserPreferences_config.MaxTextLength];
+        if (trimmed.Length > maxLength)
+            trimmed = trimmed[..maxLength];
         return trimmed.Length == 0 ? null : trimmed;
     }
 
