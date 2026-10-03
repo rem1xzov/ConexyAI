@@ -83,6 +83,15 @@ export function useKeyboardInset({ enabled, onKeyboardClosed }: KeyboardInsetOpt
     const apply = () => {
       frame = 0;
 
+      // VIEWPORT_HEIGHT: держим высоту приложения ровно по видимой области. `100dvh` на телефоне
+      // может «застыть» устаревшим — возврат из фона/bfcache, показ адресной строки при возврате на
+      // сайт — и тогда низ макета (композер) уходил под экран. `visualViewport.height` всегда свежий,
+      // поэтому именно из него считаем высоту `.app`, а --kb-inset остаётся для fixed-элементов.
+      const visiblePx = Math.max(0, Math.round(viewport.height));
+      if (visiblePx > 0) {
+        root.style.setProperty('--app-height', `${visiblePx}px`);
+      }
+
       // offsetTop is subtracted as well: when the keyboard opens, Safari shifts the visual viewport
       // up, and that shift is not part of the covered height.
       const inset = Math.max(0, Math.round(window.innerHeight - viewport.height - viewport.offsetTop));
@@ -120,11 +129,20 @@ export function useKeyboardInset({ enabled, onKeyboardClosed }: KeyboardInsetOpt
     apply();
     viewport.addEventListener('resize', schedule);
     viewport.addEventListener('scroll', schedule);
+    // VIEWPORT_HEIGHT: возврат на сайт из фона восстанавливает страницу из bfcache без resize —
+    // без этих слушателей высота осталась бы устаревшей, и композер уехал бы под экран.
+    window.addEventListener('pageshow', schedule);
+    window.addEventListener('orientationchange', schedule);
+    document.addEventListener('visibilitychange', schedule);
     return () => {
       viewport.removeEventListener('resize', schedule);
       viewport.removeEventListener('scroll', schedule);
+      window.removeEventListener('pageshow', schedule);
+      window.removeEventListener('orientationchange', schedule);
+      document.removeEventListener('visibilitychange', schedule);
       if (frame) window.cancelAnimationFrame(frame);
       root.style.removeProperty('--kb-inset');
+      root.style.removeProperty('--app-height');
     };
   }, [enabled]);
 }

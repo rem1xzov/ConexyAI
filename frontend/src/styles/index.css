@@ -197,7 +197,10 @@ body {
 .app {
   display: flex;
   height: 100vh;
-  height: 100dvh;
+  /* VIEWPORT_HEIGHT: точная видимая высота, которую считает useKeyboardInset из visualViewport.
+     `100dvh` оставлен фолбэком: на телефоне он иногда «застывает» устаревшим (возврат из фона
+     или bfcache, появление адресной строки), и тогда низ макета — композер — уходил под экран. */
+  height: var(--app-height, 100dvh);
   overflow: hidden;
   /* Stacking anchor so the incognito aura (z-index 0) paints behind the app content. */
   position: relative;
@@ -978,6 +981,8 @@ body {
 .inputbar__attachments {
   display: flex;
   flex-wrap: wrap;
+  /* ATTACHMENTS_ALIGN: файлы идут слева направо, а не по центру. */
+  justify-content: flex-start;
   gap: 8px;
   overflow-x: auto;
   padding-bottom: 2px;
@@ -6525,11 +6530,9 @@ body {
     height: 40px;
   }
 
-  /* MOBILE_KEYBOARD: the whole layout gives up the keyboard's height, so the composer lands on top
-     of it instead of behind it. Browsers that implement interactive-widget report ~0 here. */
-  .app {
-    padding-bottom: var(--kb-inset, 0px);
-  }
+  /* MOBILE_KEYBOARD: высоту приложения теперь задаёт --app-height (см. useKeyboardInset), она уже
+     учитывает клавиатуру. Нижний padding по --kb-inset убран: иначе клавиатура вычиталась бы дважды,
+     и композер всплывал бы выше неё. Сам --kb-inset остаётся для fixed-элементов (sidebar, оверлеи). */
 
   /* ---------- FOCUS_MODE: the start screen steps aside for the keyboard (2026-09-24) ---------- */
   /* Tapping into the composer on the empty home screen hides the greeting and the chips, and the
@@ -6634,6 +6637,13 @@ body {
     /* COMPOSER_ACTIONS_BOTTOM: кнопки (+ / микрофон / отправить) держатся внизу и не всплывают
        к середине, когда поле выросло под длинный текст при правке. */
     align-items: flex-end;
+  }
+
+  /* ATTACHMENTS_ALIGN: у мобильного `.inputbar { align-items: center }` та же специфичность, что и у
+     `.inputbar--attachments { align-items: stretch }`, но он объявлен ниже — и перебивал растягивание,
+     из-за чего ряд вложений (и одиночный файл) центрировался. Возвращаем stretch: файлы слева направо. */
+  .inputbar.inputbar--attachments {
+    align-items: stretch;
   }
   .inputbar-thumb,
   .inputbar-thumb__media,
