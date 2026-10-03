@@ -180,6 +180,62 @@ public class ConexyController : ControllerBase
             messages.Select(m => new ChatTranscriptMessageDto(m.Role, m.Content, m.CreatedAt)).ToList()));
     }
 
+    // SHARE_PUBLIC: добавлено 2026-10-01
+    /// <summary>
+    /// Creates (or rotates) the public read-only link of one chat. Returns the random token; the client
+    /// turns it into <c>#/shared/&lt;token&gt;</c>. Only the chat's owner can do this.
+    /// </summary>
+    [HttpPost("chats/{chatId:guid}/share")]
+    public async Task<ActionResult<ShareLinkDto>> ShareChat(Guid chatId, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        // 24 random bytes -> 48 hex chars: unguessable, and it fits the column (64).
+        var token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
+        if (!await _conversation.SetChatShareTokenAsync(userId, chatId, token, ct))
+            return NotFound(new { error = "Chat not found." });
+
+        _logger.LogInformation("Chat {ChatId} shared publicly by user {UserId}.", chatId, userId);
+        return Ok(new ShareLinkDto(token, $"/#/shared/{token}"));
+    }
+
+    /// <summary>Revokes the public link of one chat. Only the chat's owner can do this.</summary>
+    [HttpDelete("chats/{chatId:guid}/share")]
+    public async Task<IActionResult> UnshareChat(Guid chatId, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        if (!await _conversation.SetChatShareTokenAsync(userId, chatId, null, ct))
+            return NotFound(new { error = "Chat not found." });
+
+        _logger.LogInformation("Chat {ChatId} public link revoked by user {UserId}.", chatId, userId);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// The publicly shared chat behind a token: no sign-in required, read-only, transcript only.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpGet("shared/{token}")]
+    public async Task<ActionResult<SharedChatDto>> GetSharedChat(string token, CancellationToken ct)
+    {
+        var shared = await _conversation.GetSharedChatAsync(token, ct);
+        if (shared is null)
+            return NotFound(new { error = "Shared chat not found." });
+
+        var messages = shared.Messages
+            .Select(m => new ChatTranscriptMessageDto(m.Role, m.Content ?? string.Empty, m.CreatedAt))
+            .ToList();
+
+        return Ok(new SharedChatDto(
+            shared.ChatId,
+            shared.Title,
+            ResolveChatKind(shared.ChatId, shared.Kind),
+            messages));
+    }
+
     // CHAT_DELETE: добавлено 2026-09-23
     /// <summary>
     /// Permanently deletes a chat: its stored messages and, when the caller really owned it, its

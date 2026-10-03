@@ -74,6 +74,19 @@ public interface IChatHistoryRepository
     /// <summary>One chat of the user as the chat list shows it, or null when the user has no such chat.</summary>
     Task<ChatListSummary?> GetChatAsync(Guid userId, Guid chatId, CancellationToken ct = default);
 
+    // SHARE_PUBLIC: добавлено 2026-10-01
+    /// <summary>
+    /// Stores the public share token of one chat, for its owner only; null revokes the link.
+    /// Returns false when the chat is not this user's (or is deleted), so the caller must not claim success.
+    /// </summary>
+    Task<bool> SetShareTokenAsync(Guid userId, Guid chatId, string? token, CancellationToken ct = default);
+
+    /// <summary>
+    /// Resolves a public share token to the chat it opens, messages included — read-only and NOT scoped
+    /// by owner (the token itself is the permission). Null when no live, non-deleted chat carries it.
+    /// </summary>
+    Task<SharedChatResult?> GetSharedAsync(string token, CancellationToken ct = default);
+
     // CHAT_SYNC_COMPLETE: добавлено 2026-09-24 — ревью H8.
     /// <summary>Every chat id the user has stored history for (complete, unbounded — ids only).</summary>
     Task<IReadOnlyList<Guid>> GetChatIdsAsync(Guid userId, CancellationToken ct = default);
@@ -116,3 +129,11 @@ public sealed record ChatListSummary(
     bool IsPinned,
     // CHAT_OWNERSHIP: модель последнего хода (из таблицы chat), null для старых чатов.
     string? Model = null);
+
+// SHARE_PUBLIC: добавлено 2026-10-01
+/// <summary>Публично расшаренный чат, открытый по токену: только на чтение.</summary>
+public sealed record SharedChatResult(
+    Guid ChatId,
+    string? Kind,
+    string? Title,
+    IReadOnlyList<ConexyChatMessageEntity> Messages);

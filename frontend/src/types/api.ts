@@ -128,6 +128,21 @@ export interface ChatTranscript {
   messages: ChatTranscriptMessage[];
 }
 
+// SHARE_PUBLIC: добавлено 2026-10-01
+/** Публичная ссылка на чат: токен и hash-путь. */
+export interface ChatShareLink {
+  token: string;
+  path: string;
+}
+
+/** Публично расшаренный чат (только чтение), доступный без входа в аккаунт. */
+export interface SharedChat {
+  id: string;
+  title?: string | null;
+  kind: string;
+  messages: ChatTranscriptMessage[];
+}
+
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 export interface SubscriptionUsage {
   tier: string;

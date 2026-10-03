@@ -43,6 +43,7 @@ internal static class SecurityTests
         Add("M10/C2: host git ignores repo hooks and fsmonitor and strips stored tokens", TestGitHardeningAsync, GitAvailable);
         Add("GITHUB_REPO_SUBDIR: branch/commit find a repository in a workspace subfolder", TestGitRepoSubfolderAsync, GitInstalled);
         Add("GITHUB_DELETE_BRANCH: deletes a branch and refuses protected ones", TestGitDeleteBranchAsync, GitInstalled);
+        Add("SHARE_PUBLIC: a public link opens the chat for anyone and can be revoked", TestPublicShareAsync);
     }
 
     // Program.cs has a top-level Assert local function that would shadow a `using static`; a class
@@ -757,6 +758,39 @@ internal static class SecurityTests
         p.StandardOutput.ReadToEnd();
         p.WaitForExit();
         return p.ExitCode == 0;
+    }
+
+    // ---- SHARE_PUBLIC ----
+
+    // Публичная ссылка: открывается без владельца (токен и есть разрешение), но выдать/отозвать её
+    // может только владелец чата.
+    private static async Task TestPublicShareAsync()
+    {
+        await using var db = Db("share_" + Guid.NewGuid().ToString("N"));
+        var owner = Guid.NewGuid();
+        var stranger = Guid.NewGuid();
+        var chatId = Guid.NewGuid();
+
+        db.Users.Add(new User { Id = owner, Email = $"{owner:N}@example.com", EmailConfirmed = true });
+        db.Chats.Add(new ChatEntity { Id = chatId, UserId = owner, Kind = "chat" });
+        await db.SaveChangesAsync();
+
+        var repo = new ChatHistoryRepository(db);
+
+        Assert(!await repo.SetShareTokenAsync(stranger, chatId, "tok-stranger-1234"),
+            "a stranger must not share somebody else's chat");
+
+        Assert(await repo.SetShareTokenAsync(owner, chatId, "tok-owner-12345678"), "the owner must be able to share");
+        await repo.AppendAsync(owner, chatId, "user", "привет");
+        await repo.AppendAsync(owner, chatId, "assistant", "здравствуйте");
+
+        var shared = await repo.GetSharedAsync("tok-owner-12345678");
+        Assert(shared is not null && shared.ChatId == chatId, "the share token must resolve the chat for anyone");
+        Assert(shared!.Messages.Count == 2, $"the whole transcript must come through, got {shared.Messages.Count}");
+        Assert(shared.Title == "привет", $"the title falls back to the first user message, got '{shared.Title}'");
+
+        Assert(await repo.SetShareTokenAsync(owner, chatId, null), "the owner can revoke the link");
+        Assert(await repo.GetSharedAsync("tok-owner-12345678") is null, "a revoked token must not resolve");
     }
 
     private static void RunGit(string dir, params string[] args)

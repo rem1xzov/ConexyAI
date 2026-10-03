@@ -31,4 +31,13 @@ public class ChatEntity
 
     /// <summary>Set when the owner deleted the chat; the content is gone, the tombstone stays.</summary>
     public DateTime? DeletedAt { get; set; }
+
+    // SHARE_PUBLIC: добавлено 2026-10-01 — случайный токен публичной ссылки «поделиться». Пока он
+    // есть, чат открывается по адресу #/shared/<token> для ЛЮБОГО, только на чтение: тем же токеном
+    // нельзя ни писать ходы, ни трогать рабочую область. Пустой — чат приватный.
+    /// <summary>Random token of the public read-only share link; null when not shared.</summary>
+    public string? ShareToken { get; set; }
+
+    /// <summary>When the link was (re)issued; null when not shared.</summary>
+    public DateTime? SharedAt { get; set; }
 }

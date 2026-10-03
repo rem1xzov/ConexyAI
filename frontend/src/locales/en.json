@@ -369,6 +369,14 @@
     "openTicketError": "Failed to open request",
     "closeError": "Failed to close request"
   },
+  "share": {
+    "brand": "ConexyAI",
+    "openApp": "Open in ConexyAI",
+    "notFound": "This link is invalid or access to the chat was revoked.",
+    "error": "Could not load the chat. Try refreshing the page later.",
+    "untitled": "Chat",
+    "readOnly": "Read-only"
+  },
   "limits": {
     "title": "Limits",
     "intro": "Your plan's limits determine how much you can use over time. The ring in the header shows the agent pools (Coder and Cowork).",

@@ -128,6 +128,13 @@ public interface IConversationService
     // CHAT_SHARE_LINK: добавлено 2026-09-24
     /// <summary>One chat of the user as the chat list shows it, or null.</summary>
     Task<ChatListSummary?> GetChatAsync(Guid userId, Guid chatId, CancellationToken ct = default);
+
+    // SHARE_PUBLIC: добавлено 2026-10-01
+    /// <summary>Ставит (token) или снимает (null) публичный токен ссылки чата. Только владелец.</summary>
+    Task<bool> SetChatShareTokenAsync(Guid userId, Guid chatId, string? token, CancellationToken ct = default);
+
+    /// <summary>Открывает публично расшаренный чат по токену, только на чтение; null — ссылка недействительна.</summary>
+    Task<SharedChatResult?> GetSharedChatAsync(string token, CancellationToken ct = default);
 }
 
 public class ConversationService : IConversationService
@@ -429,6 +436,13 @@ public class ConversationService : IConversationService
     // CHAT_SHARE_LINK: добавлено 2026-09-24
     public Task<ChatListSummary?> GetChatAsync(Guid userId, Guid chatId, CancellationToken ct = default) =>
         _chatHistory.GetChatAsync(userId, chatId, ct);
+
+    // SHARE_PUBLIC: добавлено 2026-10-01
+    public Task<bool> SetChatShareTokenAsync(Guid userId, Guid chatId, string? token, CancellationToken ct = default) =>
+        _chatHistory.SetShareTokenAsync(userId, chatId, token, ct);
+
+    public Task<SharedChatResult?> GetSharedChatAsync(string token, CancellationToken ct = default) =>
+        _chatHistory.GetSharedAsync(token, ct);
 
     // CHAT_SYNC: добавлено 2026-09-23
     public Task<IReadOnlyList<ChatListSummary>> GetChatsAsync(

@@ -5,6 +5,7 @@ import type {
   AdminSupportTicket,
   AdminUsersResponse,
   ChatListResponse,
+  ChatShareLink,
   ChatSummary,
   ChatTranscript,
   ConexyRequest,
@@ -12,6 +13,7 @@ import type {
   DevTokenResponse,
   IdeFileContent,
   SaveFileDto,
+  SharedChat,
   SubscriptionUsage,
   SupportMessage,
   SupportTicket,
@@ -259,6 +261,27 @@ export async function getChat(chatId: string): Promise<ChatSummary | null> {
 /** The stored transcript of one chat; the backend scopes it to the token's user. */
 export async function getChatTranscript(chatId: string): Promise<ChatTranscript> {
   const { data } = await http.get<ChatTranscript>(`/conexy/chats/${chatId}/messages`);
+  return data;
+}
+
+// SHARE_PUBLIC: добавлено 2026-10-01
+/** Создаёт (или обновляет) публичную ссылку на чат. Только владелец. */
+export async function createChatShareLink(chatId: string): Promise<ChatShareLink> {
+  const { data } = await http.post<ChatShareLink>(`/conexy/chats/${chatId}/share`);
+  return data;
+}
+
+/** Отзывает публичную ссылку на чат. */
+export async function revokeChatShareLink(chatId: string): Promise<void> {
+  await http.delete(`/conexy/chats/${chatId}/share`);
+}
+
+/**
+ * Читает публично расшаренный чат по токену. Эндпоинт анонимный, поэтому идём голым axios: сессия
+ * тут не нужна, а её отсутствие не должно превращаться в «выход из аккаунта» или повторные запросы.
+ */
+export async function getSharedChat(token: string): Promise<SharedChat> {
+  const { data } = await axios.get<SharedChat>(`/api/conexy/shared/${encodeURIComponent(token)}`);
   return data;
 }
 

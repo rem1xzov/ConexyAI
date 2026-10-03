@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
-import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, getTaskStatus, runTask, type VerificationChallenge } from './api/conexyApi';
+import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, getTaskStatus, runTask, createChatShareLink, type VerificationChallenge } from './api/conexyApi';
 // YOOKASSA: добавлено 2026-09-27 — создание платежа и окно возврата после оплаты.
 import { createPayment } from './api/paymentsApi';
 // USER_NAME: имя из персонализации подписывает приветствие на стартовом экране.
@@ -21,6 +21,8 @@ import { useDrawerSwipe } from './hooks/useDrawerSwipe';
 import { useKeyboardInset } from './hooks/useKeyboardInset';
 import { Sidebar } from './components/Sidebar';
 import { ChatFeed } from './components/ChatFeed';
+// SHARE_PUBLIC: публичная страница чата открывается по #/shared/<token> без входа в аккаунт.
+import { SharedChatPage } from './components/SharedChatPage';
 import { ChatHeaderActions } from './components/ChatHeaderActions';
 import { InputBar } from './components/InputBar';
 import { ModelPicker } from './components/ModelPicker';
@@ -165,6 +167,17 @@ function chatIdFromHash(hash: string): string | null {
 
 function chatLink(id: string): string {
   return `${window.location.origin}${window.location.pathname}#/chat/${id}`;
+}
+
+// SHARE_PUBLIC: добавлено 2026-10-01
+/** Публичная ссылка на чат. Токен выдаёт сервер; он же служит разрешением на чтение. */
+function publicShareUrl(token: string): string {
+  return `${window.location.origin}${window.location.pathname}#/shared/${token}`;
+}
+
+function sharedTokenFromHash(hash: string): string | null {
+  const match = /^#\/shared\/([A-Za-z0-9_-]{8,128})$/.exec(hash);
+  return match ? match[1] : null;
 }
 
 // LOGO_SWEEP: добавлено 2026-09-20 — time-of-day greeting for the start screen.
@@ -487,6 +500,8 @@ export default function App() {
   // LEGAL_DOCS: добавлено 2026-09-25 — правовые документы доступны и гостю, поэтому маршрут
   // проверяется независимо от профиля и токена.
   const legalDoc = legalDocFromHash(route);
+  // SHARE_PUBLIC: публичный чат тоже доступен без входа.
+  const sharedToken = sharedTokenFromHash(route);
 
   // ADMIN_PANEL_FIX: добавлено 2026-09-23 — маршрут админки решается ЯВНО.
   // Раньше при `user === null` (профиль ещё не приехал или /auth/me упал) не выполнялось ни одно из
@@ -2078,7 +2093,18 @@ export default function App() {
       return;
     }
 
-    const url = chatLink(session.id);
+    // SHARE_PUBLIC: ссылка должна открываться у любого, поэтому сначала просим сервер выдать
+    // публичный токен — он же и разрешение на чтение. Пока токена нет — делиться нечем.
+    let url: string;
+    try {
+      const link = await createChatShareLink(session.id);
+      url = publicShareUrl(link.token);
+    } catch (e) {
+      console.warn('[ChatShare] could not create a public link', { id: session.id, error: String(e) });
+      showToast(t('sidebar.shareFailed'));
+      return;
+    }
+
     const title = session.title || t('chat.shareTitleFallback');
 
     // navigator.share есть и в части десктопных браузеров — тогда системная шторка предпочтительнее.
@@ -2668,6 +2694,17 @@ export default function App() {
   // и «нет прав», и только потом саму панель.
   if (adminView) {
     return adminView;
+  }
+
+  // SHARE_PUBLIC: публичная страница чата. Стоит рядом с правовыми документами — тоже доступна гостю
+  // и тоже рендерится вне основного приложения.
+  if (sharedToken) {
+    const backToApp = () => { window.location.hash = ''; };
+    return (
+      <ErrorBoundary backLabel={t('common.back')} onBack={backToApp}>
+        <SharedChatPage token={sharedToken} onOpenApp={backToApp} />
+      </ErrorBoundary>
+    );
   }
 
   // LEGAL_DOCS: добавлено 2026-09-25 — публичные правовые документы (политика обработки ПДн,

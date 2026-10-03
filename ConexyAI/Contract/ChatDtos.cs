@@ -47,3 +47,16 @@ public record ChatRenameDto(string? Title);
 // CHAT_PIN: добавлено 2026-09-23
 /// <summary>Body of <c>PATCH /api/conexy/chats/{id}/pin</c>: pin or unpin one chat.</summary>
 public record ChatPinDto(bool IsPinned);
+
+// SHARE_PUBLIC: добавлено 2026-10-01
+/// <summary>
+/// Body of <c>POST /api/conexy/chats/{id}/share</c>: the random token of the public read-only link and
+/// the hash path the client turns into a full URL.
+/// </summary>
+public record ShareLinkDto(string Token, string Path);
+
+/// <summary>
+/// Body of <c>GET /api/conexy/shared/{token}</c>: a publicly shared chat, read-only and available
+/// without signing in. Nothing but the transcript is exposed — no workspace, no tools, no writes.
+/// </summary>
+public record SharedChatDto(Guid Id, string? Title, string Kind, IReadOnlyList<ChatTranscriptMessageDto> Messages);

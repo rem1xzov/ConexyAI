@@ -1920,6 +1920,13 @@ sealed class StaticConversationService : IConversationService
     public Task<ChatListSummary?> GetChatAsync(Guid userId, Guid chatId, CancellationToken ct = default) =>
         Task.FromResult<ChatListSummary?>(null);
 
+    // SHARE_PUBLIC: публичный доступ этому стабу не нужен.
+    public Task<bool> SetChatShareTokenAsync(Guid userId, Guid chatId, string? token, CancellationToken ct = default) =>
+        Task.FromResult(false);
+
+    public Task<SharedChatResult?> GetSharedChatAsync(string token, CancellationToken ct = default) =>
+        Task.FromResult<SharedChatResult?>(null);
+
     // CHAT_RENAME: и переименования тоже — история не у него.
     public Task<int> RenameChatAsync(Guid userId, Guid chatId, string title, CancellationToken ct = default) =>
         Task.FromResult(0);

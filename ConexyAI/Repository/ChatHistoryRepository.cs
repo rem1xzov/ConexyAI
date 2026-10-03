@@ -113,6 +113,54 @@ public class ChatHistoryRepository : IChatHistoryRepository
         return new ChatListSummary(r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind, r.Title, r.IsPinned, model);
     }
 
+    // SHARE_PUBLIC: добавлено 2026-10-01
+    public async Task<bool> SetShareTokenAsync(Guid userId, Guid chatId, string? token, CancellationToken ct = default)
+    {
+        // Только владелец и только живой чат: удалённый (tombstone) ссылку не получает и не теряет.
+        var chat = await _context.Chats
+            .FirstOrDefaultAsync(c => c.Id == chatId && c.UserId == userId && c.DeletedAt == null, ct);
+        if (chat is null)
+            return false;
+
+        chat.ShareToken = token;
+        chat.SharedAt = token is null ? null : DateTime.UtcNow;
+        chat.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync(ct);
+        return true;
+    }
+
+    public async Task<SharedChatResult?> GetSharedAsync(string token, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return null;
+
+        // Владелец тут НЕ проверяется намеренно: разрешением служит сам токен. Ищем только живой чат.
+        var chat = await _context.Chats
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.ShareToken == token && c.DeletedAt == null, ct);
+        if (chat is null)
+            return null;
+
+        var messages = await _context.ChatMessages
+            .AsNoTracking()
+            .Where(m => m.ChatId == chat.Id && (m.Role == "user" || m.Role == "assistant"))
+            .OrderBy(m => m.CreatedAt)
+            .ToListAsync(ct);
+
+        return new SharedChatResult(chat.Id, chat.Kind, SharedTitle(messages), messages);
+    }
+
+    /// <summary>Заголовок общего чата: имя пользователя важнее первого сообщения, как и в списке чатов.</summary>
+    private static string? SharedTitle(IReadOnlyList<ConexyChatMessageEntity> messages)
+    {
+        var named = messages.FirstOrDefault(m => !string.IsNullOrWhiteSpace(m.Title))?.Title;
+        var first = messages.FirstOrDefault(m => m.Role == "user")?.Content;
+        var title = string.IsNullOrWhiteSpace(named) ? first : named;
+        if (string.IsNullOrWhiteSpace(title))
+            return null;
+        return title.Length > 200 ? title[..200] : title;
+    }
+
     // CHAT_SYNC_COMPLETE: добавлено 2026-09-24
     public async Task<IReadOnlyList<Guid>> GetChatIdsAsync(Guid userId, CancellationToken ct = default)
     {

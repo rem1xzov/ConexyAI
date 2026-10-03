@@ -20,6 +20,10 @@ public class Chat_config : IEntityTypeConfiguration<ChatEntity>
         builder.Property(x => x.Model).HasMaxLength(50);
         builder.Property(x => x.CreatedAt).IsRequired();
         builder.Property(x => x.UpdatedAt).IsRequired();
+        // SHARE_PUBLIC: добавлено 2026-10-01 — уникальный токен публичной ссылки. В Postgres NULL в
+        // уникальном индексе не конфликтует сам с собой, поэтому нерасшаренные чаты друг другу не мешают.
+        builder.Property(x => x.ShareToken).HasMaxLength(64);
+        builder.HasIndex(x => x.ShareToken).IsUnique();
 
         builder.HasOne<User>()
             .WithMany()
