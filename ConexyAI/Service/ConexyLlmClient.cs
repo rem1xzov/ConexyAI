@@ -30,14 +30,13 @@ public class ConexyLlmClient : IConexyLlmClient
     // running longer than MaxStreamDuration.
     private static readonly TimeSpan StreamIdleTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan MaxStreamDuration = TimeSpan.FromMinutes(10);
-    // FLASH_TIMEOUT: добавлено 2026-09-27
-    // Flash — быстрая модель: если она не выдала НИ ОДНОГО токена (включая reasoning) за 20 секунд,
-    // запрос считается зависшим. Раньше сторож смотрел только на сам факт строки ответа и keep-alive
-    // комментарии сбрасывали таймер, так что «думающая» минуту Flash так и не отвечала. Теперь мы
-    // считаем именно прогресс (контент/reasoning/usage), а не любую строку.
-    private static readonly TimeSpan FlashNoProgressTimeout = TimeSpan.FromSeconds(20);
+    // FLASH_TIMEOUT: добавлено 2026-09-27; изменено 2026-10-01 — порог поднят с 20 до 60 секунд.
+    // При большом вложении (документ в десятки тысяч символов) модель честно «думает» дольше 20 секунд,
+    // и сторож обрывал живой запрос — пользователь видел таймаут вместо ответа. Теперь у Flash 60 секунд
+    // на путь до первого токена и на отсутствие прогресса — как и у остальных моделей.
+    private static readonly TimeSpan FlashNoProgressTimeout = TimeSpan.FromSeconds(60);
     private const string FlashTimeoutMessage =
-        "Превышен таймаут: модель Flash не ответила за 20 секунд. Обновите страницу и попробуйте снова.";
+        "Превышен таймаут: модель Flash не ответила за 60 секунд. Обновите страницу и попробуйте снова.";
     private const string StreamTimeoutMessage =
         "Превышен таймаут: модель не отвечает слишком долго. Обновите страницу и попробуйте снова.";
 

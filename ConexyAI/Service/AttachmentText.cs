@@ -14,10 +14,15 @@ namespace ConexyAI.Service;
 /// </summary>
 public static class AttachmentText
 {
-    // A single document may fill most of a turn, but several must not push the context window: the
-    // history keeps up to 20 rows and every one of them is re-sent with each request.
-    public const int MaxCharsPerAttachment = 30_000;
-    public const int MaxCharsPerMessage = 60_000;
+    // ATTACHMENT_LIMITS: изменено 2026-10-01 — лимит на одно вложение поднят с 30 000 до 200 000
+    // символов, а общий бюджет сообщения — с 60 000 до 400 000. Пользователи прикладывали большие
+    // документы и получали только первые 30k символов.
+    //
+    // Важно про контекст: текст вложения сохраняется в истории и пересылается в каждом следующем
+    // запросе чата, поэтому очень длинная переписка с крупными вложениями может упереться в окно
+    // модели — это цена за чтение больших файлов целиком.
+    public const int MaxCharsPerAttachment = 200_000;
+    public const int MaxCharsPerMessage = 400_000;
 
     public static string ComposeUserMessage(string prompt, IReadOnlyList<TaskAttachment>? attachments)
     {
