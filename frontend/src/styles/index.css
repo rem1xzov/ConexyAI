@@ -1122,8 +1122,19 @@ body {
      а не зажато в одну строку. Ниже — скролл внутри поля. */
   max-height: min(60vh, 420px);
   overflow-y: auto;
+  /* COMPOSER_NO_SCROLLBAR: у поля ввода не должно быть ВИДИМОЙ полосы прокрутки. Глобальный
+     `::-webkit-scrollbar` ниже отключает авто-скрытие оверлея — на Android полоса висит всегда
+     и выглядит как лишняя вертикальная чёрточка перед микрофоном. Прокрутка пальцем работает. */
+  scrollbar-width: none;
   padding: 6px 4px;
   outline: none;
+}
+
+/* COMPOSER_NO_SCROLLBAR: скрываем и webkit-полосу (Chromium/Safari/Android), иначе она
+   рисуется поверх поля как лишняя вертикальная линия рядом с микрофоном. */
+.inputbar__textarea::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .send-btn {
@@ -6648,6 +6659,17 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
   }
+
+  /* TABLES_MOBILE: на телефоне таблица сжималась по ширине экрана, и текст скатывался в столбик
+     по 1–2 слова — читать невозможно. Даём колонкам минимальную ширину и ограничиваем слишком
+     длинные: таблица при нехватке места прокручивается по горизонтали (обёртка .markdown__table
+     уже умеет overflow-x). */
+  .markdown__table th,
+  .markdown__table td {
+    min-width: 7.5rem;
+    max-width: 18rem;
+  }
+
   /* Model picker -> compact "Flash ▾" text trigger inside the chat header. */
   .modelpicker__label-full {
     display: none;
