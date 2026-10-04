@@ -235,6 +235,8 @@ builder.Services.AddScoped<IConexyAgentRunner, ConexyAgentRunner>();
 builder.Services.AddScoped<IConversationService, ConversationService>();
 builder.Services.AddScoped<IConexyEditorService, ConexyEditorService>();
 builder.Services.AddScoped<IConexyBashService, ConexyBashService>();
+// TEST_RUNNER: добавлено 2026-10-04 — структурированный прогон тестов (run_tests).
+builder.Services.AddScoped<ITestRunnerService, ConexyTestRunnerService>();
 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
 builder.Services.AddScoped<IPendingActionRepository, PendingActionRepository>();
 builder.Services.AddSingleton<IDangerousCommandClassifier, DangerousCommandClassifier>();

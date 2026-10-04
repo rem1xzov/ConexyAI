@@ -36,6 +36,8 @@ public class ConexyBashService : IConexyBashService
 
     private const int MaxTimeoutSeconds = 300;
     private const int DefaultTimeoutSeconds = 30;
+    // TEST_RUNNER: тестовому прогону нужен больший потолок, чем обычной диагностике.
+    private const int MaxRawTimeoutSeconds = 900;
 
     public ConexyBashService(
         IConexyWorkspaceService workspaceService,
@@ -85,7 +87,7 @@ public class ConexyBashService : IConexyBashService
 
         // COMMAND_CONFIRM: добавлено 2026-09-20
         // Include the (truncated) output so command cards can show it collapsed.
-        await SendToolActionAsync(sessionId, request, result.Success ? "completed" : "failed", summary, result.Output, ct);
+        await SendToolActionAsync(sessionId, request, result.Success ? "completed" : "failed", summary, TruncateForCard(result.Output), ct);
 
         // Mirror the command and its output into the interactive terminal feed so the
         // user sees agent work in the same chronological timeline as their own commands.
@@ -115,13 +117,14 @@ public class ConexyBashService : IConexyBashService
 
         _logger.LogInformation("Executing bash for session {SessionId} ({Chars} chars).", sessionId, request.Command.Length);
 
-        var timeout = TimeSpan.FromSeconds(Math.Clamp(request.TimeoutSeconds ?? DefaultTimeoutSeconds, 1, MaxTimeoutSeconds));
+        var maxTimeout = request.RawOutput ? MaxRawTimeoutSeconds : MaxTimeoutSeconds;
+        var timeout = TimeSpan.FromSeconds(Math.Clamp(request.TimeoutSeconds ?? DefaultTimeoutSeconds, 1, maxTimeout));
 
         using var slot = await _activity.AcquireAsync(sessionId, ct);
-        return await RunProcessAsync(sessionId, request.Command, workspacePath, timeout, ct);
+        return await RunProcessAsync(sessionId, request.Command, workspacePath, timeout, request.RawOutput, ct);
     }
 
-    private async Task<BashToolResult> RunProcessAsync(Guid sessionId, string command, string workingDir, TimeSpan timeout, CancellationToken ct)
+    private async Task<BashToolResult> RunProcessAsync(Guid sessionId, string command, string workingDir, TimeSpan timeout, bool rawOutput, CancellationToken ct)
     {
         // SANDBOX: добавлено 2026-09-17 — execute inside the isolated Docker container.
         // SANDBOX_SESSIONS: добавлено 2026-09-23 — контейнер по-прежнему одноразовый (создаётся под
@@ -130,7 +133,8 @@ public class ConexyBashService : IConexyBashService
         // sweeper'ом после 10 минут простоя.
         var statePath = _sandboxSessions.GetOrCreateStatePath(sessionId);
         var result = await _sandbox.RunAsync(command, workingDir, timeout, ct, statePath);
-        var (text, truncated) = TruncateOutput(result.Output);
+        // TEST_RUNNER: тестовому прогону нужен весь вывод, а не head+tail — иначе упавшие тесты теряются.
+        var (text, truncated) = rawOutput ? TruncateRaw(result.Output) : TruncateOutput(result.Output);
 
         return new BashToolResult
         {
@@ -162,6 +166,21 @@ public class ConexyBashService : IConexyBashService
 
         return (result, true);
     }
+
+    // TEST_RUNNER: для тестов сохраняем почти весь вывод (сводка в конце, падения в середине), обрезая
+    // только по очень большому лимиту символов.
+    private const int MaxRawOutputChars = 400_000;
+
+    private static (string text, bool truncated) TruncateRaw(string raw)
+    {
+        if (raw.Length <= MaxRawOutputChars) return (raw, false);
+        var half = MaxRawOutputChars / 2;
+        return (raw[..half] + "\n[... output truncated ...]\n" + raw[^half..], true);
+    }
+
+    /// <summary>Command cards should never receive a multi-hundred-KB blob.</summary>
+    private static string TruncateForCard(string text, int maxChars = 20_000) =>
+        text.Length <= maxChars ? text : text[..maxChars] + "\n[... truncated ...]";
 
     private static string TruncateSummary(string command) =>
         command.Length <= 100 ? command : command[..100] + "...";

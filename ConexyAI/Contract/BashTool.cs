@@ -24,6 +24,11 @@ public class BashToolRequest
     /// </summary>
     [JsonPropertyName("is_dangerous")]
     public bool IsDangerous { get; set; }
+
+    // TEST_RUNNER: добавлено 2026-10-04 — тестовому прогону нужен весь вывод (сводка в конце, а падения
+    // в середине), иначе head+tail-обрезка прячет упавшие тесты. Не приходит от модели.
+    [JsonIgnore]
+    public bool RawOutput { get; set; }
 }
 
 /// <summary>Result of a <c>bash</c> execution; <see cref="Output"/> is already truncated.</summary>

@@ -45,6 +45,7 @@ internal static class SecurityTests
         Add("GITHUB_DELETE_BRANCH: deletes a branch and refuses protected ones", TestGitDeleteBranchAsync, GitInstalled);
         Add("GITHUB_FULL: switch/merge branches and a clean pull refusal", TestGitSyncAsync, GitInstalled);
         Add("GREP_GLOB: content search and file globs stay inside the workspace", TestGrepGlobAsync);
+        Add("TEST_RUNNER: parses failures and auto-detects the framework", TestTestRunnerAsync);
         Add("SHARE_PUBLIC: a public link opens the chat for anyone and can be revoked", TestPublicShareAsync);
     }
 
@@ -855,6 +856,115 @@ internal static class SecurityTests
             Cleanup(root);
         }
     }
+
+    // TEST_RUNNER: разбор вывода (pytest/jest/dotnet) и автодетект команды по файлам проекта.
+    private static async Task TestTestRunnerAsync()
+    {
+        var parseRoot = TempRoot();
+        try
+        {
+            var runner = new ConexyTestRunnerService(Workspace(parseRoot));
+
+            var pytest = runner.Parse(TestFramework.Pytest, PytestSample, false);
+            Assert(pytest.Passed == 2 && pytest.Failed == 1 && pytest.Skipped == 0,
+                $"pytest counts: expected 2/1/0, got {pytest.Passed}/{pytest.Failed}/{pytest.Skipped}");
+            Assert(pytest.Failures.Count == 1, $"pytest reports one failure, got {pytest.Failures.Count}");
+            var pf = pytest.Failures[0];
+            Assert(pf.Name == "test_add", "pytest failure name: " + pf.Name);
+            Assert(pf.File == "tests/test_math.py" && pf.Line == 12, $"pytest file:line: {pf.File}:{pf.Line}");
+            Assert(pf.Expected == "3" && pf.Actual == "2", $"pytest expected/actual: {pf.Expected}/{pf.Actual}");
+
+            var jest = runner.Parse(TestFramework.Jest, JestSample, false);
+            Assert(jest.Failed == 1 && jest.Passed == 0, $"jest counts: {jest.Passed}/{jest.Failed}");
+            Assert(jest.Failures.Count == 1, $"jest reports one failure, got {jest.Failures.Count}");
+            var jf = jest.Failures[0];
+            Assert(jf.Expected == "3" && jf.Actual == "2", $"jest expected/actual: {jf.Expected}/{jf.Actual}");
+            Assert(jf.File == "src/sum.test.ts" && jf.Line == 11, $"jest file:line: {jf.File}:{jf.Line}");
+
+            var dotnet = runner.Parse(TestFramework.DotnetTest, DotnetSample, false);
+            Assert(dotnet.Passed == 2 && dotnet.Failed == 1, $"dotnet counts: {dotnet.Passed}/{dotnet.Failed}");
+            Assert(dotnet.Failures.Count == 1 && dotnet.Failures[0].Name == "MathTests.Add", "dotnet failure name: " + dotnet.Failures[0].Name);
+            Assert(dotnet.Failures[0].File == "/src/tests/MathTests.cs" && dotnet.Failures[0].Line == 42,
+                $"dotnet file:line: {dotnet.Failures[0].File}:{dotnet.Failures[0].Line}");
+        }
+        finally { Cleanup(parseRoot); }
+
+        // Автодетект: node (package.json с тест-скриптом и jest).
+        var nodeRoot = TempRoot();
+        try
+        {
+            var workspace = Workspace(nodeRoot);
+            var chatId = Guid.NewGuid();
+            var dir = workspace.GetTaskWorkspacePath(chatId);
+            await File.WriteAllTextAsync(Path.Combine(dir, "package.json"),
+                "{\n  \"scripts\": { \"test\": \"jest\" },\n  \"devDependencies\": { \"jest\": \"^29.0.0\" }\n}");
+
+            var runner = new ConexyTestRunnerService(workspace);
+            var detected = await runner.DetectCommandAsync(chatId, null, null);
+            Assert(detected.Error is null, "node detection has no error: " + detected.Error);
+            Assert(detected.Framework == TestFramework.Jest, "node framework detected as jest, got " + detected.Framework);
+            Assert(detected.Command == "npm test --silent", "node command: " + detected.Command);
+
+            // Явное переопределение фреймворка побеждает автодетект.
+            var forced = await runner.DetectCommandAsync(chatId, null, "dotnet");
+            Assert(forced.Framework == TestFramework.DotnetTest && forced.Command == "dotnet test --nologo", "framework override: " + forced.Command);
+        }
+        finally { Cleanup(nodeRoot); }
+
+        // Автодетект: python (pytest).
+        var pyRoot = TempRoot();
+        try
+        {
+            var workspace = Workspace(pyRoot);
+            var chatId = Guid.NewGuid();
+            var dir = workspace.GetTaskWorkspacePath(chatId);
+            await File.WriteAllTextAsync(Path.Combine(dir, "test_math.py"), "def test_add():\n    assert 1 == 1\n");
+
+            var detected = await new ConexyTestRunnerService(workspace).DetectCommandAsync(chatId, null, null);
+            Assert(detected.Framework == TestFramework.Pytest && detected.Command == "python -m pytest -q",
+                "pytest detection: " + detected.Command);
+        }
+        finally { Cleanup(pyRoot); }
+    }
+
+    private const string PytestSample =
+        "============================= test session starts ==============================\n" +
+        "collected 3 items\n\n" +
+        "tests/test_math.py .F.                                                  [ 66%]\n\n" +
+        "=================================== FAILURES ===================================\n" +
+        "_________________________________ test_add ______________________________________\n\n" +
+        "    def test_add():\n" +
+        ">       assert add(1, 1) == 3\n" +
+        "E       assert 2 == 3\n\n" +
+        "tests/test_math.py:12: AssertionError\n" +
+        "=========================== short test summary info ============================\n" +
+        "FAILED tests/test_math.py::test_add - assert 2 == 3\n" +
+        "========================= 2 passed, 1 failed in 0.05s ==========================\n";
+
+    private const string JestSample =
+        " FAIL  src/sum.test.ts\n" +
+        "  ● add sums two numbers\n\n" +
+        "    expect(received).toBe(expected)\n\n" +
+        "    Expected: 3\n" +
+        "    Received: 2\n\n" +
+        "      11 |   expect(add(1, 1)).toBe(3)\n" +
+        "    > 12 | })\n" +
+        "         |  ^\n" +
+        "      at Object.<anonymous> (src/sum.test.ts:11:22)\n\n" +
+        "Test Suites: 1 failed, 1 total\n" +
+        "Tests:       1 failed, 1 total\n" +
+        "Snapshots:   0 total\n" +
+        "Time:        0.5 s\n";
+
+    private const string DotnetSample =
+        "Failed!  - Failed:     1, Passed:     2, Skipped:     0, Total:     3, Duration: 12 ms\n" +
+        "  Failed MathTests.Add [5 ms]\n" +
+        "  Error Message:\n" +
+        "   Assert.Equal() Failure: Values differ\n" +
+        "Expected: 3\n" +
+        "Actual:   2\n" +
+        "  Stack Trace:\n" +
+        "     at MathTests.Add() in /src/tests/MathTests.cs:line 42\n";
 
     private static bool LocalBranchExists(string dir, string branch)
     {

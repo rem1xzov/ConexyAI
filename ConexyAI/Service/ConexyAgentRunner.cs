@@ -46,6 +46,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // BROWSER_AUTOMATION: добавлено 2026-10-01 — DOM-автоматизация (browser_*). Необязательна,
     // чтобы тесты, собирающие раннер напрямую, работали без браузера.
     private readonly IConexyBrowserService? _browserService;
+    // TEST_RUNNER: добавлено 2026-10-04 — структурированный прогон тестов. Необязателен для тестов раннера.
+    private readonly ITestRunnerService? _testRunnerService;
     private ConexyJob _job = null!;
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — накопленный поток ответа на случай остановки.
     private readonly StringBuilder _streamedOutput = new();
@@ -269,6 +271,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         ИНСТРУМЕНТЫ:
         Ты работаешь инструментами: `str_replace_editor` (view/create/str_replace/insert/undo), `file_read`/`file_write`/`file_patch`, `grep` (поиск по содержимому файлов регулярным выражением с фильтром `glob`), `glob` (поиск файлов по маске, поддерживает `**`), `bash`, `github_action` и `github_api` (операции с GitHub от имени пользователя по его личному токену), `web_search` (поиск актуальной информации в интернете), `fetch_web_page` (чтение страницы по URL), `search_user_chats` (поиск по прошлым чатам пользователя) и системная память задачи (`todo_write`).
         Для поиска по коду в воркспейсе используй `grep` и `glob`, а не `bash: grep/rg/find` — эти инструменты не требуют подтверждения и не зависят от того, что установлено в песочнице.
+        Для проверки кода используй `run_tests` — он сам определяет фреймворк и возвращает структурированный отчёт (кто упал, файл:строка, ожидали/получили), а не сырые логи. Не гоняй `npm test`/`pytest`/`dotnet test` через `bash`, чтобы потом вручную вычитывать простыню вывода.
         Для документов: `create_document` создаёт .docx/.xlsx/.pptx из Markdown, `read_document_file` читает текст .docx/.xlsx/.pptx/.pdf (не открывай их через `view` — это двоичные файлы).
 
         ## Правила использования инструментов
@@ -496,7 +499,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // параллельными агентами нельзя. Необязательный — тесты собирают раннер вручную.
         IServiceScopeFactory? scopeFactory = null,
         // BROWSER_AUTOMATION: последним и необязательным — позиционные вызовы в тестах не ломаются.
-        IConexyBrowserService? browserService = null)
+        IConexyBrowserService? browserService = null,
+        // TEST_RUNNER: последним и необязательным — позиционные вызовы в тестах не ломаются.
+        ITestRunnerService? testRunnerService = null)
     {
         _workspaceService = workspaceService;
         _visionService = visionService;
@@ -518,6 +523,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _chatSearch = chatSearch;
         _scopeFactory = scopeFactory;
         _browserService = browserService;
+        _testRunnerService = testRunnerService;
 
         var configured = agentOptions.Value.MaxIterations;
         // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
@@ -1638,6 +1644,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     return await RunBashWithConfirmationAsync(taskId, chatId, toolCall, request, isDangerous, ct);
                 }
 
+                // TEST_RUNNER: добавлено 2026-10-04 — отдельный инструмент прогона тестов.
+                case "run_tests":
+                {
+                    return await DispatchRunTestsAsync(taskId, chatId, toolCall, root, ct);
+                }
+
                 case "todo_write":
                 {
                     var request = JsonSerializer.Deserialize<TodoWriteRequest>(toolCall.Function.Arguments);
@@ -1769,6 +1781,130 @@ public class ConexyAgentRunner : IConexyAgentRunner
         {
             return new ConexyToolResult(toolCall.Id, $"Execution error: {ex.Message}", true);
         }
+    }
+
+    // TEST_RUNNER: добавлено 2026-10-04 — «запусти тесты» одним инструментом. Автодетект команды по
+    // проекту (подтверждение не нужно — команда построена нами), а явная 'command' идёт через тот же
+    // гейт, что и bash. Ответ — структурированный отчёт, а не сырые логи.
+    private async Task<ConexyToolResult> DispatchRunTestsAsync(
+        Guid taskId, Guid chatId, LlmToolCall toolCall, JsonElement root, CancellationToken ct)
+    {
+        if (_testRunnerService is null)
+            return new ConexyToolResult(toolCall.Id, "Test runner is unavailable in this environment.", true);
+
+        var explicitCommand = Optional(root, "command");
+        var frameworkArg = Optional(root, "framework");
+        var path = Optional(root, "path");
+        var timeout = GetInt(root, "timeout_seconds", 0);
+
+        var isExplicit = !string.IsNullOrWhiteSpace(explicitCommand);
+        string command;
+        TestFramework framework;
+        if (isExplicit)
+        {
+            command = explicitCommand!.Trim();
+            framework = _testRunnerService.ResolveFramework(frameworkArg);
+        }
+        else
+        {
+            var detection = await _testRunnerService.DetectCommandAsync(chatId, path, frameworkArg, ct);
+            if (detection.Command is null)
+                return new ConexyToolResult(toolCall.Id, detection.Error ?? "Could not detect a test command.", true);
+            command = detection.Command;
+            framework = detection.Framework;
+        }
+
+        var request = new BashToolRequest
+        {
+            Command = command,
+            TimeoutSeconds = timeout > 0 ? timeout : 600,
+            RawOutput = true,
+            IsDangerous = _dangerousCommandClassifier.IsDangerous(command)
+        };
+
+        await SendAgentStatusAsync(taskId, "testing", $"Запускаю тесты: {command}...", ct: ct);
+
+        string output;
+        bool failed;
+        bool timedOut;
+        bool truncated;
+
+        if (isExplicit)
+        {
+            // Произвольная команда от модели — через тот же гейт подтверждения, что и bash.
+            var gated = await RunBashWithConfirmationAsync(taskId, chatId, toolCall, request, request.IsDangerous, ct);
+            if (!gated.CommandExecuted)
+                return gated; // не подтверждено/отменено — не маскируем под отчёт о тестах
+            output = gated.Output;
+            failed = gated.IsError;
+            timedOut = false;
+            truncated = false;
+        }
+        else
+        {
+            var res = await _bashService.ExecuteAsync(chatId, request, emitStartEvent: true, ct: ct);
+            if (res.ErrorType is "workspace_not_found" or "spawn_failed")
+                return new ConexyToolResult(toolCall.Id,
+                    res.ErrorType == "workspace_not_found" ? "Workspace not found." : "Failed to start the test process.", true);
+            output = res.Output;
+            failed = !res.Success;
+            timedOut = res.WasTimedOut;
+            truncated = res.WasTruncated;
+        }
+
+        var summary = _testRunnerService.Parse(framework, output, truncated);
+        var report = FormatTestReport(command, summary, failed, timedOut);
+        // Прогон упал => IsError: у модели есть что чинить. CommandExecuted=true — тесты реально шли.
+        return new ConexyToolResult(toolCall.Id, report, failed) { CommandExecuted = true };
+    }
+
+    private static string FormatTestReport(string command, TestRunSummary summary, bool failed, bool timedOut)
+    {
+        var sb = new StringBuilder();
+        sb.Append("TESTS ").Append(timedOut ? "TIMED OUT" : failed ? "FAILED" : "PASSED");
+        if (summary.Framework != TestFramework.Unknown) sb.Append(" (").Append(summary.Framework).Append(')');
+        sb.Append('\n').Append("Command: ").Append(command).Append('\n');
+
+        if (summary.Total > 0 || summary.Passed + summary.Skipped > 0)
+        {
+            sb.Append($"Result: {summary.Passed} passed, {summary.Failed} failed, {summary.Skipped} skipped");
+            if (summary.Total > 0) sb.Append($", {summary.Total} total");
+            if (summary.Duration is not null) sb.Append($", {summary.Duration}");
+            sb.Append('\n');
+        }
+        else
+        {
+            sb.Append(summary.Parsed
+                ? "Result: no test counts found in the output.\n"
+                : "Result: could not parse the output (unknown runner) — see the tail below.\n");
+        }
+
+        if (summary.Failures.Count > 0)
+        {
+            sb.Append("\nFailures:\n");
+            var shown = 0;
+            foreach (var f in summary.Failures)
+            {
+                shown++;
+                sb.Append(shown).Append(") ").Append(f.Name);
+                if (f.File is not null)
+                    sb.Append(" (").Append(f.File).Append(f.Line is int line ? ":" + line : string.Empty).Append(')');
+                sb.Append('\n');
+                if (!string.IsNullOrWhiteSpace(f.Message)) sb.Append("   message: ").Append(f.Message).Append('\n');
+                if (f.Expected is not null || f.Actual is not null)
+                    sb.Append("   expected: ").Append(f.Expected ?? "?").Append(" | actual: ").Append(f.Actual ?? "?").Append('\n');
+                if (shown >= 25 && summary.Failures.Count > shown)
+                {
+                    sb.Append($"   … {summary.Failures.Count - shown} more failure(s) omitted\n");
+                    break;
+                }
+            }
+        }
+
+        if (failed || !summary.Parsed)
+            sb.Append("\nOutput tail:\n").Append(summary.OutputTail);
+
+        return sb.ToString().TrimEnd();
     }
 
     // COMMAND_CONFIRM: расширено 2026-09-20 — подтверждение требуется для любой bash-команды.
@@ -2868,6 +3004,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 command = new { type = "string", description = "The shell command to run" },
                 timeout_seconds = new { type = "integer", description = "Optional timeout in seconds (default 60, max 300)" }
             }, required = new[] { "command" } }),
+        // TEST_RUNNER: добавлено 2026-10-04 — структурированный прогон тестов вместо чтения логов.
+        Function("run_tests", "Run the project's tests and return a STRUCTURED report: pass/fail counts and, for every failure, its name, file:line and expected/actual — instead of raw logs. Prefer this over `bash: npm test / pytest / dotnet test`. The framework is auto-detected (npm test with jest/vitest/mocha, pytest, dotnet test, go test, cargo test, rspec, phpunit). Pass 'command' only to override with a custom command — it then needs the same confirmation as bash.",
+            new { type = "object", properties = new {
+                framework = new { type = "string", @enum = new[] { "pytest", "jest", "vitest", "mocha", "dotnet", "go", "cargo", "rspec", "phpunit" }, description = "Force a test framework (normally auto-detected)" },
+                path = new { type = "string", description = "Optional relative directory to run the tests in (default: workspace root)" },
+                command = new { type = "string", description = "Optional explicit shell command; overrides auto-detection and requires the same confirmation as bash" },
+                timeout_seconds = new { type = "integer", description = "Optional timeout in seconds (default 600, max 900)" }
+            }, required = Array.Empty<string>() }),
         Function("todo_write", "Create or update the todo list for the current multi-step task. Pass the FULL list every time (not a delta); this replaces the previous todo state.",
             new { type = "object", properties = new {
                 todos = new { type = "array", items = new { type = "object", properties = new {
