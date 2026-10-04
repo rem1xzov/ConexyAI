@@ -177,11 +177,16 @@ internal static class AgentCapabilityTests
             services.AddSingleton<IConexyWorkspaceService>(_ => new ConexyWorkspaceService(
                 Options.Create(new WorkspaceOptions { RootPath = root }), NullLogger<ConexyWorkspaceService>.Instance));
             services.AddSingleton<IWorkspacePathValidator, WorkspacePathValidator>();
+            // BROWSER_AUTOMATION: жизненный цикл Chromium вынесен в общий хост; его же требует
+            // браузерный сервис.
+            services.AddSingleton<IChromiumHost, ChromiumHost>();
             services.AddSingleton<IConexyVisionService, ConexyVisionService>();
+            services.AddSingleton<IConexyBrowserService, ConexyBrowserService>();
 
             await using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
             Assert(provider.GetService<IWebPageFetcher>() is WebPageFetcher, "the fetcher resolves from DI");
             Assert(provider.GetService<IConexyVisionService>() is ConexyVisionService, "the vision service resolves from DI");
+            Assert(provider.GetService<IConexyBrowserService>() is ConexyBrowserService, "the browser service resolves from DI");
         }
         finally
         {

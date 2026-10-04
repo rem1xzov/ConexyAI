@@ -43,6 +43,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly IChatSearchRepository _chatSearch;
     // ORCHESTRA: создаёт scope для помощников (см. SpawnAgentsAsync).
     private readonly IServiceScopeFactory? _scopeFactory;
+    // BROWSER_AUTOMATION: добавлено 2026-10-01 — DOM-автоматизация (browser_*). Необязательна,
+    // чтобы тесты, собирающие раннер напрямую, работали без браузера.
+    private readonly IConexyBrowserService? _browserService;
     private ConexyJob _job = null!;
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — накопленный поток ответа на случай остановки.
     private readonly StringBuilder _streamedOutput = new();
@@ -257,6 +260,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         6. НЕ ВЫДУМЫВАЙ ФАКТЫ (ZERO HALLUCINATION): Никогда не выдумывай факты, цифры, даты, версии, названия API, флаги конфигурации, цитаты и источники. Не уверен или не знаешь — прямо скажи «не уверен» и проверь через `web_search` (при необходимости открой страницу через `fetch_web_page`), а не отвечай по памяти. Запрещено придумывать сигнатуры и код, которых ты не видел в файлах, и утверждать, что чего-то не существует, не проверив это поиском.
         7. НИКОГДА НЕ ВРИ О СВОИХ ДЕЙСТВИЯХ (ZERO FALSE REPORTING): Запрещено говорить, что ты вызвал инструмент, проверил, собрал, запустил тест, запушил или что-то исправил, если ты этого не делал. Нельзя выдавать ранее сделанный вывод за новую проверку. Если инструмент вернул ошибку — приводи её текст как есть; не придумывай причину, которую не подтвердил. Не выполнил проверку — так и скажи: «не проверял» или «не удалось проверить», и объясни почему. Причина ошибки непонятна — либо добудь детали (вызови инструмент ещё раз, посмотри вывод, прочитай файл), либо честно скажи, что причина не установлена.
         8. ЭКОНОМИЯ ТОКЕНОВ (LEAN BY DEFAULT): Каждый твой шаг пересылает всю переписку заново, поэтому болтливость стоит денег пользователя. На простую реплику (приветствие, короткий вопрос, светская беседа) отвечай сразу одним коротким сообщением — без плана в `todo_write`, без вызова инструментов и без рассуждений на пол-экрана. Планируй и вызывай инструменты только когда есть реальная задача. Не повторяй в ответе то, что уже видно из инструментов, и не пересказывай свой же план.
+        9. БРАУЗЕР (`browser_*`). Когда дело касается веб-приложения — ты его собрал, или просят проверить/прокликать сайт — открывай страницу через `browser_open` (файл рабочей области, например `index.html`, или публичный URL), читай содержимое через `browser_extract` (там же — селекторы интерактивных элементов), действуй через `browser_click` / `browser_type` / `browser_press` / `browser_scroll`, а результат проверяй `browser_screenshot`. Это единственный способ убедиться, что UI реально работает, а не «правильно выглядит в коде». Для простого чтения статической страницы браузер не нужен — хватит `fetch_web_page`. Внешние сайты — только публичные http(s); чужие аккаунты, ввод платёжных данных и любые действия от имени пользователя в интернете не выполняй. Закончил работу со страницей — закрой сессию через `browser_close`.
 
         ВЫЗОВ ИНСТРУМЕНТОВ ВМЕСТО РАЗГОВОРОВ:
         Если пользователь просит создать, изменить, запустить или проверить код/файл — тебе КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать код в текстовом ответе.
@@ -480,7 +484,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // ORCHESTRA: фабрика scope нужна, чтобы запустить помощников в СВОИХ экземплярах раннера:
         // у раннера на прогон своё состояние (задача, профиль, буфер ответа), и делить его между
         // параллельными агентами нельзя. Необязательный — тесты собирают раннер вручную.
-        IServiceScopeFactory? scopeFactory = null)
+        IServiceScopeFactory? scopeFactory = null,
+        // BROWSER_AUTOMATION: последним и необязательным — позиционные вызовы в тестах не ломаются.
+        IConexyBrowserService? browserService = null)
     {
         _workspaceService = workspaceService;
         _visionService = visionService;
@@ -501,6 +507,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _webPageFetcher = webPageFetcher;
         _chatSearch = chatSearch;
         _scopeFactory = scopeFactory;
+        _browserService = browserService;
 
         var configured = agentOptions.Value.MaxIterations;
         // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
@@ -816,7 +823,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                                 true)
                             : toolName == "take_screenshot"
                                 ? await HandleScreenshotAsync(chatId, toolCall, batchImages, group, ct)
-                                : await DispatchToolAsync(taskId, chatId, toolCall, ct);
+                                : toolName == "browser_screenshot"
+                                    ? await HandleBrowserScreenshotAsync(chatId, toolCall, batchImages, group, ct)
+                                    : await DispatchToolAsync(taskId, chatId, toolCall, ct);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -1013,11 +1022,19 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 _job.TaskId);
         }
 
+        // BROWSER_AUTOMATION: браузерные инструменты нужны тому же Chromium и только режиму, которому
+        // они разрешены профилем (Coder). Без доступного браузера они не предлагаются.
+        var browserTools = screenshots && _browserService is not null && _profile.Allows("browser_open");
+
         return ToolCatalog
-            .Where(tool => IsToolAllowed(tool.Name) && (tool.Name != "take_screenshot" || screenshots))
+            .Where(tool => IsToolAllowed(tool.Name)
+                && (tool.Name != "take_screenshot" || screenshots)
+                && (!IsBrowserTool(tool.Name) || browserTools))
             .Select(tool => tool.Schema)
             .ToList();
     }
+
+    private static bool IsBrowserTool(string name) => name.StartsWith("browser_", StringComparison.Ordinal);
 
     /// <summary>
     /// One-time instruction for tools that failed in this environment, so the model stops retrying
@@ -1339,6 +1356,73 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 case SpawnAgentsTool:
                 {
                     return await SpawnAgentsAsync(taskId, chatId, root, toolCall.Id, ct);
+                }
+
+                // BROWSER_AUTOMATION: DOM-автоматизация во встроенном браузере (только Coder и только
+                // когда Chromium доступен — см. ResolveToolsAsync). Скриншот обрабатывается отдельно
+                // в цикле, потому что его надо приложить к контексту как изображение.
+                case "browser_open":
+                {
+                    if (_browserService is null)
+                        return new ConexyToolResult(toolCall.Id, "Браузер недоступен в этом окружении.", true);
+                    var target = GetString(root, "url");
+                    if (string.IsNullOrWhiteSpace(target))
+                        return new ConexyToolResult(toolCall.Id, "browser_open requires 'url'.", true);
+                    var res = await _browserService.OpenAsync(chatId, target, ct);
+                    await LogAsync(taskId, $"[Browser] open {ShortUrl(target)}", ct);
+                    return new ConexyToolResult(toolCall.Id, res.Message, !res.Success);
+                }
+
+                case "browser_click":
+                {
+                    if (_browserService is null)
+                        return new ConexyToolResult(toolCall.Id, "Браузер недоступен в этом окружении.", true);
+                    var res = await _browserService.ClickAsync(chatId, Optional(root, "selector"), Optional(root, "text"), ct);
+                    return new ConexyToolResult(toolCall.Id, res.Message, !res.Success);
+                }
+
+                case "browser_type":
+                {
+                    if (_browserService is null)
+                        return new ConexyToolResult(toolCall.Id, "Браузер недоступен в этом окружении.", true);
+                    var selector = GetString(root, "selector");
+                    if (string.IsNullOrWhiteSpace(selector))
+                        return new ConexyToolResult(toolCall.Id, "browser_type requires 'selector'.", true);
+                    var res = await _browserService.TypeAsync(chatId, selector, GetString(root, "text"), OptionalBool(root, "submit") ?? false, ct);
+                    return new ConexyToolResult(toolCall.Id, res.Message, !res.Success);
+                }
+
+                case "browser_press":
+                {
+                    if (_browserService is null)
+                        return new ConexyToolResult(toolCall.Id, "Браузер недоступен в этом окружении.", true);
+                    var res = await _browserService.PressAsync(chatId, GetString(root, "key"), ct);
+                    return new ConexyToolResult(toolCall.Id, res.Message, !res.Success);
+                }
+
+                case "browser_scroll":
+                {
+                    if (_browserService is null)
+                        return new ConexyToolResult(toolCall.Id, "Браузер недоступен в этом окружении.", true);
+                    var res = await _browserService.ScrollAsync(chatId, GetString(root, "direction", "down"), GetInt(root, "amount", 0), ct);
+                    return new ConexyToolResult(toolCall.Id, res.Message, !res.Success);
+                }
+
+                case "browser_extract":
+                {
+                    if (_browserService is null)
+                        return new ConexyToolResult(toolCall.Id, "Браузер недоступен в этом окружении.", true);
+                    var res = await _browserService.ExtractAsync(chatId, GetInt(root, "max_chars", 0), ct);
+                    return new ConexyToolResult(toolCall.Id, res.Message, !res.Success);
+                }
+
+                case "browser_close":
+                {
+                    if (_browserService is null)
+                        return new ConexyToolResult(toolCall.Id, "Браузер недоступен в этом окружении.", true);
+                    await _browserService.CloseAsync(chatId, ct);
+                    await LogAsync(taskId, "[Browser] closed", ct);
+                    return new ConexyToolResult(toolCall.Id, "Браузерная сессия закрыта.", false);
                 }
 
                 case "file_write":
@@ -1941,6 +2025,31 @@ public class ConexyAgentRunner : IConexyAgentRunner
         return new ConexyToolResult(toolCall.Id, "Screenshot captured and attached for visual analysis.", false);
     }
 
+    // BROWSER_AUTOMATION: снимок ТЕКУЩЕЙ открытой страницы (в отличие от take_screenshot, который сам
+    // открывает URL). Картинка уходит и в чат, и в контекст модели — для визуальной проверки после
+    // клика/ввода.
+    private async Task<ConexyToolResult> HandleBrowserScreenshotAsync(
+        Guid chatId,
+        LlmToolCall toolCall,
+        List<ChatMessage> batchImages,
+        IClientProxy group,
+        CancellationToken ct)
+    {
+        if (_browserService is null)
+            return new ConexyToolResult(toolCall.Id, "Браузер недоступен в этом окружении.", true);
+
+        var res = await _browserService.ScreenshotAsync(chatId, ct);
+        if (!res.Success || res.ScreenshotBase64 is null)
+            return new ConexyToolResult(toolCall.Id, res.Message, true);
+
+        await group.SendAsync("OnScreenshot", res.ScreenshotBase64, ct);
+        batchImages.Add(ChatMessageFactory.User(
+            "Screenshot of the current browser page. Visually audit the layout and the effect of the last action.",
+            new List<TaskAttachment> { new("browser.jpg", res.ScreenshotBase64, "image/jpeg") }));
+
+        return new ConexyToolResult(toolCall.Id, "Скриншот снят и приложен для визуальной проверки.", false);
+    }
+
     // SEARCH_USER_CHATS: добавлено 2026-09-24
     /// <summary>
     /// Model-facing text of a past-chat search, bounded by <see cref="MaxChatSearchOutputChars"/>.
@@ -2487,6 +2596,41 @@ public class ConexyAgentRunner : IConexyAgentRunner
             new { type = "object", properties = new {
                 briefs = new { type = "array", items = new { type = "string" }, description = "От 2 до 4 подзадач для помощников. Формулируй конкретно: что найти, где искать и что вернуть." }
             }, required = new[] { "briefs" } }),
+        // BROWSER_AUTOMATION: DOM-автоматизация во встроенном браузере. Только Coder и только когда
+        // Chromium доступен (см. ResolveToolsAsync). Модель работает селекторами и текстом,
+        // а не координатами.
+        Function("browser_open", "Открывает страницу во встроенном браузере агента и начинает браузерную сессию этого чата. Цель — публичный http(s) URL или файл рабочей области (например 'index.html' — так открывают приложение, которое ты только что собрал). После открытия вызови browser_extract, чтобы увидеть текст и интерактивные элементы, затем browser_click / browser_type.",
+            new { type = "object", properties = new {
+                url = new { type = "string", description = "Публичный http(s) URL или путь к файлу рабочей области" }
+            }, required = new[] { "url" } }),
+        Function("browser_extract", "Возвращает текст открытой страницы и список интерактивных элементов с их селекторами — основной способ «прочитать», что на странице, и выбрать, по чему кликать.",
+            new { type = "object", properties = new {
+                max_chars = new { type = "integer", description = "Ограничение длины текста (по умолчанию 8000)" }
+            } }),
+        Function("browser_click", "Кликает по элементу текущей открытой страницы. Укажи либо 'selector' (из browser_extract), либо 'text' — видимый текст ссылки/кнопки.",
+            new { type = "object", properties = new {
+                selector = new { type = "string", description = "CSS-селектор элемента (предпочтительно)" },
+                text = new { type = "string", description = "Видимый текст элемента, если селектор неизвестен" }
+            } }),
+        Function("browser_type", "Вводит текст в поле ввода (по CSS-селектору). При submit=true нажимает Enter — так отправляют формы и поиск.",
+            new { type = "object", properties = new {
+                selector = new { type = "string", description = "CSS-селектор поля" },
+                text = new { type = "string", description = "Вводимый текст" },
+                submit = new { type = "boolean", description = "Нажать Enter после ввода (по умолчанию false)" }
+            }, required = new[] { "selector" } }),
+        Function("browser_press", "Нажимает клавишу на текущей странице (например 'Enter', 'Escape', 'Tab').",
+            new { type = "object", properties = new {
+                key = new { type = "string", description = "Имя клавиши" }
+            }, required = new[] { "key" } }),
+        Function("browser_scroll", "Прокручивает страницу вверх или вниз.",
+            new { type = "object", properties = new {
+                direction = new { type = "string", @enum = new[] { "down", "up" } },
+                amount = new { type = "integer", description = "На сколько пикселей (по умолчанию 600)" }
+            } }),
+        Function("browser_screenshot", "Снимает скриншот ТЕКУЩЕЙ открытой страницы и прикладывает его для визуальной проверки: вёрстка, состояние после клика, ошибки на экране.",
+            new { type = "object", properties = new { } }),
+        Function("browser_close", "Закрывает браузерную сессию этого чата. Вызывай, когда работа со страницей закончена.",
+            new { type = "object", properties = new { } }),
         Function("file_read", "Read the full contents of a workspace file.",
             new { type = "object", properties = new { path = new { type = "string", description = "Relative path to the file within the workspace." } }, required = new[] { "path" } }),
         Function("file_write", "Write or overwrite a workspace file with the complete new content.",

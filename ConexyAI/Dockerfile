@@ -34,9 +34,15 @@ COPY --from=build /app/publish .
 # GITHUB_ACTION_HOST_GIT: git is required for github_action (clone / branch / commit+push run on the
 # backend host). The aspnet image ships without it, so the tool used to fail with a vague
 # "Could not read the repository configuration" — install it here. ca-certificates comes with git.
+# BROWSER_AUTOMATION: Chromium powers take_screenshot and the browser_* tools. Playwright .NET does not
+# ship a browser, so we install the system one and point Playwright at it
+# (PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH below). fonts-liberation keeps Cyrillic pages from rendering as
+# empty boxes. If the browser is missing or fails to launch, the tools are simply hidden — nothing breaks.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl git ca-certificates \
+    && apt-get install -y --no-install-recommends curl git ca-certificates chromium fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
+
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 # The aspnet image ships with a non-root 'app' user (uid 1654). Give it a writable home
 # directory before dropping privileges; workspace/RAG directories are mounted as volumes.

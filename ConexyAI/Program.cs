@@ -285,6 +285,9 @@ builder.Services.AddSingleton<IIdeTerminalService, IdeTerminalService>();
 builder.Services.AddSingleton<IIdeFileService, IdeFileService>();
 builder.Services.AddSingleton<IConexyRunService, ConexyRunService>();
 builder.Services.AddSingleton<IConexyVisionService, ConexyVisionService>();
+// BROWSER_AUTOMATION: один Chromium на процесс (скриншоты + браузерные инструменты) и DOM-автоматизация.
+builder.Services.AddSingleton<IChromiumHost, ChromiumHost>();
+builder.Services.AddSingleton<IConexyBrowserService, ConexyBrowserService>();
 builder.Services.AddSingleton<IConexyGitHubService, ConexyGitHubService>();
 builder.Services.AddSingleton<IConexyQueue, ConexyQueue>();
 builder.Services.AddSingleton<IConexyQueueGuard, ConexyQueueGuard>();
@@ -460,9 +463,9 @@ static void LogEnvironmentPrerequisites(WebApplication app)
         else
         {
             logger.LogWarning(
-                "Playwright Chromium is NOT available: take_screenshot is hidden from the agent tool set. " +
-                "To enable it, the runtime image must ship the browser (Playwright .NET cannot install it at " +
-                "runtime: this image has no node/npx).");
+                "Playwright Chromium is NOT available: take_screenshot and the browser_* tools are hidden " +
+                "from the agent. Install a Chromium in the runtime image (see ConexyAI/Dockerfile) and point " +
+                "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH at it, or ship the Playwright browser.");
         }
     }
     catch (Exception ex)
