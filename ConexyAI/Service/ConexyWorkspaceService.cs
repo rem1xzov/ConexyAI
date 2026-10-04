@@ -428,11 +428,9 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
 
         foreach (var attachment in attachments)
         {
-            // Images are sent to the LLM context, not materialized on disk.
-            if (attachment.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
+            // VIEW_IMAGE: добавлено 2026-10-04 — картинки тоже материализуются на диск (в корень
+            // рабочей области), чтобы агент мог пересматривать их через view_image и в следующих
+            // ходах, когда исходный блок image_url уже ушёл из контекста.
 
             // GetFileName guards against path traversal in the attachment name.
             var fileName = Path.GetFileName(attachment.FileName);

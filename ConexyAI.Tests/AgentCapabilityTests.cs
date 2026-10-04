@@ -45,6 +45,8 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent rules: CONEXY.md / .conexy/rules.md are injected right after the system prompt", ProjectRulesInjectedAsync);
         TestRegistry.Add("agent vision: screenshot targets stay in the chat workspace or on public hosts (H9)", ScreenshotPolicyAsync);
         TestRegistry.Add("agent vision: the screenshot image follows all tool results of the turn (L9)", ScreenshotImageAfterToolResultsAsync);
+        TestRegistry.Add("agent view_image: a workspace image reaches the model context", ViewImageIsAttachedAsync);
+        TestRegistry.Add("agent view_image: image bytes are recognised by magic, non-images refused", ImageContentDetectionAsync);
         TestRegistry.Add("agent prompts: charters carry deep research, fetch_web_page, the plan rule and artifacts", ChartersAsync);
     }
 
@@ -721,6 +723,50 @@ internal static class AgentCapabilityTests
         {
             DeleteDir(root);
         }
+    }
+
+    // VIEW_IMAGE: картинка из рабочей области должна попасть в мультимодальный контекст модели.
+    private static async Task ViewImageIsAttachedAsync()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var llm = new ScriptLlm(
+                Turn(Call("call_view", "view_image", "{\"path\":\"mock.png\"}")),
+                Text("Макет изучен."));
+            var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext());
+
+            var dir = Path.Combine(root, job.ChatId.ToString("N"));
+            Directory.CreateDirectory(dir);
+            // Достаточно валидной сигнатуры PNG: детектор читает магические байты.
+            await File.WriteAllBytesAsync(Path.Combine(dir, "mock.png"),
+                new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 1, 2, 3 });
+
+            await runner.RunLoopAsync(job, context, Guard());
+
+            Assert(llm.AdvertisedTools.Contains("view_image"), "the coder tool set advertises view_image");
+            var second = llm.Requests[1];
+            Assert(second.Any(m => m.Role == "user" && m.Content is not string),
+                "view_image brings the workspace image into the model context as a content block");
+        }
+        finally
+        {
+            DeleteDir(root);
+        }
+    }
+
+    private static Task ImageContentDetectionAsync()
+    {
+        Assert(ImageContent.DetectContentType(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0, 0, 0, 0 }) == "image/png", "PNG magic is recognised");
+        Assert(ImageContent.DetectContentType(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 }) == "image/jpeg", "JPEG magic is recognised");
+        Assert(ImageContent.DetectContentType(new byte[] { (byte)'G', (byte)'I', (byte)'F', (byte)'8', 0, 0 }) == "image/gif", "GIF magic is recognised");
+        Assert(ImageContent.DetectContentType(new byte[] { (byte)'B', (byte)'M', 0, 0 }) == "image/bmp", "BMP magic is recognised");
+        Assert(ImageContent.DetectContentType(new byte[] { (byte)'R', (byte)'I', (byte)'F', (byte)'F', 0, 0, 0, 0, (byte)'W', (byte)'E', (byte)'B', (byte)'P' }) == "image/webp", "WEBP magic is recognised");
+        // Header unknown, but a known image extension is trusted.
+        Assert(ImageContent.DetectContentType(new byte[] { 1, 2, 3 }, "photo.jpeg") == "image/jpeg", "a known extension is a fallback");
+        // A plain-text file with an unknown extension is refused.
+        Assert(ImageContent.DetectContentType("hello"u8.ToArray(), "notes.txt") is null, "a text file is not an image");
+        return Task.CompletedTask;
     }
 
     private static Task ChartersAsync()

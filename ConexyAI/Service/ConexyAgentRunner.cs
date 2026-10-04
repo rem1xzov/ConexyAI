@@ -136,6 +136,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
             "read_document_chunk",
             "create_document",
             "read_document_file",
+            // VIEW_IMAGE: добавлено 2026-10-04 — бизнес-пользователь тоже может приложить скриншот/схему.
+            "view_image",
         },
         AuditsCode: false,
         IncludesDate: true,
@@ -272,6 +274,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         Ты работаешь инструментами: `str_replace_editor` (view/create/str_replace/insert/undo), `file_read`/`file_write`/`file_patch`, `grep` (поиск по содержимому файлов регулярным выражением с фильтром `glob`), `glob` (поиск файлов по маске, поддерживает `**`), `bash`, `github_action` и `github_api` (операции с GitHub от имени пользователя по его личному токену), `web_search` (поиск актуальной информации в интернете), `fetch_web_page` (чтение страницы по URL), `search_user_chats` (поиск по прошлым чатам пользователя) и системная память задачи (`todo_write`).
         Для поиска по коду в воркспейсе используй `grep` и `glob`, а не `bash: grep/rg/find` — эти инструменты не требуют подтверждения и не зависят от того, что установлено в песочнице.
         Для проверки кода используй `run_tests` — он сам определяет фреймворк и возвращает структурированный отчёт (кто упал, файл:строка, ожидали/получили), а не сырые логи. Не гоняй `npm test`/`pytest`/`dotnet test` через `bash`, чтобы потом вручную вычитывать простыню вывода.
+        Если пользователь приложил картинку (макет, скриншот бага) или ссылается на изображение в рабочей области, вызови `view_image` — только так ты реально «видишь» изображение. Пользовательские картинки сохраняются в корне рабочей области и доступны повторно по `path`.
         Для документов: `create_document` создаёт .docx/.xlsx/.pptx из Markdown, `read_document_file` читает текст .docx/.xlsx/.pptx/.pdf (не открывай их через `view` — это двоичные файлы).
 
         ## Правила использования инструментов
@@ -839,9 +842,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                                 true)
                             : toolName == "take_screenshot"
                                 ? await HandleScreenshotAsync(chatId, toolCall, batchImages, group, ct)
-                                : toolName == "browser_screenshot"
-                                    ? await HandleBrowserScreenshotAsync(chatId, toolCall, batchImages, group, ct)
-                                    : await DispatchToolAsync(taskId, chatId, toolCall, ct);
+                                : toolName == "view_image"
+                                    ? await HandleViewImageAsync(taskId, chatId, toolCall, batchImages, ct)
+                                    : toolName == "browser_screenshot"
+                                        ? await HandleBrowserScreenshotAsync(chatId, toolCall, batchImages, group, ct)
+                                        : await DispatchToolAsync(taskId, chatId, toolCall, ct);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -2245,6 +2250,95 @@ public class ConexyAgentRunner : IConexyAgentRunner
         return new ConexyToolResult(toolCall.Id, "Скриншот снят и приложен для визуальной проверки.", false);
     }
 
+    // VIEW_IMAGE: добавлено 2026-10-04 — пользователь скидывает картинку (дизайн-макет, скриншот бага),
+    // а агент вносит её в свой мультимодальный контекст. Источник — либо файл в рабочей области ('path'),
+    // либо картинка, приложенная к текущему сообщению ('name').
+    private async Task<ConexyToolResult> HandleViewImageAsync(
+        Guid taskId,
+        Guid chatId,
+        LlmToolCall toolCall,
+        List<ChatMessage> batchImages,
+        CancellationToken ct)
+    {
+        JsonElement root;
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(toolCall.Function.Arguments) ? "{}" : toolCall.Function.Arguments);
+            root = doc.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            return new ConexyToolResult(toolCall.Id, "view_image: invalid arguments.", true);
+        }
+
+        var name = Optional(root, "name");
+        var path = Optional(root, "path");
+
+        string base64;
+        string contentType;
+        string label;
+
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            var wanted = Path.GetFileName(name!.Trim());
+            var attachment = _job.Attachments?.FirstOrDefault(a =>
+                string.Equals(Path.GetFileName(a.FileName ?? string.Empty), wanted, StringComparison.OrdinalIgnoreCase));
+            if (attachment is null)
+                return new ConexyToolResult(toolCall.Id,
+                    $"view_image: no attached image named '{wanted}'. Attached images: {DescribeImageAttachments()}.", true);
+            if (!attachment.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                return new ConexyToolResult(toolCall.Id, $"view_image: attachment '{wanted}' is not an image ({attachment.ContentType}).", true);
+
+            base64 = attachment.ContentBase64?.Trim() ?? string.Empty;
+            if (base64.Length == 0)
+                return new ConexyToolResult(toolCall.Id, $"view_image: attachment '{wanted}' is empty.", true);
+            contentType = attachment.ContentType;
+            label = wanted;
+        }
+        else if (!string.IsNullOrWhiteSpace(path))
+        {
+            var res = await _workspaceService.ReadBytesAsync(chatId, path!, ct);
+            if (!res.Success)
+                return new ConexyToolResult(toolCall.Id, $"view_image: {res.Error}", true);
+
+            var bytes = res.Content!;
+            if (bytes.Length == 0)
+                return new ConexyToolResult(toolCall.Id, $"view_image: '{path}' is empty.", true);
+            if (bytes.LongLength > ImageContent.MaxBytes)
+                return new ConexyToolResult(toolCall.Id,
+                    $"view_image: '{path}' is too large ({bytes.Length} bytes, limit {ImageContent.MaxBytes}).", true);
+
+            var detected = ImageContent.DetectContentType(bytes, path);
+            if (detected is null)
+                return new ConexyToolResult(toolCall.Id,
+                    $"view_image: '{path}' is not a supported image (png, jpg, jpeg, webp, gif, bmp).", true);
+
+            base64 = Convert.ToBase64String(bytes);
+            contentType = detected;
+            label = Path.GetFileName(path!);
+        }
+        else
+        {
+            return new ConexyToolResult(toolCall.Id, "view_image requires 'path' (a workspace image) or 'name' (an attached image).", true);
+        }
+
+        await LogAsync(taskId, $"[View Image] {label}", ct);
+        batchImages.Add(ChatMessageFactory.User(
+            $"Image '{label}' provided by the user. Treat it as visual input: study the layout, spacing, colors, typography and any visible defect, and use it as the reference for the task.",
+            new List<TaskAttachment> { new(label, base64, contentType) }));
+
+        return new ConexyToolResult(toolCall.Id, $"Image '{label}' attached for visual analysis ({contentType}).", false);
+    }
+
+    private string DescribeImageAttachments()
+    {
+        var images = _job.Attachments?
+            .Where(a => a.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            .Select(a => Path.GetFileName(a.FileName ?? "image"))
+            .ToList();
+        return images is { Count: > 0 } ? string.Join(", ", images) : "none";
+    }
+
     // SEARCH_USER_CHATS: добавлено 2026-09-24
     /// <summary>
     /// Model-facing text of a past-chat search, bounded by <see cref="MaxChatSearchOutputChars"/>.
@@ -3012,6 +3106,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 command = new { type = "string", description = "Optional explicit shell command; overrides auto-detection and requires the same confirmation as bash" },
                 timeout_seconds = new { type = "integer", description = "Optional timeout in seconds (default 600, max 900)" }
             }, required = Array.Empty<string>() }),
+        // VIEW_IMAGE: добавлено 2026-10-04 — просмотр картинок пользователя (макет, скриншот бага).
+        Function("view_image", "Look at an image the user provided — a design mock (PNG/JPG), a screenshot of a bug, a diagram. Use it when the user says 'make the layout exactly like this image' or 'look at the screenshot, the font is off'. Pass 'path' for an image file in the workspace, or 'name' for an image attached to the current message. Supported: png, jpg, jpeg, webp, gif, bmp (max 8 MB). Attached images are also saved into the workspace root, so you can re-open them later by path.",
+            new { type = "object", properties = new {
+                path = new { type = "string", description = "Relative path to an image file in the workspace" },
+                name = new { type = "string", description = "File name of an image attached to the current message" }
+            } }),
         Function("todo_write", "Create or update the todo list for the current multi-step task. Pass the FULL list every time (not a delta); this replaces the previous todo state.",
             new { type = "object", properties = new {
                 todos = new { type = "array", items = new { type = "object", properties = new {
