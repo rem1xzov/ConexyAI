@@ -44,6 +44,7 @@ internal static class SecurityTests
         Add("GITHUB_REPO_SUBDIR: branch/commit find a repository in a workspace subfolder", TestGitRepoSubfolderAsync, GitInstalled);
         Add("GITHUB_DELETE_BRANCH: deletes a branch and refuses protected ones", TestGitDeleteBranchAsync, GitInstalled);
         Add("GITHUB_FULL: switch/merge branches and a clean pull refusal", TestGitSyncAsync, GitInstalled);
+        Add("GREP_GLOB: content search and file globs stay inside the workspace", TestGrepGlobAsync);
         Add("SHARE_PUBLIC: a public link opens the chat for anyone and can be revoked", TestPublicShareAsync);
     }
 
@@ -800,6 +801,54 @@ internal static class SecurityTests
             // pull без настроенного origin — внятный отказ, а не зависание.
             var pull = await workspace.GitPullAsync(chatId, "dummy-token", repoFolder: "app");
             Assert(!pull.Success, "pull without a reachable origin fails cleanly");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    // GREP_GLOB: отдельные инструменты поиска — regex по содержимому и glob по именам файлов.
+    private static async Task TestGrepGlobAsync()
+    {
+        var root = TempRoot();
+        try
+        {
+            var workspace = Workspace(root);
+            var chatId = Guid.NewGuid();
+            var workspaceDir = workspace.GetTaskWorkspacePath(chatId);
+            Directory.CreateDirectory(Path.Combine(workspaceDir, "src"));
+
+            await File.WriteAllTextAsync(Path.Combine(workspaceDir, "src", "a.ts"), "const hello = 1;\nlet world = 2;\n");
+            await File.WriteAllTextAsync(Path.Combine(workspaceDir, "src", "b.cs"), "// hello from C#\nclass B {}\n");
+            await File.WriteAllTextAsync(Path.Combine(workspaceDir, "README.md"), "# hello docs\n");
+            // Бинарный файл с NUL — grep обязан его пропустить.
+            await File.WriteAllBytesAsync(Path.Combine(workspaceDir, "blob.bin"), new byte[] { 0x68, 0x00, 0x65, 0x6C, 0x6C, 0x6F });
+
+            var grep = await workspace.GrepAsync(chatId, "hello");
+            Assert(grep.Success, "grep runs: " + grep.Error);
+            Assert(grep.Matches.Count == 3, $"grep finds hello in the 3 text files, got {grep.Matches.Count}");
+            Assert(grep.Matches.All(m => m.Path != "blob.bin"), "grep skips a binary file");
+
+            var grepTs = await workspace.GrepAsync(chatId, "hello", includeGlob: "*.ts");
+            Assert(grepTs.Success && grepTs.Matches.Count == 1 && grepTs.Matches[0].Path == "src/a.ts",
+                "grep honours the glob filter: " + string.Join(",", grepTs.Matches.Select(m => m.Path)));
+
+            var grepCase = await workspace.GrepAsync(chatId, "HELLO", includeGlob: "*.md", ignoreCase: true);
+            Assert(grepCase.Success && grepCase.Matches.Count == 1, "grep is case-insensitive when asked");
+
+            var badRegex = await workspace.GrepAsync(chatId, "(");
+            Assert(!badRegex.Success, "grep refuses an invalid regular expression");
+
+            var glob = await workspace.GlobAsync(chatId, "**/*.ts");
+            Assert(glob.Success && glob.Files.Count == 1 && glob.Files[0] == "src/a.ts",
+                "glob **/*.ts returns the nested TS file: " + string.Join(",", glob.Files));
+
+            var globMd = await workspace.GlobAsync(chatId, "*.md");
+            Assert(globMd.Success && globMd.Files.SequenceEqual(new[] { "README.md" }), "glob *.md returns the root file");
+
+            var escape = await workspace.GrepAsync(chatId, "hello", relativeDirectory: "..");
+            Assert(!escape.Success, "grep refuses a path outside the workspace");
         }
         finally
         {

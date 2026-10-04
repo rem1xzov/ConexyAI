@@ -267,7 +267,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         Любой созданный файл должен физически появиться в файловой системе воркспейса.
 
         ИНСТРУМЕНТЫ:
-        Ты работаешь инструментами: `str_replace_editor` (view/create/str_replace/insert/undo), `bash`, `github_action` (операции с GitHub от имени пользователя по его личному токену: клонирование, ветки, commit+push, pull request), `web_search` (поиск актуальной информации в интернете), `fetch_web_page` (чтение страницы по URL), `search_user_chats` (поиск по прошлым чатам пользователя) и системная память задачи (`todo_write`).
+        Ты работаешь инструментами: `str_replace_editor` (view/create/str_replace/insert/undo), `file_read`/`file_write`/`file_patch`, `grep` (поиск по содержимому файлов регулярным выражением с фильтром `glob`), `glob` (поиск файлов по маске, поддерживает `**`), `bash`, `github_action` и `github_api` (операции с GitHub от имени пользователя по его личному токену), `web_search` (поиск актуальной информации в интернете), `fetch_web_page` (чтение страницы по URL), `search_user_chats` (поиск по прошлым чатам пользователя) и системная память задачи (`todo_write`).
+        Для поиска по коду в воркспейсе используй `grep` и `glob`, а не `bash: grep/rg/find` — эти инструменты не требуют подтверждения и не зависят от того, что установлено в песочнице.
         Для документов: `create_document` создаёт .docx/.xlsx/.pptx из Markdown, `read_document_file` читает текст .docx/.xlsx/.pptx/.pdf (не открывай их через `view` — это двоичные файлы).
 
         ## Правила использования инструментов
@@ -1537,6 +1538,50 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     return new ConexyToolResult(toolCall.Id, listing, false);
                 }
 
+                // GREP_GLOB: добавлено 2026-10-04 — отдельные read-only инструменты поиска.
+                case "grep":
+                {
+                    var pattern = GetString(root, "pattern");
+                    if (string.IsNullOrWhiteSpace(pattern))
+                        return new ConexyToolResult(toolCall.Id, "grep requires 'pattern'.", true);
+
+                    var res = await _workspaceService.GrepAsync(
+                        chatId,
+                        pattern,
+                        Optional(root, "path"),
+                        Optional(root, "glob"),
+                        OptionalBool(root, "ignore_case") ?? false,
+                        GetInt(root, "max_results", 0),
+                        ct);
+                    if (!res.Success)
+                        return new ConexyToolResult(toolCall.Id, res.Error!, true);
+                    if (res.Matches.Count == 0)
+                        return new ConexyToolResult(toolCall.Id, $"No matches found (searched {res.FilesSearched} files).", false);
+
+                    var sb = new StringBuilder();
+                    foreach (var m in res.Matches)
+                        sb.Append(m.Path).Append(':').Append(m.Line).Append(": ").AppendLine(m.Text);
+                    if (res.Truncated)
+                        sb.Append("… (truncated; narrow the search with 'glob' or 'path')");
+                    return new ConexyToolResult(toolCall.Id, sb.ToString().TrimEnd(), false);
+                }
+
+                case "glob":
+                {
+                    var pattern = GetString(root, "pattern");
+                    if (string.IsNullOrWhiteSpace(pattern))
+                        return new ConexyToolResult(toolCall.Id, "glob requires 'pattern'.", true);
+
+                    var res = await _workspaceService.GlobAsync(chatId, pattern, Optional(root, "path"), GetInt(root, "max_results", 0), ct);
+                    if (!res.Success)
+                        return new ConexyToolResult(toolCall.Id, res.Error!, true);
+
+                    return new ConexyToolResult(
+                        toolCall.Id,
+                        res.Files.Count == 0 ? "No files matched." : string.Join("\n", res.Files),
+                        false);
+                }
+
                 case "terminal_exec":
                 {
                     // CONFIRM_GATE: добавлено 2026-09-22 — legacy-инструмент больше не является
@@ -2803,6 +2848,21 @@ public class ConexyAgentRunner : IConexyAgentRunner
             new { type = "object", properties = new {
                 path = new { type = "string", description = "Optional relative directory to list (defaults to workspace root)" }
             }, required = Array.Empty<string>() }),
+        // GREP_GLOB: добавлено 2026-10-04 — отдельные read-only инструменты поиска (не требуют подтверждения).
+        Function("grep", "Search the contents of workspace files with a regular expression (like ripgrep). Returns matching lines as 'path:line: text'. Restrict the search with 'glob' (which files, e.g. '*.ts', 'src/**/*.cs') and 'path' (which directory). Binary files are skipped.",
+            new { type = "object", properties = new {
+                pattern = new { type = "string", description = "Regular expression to search for" },
+                path = new { type = "string", description = "Optional relative directory to search in (default: workspace root)" },
+                glob = new { type = "string", description = "Optional glob to restrict which files are searched, e.g. '*.cs' or 'src/**/*.ts'" },
+                ignore_case = new { type = "boolean", description = "Case-insensitive search (default false)" },
+                max_results = new { type = "integer", description = "Maximum matching lines to return (default 100, max 1000)" }
+            }, required = new[] { "pattern" } }),
+        Function("glob", "Find files by glob pattern (supports '**'), e.g. '**/*.ts' or 'src/**/test_*.py'. Returns matching file paths relative to the workspace root, sorted. Use it to discover files before reading or searching them.",
+            new { type = "object", properties = new {
+                pattern = new { type = "string", description = "Glob pattern, e.g. '**/*.cs'" },
+                path = new { type = "string", description = "Optional relative directory to search in (default: workspace root)" },
+                max_results = new { type = "integer", description = "Maximum files to return (default 200, max 2000)" }
+            }, required = new[] { "pattern" } }),
         Function("bash", "Run a shell command in the isolated session workspace with a timeout. Output longer than 80 lines is truncated (first 40 + last 40). Use for build, tests, package managers, git and file utilities.",
             new { type = "object", properties = new {
                 command = new { type = "string", description = "The shell command to run" },

@@ -2,6 +2,7 @@
 using System.Text.Json;
 using ConexyAI.Configuration;
 using ConexyAI.Contract;
+using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -198,6 +199,156 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             return Task.FromResult(new FileListResult(false, Array.Empty<string>(), ex.Message));
         }
     }
+
+    // GREP_GLOB: добавлено 2026-10-04 — отдельные инструменты поиска для агента. Раньше он гонял
+    // `bash: grep/rg/find`, что требовало подтверждения команды и зависело от того, что установлено
+    // в песочнице. Оба метода используют ту же path-jail и не следуют симлинкам, что и листинг.
+
+    /// <summary>Total bytes scanned by one <see cref="GrepAsync"/> call, so a huge tree cannot stall the run.</summary>
+    private const long MaxGrepScanBytes = 32L * 1024 * 1024;
+
+    public Task<GrepResult> GrepAsync(
+        Guid chatId,
+        string pattern,
+        string? relativeDirectory = null,
+        string? includeGlob = null,
+        bool ignoreCase = false,
+        int maxResults = 0,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(pattern))
+                return Task.FromResult(new GrepResult(false, Array.Empty<GrepMatch>(), 0, false, "pattern must not be empty."));
+
+            System.Text.RegularExpressions.Regex regex;
+            try
+            {
+                regex = new System.Text.RegularExpressions.Regex(
+                    pattern,
+                    System.Text.RegularExpressions.RegexOptions.Compiled |
+                    (ignoreCase ? System.Text.RegularExpressions.RegexOptions.IgnoreCase : System.Text.RegularExpressions.RegexOptions.None),
+                    TimeSpan.FromSeconds(2));
+            }
+            catch (ArgumentException ex)
+            {
+                return Task.FromResult(new GrepResult(false, Array.Empty<GrepMatch>(), 0, false, "Invalid regular expression: " + ex.Message));
+            }
+
+            var root = GetTaskWorkspacePath(chatId);
+            var realRoot = WorkspaceJail.GetRealPath(root);
+            var baseDir = ResolveSafePath(chatId, relativeDirectory ?? string.Empty);
+            if (!Directory.Exists(baseDir))
+                return Task.FromResult(new GrepResult(false, Array.Empty<GrepMatch>(), 0, false, $"Directory '{relativeDirectory}' not found."));
+
+            var limit = Math.Clamp(maxResults <= 0 ? 100 : maxResults, 1, 1000);
+            var matcher = BuildGlobMatcher(includeGlob, out var globBaseOnly);
+
+            var matches = new List<GrepMatch>();
+            var filesSearched = 0;
+            var scannedChars = 0L;
+
+            foreach (var file in EnumerateWorkspaceFiles(baseDir))
+            {
+                ct.ThrowIfCancellationRequested();
+
+                if (matcher is not null && !GlobMatches(matcher, globBaseOnly, ToSlash(Path.GetRelativePath(baseDir, file))))
+                    continue;
+
+                var info = new FileInfo(file);
+                if (info.Length > MaxTextReadBytes) continue;
+                if (scannedChars + info.Length > MaxGrepScanBytes) break;
+
+                string content;
+                try { content = File.ReadAllText(file); }
+                catch { continue; }
+                if (content.IndexOf('\0') >= 0) continue; // binary — пропускаем
+
+                scannedChars += content.Length;
+                filesSearched++;
+
+                var relative = ToSlash(Path.GetRelativePath(realRoot, file));
+                var lineNumber = 0;
+                foreach (var rawLine in content.Split('\n'))
+                {
+                    lineNumber++;
+                    var line = rawLine.TrimEnd('\r');
+                    if (!regex.IsMatch(line)) continue;
+
+                    matches.Add(new GrepMatch(relative, lineNumber, line.Length > 400 ? line[..400] + "…" : line));
+                    if (matches.Count >= limit)
+                        return Task.FromResult(new GrepResult(true, matches, filesSearched, true, null));
+                }
+            }
+
+            return Task.FromResult(new GrepResult(true, matches, filesSearched, false, null));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Task.FromResult(new GrepResult(false, Array.Empty<GrepMatch>(), 0, false, ex.Message));
+        }
+    }
+
+    public Task<FileListResult> GlobAsync(
+        Guid chatId,
+        string pattern,
+        string? relativeDirectory = null,
+        int maxResults = 0,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(pattern))
+                return Task.FromResult(new FileListResult(false, Array.Empty<string>(), "pattern must not be empty."));
+
+            var root = GetTaskWorkspacePath(chatId);
+            var realRoot = WorkspaceJail.GetRealPath(root);
+            var baseDir = ResolveSafePath(chatId, relativeDirectory ?? string.Empty);
+            if (!Directory.Exists(baseDir))
+                return Task.FromResult(new FileListResult(false, Array.Empty<string>(), $"Directory '{relativeDirectory}' not found."));
+
+            var baseReal = WorkspaceJail.GetRealPath(baseDir);
+            var matcher = new Matcher(StringComparison.OrdinalIgnoreCase);
+            matcher.AddInclude(ToSlash(pattern.Trim()));
+            // Маска без '/' (например '*.ts') матчит имя файла на любом уровне, как в ripgrep.
+            var basenameOnly = !pattern.Contains('/');
+
+            var limit = Math.Clamp(maxResults <= 0 ? 200 : maxResults, 1, 2000);
+            var files = new List<string>();
+            foreach (var file in EnumerateWorkspaceFiles(baseDir))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!GlobMatches(matcher, basenameOnly, ToSlash(Path.GetRelativePath(baseReal, file)))) continue;
+                files.Add(ToSlash(Path.GetRelativePath(realRoot, file)));
+                if (files.Count >= limit) break;
+            }
+
+            files.Sort(StringComparer.Ordinal);
+            return Task.FromResult(new FileListResult(true, files, null));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Task.FromResult(new FileListResult(false, Array.Empty<string>(), ex.Message));
+        }
+    }
+
+    // WORKSPACE_JAIL: symlinks are not followed during a search (review C2).
+    private static IEnumerable<string> EnumerateWorkspaceFiles(string directory) =>
+        Directory.EnumerateFiles(directory, "*", WorkspaceJail.NoLinks(recursive: true));
+
+    private static Matcher? BuildGlobMatcher(string? pattern, out bool basenameOnly)
+    {
+        basenameOnly = pattern is not null && !pattern.Contains('/');
+        if (string.IsNullOrWhiteSpace(pattern)) return null;
+        var matcher = new Matcher(StringComparison.OrdinalIgnoreCase);
+        matcher.AddInclude(ToSlash(pattern.Trim()));
+        return matcher;
+    }
+
+    private static bool GlobMatches(Matcher matcher, bool basenameOnly, string relativePath) =>
+        matcher.Match(basenameOnly ? Path.GetFileName(relativePath) : relativePath).HasMatches;
+
+    private static string ToSlash(string path) => path.Replace('\\', '/');
 
     // WORKSPACE_JAIL: ExecuteCommandAsync удалён 2026-09-24 — он запускал bash прямо на хосте бэкенда
     // в каталоге воркспейса. Вызывающих не осталось (terminal_exec давно идёт через песочницу), а

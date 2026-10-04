@@ -23,6 +23,28 @@ public interface IConexyWorkspaceService
     Task<FilePatchResult> PatchFileAsync(Guid chatId, string relativePath, string searchBlock, string replaceBlock, CancellationToken ct = default);
     Task<FileListResult> ListFilesAsync(Guid chatId, string relativeDirectory = "", CancellationToken ct = default);
 
+    // GREP_GLOB: добавлено 2026-10-04 — поиск по содержимому (grep) и по имени (glob) как отдельные инструменты.
+    /// <summary>
+    /// Searches file contents under <paramref name="relativeDirectory"/> with a regular expression.
+    /// <paramref name="includeGlob"/> optionally restricts which files are searched (e.g. <c>*.ts</c>).
+    /// </summary>
+    Task<GrepResult> GrepAsync(
+        Guid chatId,
+        string pattern,
+        string? relativeDirectory = null,
+        string? includeGlob = null,
+        bool ignoreCase = false,
+        int maxResults = 0,
+        CancellationToken ct = default);
+
+    /// <summary>Finds files matching a glob (supports <c>**</c>) under <paramref name="relativeDirectory"/>.</summary>
+    Task<FileListResult> GlobAsync(
+        Guid chatId,
+        string pattern,
+        string? relativeDirectory = null,
+        int maxResults = 0,
+        CancellationToken ct = default);
+
     /// <summary>Clones a repository into the task workspace using a user-supplied access token.</summary>
     Task<GitOperationResult> GitCloneAsync(Guid chatId, string repoUrl, string token, string? targetFolder = null, string? branch = null, CancellationToken ct = default);
 
