@@ -424,6 +424,101 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         return new GitOperationResult(true, $"Switched to branch '{branchName}'.", null);
     }
 
+    // GITHUB_FULL: добавлено 2026-10-02 — переключение на СУЩЕСТВУЮЩУЮ ветку (без создания/сброса).
+    public async Task<GitOperationResult> GitSwitchBranchAsync(Guid chatId, string branchName, string? repoFolder = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(branchName))
+            return new GitOperationResult(false, null, "Branch name is required.");
+        if (!IsSafeRefName(branchName))
+            return new GitOperationResult(false, null, "Invalid branch name.");
+
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
+
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
+        var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
+        if (unsafeRepo is not null)
+            return new GitOperationResult(false, null, unsafeRepo);
+
+        var result = await RunGitAsync(workspaceDir, new[] { "checkout", branchName }, token: null, ct, TimeSpan.FromSeconds(60));
+        if (!result.Success)
+            return new GitOperationResult(false, null, result.StdErr);
+
+        return new GitOperationResult(true, $"Switched to branch '{branchName}'.", null);
+    }
+
+    public async Task<GitOperationResult> GitFetchAsync(Guid chatId, string token, string? repoFolder = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return new GitOperationResult(false, null, "GitHub token is required.");
+
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
+
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
+        var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
+        if (unsafeRepo is not null)
+            return new GitOperationResult(false, null, unsafeRepo);
+
+        var result = await RunGitAsync(workspaceDir, new[] { "fetch", "--prune", "origin" }, token, ct, TimeSpan.FromSeconds(120));
+        if (!result.Success)
+            return new GitOperationResult(false, null, result.StdErr);
+
+        return new GitOperationResult(true, "Fetched from origin (pruned).", null);
+    }
+
+    public async Task<GitOperationResult> GitPullAsync(Guid chatId, string token, string? repoFolder = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return new GitOperationResult(false, null, "GitHub token is required.");
+
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
+
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
+        var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
+        if (unsafeRepo is not null)
+            return new GitOperationResult(false, null, unsafeRepo);
+
+        var current = await RunGitAsync(workspaceDir, new[] { "rev-parse", "--abbrev-ref", "HEAD" }, token: null, ct, TimeSpan.FromSeconds(30));
+        var branch = current.Success ? current.StdOut.Trim() : string.Empty;
+        if (string.IsNullOrWhiteSpace(branch) || branch == "HEAD")
+            return new GitOperationResult(false, null, "Could not determine the current branch to pull.");
+
+        // Только fast-forward: расхождение ветки и origin не должно превращаться в неожиданный merge.
+        var result = await RunGitAsync(workspaceDir, new[] { "pull", "--ff-only", "origin", branch }, token, ct, TimeSpan.FromSeconds(120));
+        if (!result.Success)
+            return new GitOperationResult(false, null, result.StdErr +
+                $"\n(Тяну только fast-forward. Если ветки разошлись — посмотри origin/{branch} и влей нужное через merge_branch.)");
+
+        return new GitOperationResult(true, $"Pulled origin/{branch} (fast-forward).", null);
+    }
+
+    public async Task<GitOperationResult> GitMergeBranchAsync(Guid chatId, string branchName, string? repoFolder = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(branchName))
+            return new GitOperationResult(false, null, "Branch name is required.");
+        if (!IsSafeRefName(branchName))
+            return new GitOperationResult(false, null, "Invalid branch name.");
+
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
+
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
+        var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
+        if (unsafeRepo is not null)
+            return new GitOperationResult(false, null, unsafeRepo);
+
+        // --no-edit: слияние не должно открывать редактор. Конфликты слияние НЕ разрешает — о них
+        // сообщаем текстом, чтобы модель поправила файлы и завершила слияние коммитом.
+        var result = await RunGitAsync(workspaceDir, new[] { "merge", "--no-edit", branchName }, token: null, ct, TimeSpan.FromSeconds(60));
+        if (!result.Success)
+            return new GitOperationResult(false, null,
+                (result.StdOut + "\n" + result.StdErr).Trim() +
+                "\n(Возможно, конфликт: разреши его в файлах, затем закоммить слияние через commit_and_push.)");
+
+        var summary = result.StdOut.Trim();
+        return new GitOperationResult(true,
+            (string.IsNullOrEmpty(summary) ? string.Empty : summary + "\n") + $"Merged '{branchName}' into the current branch.",
+            null);
+    }
+
     public async Task<GitOperationResult> GitCommitPushAsync(
         Guid chatId,
         string commitMessage,

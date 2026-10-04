@@ -33,6 +33,19 @@ public interface IConexyWorkspaceService
     /// </remarks>
     Task<GitOperationResult> GitCreateBranchAsync(Guid chatId, string branchName, string? repoFolder = null, CancellationToken ct = default);
 
+    // GITHUB_FULL: добавлено 2026-10-02 — синхронизация с origin.
+    /// <summary>Switches to an EXISTING branch (no create/reset).</summary>
+    Task<GitOperationResult> GitSwitchBranchAsync(Guid chatId, string branchName, string? repoFolder = null, CancellationToken ct = default);
+
+    /// <summary>Fetches and prunes remote refs (needs the user's token).</summary>
+    Task<GitOperationResult> GitFetchAsync(Guid chatId, string token, string? repoFolder = null, CancellationToken ct = default);
+
+    /// <summary>Fast-forward pulls the current branch from origin; refuses to create a merge commit.</summary>
+    Task<GitOperationResult> GitPullAsync(Guid chatId, string token, string? repoFolder = null, CancellationToken ct = default);
+
+    /// <summary>Merges another branch into the current one (no-edit); conflicts are reported, not resolved.</summary>
+    Task<GitOperationResult> GitMergeBranchAsync(Guid chatId, string branchName, string? repoFolder = null, CancellationToken ct = default);
+
     /// <summary>Stages the given files, commits them and pushes to the target branch.</summary>
     /// <remarks>
     /// GITHUB_PAT_PER_USER: <paramref name="authorName"/>/<paramref name="authorEmail"/> — личность

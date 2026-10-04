@@ -349,9 +349,18 @@ public class ConexyAgentRunner : IConexyAgentRunner
             репозитория: стиль кода, команды сборки и тестов, архитектура, запреты. Они важнее твоих
             привычек, но не отменяют правил безопасности и подтверждения команд.
 
-        14. **GitHub — только через `github_action`.** Клонирование репозитория с авторизацией,
-            создание ветки, коммит с отправкой (`push`), удаление ветки (в том числе на GitHub —
-            операция `delete_branch`) и pull request выполняй инструментом `github_action`, а не
+        14. **GitHub — только через `github_action` и `github_api`.** Клонирование репозитория с
+            авторизацией, работа с ветками (создание `create_branch`, переключение на существующую
+            `switch_branch`, удаление `delete_branch`), синхронизация (`fetch`, `pull` — только
+            fast-forward, `merge_branch`), коммит с отправкой (`commit_and_push`) и pull request —
+            инструментом `github_action`. Всё остальное в GitHub — ветки/коммиты на чтение, issues
+            (`get_issue`, `comment_issue`, `close_issue`), pull request-ы (`get_pull_request`,
+            `get_pull_request_files` — файлы и дифф, `get_pull_request_comments` — ревью и комментарии,
+            `review_pull_request`, `merge_pull_request`, `close_pull_request`), статус CI
+            (`get_commit_status`) и workflows Actions (`list_workflows`, `run_workflow`) — инструментом
+            `github_api` (REST без локального клона). **Перед ревью PR сначала прочитай дифф через
+            `get_pull_request_files` и обсуждение через `get_pull_request_comments`, и только потом
+            выноси вердикт `review_pull_request`** — иначе ревью будет выдуманным. Не выполняй это
             `bash`-командами `git`. Личный токен пользователя доступен ТОЛЬКО
             этому инструменту; внутри песочницы креденшелов нет, поэтому `bash: git push` и
             клонирование приватных репозиториев там работать не будут (публичные репозитории можно
@@ -1553,6 +1562,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     return await DispatchGithubActionAsync(toolCall, root, ct);
                 }
 
+                case "github_api":
+                {
+                    return await DispatchGithubApiAsync(toolCall, root, ct);
+                }
+
                 case "str_replace_editor":
                 {
                     var request = JsonSerializer.Deserialize<StrReplaceEditorRequest>(toolCall.Function.Arguments);
@@ -2104,6 +2118,100 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     private static string ShortUrl(string url) => url.Length <= 80 ? url : url[..80] + "…";
 
+    // GITHUB_FULL: добавлено 2026-10-02 — REST-операции GitHub, которым не нужен локальный клон
+    // (issues, pull requests, ветки/коммиты, Actions). Git-операции над рабочей копией живут в
+    // github_action.
+    private async Task<ConexyToolResult> DispatchGithubApiAsync(LlmToolCall toolCall, JsonElement root, CancellationToken ct)
+    {
+        var operation = GetString(root, "operation");
+        var token = ResolveGitHubToken();
+
+        if (string.IsNullOrWhiteSpace(token))
+            return new ConexyToolResult(
+                toolCall.Id,
+                "GitHub token is not configured. Stop and tell the user: open Settings → GitHub in the app, " +
+                "paste a Personal Access Token (classic with the 'repo' and 'workflow' scopes, or fine-grained with " +
+                "Contents, Issues, Pull requests and Actions) and repeat the request.",
+                true);
+
+        var context = new GitHubApiContext(
+            _job.ChatId,
+            token,
+            Optional(root, "repo"),
+            Optional(root, "repo_folder") ?? Optional(root, "target_folder"));
+
+        var state = GetString(root, "state", "open");
+        var limit = GetInt(root, "limit", 0);
+        var number = GetInt(root, "number", 0);
+
+        GitOperationResult res;
+        switch (operation)
+        {
+            case "list_branches":
+                res = await _githubService.ListBranchesAsync(context, ct);
+                break;
+            case "list_commits":
+                res = await _githubService.ListCommitsAsync(context, Optional(root, "branch"), limit, ct);
+                break;
+            case "list_issues":
+                res = await _githubService.ListIssuesAsync(context, state, limit, ct);
+                break;
+            case "create_issue":
+                res = await _githubService.CreateIssueAsync(context, GetString(root, "title"), Optional(root, "body"), ct);
+                break;
+            case "comment_issue":
+                res = await _githubService.CommentIssueAsync(context, number, GetString(root, "body"), ct);
+                break;
+            case "close_issue":
+                res = await _githubService.CloseIssueAsync(context, number, ct);
+                break;
+            case "list_pull_requests":
+                res = await _githubService.ListPullRequestsAsync(context, state, limit, ct);
+                break;
+            case "get_pull_request":
+                res = await _githubService.GetPullRequestAsync(context, number, ct);
+                break;
+            case "get_pull_request_files":
+                res = await _githubService.GetPullRequestFilesAsync(context, number, limit, ct);
+                break;
+            case "get_pull_request_comments":
+                res = await _githubService.GetPullRequestCommentsAsync(context, number, limit, ct);
+                break;
+            case "get_issue":
+                res = await _githubService.GetIssueAsync(context, number, ct);
+                break;
+            case "get_commit_status":
+                res = await _githubService.GetCommitStatusAsync(context, GetString(root, "ref").Length > 0 ? GetString(root, "ref") : GetString(root, "branch"), ct);
+                break;
+            case "comment_pull_request":
+                res = await _githubService.CommentPullRequestAsync(context, number, GetString(root, "body"), ct);
+                break;
+            case "review_pull_request":
+                res = await _githubService.ReviewPullRequestAsync(context, number, GetString(root, "event"), Optional(root, "body"), ct);
+                break;
+            case "merge_pull_request":
+                res = await _githubService.MergePullRequestAsync(context, number, GetString(root, "method", "merge"), ct);
+                break;
+            case "close_pull_request":
+                res = await _githubService.ClosePullRequestAsync(context, number, ct);
+                break;
+            case "list_workflows":
+                res = await _githubService.ListWorkflowsAsync(context, ct);
+                break;
+            case "run_workflow":
+                res = await _githubService.RunWorkflowAsync(context, GetString(root, "workflow"), Optional(root, "ref"), ct);
+                break;
+            default:
+                return new ConexyToolResult(toolCall.Id, $"Unknown github_api operation '{operation}'.", true);
+        }
+
+        await LogAsync(_job.TaskId, $"[GitHub API] {operation}", ct);
+        var message = res.Success ? res.Message! : res.Error!;
+        if (!string.IsNullOrWhiteSpace(res.PullRequestUrl))
+            message += $"\n{res.PullRequestUrl}";
+        return new ConexyToolResult(toolCall.Id, message, !res.Success);
+    }
+
     private async Task<ConexyToolResult> DispatchGithubActionAsync(LlmToolCall toolCall, JsonElement root, CancellationToken ct)
     {
         var operation = GetString(root, "operation");
@@ -2143,6 +2251,43 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 var branchRepoFolder = Optional(root, "repo_folder");
                 var res = await _workspaceService.GitCreateBranchAsync(_job.ChatId, branchName, branchRepoFolder, ct);
                 await LogAsync(_job.TaskId, $"[Git Branch] {branchName}", ct);
+                return new ConexyToolResult(toolCall.Id, res.Success ? res.Message! : res.Error!, !res.Success);
+            }
+
+            case "switch_branch":
+            {
+                var branchName = GetBranchArg(root);
+                if (string.IsNullOrWhiteSpace(branchName))
+                    return new ConexyToolResult(toolCall.Id, "switch_branch requires a branch name ('branch_name' or 'branch').", true);
+
+                var switchRepoFolder = Optional(root, "repo_folder");
+                var res = await _workspaceService.GitSwitchBranchAsync(_job.ChatId, branchName, switchRepoFolder, ct);
+                await LogAsync(_job.TaskId, $"[Git Switch] {branchName}", ct);
+                return new ConexyToolResult(toolCall.Id, res.Success ? res.Message! : res.Error!, !res.Success);
+            }
+
+            case "fetch":
+            {
+                var res = await _workspaceService.GitFetchAsync(_job.ChatId, token, Optional(root, "repo_folder"), ct);
+                await LogAsync(_job.TaskId, "[Git Fetch]", ct);
+                return new ConexyToolResult(toolCall.Id, res.Success ? res.Message! : res.Error!, !res.Success);
+            }
+
+            case "pull":
+            {
+                var res = await _workspaceService.GitPullAsync(_job.ChatId, token, Optional(root, "repo_folder"), ct);
+                await LogAsync(_job.TaskId, "[Git Pull]", ct);
+                return new ConexyToolResult(toolCall.Id, res.Success ? res.Message! : res.Error!, !res.Success);
+            }
+
+            case "merge_branch":
+            {
+                var branchName = GetBranchArg(root);
+                if (string.IsNullOrWhiteSpace(branchName))
+                    return new ConexyToolResult(toolCall.Id, "merge_branch requires a branch name ('branch_name' or 'branch').", true);
+
+                var res = await _workspaceService.GitMergeBranchAsync(_job.ChatId, branchName, Optional(root, "repo_folder"), ct);
+                await LogAsync(_job.TaskId, $"[Git Merge] {branchName}", ct);
                 return new ConexyToolResult(toolCall.Id, res.Success ? res.Message! : res.Error!, !res.Success);
             }
 
@@ -2674,7 +2819,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             }, required = new[] { "todos" } }),
         Function("github_action", "Perform a GitHub workflow operation (authenticated clone, branch, commit+push, delete branch, pull request) with the user's OWN Personal Access Token. The token lives only server-side for this tool: the sandbox has no git credentials. After clone_repo with target_folder, pass the same folder as repo_folder to create_branch/commit_and_push/create_pull_request (they also auto-detect it when the workspace holds a single repo). If it answers that the token is missing or rejected, stop and tell the user to add a Personal Access Token in Settings → GitHub.",
             new { type = "object", properties = new {
-                operation = new { type = "string", @enum = new[] { "clone_repo", "create_branch", "commit_and_push", "delete_branch", "create_pull_request" } },
+                operation = new { type = "string", @enum = new[] { "clone_repo", "create_branch", "switch_branch", "fetch", "pull", "merge_branch", "commit_and_push", "delete_branch", "create_pull_request" } },
                 repo_url = new { type = "string", description = "Repository URL (owner/repo or full URL)" },
                 target_folder = new { type = "string", description = "Target folder for clone_repo (relative to the workspace)" },
                 repo_folder = new { type = "string", description = "Folder of the cloned repository inside the workspace, used by create_branch/commit_and_push/create_pull_request when the repo is not at the workspace root" },
@@ -2688,6 +2833,23 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 body = new { type = "string", description = "Pull request body" },
                 head_branch = new { type = "string", description = "PR head branch" },
                 base_branch = new { type = "string", description = "PR base branch (default main)" }
+            }, required = new[] { "operation" } }),
+        // GITHUB_FULL: добавлено 2026-10-02 — REST-операции GitHub без локального клона.
+        Function("github_api", "GitHub REST API without a local clone: branches, commits, issues, pull requests (including their diffs and discussion) and Actions workflows/CI status. Uses the user's OWN Personal Access Token. Use it to read a repository, file an issue or reply to one, review a pull request (read the changed files and comments first), check whether CI passed, or trigger a workflow. Git operations on the working copy (clone/branch/commit/push/merge) live in github_action. If it answers that the token is missing, stop and tell the user to add a Personal Access Token in Settings → GitHub.",
+            new { type = "object", properties = new {
+                operation = new { type = "string", @enum = new[] { "list_branches", "list_commits", "list_issues", "create_issue", "comment_issue", "close_issue", "get_issue", "list_pull_requests", "get_pull_request", "get_pull_request_files", "get_pull_request_comments", "comment_pull_request", "review_pull_request", "merge_pull_request", "close_pull_request", "get_commit_status", "list_workflows", "run_workflow" } },
+                repo = new { type = "string", description = "Repository as owner/repo (or full URL); omit to use the workspace clone's origin" },
+                repo_folder = new { type = "string", description = "Folder of the cloned repository inside the workspace, when 'repo' is omitted" },
+                state = new { type = "string", @enum = new[] { "open", "closed", "all" }, description = "Filter for list_issues / list_pull_requests (default open)" },
+                limit = new { type = "integer", description = "Maximum items for list operations (default 20, max 100)" },
+                branch = new { type = "string", description = "Branch for list_commits / get_commit_status" },
+                number = new { type = "integer", description = "Issue or pull request number" },
+                title = new { type = "string", description = "Title for create_issue" },
+                body = new { type = "string", description = "Body text for create_issue / comment_* / the review body" },
+                @event = new { type = "string", @enum = new[] { "approve", "request_changes", "comment" }, description = "Review verdict for review_pull_request" },
+                method = new { type = "string", @enum = new[] { "merge", "squash", "rebase" }, description = "Merge method for merge_pull_request" },
+                workflow = new { type = "string", description = "Workflow file name or id for run_workflow (see list_workflows)" },
+                @ref = new { type = "string", description = "Branch, tag or commit SHA for run_workflow / get_commit_status (workflow defaults to main)" }
             }, required = new[] { "operation" } }),
         // RAG: добавлено 2026-09-17
         Function("search_documents", "Выполняет семантический поиск по загруженным документам, файлам и базе знаний проекта. Возвращает список наиболее релевантных фрагментов (чанков) с их ID, заголовками и кратким содержимым. Используй этот инструмент ПЕРВЫМ, когда пользователь спрашивает о фактах, документах, инструкциях, коде или регламентах.",

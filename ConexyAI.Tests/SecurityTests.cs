@@ -43,6 +43,7 @@ internal static class SecurityTests
         Add("M10/C2: host git ignores repo hooks and fsmonitor and strips stored tokens", TestGitHardeningAsync, GitAvailable);
         Add("GITHUB_REPO_SUBDIR: branch/commit find a repository in a workspace subfolder", TestGitRepoSubfolderAsync, GitInstalled);
         Add("GITHUB_DELETE_BRANCH: deletes a branch and refuses protected ones", TestGitDeleteBranchAsync, GitInstalled);
+        Add("GITHUB_FULL: switch/merge branches and a clean pull refusal", TestGitSyncAsync, GitInstalled);
         Add("SHARE_PUBLIC: a public link opens the chat for anyone and can be revoked", TestPublicShareAsync);
     }
 
@@ -743,6 +744,62 @@ internal static class SecurityTests
             // Отсутствующая ветка — не ошибка.
             var missing = await workspace.GitDeleteBranchAsync(chatId, "nope", repoFolder: "app", deleteRemote: false, token: "");
             Assert(missing.Success, "a missing branch is not an error");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    // GITHUB_FULL: синхронизация и ветки — switch на существующую ветку, merge с расхождением и
+    // корректный (без зависания) отказ pull, когда origin недоступен.
+    private static async Task TestGitSyncAsync()
+    {
+        var root = TempRoot();
+        try
+        {
+            var workspace = Workspace(root);
+            var chatId = Guid.NewGuid();
+            var workspaceDir = workspace.GetTaskWorkspacePath(chatId);
+            var repoDir = Path.Combine(workspaceDir, "app");
+            Directory.CreateDirectory(repoDir);
+            RunGit(repoDir, "init", "-q", "-b", "main");
+            // Локальная identity: сервис гоняет git с пустым глобальным конфигом, поэтому имя/почта
+            // должны лежать в конфиге репозитория (эти ключи в белом списке).
+            RunGit(repoDir, "config", "user.email", "a@b.c");
+            RunGit(repoDir, "config", "user.name", "t");
+            await File.WriteAllTextAsync(Path.Combine(repoDir, "a.txt"), "a");
+            RunGit(repoDir, "add", "-A");
+            RunGit(repoDir, "commit", "-q", "-m", "init");
+
+            // switch на существующую ветку.
+            RunGit(repoDir, "checkout", "-q", "-b", "feature/a");
+            var switched = await workspace.GitSwitchBranchAsync(chatId, "main", repoFolder: "app");
+            Assert(switched.Success, "switch to an existing branch works: " + switched.Error);
+            Assert(CurrentBranch(repoDir) == "main", "the branch switched to main");
+
+            // Несуществующая ветка — отказ (switch не создаёт и не сбрасывает ветки).
+            var missing = await workspace.GitSwitchBranchAsync(chatId, "nope", repoFolder: "app");
+            Assert(!missing.Success, "switching to a missing branch is refused");
+
+            // merge с расхождением: в feature/b есть коммит, в main — свой, значит нужен merge-коммит.
+            RunGit(repoDir, "checkout", "-q", "-b", "feature/b");
+            await File.WriteAllTextAsync(Path.Combine(repoDir, "b.txt"), "b");
+            RunGit(repoDir, "add", "-A");
+            RunGit(repoDir, "commit", "-q", "-m", "b");
+            RunGit(repoDir, "checkout", "-q", "main");
+            await File.WriteAllTextAsync(Path.Combine(repoDir, "c.txt"), "c");
+            RunGit(repoDir, "add", "-A");
+            RunGit(repoDir, "commit", "-q", "-m", "c");
+
+            var merged = await workspace.GitMergeBranchAsync(chatId, "feature/b", repoFolder: "app");
+            Assert(merged.Success, "merging a diverged branch works: " + merged.Error);
+            Assert(File.Exists(Path.Combine(repoDir, "b.txt")) && File.Exists(Path.Combine(repoDir, "c.txt")),
+                "both sides of the merge are present");
+
+            // pull без настроенного origin — внятный отказ, а не зависание.
+            var pull = await workspace.GitPullAsync(chatId, "dummy-token", repoFolder: "app");
+            Assert(!pull.Success, "pull without a reachable origin fails cleanly");
         }
         finally
         {
