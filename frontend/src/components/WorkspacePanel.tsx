@@ -45,6 +45,7 @@ import {
   DownloadIcon,
   PlayIcon,
   RefreshIcon,
+  SearchIcon,
   TerminalIcon,
   TrashIcon,
 } from './Icons';
@@ -434,6 +435,8 @@ export function WorkspacePanel({
   // LSP_LITE: добавлен третий вид — Outline (структура файла).
   // SEARCH_REPLACE: четвёртый вид — глобальный поиск и замена.
   const [sideView, setSideView] = useState<'files' | 'git' | 'outline' | 'search'>('files');
+  // IDE_SIDEBAR_SEARCH: строка поиска живёт в шапке сайдбара и управляет панелью поиска.
+  const [searchQuery, setSearchQuery] = useState('');
   // DEBUG_TRACE: точки останова по файлам (path → строки), синхронизируются с бэкендом.
   const [breakpoints, setBreakpoints] = useState<Record<string, number[]>>({});
   // FORMATTER: форматирование Prettier — сигнал для редактора и флаг «форматировать при сохранении».
@@ -1643,35 +1646,49 @@ export function WorkspacePanel({
       <div className="workspace__body">
         {explorerVisible && (
         <aside className="workspace__explorer">
-          <div className="workspace__side-switch">
-            <button
-              type="button"
-              className={`workspace__side-tab ${sideView === 'files' ? 'workspace__side-tab--active' : ''}`}
-              onClick={() => setSideView('files')}
-            >
-              {t('workspace.fileExplorer')}
-            </button>
-            <button
-              type="button"
-              className={`workspace__side-tab ${sideView === 'git' ? 'workspace__side-tab--active' : ''}`}
-              onClick={() => setSideView('git')}
-            >
-              {t('scm.tab')}
-            </button>
-            <button
-              type="button"
-              className={`workspace__side-tab ${sideView === 'outline' ? 'workspace__side-tab--active' : ''}`}
-              onClick={() => setSideView('outline')}
-            >
-              {t('workspace.outline')}
-            </button>
-            <button
-              type="button"
-              className={`workspace__side-tab ${sideView === 'search' ? 'workspace__side-tab--active' : ''}`}
-              onClick={() => setSideView('search')}
-            >
-              {t('search.tab')}
-            </button>
+          <div className="workspace__explorer-head">
+            <label className="search-pill workspace__search">
+              <SearchIcon size={15} className="search-pill__icon" />
+              <input
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setSideView('search');
+                }}
+                onFocus={() => setSideView('search')}
+                placeholder={t('search.placeholder')}
+                spellCheck={false}
+              />
+            </label>
+            <div className="workspace__side-switch" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sideView === 'files'}
+                className={`workspace__side-tab ${sideView === 'files' ? 'workspace__side-tab--active' : ''}`}
+                onClick={() => setSideView('files')}
+              >
+                {t('workspace.filesTab')}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sideView === 'git'}
+                className={`workspace__side-tab ${sideView === 'git' ? 'workspace__side-tab--active' : ''}`}
+                onClick={() => setSideView('git')}
+              >
+                {t('scm.tab')}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sideView === 'outline'}
+                className={`workspace__side-tab ${sideView === 'outline' ? 'workspace__side-tab--active' : ''}`}
+                onClick={() => setSideView('outline')}
+              >
+                {t('workspace.outline')}
+              </button>
+            </div>
           </div>
           {sideView === 'git' ? (
             <SourceControlPanel
@@ -1692,6 +1709,7 @@ export function WorkspacePanel({
           ) : sideView === 'search' ? (
             <SearchPanel
               sessionId={sessionId}
+              query={searchQuery}
               onOpenLocation={openLocation}
               onReplaced={(paths) => void refreshPathsFromDisk(paths)}
             />

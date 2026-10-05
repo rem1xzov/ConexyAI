@@ -626,6 +626,7 @@
     "downloadZipTitle": "Download project as ZIP",
     "packaging": "Packaging…",
     "fileExplorer": "File Explorer",
+    "filesTab": "Files",
     "runTaskHint": "Run a task to generate files.",
     "noFiles": "No files created yet.",
     "closeTab": "Close tab",
@@ -807,6 +808,7 @@
   },
   "search": {
     "tab": "Search",
+    "placeholder": "Search in files",
     "find": "Find",
     "replace": "Replace",
     "caseSensitive": "Match case",

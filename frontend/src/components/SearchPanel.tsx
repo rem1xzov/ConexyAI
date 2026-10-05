@@ -1,21 +1,22 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { replaceProject, searchProject } from '../api/conexyApi';
 import type { SearchMatch } from '../types/api';
 
 // SEARCH_REPLACE: добавлено 2026-10-05 — панель глобального поиска и замены по проекту (как Find &
-// Replace в VS Code): строка или регулярное выражение, регистр, фильтр по glob, замена во всех
-// файлах или в одном. Результаты сгруппированы по файлу, клик открывает совпадение.
+// Replace в VS Code). Строка поиска живёт в шапке сайдбара (поле «Поиск по файлам»), а здесь —
+// параметры (регистр/regex/glob), замена и результаты. Поиск запускается автоматически с задержкой.
 interface SearchPanelProps {
   sessionId?: string;
+  /** The query typed in the sidebar search field. */
+  query: string;
   onOpenLocation: (path: string, line: number, column: number) => void;
   /** Called with the changed paths after a replace, so the editor can reload open files. */
   onReplaced: (paths: string[]) => void;
 }
 
-export function SearchPanel({ sessionId, onOpenLocation, onReplaced }: SearchPanelProps) {
+export function SearchPanel({ sessionId, query, onOpenLocation, onReplaced }: SearchPanelProps) {
   const { t } = useTranslation();
-  const [query, setQuery] = useState('');
   const [replacement, setReplacement] = useState('');
   const [regex, setRegex] = useState(false);
   const [caseSensitive, setCaseSensitive] = useState(false);
@@ -33,13 +34,14 @@ export function SearchPanel({ sessionId, onOpenLocation, onReplaced }: SearchPan
   const grouped = useMemo(() => groupByFile(matches), [matches]);
 
   async function runSearch(clearNotice = true) {
-    if (!sessionId || query.length === 0) return;
+    const q = query.trim();
+    if (!sessionId || q.length === 0) return;
     setLoading(true);
     setError(null);
     if (clearNotice) setNotice(null);
     setArmed(false);
     try {
-      const res = await searchProject(sessionId, query, regex, caseSensitive, glob.trim() || undefined);
+      const res = await searchProject(sessionId, q, regex, caseSensitive, glob.trim() || undefined);
       setSearched(true);
       if (!res.success) {
         setMatches([]);
@@ -57,21 +59,29 @@ export function SearchPanel({ sessionId, onOpenLocation, onReplaced }: SearchPan
     }
   }
 
+  // Auto-run (debounced) whenever the query or a search option changes.
+  useEffect(() => {
+    if (!sessionId || query.trim().length === 0) {
+      setMatches([]);
+      setTotal(0);
+      setSearched(false);
+      setError(null);
+      setNotice(null);
+      return;
+    }
+    const timer = setTimeout(() => void runSearch(), 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, regex, caseSensitive, glob, sessionId]);
+
   async function runReplace(path?: string) {
-    if (!sessionId || query.length === 0) return;
+    const q = query.trim();
+    if (!sessionId || q.length === 0) return;
     setReplacing(true);
     setError(null);
     setNotice(null);
     try {
-      const res = await replaceProject(
-        sessionId,
-        query,
-        replacement,
-        regex,
-        caseSensitive,
-        glob.trim() || undefined,
-        path,
-      );
+      const res = await replaceProject(sessionId, q, replacement, regex, caseSensitive, glob.trim() || undefined, path);
       if (!res.success) {
         setError(errorText(res.error, t));
         return;
@@ -87,23 +97,17 @@ export function SearchPanel({ sessionId, onOpenLocation, onReplaced }: SearchPan
     }
   }
 
-  const canSearch = !!sessionId && query.length > 0 && !loading;
+  const canSearch = !!sessionId && query.trim().length > 0 && !loading;
 
   return (
     <div className="search">
       <div className="search__fields">
         <div className="search__row">
           <input
-            className="dialog-input search__input"
-            placeholder={t('search.find')}
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setArmed(false);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void runSearch();
-            }}
+            className="dialog-input search__glob"
+            placeholder={t('search.includeGlob')}
+            value={glob}
+            onChange={(e) => setGlob(e.target.value)}
             spellCheck={false}
           />
           <button
@@ -147,21 +151,13 @@ export function SearchPanel({ sessionId, onOpenLocation, onReplaced }: SearchPan
             {armed ? t('search.replaceAllConfirm', { count: total }) : t('search.replaceAll')}
           </button>
         </div>
-
-        <input
-          className="dialog-input search__glob"
-          placeholder={t('search.includeGlob')}
-          value={glob}
-          onChange={(e) => setGlob(e.target.value)}
-          spellCheck={false}
-        />
       </div>
 
       {error && <div className="workspace__hint workspace__hint--error">{error}</div>}
       {notice && <div className="workspace__hint">{notice}</div>}
       {truncated && <div className="workspace__hint">{t('search.truncated')}</div>}
 
-      {searched && !error && matches.length === 0 && !loading && (
+      {searched && !error && query.trim().length > 0 && matches.length === 0 && !loading && (
         <div className="workspace__hint">{t('search.noResults')}</div>
       )}
       {matches.length > 0 && (

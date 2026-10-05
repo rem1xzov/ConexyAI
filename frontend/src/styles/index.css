@@ -8497,23 +8497,38 @@ html[data-theme="light"]:not([data-incognito="true"]) .artifact-panel {
 }
 
 /* IDE_GIT: добавлено 2026-10-04 — Source Control panel (workspace sidebar). */
+/* IDE_SIDEBAR: шапка сайдбара IDE — поле поиска сверху, вкладки-сегменты ниже. */
+.workspace__explorer-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: -10px -8px 8px;
+  padding: 10px 8px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.workspace__search { padding: 6px 10px; }
+.workspace__search input { font-size: 12px; }
 .workspace__side-switch {
   display: flex;
   gap: 4px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
+  padding: 0;
+  border-bottom: none;
 }
 .workspace__side-tab {
   flex: 1;
+  min-width: 0;
   padding: 5px 8px;
   font-size: 12px;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.workspace__side-tab:hover { color: var(--text); }
+.workspace__side-tab:hover { color: var(--text); background: var(--bg-hover); }
 .workspace__side-tab--active {
   background: var(--accent-soft);
   border-color: var(--accent);
