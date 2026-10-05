@@ -124,6 +124,8 @@ builder.Services.Configure<GitHubOAuthOptions>(options =>
 builder.Services.Configure<WorkspaceOptions>(builder.Configuration.GetSection(WorkspaceOptions.SectionName));
 builder.Services.Configure<WebSearchOptions>(builder.Configuration.GetSection(WebSearchOptions.SectionName));
 builder.Services.Configure<AgentOptions>(builder.Configuration.GetSection(AgentOptions.SectionName));
+// MCP: добавлено 2026-10-04 — удалённые MCP-серверы (Streamable HTTP).
+builder.Services.Configure<McpOptions>(builder.Configuration.GetSection(McpOptions.SectionName));
 builder.Services.Configure<SpeechKitOptions>(builder.Configuration.GetSection(SpeechKitOptions.SectionName));
 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
 builder.Services.Configure<DangerousCommandOptions>(builder.Configuration.GetSection(DangerousCommandOptions.SectionName));
@@ -307,6 +309,9 @@ builder.Services.AddHostedService<MemoryExtractionWorker>();
 // CHAT_TITLE_TOPIC: фоновое название чата по теме (flash-модель, лимиты пользователя не тратит).
 builder.Services.AddHostedService<ChatTitleWorker>();
 builder.Services.AddHttpClient<IConexyLlmClient, ConexyLlmClient>();
+// MCP: отдельный HttpClient для удалённых MCP-серверов; реестр — singleton (кэш списка инструментов).
+builder.Services.AddHttpClient("mcp", client => client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddSingleton<IMcpRegistry, McpRegistry>();
 builder.Services.AddHttpClient<IWebSearchService, JsonSeoSearchService>();
 // AGENT_WEB_TOOLS: добавлено 2026-09-24 — начало блока агентских инструментов (ws/be-agent).
 // SSRF-гард (DNS-резолвер как шов для тестов) нужен fetch_web_page и take_screenshot; у

@@ -51,6 +51,8 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent apply_patch: hunks tolerate offsets and /dev/null marks new files", UnifiedDiffApplyAsync);
         TestRegistry.Add("agent hooks: loads .conexy/hooks.json and shells out on agent events", HooksRunOnEventsAsync);
         TestRegistry.Add("agent hooks: parses config, ignores unknown events, quotes placeholders", HooksServiceAsync);
+        TestRegistry.Add("agent mcp: lists remote tools, handshakes and parses SSE tool results", McpRemoteServerAsync);
+        TestRegistry.Add("agent mcp: server tools are offered and dispatched by prefix", McpToolIsOfferedAndDispatchedAsync);
         TestRegistry.Add("agent prompts: charters carry deep research, fetch_web_page, the plan rule and artifacts", ChartersAsync);
     }
 
@@ -913,6 +915,51 @@ internal static class AgentCapabilityTests
         }
     }
 
+    // MCP: удалённый сервер (Streamable HTTP) — рукопожатие, список тулзов, вызов с SSE-ответом.
+    private static async Task McpRemoteServerAsync()
+    {
+        var handler = new McpHandler();
+        var options = Options.Create(new McpOptions
+        {
+            Servers = { new McpServerOptions { Id = "notion", Name = "Notion", Url = "https://mcp.example.test/mcp" } }
+        });
+        var registry = new McpRegistry(options, new FakeHttpClientFactory(handler), NullLogger<McpRegistry>.Instance);
+
+        var tools = await registry.ListToolsAsync();
+        Assert(tools.Count == 1, "one MCP tool listed, got " + tools.Count);
+        Assert(tools[0].FunctionName == "mcp__notion__search_pages", "function name is namespaced and sanitised: " + tools[0].FunctionName);
+        Assert(handler.Methods.Contains("initialize") && handler.Methods.Contains("notifications/initialized") && handler.Methods.Contains("tools/list"),
+            "the MCP handshake ran: " + string.Join(",", handler.Methods));
+
+        Assert(registry.TryResolve("mcp__notion__search_pages", out var descriptor), "the advertised name resolves back");
+        var call = await registry.CallAsync(descriptor!, "{\"query\":\"roadmap\"}");
+        Assert(call.Success && call.Text == "found 3 pages", "the SSE tool result is parsed: " + call.Text);
+    }
+
+    private static async Task McpToolIsOfferedAndDispatchedAsync()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var mcp = new FakeMcpRegistry();
+            mcp.Add("mcp__notion__search_pages", "Notion", "search.pages", "Search pages");
+            var llm = new ScriptLlm(
+                Turn(Call("call_m", "mcp__notion__search_pages", "{\"query\":\"x\"}")),
+                Text("Нашёл."));
+            var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(), mcp: mcp, mode: ConexyModelType.ConexyCowork);
+
+            await runner.RunLoopAsync(job, context, Guard());
+
+            Assert(llm.AdvertisedTools.Contains("mcp__notion__search_pages"),
+                "the MCP tool is advertised to the model: " + string.Join(",", llm.AdvertisedTools));
+            Assert(mcp.Calls.Count == 1 && mcp.Calls[0].Contains("x"), "the MCP tool was dispatched with its arguments");
+        }
+        finally
+        {
+            DeleteDir(root);
+        }
+    }
+
     private static Task ChartersAsync()
     {
         var root = CreateTempRoot();
@@ -960,7 +1007,8 @@ internal static class AgentCapabilityTests
         Guid? userId = null,
         Guid? chatId = null,
         bool incognito = false,
-        IAgentHooksService? hooks = null)
+        IAgentHooksService? hooks = null,
+        IMcpRegistry? mcp = null)
     {
         var workspace = new ConexyWorkspaceService(
             Options.Create(new WorkspaceOptions { RootPath = workspaceRoot }),
@@ -987,7 +1035,8 @@ internal static class AgentCapabilityTests
             Options.Create(new AgentOptions { MaxIterations = 12, AuditTimeoutSeconds = 5, MaxSelfCorrectionAttempts = maxSelfCorrections }),
             fetcher!,
             chatSearch!,
-            hooksService: hooks);
+            hooksService: hooks,
+            mcpRegistry: mcp);
 
         var job = new ConexyJob(Guid.NewGuid(), chatId ?? Guid.NewGuid(), userId ?? Guid.NewGuid(), mode, "Сделай задачу", Incognito: incognito);
         var context = new ConversationContext(job.TaskId, job.ChatId, job.UserId, runner.GetSystemPrompt(mode), job.Prompt, Incognito: incognito);
@@ -1169,6 +1218,91 @@ internal static class AgentCapabilityTests
     {
         public bool RequiresApproval(string command) => false;
         public bool IsDangerous(string command) => false;
+    }
+
+    // MCP: минимальный fake удалённого MCP-сервера (JSON-RPC поверх HTTP + SSE на tools/call).
+    private sealed class McpHandler : HttpMessageHandler
+    {
+        public List<string> Methods { get; } = new();
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var method = root.GetProperty("method").GetString() ?? string.Empty;
+            Methods.Add(method);
+
+            if (method == "notifications/initialized")
+                return new HttpResponseMessage(HttpStatusCode.Accepted);
+
+            var id = root.GetProperty("id").GetInt32();
+
+            if (method == "initialize")
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{{}}}}}}",
+                        Encoding.UTF8, "application/json")
+                };
+                response.Headers.TryAddWithoutValidation("Mcp-Session-Id", "sess-1");
+                return response;
+            }
+
+            if (method == "tools/list")
+            {
+                var json = $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"tools\":[{{\"name\":\"search.pages\",\"description\":\"Search pages\",\"inputSchema\":{{\"type\":\"object\"}}}}]}}}}";
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+            }
+
+            if (method == "tools/call")
+            {
+                var json = $"event: message\ndata: {{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"content\":[{{\"type\":\"text\",\"text\":\"found 3 pages\"}}]}}}}\n\n";
+                var content = new StringContent(json, Encoding.UTF8);
+                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/event-stream");
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        }
+    }
+
+    private sealed class FakeHttpClientFactory : IHttpClientFactory
+    {
+        private readonly HttpMessageHandler _handler;
+        public FakeHttpClientFactory(HttpMessageHandler handler) => _handler = handler;
+        public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
+    }
+
+    private sealed class FakeMcpRegistry : IMcpRegistry
+    {
+        private readonly List<McpToolDescriptor> _tools = new();
+        private readonly Dictionary<string, McpToolDescriptor> _map = new(StringComparer.Ordinal);
+
+        public List<string> Calls { get; } = new();
+        public IReadOnlyList<string> ServerNames => new[] { "Notion" };
+
+        public void Add(string functionName, string serverName, string toolName, string description)
+        {
+            var descriptor = new McpToolDescriptor(
+                functionName, "notion", serverName, toolName, description,
+                System.Text.Json.JsonDocument.Parse("{\"type\":\"object\"}").RootElement.Clone());
+            _tools.Add(descriptor);
+            _map[functionName] = descriptor;
+        }
+
+        public Task<IReadOnlyList<McpToolDescriptor>> ListToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<McpToolDescriptor>>(_tools);
+
+        public bool TryResolve(string functionName, out McpToolDescriptor descriptor) =>
+            _map.TryGetValue(functionName, out descriptor!);
+
+        public Task<McpCallResult> CallAsync(McpToolDescriptor descriptor, string argumentsJson, CancellationToken ct = default)
+        {
+            Calls.Add(argumentsJson);
+            return Task.FromResult(new McpCallResult(true, "ok"));
+        }
     }
 
     private sealed class AvailableVision : IConexyVisionService
