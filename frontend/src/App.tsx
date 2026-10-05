@@ -59,7 +59,7 @@ import { ConfirmDialog } from './components/Dialog';
 import { getStoredTheme, setTheme, type Theme } from './theme';
 import { setLanguage } from './i18n';
 import type { ChatSummary, ConexyModel, LimitExceededInfo, ReasoningEffort, SendOutcome, SubscriptionUsage, TaskAttachment } from './types/api';
-import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep, TurnBlock } from './types/chat';
+import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep, TurnBlock, AgentAction } from './types/chat';
 import type { PendingActionPayload, SignalrCallbacks } from './types/signalr';
 // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
 import { toMessageAttachment } from './utils/attachments';
@@ -1165,6 +1165,8 @@ export default function App() {
       patchTurn(ctx, (m) => ({
         ...m,
         thinking: (m.thinking ?? '') + delta,
+        // ATTACHMENT_PILL: модель начала рассуждать — «обрабатываю вложение» больше не актуально.
+        currentAction: m.currentAction?.stage === 'processing' ? null : m.currentAction,
         blocks: isAgentSession(ctx.sessionId) ? appendThoughtBlock(m.blocks ?? [], delta) : m.blocks,
       }));
     },
@@ -2196,6 +2198,24 @@ export default function App() {
       model: live.model,
       attachments: messageAttachments.length ? messageAttachments : undefined,
     };
+    // ATTACHMENT_PILL: добавлено 2026-10-04 — пока модель читает вложение, показываем такую же
+    // плашку, как «Ищу в интернете», чтобы не казалось, что генерация застыла. Живёт до первого
+    // токена/статуса (см. appendTurnText/onAgentStatus/onThinkingToken).
+    const attachmentAction: AgentAction | undefined = attachments.length
+      ? (() => {
+          const images = attachments.filter((a) => a.contentType.startsWith('image/')).length;
+          const files = attachments.length - images;
+          const translate = live.t;
+          if (images > 0 && files === 0) {
+            return { stage: 'processing', label: images > 1 ? translate('agent.processingImages') : translate('agent.processingImage') };
+          }
+          if (files > 0 && images === 0) {
+            return { stage: 'processing', label: files > 1 ? translate('agent.processingFiles') : translate('agent.processingFile') };
+          }
+          return { stage: 'processing', label: translate('agent.processingAttachments') };
+        })()
+      : undefined;
+
     const assistantMsg: ChatMessage = {
       id: assistantId,
       role: 'assistant',
@@ -2207,6 +2227,7 @@ export default function App() {
       createdAt: Date.now(),
       model: live.model,
       awaitingTaskId: true,
+      currentAction: attachmentAction ?? null,
     };
 
     setSessions((prev) =>
@@ -2221,7 +2242,7 @@ export default function App() {
         messages: continueMessageId
           ? s.messages.map((m) =>
               m.id === continueMessageId
-                ? { ...m, status: 'streaming', error: undefined, taskId: undefined, awaitingTaskId: true }
+                ? { ...m, status: 'streaming', error: undefined, taskId: undefined, awaitingTaskId: true, currentAction: attachmentAction ?? m.currentAction }
                 : m,
             )
           : appendUserMessage

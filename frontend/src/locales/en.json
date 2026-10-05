@@ -420,6 +420,11 @@
   "agent": {
     "searching": "Searching the web: {{query}}",
     "searchingShort": "Searching the web…",
+    "processingImage": "Processing the image…",
+    "processingImages": "Processing the images…",
+    "processingFile": "Processing the file…",
+    "processingFiles": "Processing the files…",
+    "processingAttachments": "Processing the attachments…",
     "limitExceeded": "Limit exceeded",
     "generationStopped": "⏹ Generation stopped.",
     "taskFailed": "The task failed on the server",

@@ -428,6 +428,11 @@
   "agent": {
     "searching": "Ищу в интернете: {{query}}",
     "searchingShort": "Ищу в интернете…",
+    "processingImage": "Обрабатываю фотографию…",
+    "processingImages": "Обрабатываю фотографии…",
+    "processingFile": "Обрабатываю файл…",
+    "processingFiles": "Обрабатываю файлы…",
+    "processingAttachments": "Обрабатываю вложения…",
     "limitExceeded": "Лимит исчерпан",
     "generationStopped": "⏹ Генерация остановлена.",
     "taskFailed": "Задача завершилась с ошибкой на сервере",
