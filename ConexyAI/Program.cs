@@ -239,6 +239,8 @@ builder.Services.AddScoped<IConexyBashService, ConexyBashService>();
 builder.Services.AddScoped<ITestRunnerService, ConexyTestRunnerService>();
 // DIAGNOSTICS: добавлено 2026-10-04 — структурированные ошибки компиляции/типов (get_diagnostics).
 builder.Services.AddScoped<IDiagnosticsService, ConexyDiagnosticsService>();
+// AGENT_HOOKS: добавлено 2026-10-04 — хуки проекта из .conexy/hooks.json.
+builder.Services.AddScoped<IAgentHooksService, ConexyAgentHooksService>();
 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
 builder.Services.AddScoped<IPendingActionRepository, PendingActionRepository>();
 builder.Services.AddSingleton<IDangerousCommandClassifier, DangerousCommandClassifier>();

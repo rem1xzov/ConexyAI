@@ -49,6 +49,8 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent view_image: image bytes are recognised by magic, non-images refused", ImageContentDetectionAsync);
         TestRegistry.Add("agent apply_patch: unified diff is parsed and applied; mismatch changes nothing", ApplyPatchToolAsync);
         TestRegistry.Add("agent apply_patch: hunks tolerate offsets and /dev/null marks new files", UnifiedDiffApplyAsync);
+        TestRegistry.Add("agent hooks: loads .conexy/hooks.json and shells out on agent events", HooksRunOnEventsAsync);
+        TestRegistry.Add("agent hooks: parses config, ignores unknown events, quotes placeholders", HooksServiceAsync);
         TestRegistry.Add("agent prompts: charters carry deep research, fetch_web_page, the plan rule and artifacts", ChartersAsync);
     }
 
@@ -845,6 +847,72 @@ internal static class AgentCapabilityTests
         return Task.CompletedTask;
     }
 
+    // AGENT_HOOKS: хуки проекта (.conexy/hooks.json) запускаются на события агента в песочнице.
+    private static async Task HooksRunOnEventsAsync()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var workspace = new ConexyWorkspaceService(
+                Options.Create(new WorkspaceOptions { RootPath = root }),
+                NullLogger<ConexyWorkspaceService>.Instance);
+            var chatId = Guid.NewGuid();
+            var hooksDir = Path.Combine(workspace.GetTaskWorkspacePath(chatId), ".conexy");
+            Directory.CreateDirectory(hooksDir);
+            await File.WriteAllTextAsync(Path.Combine(hooksDir, "hooks.json"),
+                "{\"before_task\":[\"echo before {event}\"],\"after_file_change\":[\"echo changed {file}\"],\"after_task\":[\"echo done\"]}");
+
+            var hooks = new ConexyAgentHooksService(workspace);
+            var bash = new ScriptedBashService(_ => new BashToolResult { Success = true, ExitCode = 0, Output = "ok" });
+            var llm = new ScriptLlm(
+                Turn(Call("call_w", "file_write", "{\"path\":\"a.txt\",\"content\":\"x\"}")),
+                Text("Готово."));
+            var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(), bash: bash, hooks: hooks, chatId: chatId);
+
+            await runner.RunLoopAsync(job, context, Guard());
+
+            Assert(bash.Commands.Any(c => c.Contains("echo before")), "before_task hook ran: " + string.Join(" | ", bash.Commands));
+            Assert(bash.Commands.Any(c => c.Contains("echo changed") && c.Contains("a.txt")), "after_file_change hook ran with the file");
+            Assert(bash.Commands.Any(c => c.Contains("echo done")), "after_task hook ran");
+        }
+        finally
+        {
+            DeleteDir(root);
+        }
+    }
+
+    private static async Task HooksServiceAsync()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var workspace = new ConexyWorkspaceService(
+                Options.Create(new WorkspaceOptions { RootPath = root }),
+                NullLogger<ConexyWorkspaceService>.Instance);
+            var chatId = Guid.NewGuid();
+            var hooksDir = Path.Combine(workspace.GetTaskWorkspacePath(chatId), ".conexy");
+            Directory.CreateDirectory(hooksDir);
+            var hooksFile = Path.Combine(hooksDir, "hooks.json");
+            await File.WriteAllTextAsync(hooksFile,
+                "{\"hooks\":{\"before_task\":\"npm ci\",\"after_file_change\":[\"prettier --write {file}\"]}}");
+
+            var service = new ConexyAgentHooksService(workspace);
+            var hooks = await service.LoadAsync(chatId);
+            Assert(hooks is not null, "hooks load from the nested 'hooks' object");
+            Assert(service.CommandsFor(hooks!, "before_task").Single() == "npm ci", "a single string form works");
+
+            var resolved = service.Substitute("prettier --write {file}", new Dictionary<string, string> { ["file"] = "src/a b.ts" });
+            Assert(resolved == "prettier --write 'src/a b.ts'", "placeholders are shell-quoted: " + resolved);
+
+            await File.WriteAllTextAsync(hooksFile, "{\"unknown_event\":[\"x\"]}");
+            Assert(await service.LoadAsync(chatId) is null, "unknown events are ignored");
+        }
+        finally
+        {
+            DeleteDir(root);
+        }
+    }
+
     private static Task ChartersAsync()
     {
         var root = CreateTempRoot();
@@ -891,7 +959,8 @@ internal static class AgentCapabilityTests
         int maxSelfCorrections = 5,
         Guid? userId = null,
         Guid? chatId = null,
-        bool incognito = false)
+        bool incognito = false,
+        IAgentHooksService? hooks = null)
     {
         var workspace = new ConexyWorkspaceService(
             Options.Create(new WorkspaceOptions { RootPath = workspaceRoot }),
@@ -917,7 +986,8 @@ internal static class AgentCapabilityTests
             documentService: null!,
             Options.Create(new AgentOptions { MaxIterations = 12, AuditTimeoutSeconds = 5, MaxSelfCorrectionAttempts = maxSelfCorrections }),
             fetcher!,
-            chatSearch!);
+            chatSearch!,
+            hooksService: hooks);
 
         var job = new ConexyJob(Guid.NewGuid(), chatId ?? Guid.NewGuid(), userId ?? Guid.NewGuid(), mode, "Сделай задачу", Incognito: incognito);
         var context = new ConversationContext(job.TaskId, job.ChatId, job.UserId, runner.GetSystemPrompt(mode), job.Prompt, Incognito: incognito);

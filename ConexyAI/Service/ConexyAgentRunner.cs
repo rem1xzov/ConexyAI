@@ -50,6 +50,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly ITestRunnerService? _testRunnerService;
     // DIAGNOSTICS: добавлено 2026-10-04 — структурированные ошибки компиляции/типов (get_diagnostics).
     private readonly IDiagnosticsService? _diagnosticsService;
+    // AGENT_HOOKS: добавлено 2026-10-04 — пользовательские хуки проекта (.conexy/hooks.json).
+    private readonly IAgentHooksService? _hooksService;
+    private AgentHooks? _hooks;
+    private int _hookRuns;
     private ConexyJob _job = null!;
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — накопленный поток ответа на случай остановки.
     private readonly StringBuilder _streamedOutput = new();
@@ -360,6 +364,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
             `CLAUDE.md`, `.conexy/rules.md` из корня рабочей области) — это требования владельца
             репозитория: стиль кода, команды сборки и тестов, архитектура, запреты. Они важнее твоих
             привычек, но не отменяют правил безопасности и подтверждения команд.
+            Владелец может также задать **хуки** в `.conexy/hooks.json` (события `before_task`,
+            `after_file_change`, `on_error`, `after_task`) — их система запускает сама; тебе не нужно
+            вызывать их вручную. Если хук упал — система скажет об этом отдельной заметкой `[Hooks]`, учти это.
 
         14. **GitHub — только через `github_action` и `github_api`.** Клонирование репозитория с
             авторизацией, работа с ветками (создание `create_branch`, переключение на существующую
@@ -445,6 +452,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private const int ProjectRulesMaxCharsPerFile = 16_000;
     private const int ProjectRulesMaxTotalChars = 24_000;
 
+    // AGENT_HOOKS: добавлено 2026-10-04 — бюджеты хуков, чтобы автоматизация не могла зациклиться или
+    // залить контекст выводом.
+    private const int MaxHookRunsPerRun = 50;
+    private const int MaxHookFilesPerBatch = 5;
+    private const int HookTimeoutSeconds = 60;
+
     private const string ProjectRulesPreamble =
         """
         [Правила проекта]
@@ -511,7 +524,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // TEST_RUNNER: последним и необязательным — позиционные вызовы в тестах не ломаются.
         ITestRunnerService? testRunnerService = null,
         // DIAGNOSTICS: добавлено 2026-10-04.
-        IDiagnosticsService? diagnosticsService = null)
+        IDiagnosticsService? diagnosticsService = null,
+        // AGENT_HOOKS: добавлено 2026-10-04.
+        IAgentHooksService? hooksService = null)
     {
         _workspaceService = workspaceService;
         _visionService = visionService;
@@ -535,6 +550,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _browserService = browserService;
         _testRunnerService = testRunnerService;
         _diagnosticsService = diagnosticsService;
+        _hooksService = hooksService;
 
         var configured = agentOptions.Value.MaxIterations;
         // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
@@ -573,6 +589,22 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var insertAt = messages.Count > 0 && messages[0].Role == "system" ? 1 : 0;
             messages.Insert(insertAt, new ChatMessage("system", projectRules.Prompt));
             await group.SendAsync("OnLog", $"[Project Rules] Loaded {string.Join(", ", projectRules.Files)}", ct);
+        }
+
+        // AGENT_HOOKS: добавлено 2026-10-04 — хуки проекта (.conexy/hooks.json). Только для режима с
+        // песочницей (Coder): у Cowork нет bash. Запускаются без подтверждения — это автоматизация
+        // владельца репозитория, выполняемая в изолированной песочнице.
+        _hookRuns = 0;
+        _hooks = _hooksService is null || !_profile.Allows("bash") ? null : await _hooksService.LoadAsync(chatId, ct);
+        if (_hooks is not null)
+        {
+            await group.SendAsync("OnLog", $"[Hooks] Loaded {_hooks.Events.Count} event(s) from {ConexyAgentHooksService.HooksFile}", ct);
+            var beforeNotes = new List<string>();
+            await RunHooksAsync(taskId, chatId, "before_task", HookValues(chatId, "before_task"), beforeNotes, ct);
+            if (beforeNotes.Count > 0)
+            {
+                messages.Add(new ChatMessage("system", "[Hooks] before_task reported:\n" + string.Join("\n", beforeNotes)));
+            }
         }
 
         var changedFiles = new HashSet<string>(StringComparer.Ordinal);
@@ -791,6 +823,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     "Agent loop finished at step {Step}/{Max} task={TaskId} selfCorrections={Corrections} red={Red} auditReworks={Reworks} changedFiles={Files} textChars={Chars}",
                     step, _maxIterations, taskId, selfCorrections, buildHealth.IsRed, auditReworks, changedFiles.Count, finalText.Length);
 
+                // AGENT_HOOKS: after_task — финальный хук проекта перед завершением прогона.
+                await RunHooksAsync(taskId, chatId, "after_task", HookValues(chatId, "after_task"), null, ct);
+
                 // No file modifications were made: the model's text is the whole answer.
                 if (changedFiles.Count == 0)
                 {
@@ -808,6 +843,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // tool-результатов хода: user(image) между assistant(tool_calls) и tool(...) ломает формат
             // запроса к модели (tool-ответы обязаны идти сразу за своим assistant-сообщением).
             var batchImages = new List<ChatMessage>();
+            // AGENT_HOOKS: заметки хуков этого хода (сбои) — отдаём модели одним system-сообщением после
+            // всех tool-результатов; FilesBeforeBatch — чтобы понять, какие файлы изменились именно сейчас.
+            var hookNotes = new List<string>();
+            var hookedErrorTools = new HashSet<string>(StringComparer.Ordinal);
+            var filesBeforeBatch = new HashSet<string>(changedFiles, StringComparer.Ordinal);
 
             foreach (var toolCall in responseMessage.ToolCalls)
             {
@@ -939,10 +979,38 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     // Прогресс есть — серия неудач прервана.
                     consecutiveToolFailures = 0;
                 }
+
+                // AGENT_HOOKS: on_error на реальном сбое инструмента (один раз на инструмент за ход).
+                if (result.IsError && hookedErrorTools.Add(toolName))
+                {
+                    var values = HookValues(chatId, "on_error");
+                    values["tool"] = toolName;
+                    values["error"] = Truncate(result.Output, 1500);
+                    await RunHooksAsync(taskId, chatId, "on_error", values, hookNotes, ct);
+                }
             }
 
             // L9: images of this batch, after every tool result of the assistant turn.
             messages.AddRange(batchImages);
+
+            // AGENT_HOOKS: after_file_change — по одному запуску на изменённый в этом ходе файл (в
+            // пределах бюджета). Сбои хуков отдаём модели одним system-сообщением.
+            if (_hooks is not null)
+            {
+                var newFiles = changedFiles.Where(f => !filesBeforeBatch.Contains(f)).Take(MaxHookFilesPerBatch).ToList();
+                foreach (var file in newFiles)
+                {
+                    var values = HookValues(chatId, "after_file_change");
+                    values["file"] = file;
+                    values["files"] = string.Join(" ", changedFiles.Where(f => !filesBeforeBatch.Contains(f)));
+                    await RunHooksAsync(taskId, chatId, "after_file_change", values, hookNotes, ct);
+                }
+            }
+
+            if (hookNotes.Count > 0)
+            {
+                messages.Add(new ChatMessage("system", "[Hooks] reported:\n" + string.Join("\n", hookNotes)));
+            }
 
             // PLAN_REQUIRED: добавлено 2026-09-24 — многошаговая работа (несколько файлов или
             // красная сборка) без плана: одно явное напоминание, дальше решает модель.
@@ -1002,6 +1070,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
         {
             await StreamNoteAsync(group, accumulated, note, ct);
         }
+
+        // AGENT_HOOKS: прогон завершился досрочно из-за бюджета/лимита — даём хуку on_error шанс,
+        // затем after_task (оба best-effort).
+        if (_hooks is not null && (toolBudgetExhausted || tokenBudgetExceeded))
+        {
+            var values = HookValues(chatId, "on_error");
+            values["tool"] = "agent";
+            values["error"] = tokenBudgetExceeded ? "token_limit_exceeded" : "tool_failure_budget";
+            await RunHooksAsync(taskId, chatId, "on_error", values, null, ct);
+        }
+        await RunHooksAsync(taskId, chatId, "after_task", HookValues(chatId, "after_task"), null, ct);
 
         if (accumulated.Length > 0)
         {
@@ -1235,6 +1314,69 @@ public class ConexyAgentRunner : IConexyAgentRunner
             ? null
             : new ProjectRules(ProjectRulesPreamble + sections.ToString().TrimEnd(), files);
     }
+
+    // AGENT_HOOKS: добавлено 2026-10-04 — запуск пользовательских хуков проекта в песочнице. Hooks
+    // best-effort: сбой хука не валит задачу, а его вывод (обрезанный) уходит модели отдельной заметкой.
+    private async Task RunHooksAsync(
+        Guid taskId,
+        Guid chatId,
+        string eventName,
+        Dictionary<string, string> values,
+        List<string>? failureNotes,
+        CancellationToken ct)
+    {
+        if (_hooks is null || _hooksService is null) return;
+
+        var commands = _hooksService.CommandsFor(_hooks, eventName);
+        foreach (var command in commands)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (_hookRuns >= MaxHookRunsPerRun)
+            {
+                await LogAsync(taskId, $"[Hook:{eventName}] Пропуск — исчерпан лимит {MaxHookRunsPerRun} запусков за прогон.", ct);
+                break;
+            }
+            _hookRuns++;
+
+            var resolved = _hooksService.Substitute(command, values);
+            await LogAsync(taskId, $"[Hook:{eventName}] {resolved}", ct);
+            await SendAgentStatusAsync(taskId, "executing", $"Хук {eventName}: {Truncate(resolved, 120)}", ct: ct);
+
+            try
+            {
+                var request = new BashToolRequest
+                {
+                    Command = resolved,
+                    TimeoutSeconds = HookTimeoutSeconds,
+                    IsDangerous = false
+                };
+                var result = await _bashService.ExecuteAsync(chatId, request, emitStartEvent: true, ct);
+                if (!result.Success)
+                {
+                    var output = string.IsNullOrEmpty(result.Output) ? result.ErrorType ?? "failed" : result.Output;
+                    failureNotes?.Add($"[Hook {eventName}] `{resolved}` → {Truncate(output, 1500)}");
+                    await LogAsync(taskId, $"[Hook:{eventName}] failed: {Truncate(output, 300)}", ct);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Agent hook {Event} crashed. task={TaskId}", eventName, taskId);
+                failureNotes?.Add($"[Hook {eventName}] `{resolved}` crashed: {ex.Message}");
+            }
+        }
+    }
+
+    private Dictionary<string, string> HookValues(Guid chatId, string eventName) => new(StringComparer.Ordinal)
+    {
+        ["event"] = eventName,
+        ["task"] = _job.TaskId.ToString(),
+        ["chat"] = chatId.ToString(),
+    };
 
     // ORCHESTRA: добавлено 2026-09-28
     /// <summary>
