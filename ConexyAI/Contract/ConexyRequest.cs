@@ -36,8 +36,31 @@ public record ConexyRequest(
     // ORCHESTRA: добавлено 2026-09-28 — пожелание клиента включить «Оркестр агентов». Решение
     // принимает сервер: оркестр доступен только ProMax и только режиму Coder (в остальных случаях
     // флаг просто снимается).
-    bool Orchestra = false
+    bool Orchestra = false,
+    // MCP: добавлено 2026-10-04 — личные MCP-серверы пользователя (URL + токен). Не хранятся на
+    // сервере: едут с запросом, чтобы агент работал под аккаунтом пользователя, а не под общим.
+    List<McpServerInput>? McpServers = null
 );
+
+// MCP: личный MCP-сервер пользователя. Токен живёт только в браузере и в памяти запроса.
+public class McpServerInput
+{
+    [System.Text.Json.Serialization.JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("url")]
+    public string? Url { get; set; }
+
+    /// <summary>Access token; sent as <c>Authorization: Bearer &lt;token&gt;</c>.</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("token")]
+    public string? Token { get; set; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
+}
 
 /// <summary>An uploaded file/image attachment from the user.</summary>
 public record TaskAttachment(

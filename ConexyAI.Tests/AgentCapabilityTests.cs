@@ -53,6 +53,7 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent hooks: parses config, ignores unknown events, quotes placeholders", HooksServiceAsync);
         TestRegistry.Add("agent mcp: lists remote tools, handshakes and parses SSE tool results", McpRemoteServerAsync);
         TestRegistry.Add("agent mcp: server tools are offered and dispatched by prefix", McpToolIsOfferedAndDispatchedAsync);
+        TestRegistry.Add("agent mcp: a personal server overrides the operator one and sends its token", McpUserServerOverridesOperatorAsync);
         TestRegistry.Add("agent prompts: charters carry deep research, fetch_web_page, the plan rule and artifacts", ChartersAsync);
     }
 
@@ -923,7 +924,7 @@ internal static class AgentCapabilityTests
         {
             Servers = { new McpServerOptions { Id = "notion", Name = "Notion", Url = "https://mcp.example.test/mcp" } }
         });
-        var registry = new McpRegistry(options, new FakeHttpClientFactory(handler), NullLogger<McpRegistry>.Instance);
+        var registry = new McpRegistryFactory(options, new FakeHttpClientFactory(handler), NullLogger<McpRegistry>.Instance).Create(null);
 
         var tools = await registry.ListToolsAsync();
         Assert(tools.Count == 1, "one MCP tool listed, got " + tools.Count);
@@ -934,6 +935,33 @@ internal static class AgentCapabilityTests
         Assert(registry.TryResolve("mcp__notion__search_pages", out var descriptor), "the advertised name resolves back");
         var call = await registry.CallAsync(descriptor!, "{\"query\":\"roadmap\"}");
         Assert(call.Success && call.Text == "found 3 pages", "the SSE tool result is parsed: " + call.Text);
+    }
+
+    private static async Task McpUserServerOverridesOperatorAsync()
+    {
+        var handler = new McpHandler();
+        var options = Options.Create(new McpOptions
+        {
+            Servers =
+            {
+                new McpServerOptions
+                {
+                    Id = "notion", Name = "Notion", Url = "https://operator.example/mcp",
+                    Headers = { ["Authorization"] = "Bearer operator" }
+                }
+            }
+        });
+        var factory = new McpRegistryFactory(options, new FakeHttpClientFactory(handler), NullLogger<McpRegistry>.Instance);
+        var registry = factory.Create(new List<McpServerInput>
+        {
+            new() { Id = "notion", Name = "Notion", Url = "https://user.example/mcp", Token = "user-tok" }
+        });
+
+        await registry.ListToolsAsync();
+
+        Assert(handler.Urls.Count > 0 && handler.Urls.All(u => u.Contains("user.example")),
+            "the user's server overrides the operator one: " + string.Join(",", handler.Urls));
+        Assert(handler.Auths.Contains("Bearer user-tok"), "the user's token is sent: " + string.Join(",", handler.Auths));
     }
 
     private static async Task McpToolIsOfferedAndDispatchedAsync()
@@ -1036,7 +1064,7 @@ internal static class AgentCapabilityTests
             fetcher!,
             chatSearch!,
             hooksService: hooks,
-            mcpRegistry: mcp);
+            mcpRegistryFactory: mcp is null ? null : new FakeMcpRegistryFactory(mcp));
 
         var job = new ConexyJob(Guid.NewGuid(), chatId ?? Guid.NewGuid(), userId ?? Guid.NewGuid(), mode, "Сделай задачу", Incognito: incognito);
         var context = new ConversationContext(job.TaskId, job.ChatId, job.UserId, runner.GetSystemPrompt(mode), job.Prompt, Incognito: incognito);
@@ -1224,6 +1252,8 @@ internal static class AgentCapabilityTests
     private sealed class McpHandler : HttpMessageHandler
     {
         public List<string> Methods { get; } = new();
+        public List<string> Urls { get; } = new();
+        public List<string> Auths { get; } = new();
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -1232,6 +1262,8 @@ internal static class AgentCapabilityTests
             var root = doc.RootElement;
             var method = root.GetProperty("method").GetString() ?? string.Empty;
             Methods.Add(method);
+            Urls.Add(request.RequestUri?.ToString() ?? string.Empty);
+            if (request.Headers.TryGetValues("Authorization", out var auth)) Auths.Add(string.Join(",", auth));
 
             if (method == "notifications/initialized")
                 return new HttpResponseMessage(HttpStatusCode.Accepted);
@@ -1273,6 +1305,13 @@ internal static class AgentCapabilityTests
         private readonly HttpMessageHandler _handler;
         public FakeHttpClientFactory(HttpMessageHandler handler) => _handler = handler;
         public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
+    }
+
+    private sealed class FakeMcpRegistryFactory : IMcpRegistryFactory
+    {
+        private readonly IMcpRegistry _registry;
+        public FakeMcpRegistryFactory(IMcpRegistry registry) => _registry = registry;
+        public IMcpRegistry Create(IReadOnlyList<McpServerInput>? userServers) => _registry;
     }
 
     private sealed class FakeMcpRegistry : IMcpRegistry

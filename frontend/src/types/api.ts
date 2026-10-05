@@ -13,6 +13,16 @@ export interface TaskAttachment {
   contentType: string; // e.g. "image/png", "text/plain", "application/json"
 }
 
+// MCP: добавлено 2026-10-04 — личный MCP-сервер пользователя (URL + токен). Токен живёт только
+// в браузере и в памяти запроса; агент вызывает внешние сервисы под аккаунтом пользователя.
+export interface McpServerInput {
+  id?: string;
+  name?: string;
+  url: string;
+  token?: string;
+  enabled?: boolean;
+}
+
 // ATTACHMENT_SIZE_LIMIT: добавлено 2026-09-22
 /** Result of handing a turn to the backend. `ok: false` means nothing was sent, so the composer
  *  can hand the text and the files back instead of losing them to a failed request. */
@@ -50,6 +60,8 @@ export interface ConexyRequest {
   prompt: string;
   githubToken?: string;
   githubRepo?: string;
+  // MCP: личные MCP-серверы (URL + токен) — только для агентских режимов.
+  mcpServers?: McpServerInput[];
   attachments?: TaskAttachment[];
   thinking?: boolean;
   reasoningEffort?: ReasoningEffort;

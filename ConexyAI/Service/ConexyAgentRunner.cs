@@ -52,8 +52,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly IDiagnosticsService? _diagnosticsService;
     // AGENT_HOOKS: добавлено 2026-10-04 — пользовательские хуки проекта (.conexy/hooks.json).
     private readonly IAgentHooksService? _hooksService;
-    // MCP: добавлено 2026-10-04 — удалённые MCP-серверы (уровень A, Streamable HTTP).
-    private readonly IMcpRegistry? _mcpRegistry;
+    // MCP: добавлено 2026-10-04 — удалённые MCP-серверы (уровень A, Streamable HTTP). Реестр создаётся
+    // на прогон, потому что включает ЛИЧНЫЕ серверы пользователя из запроса.
+    private IMcpRegistry? _mcpRegistry;
+    private readonly IMcpRegistryFactory? _mcpRegistryFactory;
     private AgentHooks? _hooks;
     private int _hookRuns;
     private ConexyJob _job = null!;
@@ -531,7 +533,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // AGENT_HOOKS: добавлено 2026-10-04.
         IAgentHooksService? hooksService = null,
         // MCP: добавлено 2026-10-04.
-        IMcpRegistry? mcpRegistry = null)
+        IMcpRegistryFactory? mcpRegistryFactory = null)
     {
         _workspaceService = workspaceService;
         _visionService = visionService;
@@ -556,7 +558,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _testRunnerService = testRunnerService;
         _diagnosticsService = diagnosticsService;
         _hooksService = hooksService;
-        _mcpRegistry = mcpRegistry;
+        // MCP: реестр создаётся на прогон (см. RunLoopAsync) — он включает личные серверы пользователя.
+        _mcpRegistry = null;
+        _mcpRegistryFactory = mcpRegistryFactory;
 
         var configured = agentOptions.Value.MaxIterations;
         // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
@@ -652,6 +656,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var completedSteps = 0;
 
         // Инструменты этого прогона: по профилю режима; take_screenshot убирается, если Chromium нет.
+        // MCP: реестр на прогон — операторские серверы + личные серверы пользователя из запроса.
+        _mcpRegistry = _mcpRegistryFactory?.Create(_job.McpServers);
         _tools = await ResolveToolsAsync(ct);
 
         // LOOP_GUARD: защита от зацикливания живёт ровно один прогон — на следующий запуск состояние
@@ -1512,6 +1518,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // инструментов и своя короткая история. В основной ответ он ничего не стримит.
         _job = job;
         _profile = ResearchProfile;
+        // MCP: у помощника-исследователя MCP-инструментов нет (профиль research), реестр не нужен.
+        _mcpRegistry = null;
         _tools = await ResolveToolsAsync(ct);
 
         var taskId = job.TaskId;

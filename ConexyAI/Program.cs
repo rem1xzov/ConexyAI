@@ -309,9 +309,9 @@ builder.Services.AddHostedService<MemoryExtractionWorker>();
 // CHAT_TITLE_TOPIC: фоновое название чата по теме (flash-модель, лимиты пользователя не тратит).
 builder.Services.AddHostedService<ChatTitleWorker>();
 builder.Services.AddHttpClient<IConexyLlmClient, ConexyLlmClient>();
-// MCP: отдельный HttpClient для удалённых MCP-серверов; реестр — singleton (кэш списка инструментов).
+// MCP: отдельный HttpClient для удалённых MCP-серверов; фабрика создаёт реестр на прогон (с личными серверами пользователя).
 builder.Services.AddHttpClient("mcp", client => client.Timeout = Timeout.InfiniteTimeSpan);
-builder.Services.AddSingleton<IMcpRegistry, McpRegistry>();
+builder.Services.AddSingleton<IMcpRegistryFactory, McpRegistryFactory>();
 builder.Services.AddHttpClient<IWebSearchService, JsonSeoSearchService>();
 // AGENT_WEB_TOOLS: добавлено 2026-09-24 — начало блока агентских инструментов (ws/be-agent).
 // SSRF-гард (DNS-резолвер как шов для тестов) нужен fetch_web_page и take_screenshot; у

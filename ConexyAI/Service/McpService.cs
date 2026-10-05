@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ConexyAI.Configuration;
+using ConexyAI.Contract;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -47,7 +48,6 @@ public interface IMcpRegistry
 
 public class McpRegistry : IMcpRegistry
 {
-    private const int MaxServers = 10;
     private const int MaxTools = 80;
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
@@ -61,11 +61,11 @@ public class McpRegistry : IMcpRegistry
     private Dictionary<string, McpToolDescriptor> _byFunction = new(StringComparer.Ordinal);
     private DateTimeOffset _cachedAt = DateTimeOffset.MinValue;
 
-    public McpRegistry(IOptions<McpOptions> options, IHttpClientFactory httpClientFactory, ILogger<McpRegistry> logger)
+    public McpRegistry(IReadOnlyList<McpServerConfig> servers, HttpClient http, ILogger<McpRegistry> logger)
     {
         _logger = logger;
-        _http = httpClientFactory.CreateClient("mcp");
-        _servers = ResolveServers(options.Value);
+        _http = http;
+        _servers = servers.ToList();
     }
 
     public IReadOnlyList<string> ServerNames => _servers.Select(s => s.Name).ToList();
@@ -180,8 +180,46 @@ public class McpRegistry : IMcpRegistry
 
     private static string Truncate(string? text, int max) =>
         string.IsNullOrEmpty(text) ? string.Empty : text.Length <= max ? text : text[..max] + "…";
+}
 
-    private static List<McpServerConfig> ResolveServers(McpOptions options)
+// MCP: фабрика создаёт реестр на один прогон из операторских серверов (appsettings) и
+// ЛИЧНЫХ серверов пользователя (приходят с запросом, в БД не хранятся). Личный сервер с тем же id
+// перекрывает операторский — так агент работает под аккаунтом пользователя, а не под общим.
+public interface IMcpRegistryFactory
+{
+    IMcpRegistry Create(IReadOnlyList<McpServerInput>? userServers);
+}
+
+public class McpRegistryFactory : IMcpRegistryFactory
+{
+    private const int MaxServers = 10;
+
+    private readonly List<McpServerConfig> _operatorServers;
+    private readonly HttpClient _http;
+    private readonly ILogger<McpRegistry> _logger;
+
+    public McpRegistryFactory(IOptions<McpOptions> options, IHttpClientFactory httpClientFactory, ILogger<McpRegistry> logger)
+    {
+        _logger = logger;
+        _http = httpClientFactory.CreateClient("mcp");
+        _operatorServers = ResolveOperatorServers(options.Value);
+    }
+
+    public IMcpRegistry Create(IReadOnlyList<McpServerInput>? userServers)
+    {
+        var merged = new List<McpServerConfig>(_operatorServers);
+        foreach (var input in userServers ?? Array.Empty<McpServerInput>())
+        {
+            var server = ResolveUserServer(input);
+            if (server is null) continue;
+            merged.RemoveAll(s => string.Equals(s.Id, server.Id, StringComparison.OrdinalIgnoreCase));
+            merged.Add(server);
+        }
+        if (merged.Count > MaxServers) merged = merged.Take(MaxServers).ToList();
+        return new McpRegistry(merged, _http, _logger);
+    }
+
+    private static List<McpServerConfig> ResolveOperatorServers(McpOptions options)
     {
         var servers = new List<McpServerConfig>();
         foreach (var configured in options.Servers)
@@ -189,23 +227,50 @@ public class McpRegistry : IMcpRegistry
             if (!configured.Enabled) continue;
 
             var url = Expand(configured.Url);
-            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
-                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-            {
-                continue;
-            }
+            if (!IsHttpUrl(url)) continue;
 
             var id = string.IsNullOrWhiteSpace(configured.Id) ? Sanitize(configured.Name) : configured.Id.Trim();
             var name = string.IsNullOrWhiteSpace(configured.Name) ? id : configured.Name.Trim();
             var headers = configured.Headers.ToDictionary(k => k.Key, v => Expand(v.Value), StringComparer.OrdinalIgnoreCase);
 
-            servers.Add(new McpServerConfig(id, name, uri.ToString(), headers, configured.TimeoutSeconds <= 0 ? 30 : configured.TimeoutSeconds));
+            servers.Add(new McpServerConfig(id, name, url, headers, configured.TimeoutSeconds <= 0 ? 30 : configured.TimeoutSeconds));
             if (servers.Count >= MaxServers) break;
         }
         return servers;
     }
 
-    // ${VAR} -> environment, so secrets never live in appsettings.json.
+    // A user server carries its own access token; it is sent as "Authorization: Bearer <token>".
+    private static McpServerConfig? ResolveUserServer(McpServerInput input)
+    {
+        if (input is null || !input.Enabled) return null;
+        var url = (input.Url ?? string.Empty).Trim();
+        if (!IsHttpUrl(url)) return null;
+
+        var id = !string.IsNullOrWhiteSpace(input.Id)
+            ? Sanitize(input.Id!)
+            : !string.IsNullOrWhiteSpace(input.Name) ? Sanitize(input.Name!) : Sanitize(new Uri(url).Host);
+        var name = string.IsNullOrWhiteSpace(input.Name) ? id : input.Name!.Trim();
+
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(input.Token))
+            headers["Authorization"] = "Bearer " + input.Token!.Trim();
+
+        return new McpServerConfig(id, name, url, headers, 30);
+    }
+
+    private static bool IsHttpUrl(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
+    private static string Sanitize(string value)
+    {
+        var sb = new StringBuilder(value.Length);
+        foreach (var ch in value)
+            sb.Append(char.IsLetterOrDigit(ch) || ch is '_' or '-' ? ch : '_');
+        return sb.Length == 0 ? "srv" : sb.ToString();
+    }
+
+    // ${VAR} -> environment, so operator secrets never live in appsettings.json.
     private static string Expand(string value)
     {
         if (string.IsNullOrEmpty(value) || !value.Contains("${", StringComparison.Ordinal)) return value;

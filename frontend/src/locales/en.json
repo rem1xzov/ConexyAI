@@ -173,7 +173,17 @@
     "githubSave": "Save",
     "githubClear": "Remove",
     "githubSaved": "Saved",
-    "githubCreate": "Create a token on GitHub"
+    "githubCreate": "Create a token on GitHub",
+    "mcpTab": "MCP",
+    "mcpTitle": "Personal MCP servers",
+    "mcpHint": "Connect external services (Notion, Jira, Linear, …) that expose a remote MCP over HTTP. The URL and token live only in this browser and travel with your agent tasks; they are never saved on the server. The agent reaches the service as your account.",
+    "mcpNamePlaceholder": "Name (e.g. Notion)",
+    "mcpUrlPlaceholder": "Server URL (https://…/mcp)",
+    "mcpTokenPlaceholder": "Access token",
+    "mcpAdd": "Add server",
+    "mcpSave": "Save",
+    "mcpSaved": "Saved",
+    "mcpEmpty": "No personal MCP server yet."
   },
   "memory": {
     "tab": "Memory",

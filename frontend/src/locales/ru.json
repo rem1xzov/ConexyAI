@@ -173,7 +173,17 @@
     "githubSave": "Сохранить",
     "githubClear": "Удалить",
     "githubSaved": "Сохранено",
-    "githubCreate": "Создать токен на GitHub"
+    "githubCreate": "Создать токен на GitHub",
+    "mcpTab": "MCP",
+    "mcpTitle": "Личные MCP-серверы",
+    "mcpHint": "Подключите внешние сервисы (Notion, Jira, Linear и др.), которые поддерживают удалённый MCP по HTTP. URL и токен хранятся только в этом браузере и уходят с задачами агента; на сервере не сохраняются. Агент будет обращаться к сервису под вашим аккаунтом.",
+    "mcpNamePlaceholder": "Название (например, Notion)",
+    "mcpUrlPlaceholder": "URL сервера (https://…/mcp)",
+    "mcpTokenPlaceholder": "Токен доступа",
+    "mcpAdd": "Добавить сервер",
+    "mcpSave": "Сохранить",
+    "mcpSaved": "Сохранено",
+    "mcpEmpty": "Пока нет ни одного личного MCP-сервера."
   },
   "memory": {
     "tab": "Память",

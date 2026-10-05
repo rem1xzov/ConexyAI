@@ -16,14 +16,16 @@ import {
 import { humanError } from '../utils/humanError';
 // GITHUB_PAT_PER_USER: личный GitHub-токен для git-операций агента.
 import { clearGitHubToken, readGitHubToken, storeGitHubToken } from '../utils/githubToken';
+// MCP: личные MCP-серверы пользователя (URL + токен) для агента.
+import { readMcpServers, storeMcpServers } from '../utils/mcpServers';
 import { ConfirmDialog } from './Dialog';
 import { CloseIcon, TrashIcon } from './Icons';
 // USAGE_LIMITS_SECTION: добавлено 2026-10-01 — лимиты Flash/Pro переехали из кольца в настройки.
-import type { SubscriptionUsage } from '../types/api';
+import type { SubscriptionUsage, McpServerInput } from '../types/api';
 // LEGAL_DOCS: добавлено 2026-09-25 — правовые документы доступны всегда, в том числе из настроек.
 import { LEGAL_PATHS } from './legal/LegalPage';
 
-export type SettingsSection = 'general' | 'limits' | 'personalization' | 'memory' | 'github';
+export type SettingsSection = 'general' | 'limits' | 'personalization' | 'memory' | 'github' | 'mcp';
 
 interface SettingsModalProps {
   theme: Theme;
@@ -56,6 +58,7 @@ const SECTIONS: { value: SettingsSection; key: string }[] = [
   { value: 'personalization', key: 'prefs.tabPersonalization' },
   { value: 'memory', key: 'memory.tab' },
   { value: 'github', key: 'settings.githubTab' },
+  { value: 'mcp', key: 'settings.mcpTab' },
 ];
 
 function statusOf(e: unknown): number | undefined {
@@ -560,6 +563,86 @@ function GitHubSection() {
   );
 }
 
+// MCP: добавлено 2026-10-04 — личные MCP-серверы пользователя. URL и токен хранятся ТОЛЬКО в
+// этом браузере и уезжают с задачами агента; на сервере не сохраняются.
+function McpSection() {
+  const { t } = useTranslation();
+  const [servers, setServers] = useState<McpServerInput[]>(() => readMcpServers());
+  const [saved, setSaved] = useState(false);
+  const dirty = JSON.stringify(servers) !== JSON.stringify(readMcpServers());
+
+  function flashSaved() {
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 2000);
+  }
+
+  function update(index: number, patch: Partial<McpServerInput>) {
+    setServers((prev) => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)));
+  }
+
+  function add() {
+    setServers((prev) => [...prev, { name: '', url: '', token: '' }]);
+  }
+
+  function removeAt(index: number) {
+    setServers((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function save() {
+    storeMcpServers(servers);
+    setServers(readMcpServers());
+    flashSaved();
+  }
+
+  return (
+    <div className="settings-panel">
+      <div className="settings-modal__section">
+        <div className="settings-modal__label">{t('settings.mcpTitle')}</div>
+        <p className="settings-github__hint">{t('settings.mcpHint')}</p>
+        {servers.length === 0 && <p className="settings-github__hint">{t('settings.mcpEmpty')}</p>}
+        {servers.map((server, index) => (
+          <div key={index} className="settings-mcp__row">
+            <input
+              className="dialog-input"
+              placeholder={t('settings.mcpNamePlaceholder')}
+              value={server.name ?? ''}
+              onChange={(e) => update(index, { name: e.target.value })}
+            />
+            <input
+              className="dialog-input"
+              spellCheck={false}
+              placeholder={t('settings.mcpUrlPlaceholder')}
+              value={server.url}
+              onChange={(e) => update(index, { url: e.target.value })}
+            />
+            <input
+              className="dialog-input"
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={t('settings.mcpTokenPlaceholder')}
+              value={server.token ?? ''}
+              onChange={(e) => update(index, { token: e.target.value })}
+            />
+            <button className="dialog-btn" type="button" onClick={() => removeAt(index)} aria-label={t('settings.githubClear')}>
+              <TrashIcon />
+            </button>
+          </div>
+        ))}
+        <div className="settings-github__actions">
+          <button className="dialog-btn" type="button" onClick={add}>
+            {t('settings.mcpAdd')}
+          </button>
+          <button className="dialog-btn dialog-btn--primary" type="button" onClick={save} disabled={!dirty}>
+            {t('settings.mcpSave')}
+          </button>
+          {saved && <span className="settings-github__saved">{t('settings.mcpSaved')}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function SettingsModal({
   theme,
   language,
@@ -689,6 +772,10 @@ export function SettingsModal({
 
             <div hidden={section !== 'github'}>
               <GitHubSection />
+            </div>
+
+            <div hidden={section !== 'mcp'}>
+              <McpSection />
             </div>
           </div>
         </div>

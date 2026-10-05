@@ -13,6 +13,8 @@ import { TurnRegistry, type TurnContext } from './services/turnRegistry';
 import { useAuth } from './hooks/useAuth';
 // GITHUB_PAT_PER_USER: личный токен пользователя для git-операций агента.
 import { readGitHubToken, clearGitHubToken } from './utils/githubToken';
+// MCP: личные MCP-серверы пользователя (внешние сервисы под его аккаунтом).
+import { readMcpServers, clearMcpServers } from './utils/mcpServers';
 import { useIsMobile } from './hooks/useMediaQuery';
 // FILE_DROP: добавлено 2026-09-24 (L11)
 import { useFileDropZone, usePreventWindowFileDrop } from './hooks/useFileDrop';
@@ -411,6 +413,8 @@ export default function App() {
   function handleLogout() {
     // GITHUB_PAT_PER_USER: личный токен не должен достаться следующему аккаунту в этом браузере.
     clearGitHubToken();
+    // MCP: то же для личных MCP-токенов.
+    clearMcpServers();
     void logout();
   }
 
@@ -2271,6 +2275,11 @@ export default function App() {
         githubToken:
           live.model === 'conexy-coder' || live.model === 'conexy-cowork'
             ? (readGitHubToken() ?? undefined)
+            : undefined,
+        // MCP: личные MCP-серверы едут только для агентских режимов.
+        mcpServers:
+          live.model === 'conexy-coder' || live.model === 'conexy-cowork'
+            ? (readMcpServers().length ? readMcpServers() : undefined)
             : undefined,
       });
 
