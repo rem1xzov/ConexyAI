@@ -8610,3 +8610,50 @@ html[data-theme="light"]:not([data-incognito="true"]) .artifact-panel {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* PROBLEMS_PANEL: добавлено 2026-10-04 — единая панель ошибок и предупреждений. */
+.problems { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.problems__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.problems__analyze { font-size: 12px; }
+.problems__counts { display: flex; align-items: center; gap: 10px; margin-left: auto; font-size: 12px; }
+.problems__count { font-weight: 600; }
+.problems__count--error { color: var(--danger); }
+.problems__count--warning { color: #e2b93b; }
+.problems__tool { color: var(--muted); text-transform: lowercase; }
+.problems__list { overflow-y: auto; padding: 4px 0; }
+.problems__file-name {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 10px 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.problems__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+.problems__row:hover { background: var(--surface-2); }
+.problems__sev { flex: 0 0 auto; font-weight: 700; }
+.problems__sev--error { color: var(--danger); }
+.problems__sev--warning { color: #e2b93b; }
+.problems__sev--info { color: var(--muted); }
+.problems__msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.problems__code { flex: 0 0 auto; color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }
+.problems__loc { flex: 0 0 auto; color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }

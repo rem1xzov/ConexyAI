@@ -21,17 +21,24 @@ public class IdeController : ControllerBase
     // (TryGetUserId(out _)), и чужой воркспейс читался и правился по одному chatId.
     private readonly IChatAccessService _chatAccess;
     private readonly IConexyWorkspaceService _workspace;
+    // PROBLEMS_PANEL: добавлено 2026-10-04 — анализ ошибок/предупреждений для панели Problems.
+    private readonly IDiagnosticsService _diagnostics;
+    private readonly IConexyBashService _bash;
     private readonly ILogger<IdeController> _logger;
 
     public IdeController(
         IIdeFileService fileService,
         IChatAccessService chatAccess,
         IConexyWorkspaceService workspace,
+        IDiagnosticsService diagnostics,
+        IConexyBashService bash,
         ILogger<IdeController> logger)
     {
         _fileService = fileService;
         _chatAccess = chatAccess;
         _workspace = workspace;
+        _diagnostics = diagnostics;
+        _bash = bash;
         _logger = logger;
     }
 
@@ -298,6 +305,60 @@ public class IdeController : ControllerBase
             return Ok(await _workspace.GitSwitchBranchAsync(sessionId, request.Branch, request.RepoFolder, ct));
         }
         catch (Exception ex) { return MapError(ex); }
+    }
+
+    // PROBLEMS_PANEL: добавлено 2026-10-04 — единая панель проблем: проверка всего проекта
+    // (comпилятор/линтер/типы) в песочнице, без запуска приложения.
+    /// <summary>Analyzes the whole workspace and returns structured diagnostics.</summary>
+    [HttpPost("{sessionId:guid}/problems/analyze")]
+    public async Task<ActionResult<ProblemsResult>> AnalyzeProblems(
+        Guid sessionId, [FromBody] AnalyzeProblemsRequest? request, CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        if (!await _chatAccess.CanReadAsync(userId, sessionId, ct))
+            return Forbidden();
+
+        // A brand-new chat (no workspace yet) simply has no problems to report.
+        if (_workspace.GetTaskWorkspacePathIfExists(sessionId) is null)
+            return Ok(new ProblemsResult(true, null, 0, 0, Array.Empty<BuildProblem>(), null));
+
+        try
+        {
+            var detection = await _diagnostics.DetectCommandAsync(sessionId, request?.Path, request?.Tool, ct);
+            if (detection.Command is null)
+                return Ok(new ProblemsResult(false, null, 0, 0, Array.Empty<BuildProblem>(), detection.Error));
+
+            var run = await _bash.ExecuteAsync(sessionId, new BashToolRequest
+            {
+                Command = detection.Command,
+                TimeoutSeconds = 600,
+                RawOutput = true,
+                IsDangerous = false
+            }, emitStartEvent: false, ct);
+
+            if (run.ErrorType is "workspace_not_found" or "spawn_failed")
+                return Ok(new ProblemsResult(false, detection.Tool.ToString(), 0, 0, Array.Empty<BuildProblem>(),
+                    run.ErrorType == "workspace_not_found" ? "Workspace not found." : "The sandbox is unavailable."));
+
+            var report = _diagnostics.Parse(detection.Tool, run.Output, run.WasTruncated);
+            var problems = report.Diagnostics.Take(500).Select(d => new BuildProblem
+            {
+                File = d.File,
+                Line = d.Line,
+                Column = d.Column,
+                Severity = d.Severity,
+                Code = d.Code ?? string.Empty,
+                Message = d.Message
+            }).ToList();
+
+            return Ok(new ProblemsResult(true, detection.Tool.ToString(), report.Errors, report.Warnings, problems, null));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Problems analysis failed for session {SessionId}", sessionId);
+            return Ok(new ProblemsResult(false, null, 0, 0, Array.Empty<BuildProblem>(), "PROBLEMS_FAILED"));
+        }
     }
 
     private ObjectResult Forbidden() =>

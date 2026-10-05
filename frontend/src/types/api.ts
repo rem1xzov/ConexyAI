@@ -361,3 +361,23 @@ export interface GitOperationResult {
   message?: string | null;
   error?: string | null;
 }
+
+// PROBLEMS_PANEL: добавлено 2026-10-04 — единая панель проблем (ошибки/предупреждения всего проекта).
+export interface ProblemItem {
+  file: string;
+  line: number;
+  column: number;
+  /** "error" | "warning" | "info" */
+  severity: string;
+  code: string;
+  message: string;
+}
+
+export interface ProblemsResult {
+  success: boolean;
+  tool?: string | null;
+  errors: number;
+  warnings: number;
+  problems: ProblemItem[];
+  error?: string | null;
+}

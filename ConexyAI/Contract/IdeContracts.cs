@@ -107,11 +107,24 @@ public class BuildProblem
     public required string Message { get; set; }
 }
 
-/// <summary>Streamed to the client after a build-style bash command to populate the Problems panel.</summary>
+/** <summary>Streamed to the client after a build-style bash command to populate the Problems panel.</summary> */
 public class BuildProblemsEvent
 {
     public required List<BuildProblem> Problems { get; set; }
 }
+
+// PROBLEMS_PANEL: добавлено 2026-10-04 — проектный анализ ошибок/предупреждений для единой панели Problems.
+/// <summary>Body of an on-demand problems analysis (optional tool/path override).</summary>
+public sealed record AnalyzeProblemsRequest(string? Tool, string? Path);
+
+/// <summary>Aggregated diagnostics of the whole workspace, with counts.</summary>
+public sealed record ProblemsResult(
+    bool Success,
+    string? Tool,
+    int Errors,
+    int Warnings,
+    IReadOnlyList<BuildProblem> Problems,
+    string? Error);
 
 // COMMAND_CONFIRM: расширено 2026-09-20 — подтверждение теперь требуется для любой bash-команды,
 // поэтому сервис больше не описывает только "опасные" команды.

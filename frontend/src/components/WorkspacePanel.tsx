@@ -24,6 +24,7 @@ import { FileTypeIcon } from './FileTypeIcon';
 import { Breadcrumbs } from './Breadcrumbs';
 import { CommandPalette } from './CommandPalette';
 import { ConfirmDialog, PromptDialog } from './Dialog';
+import { ProblemsPanel } from './ProblemsPanel';
 import { SourceControlPanel } from './SourceControlPanel';
 import { MenuBar, type Menu } from './MenuBar';
 import {
@@ -83,7 +84,7 @@ type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 // STATUS_TAB_REMOVED: добавлено 2026-09-22 — вкладка «Статус» удалена целиком: она дублировала
 // ленту чата (те же команды и карточки подтверждения).
 // SANDBOX_TERMINAL: добавлено 2026-09-24 — вторая вкладка нижней панели: терминал.
-type BottomTab = 'todo' | 'terminal';
+type BottomTab = 'todo' | 'terminal' | 'problems';
 
 type DialogState =
   | { kind: 'confirm'; title: string; message?: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void }
@@ -1338,6 +1339,14 @@ export function WorkspacePanel({
               </button>
             </div>
           )}
+          <button
+            role="tab"
+            aria-selected={bottomTab === 'problems'}
+            className={`workspace__bottom-tab ${bottomTab === 'problems' ? 'workspace__bottom-tab--active' : ''}`}
+            onClick={() => setBottomTab('problems')}
+          >
+            {t('workspace.problems')}
+          </button>
         </div>
         <div className="workspace__bottom-body" hidden={bottomTab !== 'todo'}>
           {todos.length > 0 ? (
@@ -1362,6 +1371,17 @@ export function WorkspacePanel({
             )}
           </div>
         )}
+        <div className="workspace__bottom-body" hidden={bottomTab !== 'problems'}>
+          <ProblemsPanel
+            key={sessionId ?? 'none'}
+            sessionId={sessionId}
+            active={bottomTab === 'problems'}
+            onOpenProblem={(path, line) => {
+              void openFile(path);
+              setHighlight({ path, lines: [line], nonce: Date.now() });
+            }}
+          />
+        </div>
       </div>
 
       <CommandPalette

@@ -16,6 +16,7 @@ import type {
   GitOperationResult,
   GitStatusResult,
   IdeFileContent,
+  ProblemsResult,
   SaveFileDto,
   SharedChat,
   SubscriptionUsage,
@@ -454,5 +455,16 @@ export async function checkoutGitBranch(
   repoFolder?: string,
 ): Promise<GitOperationResult> {
   const { data } = await http.post<GitOperationResult>(`/sessions/${sessionId}/git/checkout`, { branch, repoFolder });
+  return data;
+}
+
+// PROBLEMS_PANEL: добавлено 2026-10-04 — анализ ошибок/предупреждений всего проекта.
+/** Analyzes the workspace (compiler/linter/types) and returns structured problems. */
+export async function analyzeProblems(
+  sessionId: string,
+  tool?: string,
+  path?: string,
+): Promise<ProblemsResult> {
+  const { data } = await http.post<ProblemsResult>(`/sessions/${sessionId}/problems/analyze`, { tool, path });
   return data;
 }
