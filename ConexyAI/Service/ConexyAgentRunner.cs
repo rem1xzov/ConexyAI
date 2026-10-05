@@ -48,6 +48,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly IConexyBrowserService? _browserService;
     // TEST_RUNNER: добавлено 2026-10-04 — структурированный прогон тестов. Необязателен для тестов раннера.
     private readonly ITestRunnerService? _testRunnerService;
+    // DIAGNOSTICS: добавлено 2026-10-04 — структурированные ошибки компиляции/типов (get_diagnostics).
+    private readonly IDiagnosticsService? _diagnosticsService;
     private ConexyJob _job = null!;
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — накопленный поток ответа на случай остановки.
     private readonly StringBuilder _streamedOutput = new();
@@ -275,6 +277,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         Ты работаешь инструментами: `str_replace_editor` (view/create/str_replace/insert/undo), `apply_patch` (применить unified-diff патч в формате git — минус удаляет строки, плюс добавляет, можно несколько файлов), `file_read`/`file_write`/`file_patch`, `grep` (поиск по содержимому файлов регулярным выражением с фильтром `glob`), `glob` (поиск файлов по маске, поддерживает `**`), `bash`, `github_action` и `github_api` (операции с GitHub от имени пользователя по его личному токену), `web_search` (поиск актуальной информации в интернете), `fetch_web_page` (чтение страницы по URL), `search_user_chats` (поиск по прошлым чатам пользователя) и системная память задачи (`todo_write`).
         Для поиска по коду в воркспейсе используй `grep` и `glob`, а не `bash: grep/rg/find` — эти инструменты не требуют подтверждения и не зависят от того, что установлено в песочнице.
         Для проверки кода используй `run_tests` — он сам определяет фреймворк и возвращает структурированный отчёт (кто упал, файл:строка, ожидали/получили), а не сырые логи. Не гоняй `npm test`/`pytest`/`dotnet test` через `bash`, чтобы потом вручную вычитывать простыню вывода.
+        Чтобы увидеть ошибки компиляции, типов и линтера без запуска приложения и тестов, используй `get_diagnostics` — он сам подбирает проверку (dotnet build, tsc, eslint, cargo check, go vet, pyright/mypy/ruff) и отдаёт `severity: файл:строка:колонка [код] сообщение`. Вызывай его после правок, чтобы поймать ошибки типов до сборки.
         Для правок предпочитай `apply_patch` с unified-diff: когда меняешь несколько строк или файлов, патч точнее и дешевле по токенам, чем `str_replace`. Если хунк не совпал с файлом, инструмент скажет об этом и ничего не поменяет — тогда перечитай файл и пришли патч заново.
         Если пользователь приложил картинку (макет, скриншот бага) или ссылается на изображение в рабочей области, вызови `view_image` — только так ты реально «видишь» изображение. Пользовательские картинки сохраняются в корне рабочей области и доступны повторно по `path`.
         Для документов: `create_document` создаёт .docx/.xlsx/.pptx из Markdown, `read_document_file` читает текст .docx/.xlsx/.pptx/.pdf (не открывай их через `view` — это двоичные файлы).
@@ -506,7 +509,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // BROWSER_AUTOMATION: последним и необязательным — позиционные вызовы в тестах не ломаются.
         IConexyBrowserService? browserService = null,
         // TEST_RUNNER: последним и необязательным — позиционные вызовы в тестах не ломаются.
-        ITestRunnerService? testRunnerService = null)
+        ITestRunnerService? testRunnerService = null,
+        // DIAGNOSTICS: добавлено 2026-10-04.
+        IDiagnosticsService? diagnosticsService = null)
     {
         _workspaceService = workspaceService;
         _visionService = visionService;
@@ -529,6 +534,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _scopeFactory = scopeFactory;
         _browserService = browserService;
         _testRunnerService = testRunnerService;
+        _diagnosticsService = diagnosticsService;
 
         var configured = agentOptions.Value.MaxIterations;
         // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
@@ -1671,6 +1677,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     return await DispatchRunTestsAsync(taskId, chatId, toolCall, root, ct);
                 }
 
+                // DIAGNOSTICS: добавлено 2026-10-04 — ошибки компиляции/типов без запуска приложения.
+                case "get_diagnostics":
+                {
+                    return await DispatchDiagnosticsAsync(taskId, chatId, toolCall, root, ct);
+                }
+
                 case "todo_write":
                 {
                     var request = JsonSerializer.Deserialize<TodoWriteRequest>(toolCall.Function.Arguments);
@@ -1924,6 +1936,124 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         if (failed || !summary.Parsed)
             sb.Append("\nOutput tail:\n").Append(summary.OutputTail);
+
+        return sb.ToString().TrimEnd();
+    }
+
+    // DIAGNOSTICS: добавлено 2026-10-04 — проверка проекта на ошибки компиляции/типов без запуска
+    // приложения. Автодетектнутую команду выполняем сразу, явную 'command' — через гейт bash.
+    private async Task<ConexyToolResult> DispatchDiagnosticsAsync(
+        Guid taskId, Guid chatId, LlmToolCall toolCall, JsonElement root, CancellationToken ct)
+    {
+        if (_diagnosticsService is null)
+            return new ConexyToolResult(toolCall.Id, "Diagnostics are unavailable in this environment.", true);
+
+        var explicitCommand = Optional(root, "command");
+        var toolArg = Optional(root, "tool");
+        var path = Optional(root, "path");
+        var timeout = GetInt(root, "timeout_seconds", 0);
+
+        var isExplicit = !string.IsNullOrWhiteSpace(explicitCommand);
+        string command;
+        DiagnosticTool tool;
+        if (isExplicit)
+        {
+            command = explicitCommand!.Trim();
+            tool = _diagnosticsService.ResolveTool(toolArg);
+        }
+        else
+        {
+            var detection = await _diagnosticsService.DetectCommandAsync(chatId, path, toolArg, ct);
+            if (detection.Command is null)
+                return new ConexyToolResult(toolCall.Id, detection.Error ?? "Could not detect a check command.", true);
+            command = detection.Command;
+            tool = detection.Tool;
+        }
+
+        var request = new BashToolRequest
+        {
+            Command = command,
+            TimeoutSeconds = timeout > 0 ? timeout : 600,
+            RawOutput = true,
+            IsDangerous = _dangerousCommandClassifier.IsDangerous(command)
+        };
+
+        await SendAgentStatusAsync(taskId, "testing", $"Проверяю проект: {command}...", ct: ct);
+
+        string output;
+        bool failed;
+        bool truncated;
+
+        if (isExplicit)
+        {
+            var gated = await RunBashWithConfirmationAsync(taskId, chatId, toolCall, request, request.IsDangerous, ct);
+            if (!gated.CommandExecuted)
+                return gated;
+            output = gated.Output;
+            failed = gated.IsError;
+            truncated = false;
+        }
+        else
+        {
+            var res = await _bashService.ExecuteAsync(chatId, request, emitStartEvent: true, ct: ct);
+            if (res.ErrorType is "workspace_not_found" or "spawn_failed")
+                return new ConexyToolResult(toolCall.Id,
+                    res.ErrorType == "workspace_not_found" ? "Workspace not found." : "Failed to start the check process.", true);
+            output = res.Output;
+            failed = !res.Success;
+            truncated = res.WasTruncated;
+        }
+
+        var report = _diagnosticsService.Parse(tool, output, truncated);
+
+        // Mirror the parsed problems into the IDE Problems panel, like build commands do.
+        var problems = report.Diagnostics.Take(200).Select(d => new BuildProblem
+        {
+            File = d.File,
+            Line = d.Line,
+            Column = d.Column,
+            Severity = d.Severity,
+            Code = d.Code ?? string.Empty,
+            Message = d.Message
+        }).ToList();
+        await _hubContext.Clients.Group($"task_{chatId}").SendAsync("BuildProblems", new BuildProblemsEvent { Problems = problems }, ct);
+
+        var text = FormatDiagnosticReport(command, report, failed);
+        return new ConexyToolResult(toolCall.Id, text, false) { CommandExecuted = true };
+    }
+
+    private static string FormatDiagnosticReport(string command, DiagnosticReport report, bool failed)
+    {
+        var sb = new StringBuilder();
+        sb.Append(report.Errors == 0 && report.Warnings == 0
+            ? "DIAGNOSTICS: clean"
+            : $"DIAGNOSTICS: {report.Errors} error(s), {report.Warnings} warning(s)");
+        if (report.Tool != DiagnosticTool.Unknown) sb.Append($" ({report.Tool})");
+        sb.Append('\n').Append("Command: ").Append(command).Append('\n');
+
+        if (report.Diagnostics.Count == 0)
+        {
+            sb.Append(failed
+                ? "No file:line diagnostics were found, but the command reported a failure — see the tail below.\n"
+                : "No errors or warnings.\n");
+        }
+        else
+        {
+            // Errors first, then by file/line, so the model fixes the most important things first.
+            foreach (var d in report.Diagnostics
+                         .OrderByDescending(d => d.Severity == "error")
+                         .ThenBy(d => d.File, StringComparer.Ordinal)
+                         .ThenBy(d => d.Line))
+            {
+                sb.Append($"\n{d.Severity}: {d.File}:{d.Line}:{d.Column}");
+                if (!string.IsNullOrEmpty(d.Code)) sb.Append(" [").Append(d.Code).Append(']');
+                sb.Append(' ').Append(d.Message);
+            }
+            sb.Append('\n');
+        }
+
+        if (failed && report.Diagnostics.Count == 0)
+            sb.Append("\nOutput tail:\n").Append(report.OutputTail);
 
         return sb.ToString().TrimEnd();
     }
@@ -3139,6 +3269,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 command = new { type = "string", description = "Optional explicit shell command; overrides auto-detection and requires the same confirmation as bash" },
                 timeout_seconds = new { type = "integer", description = "Optional timeout in seconds (default 600, max 900)" }
             }, required = Array.Empty<string>() }),
+        // DIAGNOSTICS: добавлено 2026-10-04 — проверка ошибок компиляции/типов без запуска приложения.
+        Function("get_diagnostics", "Get compiler, type and linter errors/warnings for the project WITHOUT running it or its tests — like the editor's Problems panel. Auto-detects the check (dotnet build, tsc --noEmit, eslint, cargo check, go vet, pyright/mypy/ruff) and returns each diagnostic as 'severity: file:line:column [code] message'. Use it after edits to catch type errors before a build or run. Pass 'tool' to force a checker, or 'command' for a custom one (it then needs the same confirmation as bash).",
+            new { type = "object", properties = new {
+                tool = new { type = "string", @enum = new[] { "dotnet", "tsc", "eslint", "cargo", "go", "pyright", "mypy", "ruff" }, description = "Force a checker (normally auto-detected)" },
+                path = new { type = "string", description = "Optional relative directory to check (default: workspace root)" },
+                command = new { type = "string", description = "Optional explicit check command; overrides auto-detection and needs confirmation like bash" },
+                timeout_seconds = new { type = "integer", description = "Optional timeout in seconds (default 600, max 900)" }
+            } }),
         // VIEW_IMAGE: добавлено 2026-10-04 — просмотр картинок пользователя (макет, скриншот бага).
         Function("view_image", "Look at an image the user provided — a design mock (PNG/JPG), a screenshot of a bug, a diagram. Use it when the user says 'make the layout exactly like this image' or 'look at the screenshot, the font is off'. Pass 'path' for an image file in the workspace, or 'name' for an image attached to the current message. Supported: png, jpg, jpeg, webp, gif, bmp (max 8 MB). Attached images are also saved into the workspace root, so you can re-open them later by path.",
             new { type = "object", properties = new {

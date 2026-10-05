@@ -46,6 +46,7 @@ internal static class SecurityTests
         Add("GITHUB_FULL: switch/merge branches and a clean pull refusal", TestGitSyncAsync, GitInstalled);
         Add("GREP_GLOB: content search and file globs stay inside the workspace", TestGrepGlobAsync);
         Add("TEST_RUNNER: parses failures and auto-detects the framework", TestTestRunnerAsync);
+        Add("DIAGNOSTICS: parses compiler/linter output and auto-detects the checker", TestDiagnosticsAsync);
         Add("SHARE_PUBLIC: a public link opens the chat for anyone and can be revoked", TestPublicShareAsync);
     }
 
@@ -925,6 +926,73 @@ internal static class SecurityTests
                 "pytest detection: " + detected.Command);
         }
         finally { Cleanup(pyRoot); }
+    }
+
+    // DIAGNOSTICS: разбор вывода компиляторов/линтеров и автодетект проверки по файлам проекта.
+    private static async Task TestDiagnosticsAsync()
+    {
+        var parseRoot = TempRoot();
+        try
+        {
+            var service = new ConexyDiagnosticsService(Workspace(parseRoot));
+
+            var msbuild = service.Parse(DiagnosticTool.DotnetBuild,
+                "Program.cs(12,5): error CS0103: The name 'x' does not exist\r\n" +
+                "Program.cs(13,9): warning CS0168: The variable is declared but never used\r\n" +
+                "  Determining projects to restore...\r\nBuild FAILED.\r\n", false);
+            Assert(msbuild.Errors == 1 && msbuild.Warnings == 1, $"msbuild counts: {msbuild.Errors}/{msbuild.Warnings}");
+            Assert(msbuild.Diagnostics.Any(d => d.File == "Program.cs" && d.Line == 12 && d.Column == 5 && d.Code == "CS0103"),
+                "msbuild diagnostic parsed");
+
+            var tsc = service.Parse(DiagnosticTool.TypeScript,
+                "src/app.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.\n", false);
+            Assert(tsc.Errors == 1 && tsc.Diagnostics[0].Code == "TS2322" && tsc.Diagnostics[0].File == "src/app.ts",
+                "tsc diagnostic parsed");
+
+            var cargo = service.Parse(DiagnosticTool.Cargo, "src/main.rs:3:5: error[E0308]: mismatched types\n", false);
+            Assert(cargo.Errors == 1 && cargo.Diagnostics[0].Code == "E0308", "cargo diagnostic parsed");
+
+            var go = service.Parse(DiagnosticTool.GoVet, "main.go:7:2: unreachable code\n", false);
+            Assert(go.Warnings == 1 && go.Diagnostics[0].File == "main.go", "go vet is a warning by default");
+
+            var pyright = service.Parse(DiagnosticTool.Pyright,
+                "  /app/x.py:4:9 - error: \"int\" is not assignable to \"str\"\n", false);
+            Assert(pyright.Errors == 1 && pyright.Diagnostics[0].Column == 9, "pyright diagnostic parsed (indented)");
+
+            var mypy = service.Parse(DiagnosticTool.Mypy,
+                "x.py:4: error: Incompatible types in assignment  [assignment]\n", false);
+            Assert(mypy.Errors == 1 && mypy.Diagnostics[0].Code == "assignment", "mypy diagnostic parsed");
+
+            var eslint = service.Parse(DiagnosticTool.Eslint,
+                "[{\"filePath\":\"/app/src/a.js\",\"messages\":[{\"line\":3,\"column\":7,\"severity\":2,\"message\":\"'x' is not defined\",\"ruleId\":\"no-undef\"}]}]",
+                false);
+            Assert(eslint.Errors == 1 && eslint.Diagnostics[0].Code == "no-undef" && eslint.Diagnostics[0].Line == 3,
+                "eslint JSON parsed");
+        }
+        finally { Cleanup(parseRoot); }
+
+        // Autodetection: tsconfig -> tsc, csproj -> dotnet build.
+        var tsRoot = TempRoot();
+        try
+        {
+            var workspace = Workspace(tsRoot);
+            var chatId = Guid.NewGuid();
+            await File.WriteAllTextAsync(Path.Combine(workspace.GetTaskWorkspacePath(chatId), "tsconfig.json"), "{}");
+            var detected = await new ConexyDiagnosticsService(workspace).DetectCommandAsync(chatId, null, null);
+            Assert(detected.Tool == DiagnosticTool.TypeScript && detected.Command!.Contains("tsc"), "tsconfig detects tsc: " + detected.Command);
+        }
+        finally { Cleanup(tsRoot); }
+
+        var csRoot = TempRoot();
+        try
+        {
+            var workspace = Workspace(csRoot);
+            var chatId = Guid.NewGuid();
+            await File.WriteAllTextAsync(Path.Combine(workspace.GetTaskWorkspacePath(chatId), "App.csproj"), "<Project/>");
+            var detected = await new ConexyDiagnosticsService(workspace).DetectCommandAsync(chatId, null, null);
+            Assert(detected.Tool == DiagnosticTool.DotnetBuild && detected.Command!.Contains("dotnet build"), "csproj detects dotnet build");
+        }
+        finally { Cleanup(csRoot); }
     }
 
     private const string PytestSample =
