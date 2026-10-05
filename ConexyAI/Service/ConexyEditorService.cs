@@ -10,6 +10,9 @@ namespace ConexyAI.Service;
 public interface IConexyEditorService
 {
     Task<StrReplaceEditorResult> ExecuteAsync(Guid taskId, StrReplaceEditorRequest request, CancellationToken ct = default);
+
+    /// <summary>Applies a unified-diff patch (one or more files) to the workspace, with undo and rollback.</summary>
+    Task<StrReplaceEditorResult> ApplyPatchAsync(Guid taskId, ApplyPatchRequest request, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -72,6 +75,152 @@ public class ConexyEditorService : IConexyEditorService
             ct);
 
         return result;
+    }
+
+    // UNIFIED_DIFF: добавлено 2026-10-04 — применение патча в формате git diff. Каждый файл
+    // применяется под своим локом, все изменения откатываются, если хоть один файл не сошёлся.
+    public async Task<StrReplaceEditorResult> ApplyPatchAsync(Guid taskId, ApplyPatchRequest request, CancellationToken ct = default)
+    {
+        var target = string.IsNullOrWhiteSpace(request.Path) ? "(patch)" : request.Path!;
+        await SendToolActionAsync(taskId, target, "patch", "started", null, ct);
+
+        StrReplaceEditorResult result;
+        try
+        {
+            result = await ApplyPatchCoreAsync(taskId, request, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "apply_patch failed");
+            result = Fail("io_error", ex.Message);
+        }
+
+        await SendToolActionAsync(taskId, target, "patch",
+            result.Success ? "completed" : "failed",
+            result.Success ? result.Output : result.ErrorDetail,
+            ct);
+
+        return result;
+    }
+
+    private async Task<StrReplaceEditorResult> ApplyPatchCoreAsync(Guid taskId, ApplyPatchRequest request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.Patch))
+            return Fail("io_error", "apply_patch requires a non-empty 'patch'.");
+
+        List<UnifiedDiff.FilePatch> files;
+        try
+        {
+            files = UnifiedDiff.Parse(request.Patch!, request.Path, out var parseError);
+            if (parseError is not null)
+                return Fail("io_error", "Could not parse the patch: " + parseError);
+        }
+        catch (Exception ex)
+        {
+            return Fail("io_error", "Could not parse the patch: " + ex.Message);
+        }
+
+        // Validate every path first: a bad path must not leave the workspace half-patched.
+        foreach (var file in files)
+        {
+            if (string.IsNullOrWhiteSpace(file.Path))
+                return Fail("io_error", "A patch file header has an empty path.");
+            ResolvePath(taskId, file.Path); // throws on traversal or outside the workspace
+        }
+
+        var applied = new List<(string Path, string? Before, bool Existed)>();
+        var summary = new List<string>();
+
+        foreach (var file in files)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var fileResult = await PatchOneAsync(taskId, file, applied, ct);
+            if (!fileResult.Success)
+            {
+                // All-or-nothing: an earlier file must not stay changed when a later one fails.
+                await RollbackAsync(taskId, applied);
+                return fileResult;
+            }
+            summary.Add(fileResult.Output ?? file.Path);
+        }
+
+        return Ok(string.Join("\n", summary));
+    }
+
+    private async Task<StrReplaceEditorResult> PatchOneAsync(
+        Guid taskId,
+        UnifiedDiff.FilePatch file,
+        List<(string Path, string? Before, bool Existed)> applied,
+        CancellationToken ct)
+    {
+        var path = file.Path;
+        var fullPath = ResolvePath(taskId, path);
+
+        return await _editorState.WithLockAsync(taskId, path, async () =>
+        {
+            if (file.IsNew)
+            {
+                if (File.Exists(fullPath))
+                    return Fail("io_error", $"'{path}' already exists, but the patch creates it.");
+
+                var created = UnifiedDiff.Apply(string.Empty, file);
+                if (!created.Success) return Fail("no_match", created.Error!);
+
+                await WorkspaceJail.WriteAllTextAsync(Root(taskId), fullPath, created.Text ?? string.Empty, ct);
+                _editorState.PushUndo(taskId, path, new FileSnapshot(path, null, ExistedBefore: false));
+                applied.Add((path, null, false));
+                return Ok($"Created '{path}' ({file.Hunks.Count} hunk(s)).");
+            }
+
+            if (!File.Exists(fullPath))
+                return Fail("file_not_found", $"File '{path}' not found.");
+
+            var bytes = await WorkspaceJail.ReadAllBytesAsync(Root(taskId), fullPath, ct);
+            if (IsBinary(bytes))
+                return Fail("io_error", $"File '{path}' appears to be binary and cannot be patched as text.");
+
+            var before = Encoding.UTF8.GetString(bytes);
+            var result = UnifiedDiff.Apply(before, file);
+            if (!result.Success)
+                return Fail("no_match", result.Error!);
+
+            _editorState.PushUndo(taskId, path, new FileSnapshot(path, before, ExistedBefore: true));
+            applied.Add((path, before, true));
+
+            if (file.IsDelete)
+            {
+                File.Delete(fullPath);
+                return Ok($"Deleted '{path}'.");
+            }
+
+            await WorkspaceJail.WriteAllTextAsync(Root(taskId), fullPath, result.Text ?? string.Empty, ct);
+            return Ok($"Patched '{path}' ({result.Applied}/{file.Hunks.Count} hunks).");
+        });
+    }
+
+    private async Task RollbackAsync(Guid taskId, List<(string Path, string? Before, bool Existed)> applied)
+    {
+        for (var i = applied.Count - 1; i >= 0; i--)
+        {
+            var (path, before, existed) = applied[i];
+            try
+            {
+                var fullPath = ResolvePath(taskId, path);
+                if (existed)
+                    await WorkspaceJail.WriteAllTextAsync(Root(taskId), fullPath, before ?? string.Empty, CancellationToken.None);
+                else if (File.Exists(fullPath))
+                    File.Delete(fullPath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "apply_patch rollback failed for {Path}", path);
+            }
+        }
     }
 
     private Task<StrReplaceEditorResult> ExecuteCoreAsync(Guid taskId, StrReplaceEditorRequest request, string command, CancellationToken ct)

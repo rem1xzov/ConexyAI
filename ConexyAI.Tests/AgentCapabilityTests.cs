@@ -47,6 +47,8 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent vision: the screenshot image follows all tool results of the turn (L9)", ScreenshotImageAfterToolResultsAsync);
         TestRegistry.Add("agent view_image: a workspace image reaches the model context", ViewImageIsAttachedAsync);
         TestRegistry.Add("agent view_image: image bytes are recognised by magic, non-images refused", ImageContentDetectionAsync);
+        TestRegistry.Add("agent apply_patch: unified diff is parsed and applied; mismatch changes nothing", ApplyPatchToolAsync);
+        TestRegistry.Add("agent apply_patch: hunks tolerate offsets and /dev/null marks new files", UnifiedDiffApplyAsync);
         TestRegistry.Add("agent prompts: charters carry deep research, fetch_web_page, the plan rule and artifacts", ChartersAsync);
     }
 
@@ -766,6 +768,80 @@ internal static class AgentCapabilityTests
         Assert(ImageContent.DetectContentType(new byte[] { 1, 2, 3 }, "photo.jpeg") == "image/jpeg", "a known extension is a fallback");
         // A plain-text file with an unknown extension is refused.
         Assert(ImageContent.DetectContentType("hello"u8.ToArray(), "notes.txt") is null, "a text file is not an image");
+        return Task.CompletedTask;
+    }
+
+    // UNIFIED_DIFF: применение unified-diff через редактор (файл меняется целиком, промах — отказ).
+    private static async Task ApplyPatchToolAsync()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var workspace = new ConexyWorkspaceService(
+                Options.Create(new WorkspaceOptions { RootPath = root }),
+                NullLogger<ConexyWorkspaceService>.Instance);
+            var chatId = Guid.NewGuid();
+            var editor = new ConexyEditorService(
+                workspace,
+                new ConexyEditorStateService(),
+                new WorkspacePathValidator(workspace),
+                new RecordingHubContext(),
+                NullLogger<ConexyEditorService>.Instance);
+
+            var file = Path.Combine(workspace.GetTaskWorkspacePath(chatId), "app.txt");
+            await File.WriteAllTextAsync(file, "one\ntwo\nthree\n");
+
+            var diff =
+                "--- a/app.txt\n" +
+                "+++ b/app.txt\n" +
+                "@@ -1,3 +1,4 @@\n" +
+                " one\n" +
+                "-two\n" +
+                "+TWO\n" +
+                "+2.5\n" +
+                " three\n";
+
+            var ok = await editor.ApplyPatchAsync(chatId, new ApplyPatchRequest { Patch = diff });
+            Assert(ok.Success, "apply_patch applies a git-style diff: " + ok.ErrorDetail);
+            Assert(await File.ReadAllTextAsync(file) == "one\nTWO\n2.5\nthree\n",
+                "the file is rewritten exactly, got: " + (await File.ReadAllTextAsync(file)).Replace("\n", "\\n"));
+
+            // A hunk that does not match the file must change nothing.
+            var bad = "--- a/app.txt\n+++ b/app.txt\n@@ -1,2 +1,2 @@\n-nope\n+nope2\n two\n";
+            var badResult = await editor.ApplyPatchAsync(chatId, new ApplyPatchRequest { Patch = bad });
+            Assert(!badResult.Success, "a non-matching hunk is refused");
+            Assert(await File.ReadAllTextAsync(file) == "one\nTWO\n2.5\nthree\n", "a refused patch changes nothing");
+
+            // A path that escapes the workspace is refused.
+            var escape = "--- a/../evil.txt\n+++ b/../evil.txt\n@@ -1,1 +1,1 @@\n-x\n+y\n";
+            var escapeResult = await editor.ApplyPatchAsync(chatId, new ApplyPatchRequest { Patch = escape });
+            Assert(!escapeResult.Success, "a path outside the workspace is refused");
+        }
+        finally
+        {
+            DeleteDir(root);
+        }
+    }
+
+    private static Task UnifiedDiffApplyAsync()
+    {
+        var files = UnifiedDiff.Parse("--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n", null, out var error);
+        Assert(error is null && files.Count == 1 && files[0].Path == "f", "the path is read from the header");
+
+        var applied = UnifiedDiff.Apply("a\nb\nc\n", files[0]);
+        Assert(applied.Success && applied.Text == "a\nB\nc\n", "the hunk is applied: " + applied.Text);
+
+        var shifted = UnifiedDiff.Apply("zero\na\nb\nc\n", files[0]);
+        Assert(shifted.Success && shifted.Text == "zero\na\nB\nc\n", "line offsets are tolerated: " + shifted.Text);
+
+        var addFiles = UnifiedDiff.Parse("--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,2 @@\n+hi\n+there\n", null, out _);
+        Assert(addFiles.Count == 1 && addFiles[0].IsNew && addFiles[0].Path == "new.txt", "/dev/null marks a new file");
+        var created = UnifiedDiff.Apply(string.Empty, addFiles[0]);
+        Assert(created.Success && created.Text == "hi\nthere\n", "the new file content is built: " + created.Text);
+
+        var bare = UnifiedDiff.Parse("@@ -1,1 +1,1 @@\n-x\n+y\n", "solo.txt", out _);
+        Assert(bare.Count == 1 && bare[0].Path == "solo.txt", "bare hunks use the default path");
+
         return Task.CompletedTask;
     }
 

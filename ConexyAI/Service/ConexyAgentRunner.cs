@@ -127,6 +127,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         AllowedTools: new HashSet<string>(StringComparer.Ordinal)
         {
             "str_replace_editor",
+            "apply_patch",
             "workspace_list_files",
             "todo_write",
             WebSearchTool.Name,
@@ -271,9 +272,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         Любой созданный файл должен физически появиться в файловой системе воркспейса.
 
         ИНСТРУМЕНТЫ:
-        Ты работаешь инструментами: `str_replace_editor` (view/create/str_replace/insert/undo), `file_read`/`file_write`/`file_patch`, `grep` (поиск по содержимому файлов регулярным выражением с фильтром `glob`), `glob` (поиск файлов по маске, поддерживает `**`), `bash`, `github_action` и `github_api` (операции с GitHub от имени пользователя по его личному токену), `web_search` (поиск актуальной информации в интернете), `fetch_web_page` (чтение страницы по URL), `search_user_chats` (поиск по прошлым чатам пользователя) и системная память задачи (`todo_write`).
+        Ты работаешь инструментами: `str_replace_editor` (view/create/str_replace/insert/undo), `apply_patch` (применить unified-diff патч в формате git — минус удаляет строки, плюс добавляет, можно несколько файлов), `file_read`/`file_write`/`file_patch`, `grep` (поиск по содержимому файлов регулярным выражением с фильтром `glob`), `glob` (поиск файлов по маске, поддерживает `**`), `bash`, `github_action` и `github_api` (операции с GitHub от имени пользователя по его личному токену), `web_search` (поиск актуальной информации в интернете), `fetch_web_page` (чтение страницы по URL), `search_user_chats` (поиск по прошлым чатам пользователя) и системная память задачи (`todo_write`).
         Для поиска по коду в воркспейсе используй `grep` и `glob`, а не `bash: grep/rg/find` — эти инструменты не требуют подтверждения и не зависят от того, что установлено в песочнице.
         Для проверки кода используй `run_tests` — он сам определяет фреймворк и возвращает структурированный отчёт (кто упал, файл:строка, ожидали/получили), а не сырые логи. Не гоняй `npm test`/`pytest`/`dotnet test` через `bash`, чтобы потом вручную вычитывать простыню вывода.
+        Для правок предпочитай `apply_patch` с unified-diff: когда меняешь несколько строк или файлов, патч точнее и дешевле по токенам, чем `str_replace`. Если хунк не совпал с файлом, инструмент скажет об этом и ничего не поменяет — тогда перечитай файл и пришли патч заново.
         Если пользователь приложил картинку (макет, скриншот бага) или ссылается на изображение в рабочей области, вызови `view_image` — только так ты реально «видишь» изображение. Пользовательские картинки сохраняются в корне рабочей области и доступны повторно по `path`.
         Для документов: `create_document` создаёт .docx/.xlsx/.pptx из Markdown, `read_document_file` читает текст .docx/.xlsx/.pptx/.pdf (не открывай их через `view` — это двоичные файлы).
 
@@ -1636,6 +1638,20 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     return new ConexyToolResult(toolCall.Id, output, !res.Success);
                 }
 
+                // UNIFIED_DIFF: добавлено 2026-10-04 — применение патча в формате git diff.
+                case "apply_patch":
+                {
+                    var request = JsonSerializer.Deserialize<ApplyPatchRequest>(toolCall.Function.Arguments);
+                    if (request is null || string.IsNullOrWhiteSpace(request.Patch))
+                        return new ConexyToolResult(toolCall.Id, "apply_patch requires 'patch'.", true);
+
+                    var res = await _editorService.ApplyPatchAsync(chatId, request, ct);
+                    var output = res.Success
+                        ? res.Output ?? "Done."
+                        : $"{res.ErrorType}: {res.ErrorDetail}";
+                    return new ConexyToolResult(toolCall.Id, output, !res.Success);
+                }
+
                 case "bash":
                 {
                     var request = JsonSerializer.Deserialize<BashToolRequest>(toolCall.Function.Arguments);
@@ -2919,6 +2935,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     }
                     break;
                 }
+                case "apply_patch":
+                {
+                    // Paths live inside the diff; extract the headers for the changed-files bookkeeping.
+                    var patch = GetString(root, "patch");
+                    if (!string.IsNullOrEmpty(patch))
+                    {
+                        foreach (var p in UnifiedDiff.ExtractPaths(patch, GetString(root, "path")))
+                            changedFiles.Add(p);
+                    }
+                    break;
+                }
             }
         }
         catch (Exception)
@@ -3074,6 +3101,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 insert_line = new { type = "integer", description = "Line number after which to insert new_str (insert only); 0 = start" },
                 view_range = new { type = "array", items = new { type = "integer" }, description = "Optional [start_line, end_line] for view, 1-indexed" }
             }, required = new[] { "command", "path" } }),
+        // UNIFIED_DIFF: добавлено 2026-10-04 — правка через стандартный патч (git diff).
+        Function("apply_patch", "Edit workspace files by applying a unified diff (the standard git format: lines starting with '-' are removed, '+' are added, '@@' opens a hunk). Prefer this over str_replace when a change spans several lines or files, or when you can express it precisely as a diff. Use a git-style patch with '--- a/path' / '+++ b/path' headers (multiple files allowed; '/dev/null' creates or deletes a file). For a single file you may instead pass just the hunks with 'path'. A hunk that does not match the file is reported and nothing is changed.",
+            new { type = "object", properties = new {
+                patch = new { type = "string", description = "Unified diff text (git format)" },
+                path = new { type = "string", description = "Target file when the patch carries only hunks without '---'/'+++' headers" }
+            }, required = new[] { "patch" } }),
         Function("workspace_list_files", "List all files currently present in the workspace (recursively).",
             new { type = "object", properties = new {
                 path = new { type = "string", description = "Optional relative directory to list (defaults to workspace root)" }

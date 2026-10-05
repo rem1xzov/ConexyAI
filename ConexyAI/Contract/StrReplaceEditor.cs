@@ -27,6 +27,20 @@ public class StrReplaceEditorRequest
     public int[]? ViewRange { get; set; }
 }
 
+/// <summary>
+/// Arguments for the <c>apply_patch</c> tool: a unified diff in the standard git format
+/// (<c>--- a/file</c> / <c>+++ b/file</c>, <c>@@</c> hunks, '-' removed, '+' added).
+/// </summary>
+public class ApplyPatchRequest
+{
+    [JsonPropertyName("patch")]
+    public required string Patch { get; set; }
+
+    /// <summary>Optional target file for a bare patch that carries only hunks (no file headers).</summary>
+    [JsonPropertyName("path")]
+    public string? Path { get; set; }
+}
+
 /// <summary>Result returned as the tool result and streamed to the UI over SignalR.</summary>
 public class StrReplaceEditorResult
 {
