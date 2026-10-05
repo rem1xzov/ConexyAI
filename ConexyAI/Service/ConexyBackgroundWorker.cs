@@ -593,9 +593,18 @@ public class ConexyBackgroundWorker : BackgroundService
     {
         var tools = new List<object> { WebSearchTool.Schema() };
 
+        // SMART_SEARCH_FORCE: если вопрос про свежие/версионные/рыночные факты — первый раунд
+        // принудительно ищет, чтобы модель не ответила из памяти (и не отрицала существование новинки).
+        var forceSearch = Prompts.PromptFragments.RequiresFreshInfo(job.Prompt);
+        if (forceSearch)
+        {
+            _logger.LogInformation("Smart search: forcing web_search on the first round [task {TaskId}].", job.TaskId);
+        }
+
         for (var round = 0; round < MaxSearchRounds; round++)
         {
             ct.ThrowIfCancellationRequested();
+            var toolChoice = round == 0 && forceSearch ? "required" : "auto";
 
             var content = new StringBuilder();
             var reasoning = new StringBuilder();
@@ -606,7 +615,7 @@ public class ConexyBackgroundWorker : BackgroundService
             // reasoning stays streamed), while still capturing any tool_calls the model
             // requests. Tool-call turns produce no content — only a ToolCalls delta.
             await foreach (var delta in llmClient.StreamChatAsync(
-                messages, job.ModelType, reasoningEffort, tools, "auto", job.TaskId, ct))
+                messages, job.ModelType, reasoningEffort, tools, toolChoice, job.TaskId, ct))
             {
                 if (reasoningEffort is not null && !string.IsNullOrEmpty(delta.Reasoning))
                 {
