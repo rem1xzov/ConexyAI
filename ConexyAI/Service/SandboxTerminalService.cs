@@ -22,10 +22,10 @@ public interface ISandboxTerminalService
     Task<string> GetModeAsync(CancellationToken ct = default);
 
     /// <summary>Runs one user command in the chat's sandbox; output is broadcast as TerminalOutput.</summary>
-    Task<SandboxCommandResult> RunAsync(Guid chatId, string command, CancellationToken ct = default);
+    Task<SandboxCommandResult> RunAsync(Guid chatId, string? terminalId, string command, CancellationToken ct = default);
 
-    /// <summary>Cancels the chat's running user command. False when none is running.</summary>
-    bool Cancel(Guid chatId);
+    /// <summary>Cancels the terminal's running user command. False when none is running.</summary>
+    bool Cancel(Guid chatId, string? terminalId);
 }
 
 public class SandboxTerminalService : ISandboxTerminalService
@@ -41,7 +41,7 @@ public class SandboxTerminalService : ISandboxTerminalService
     private readonly IHubContext<ConexyHub> _hub;
     private readonly bool _allowBackendShell;
     private readonly ILogger<SandboxTerminalService> _logger;
-    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _running = new();
+    private readonly ConcurrentDictionary<(Guid ChatId, string TerminalId), CancellationTokenSource> _running = new();
 
     private (DateTime CheckedAt, bool Available) _dockerProbe;
 
@@ -78,7 +78,7 @@ public class SandboxTerminalService : ISandboxTerminalService
         return probe.Available ? "sandbox" : "unavailable";
     }
 
-    public async Task<SandboxCommandResult> RunAsync(Guid chatId, string command, CancellationToken ct = default)
+    public async Task<SandboxCommandResult> RunAsync(Guid chatId, string? terminalId, string command, CancellationToken ct = default)
     {
         command = (command ?? string.Empty).Trim();
         if (command.Length == 0)
@@ -86,12 +86,14 @@ public class SandboxTerminalService : ISandboxTerminalService
         if (command.Length > MaxCommandChars)
             return new SandboxCommandResult(-1, false, "too_long");
 
+        var id = TerminalIds.Normalize(terminalId);
+
         using var slot = _activity.TryAcquire(chatId);
         if (slot is null)
             return new SandboxCommandResult(-1, false, "busy");
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        if (!_running.TryAdd(chatId, cts))
+        if (!_running.TryAdd((chatId, id), cts))
             return new SandboxCommandResult(-1, false, "busy");
 
         try
@@ -100,36 +102,37 @@ public class SandboxTerminalService : ISandboxTerminalService
             var statePath = _sessions.GetOrCreateStatePath(chatId);
 
             // Logged without the command text: it is the user's own input.
-            _logger.LogInformation("Sandbox terminal command for chat {ChatId} ({Chars} chars).", chatId, command.Length);
+            _logger.LogInformation("Sandbox terminal command for chat {ChatId} terminal {TerminalId} ({Chars} chars).", chatId, id, command.Length);
             var result = await _sandbox.RunAsync(command, workspace, CommandTimeout, cts.Token, statePath);
 
-            await SendAsync(chatId, Format(result), CancellationToken.None);
+            await SendAsync(chatId, id, Format(result), CancellationToken.None);
             return new SandboxCommandResult(result.ExitCode, result.WasTimedOut, result.Success ? null : result.ErrorType);
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
-            await SendAsync(chatId, "\x1b[1;33m^C\x1b[0m\r\n", CancellationToken.None);
+            await SendAsync(chatId, id, "\x1b[1;33m^C\x1b[0m\r\n", CancellationToken.None);
             return new SandboxCommandResult(130, false, "cancelled");
         }
         finally
         {
-            _running.TryRemove(chatId, out _);
+            _running.TryRemove((chatId, id), out _);
         }
     }
 
-    public bool Cancel(Guid chatId)
+    public bool Cancel(Guid chatId, string? terminalId)
     {
-        if (!_running.TryGetValue(chatId, out var cts))
+        if (!_running.TryGetValue((chatId, TerminalIds.Normalize(terminalId)), out var cts))
             return false;
 
         cts.Cancel();
         return true;
     }
 
-    private Task SendAsync(Guid chatId, string data, CancellationToken ct) =>
+    private Task SendAsync(Guid chatId, string terminalId, string data, CancellationToken ct) =>
         _hub.Clients.Group($"task_{chatId}").SendAsync("TerminalOutput", new TerminalOutputEvent
         {
             SessionId = chatId,
+            TerminalId = terminalId,
             Data = data,
             Source = "user"
         }, ct);

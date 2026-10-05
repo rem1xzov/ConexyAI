@@ -55,6 +55,8 @@ export interface TodoUpdatePayload {
 
 export interface TerminalOutputPayload {
   sessionId: string;
+  /** MULTI_TERMINAL: which terminal of the chat produced this chunk (absent = "main"). */
+  terminalId?: string;
   data: string;
   /** "pty" | "agent" | "user" */
   source?: string;

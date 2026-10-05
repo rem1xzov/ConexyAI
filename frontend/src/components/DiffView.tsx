@@ -1,5 +1,6 @@
 import { DiffEditor } from '@monaco-editor/react';
 import { detectLanguageFromExtension } from '../utils/fileTypes';
+import { useEditorSettings } from '../utils/editorSettings';
 import { useEffectiveTheme } from '../theme';
 
 // IDE_DIFF: добавлено 2026-10-05 — режим сравнения «до/после» на Monaco DiffEditor: слева ревизия
@@ -14,6 +15,7 @@ interface DiffViewProps {
 export function DiffView({ path, original, modified, sideBySide }: DiffViewProps) {
   const language = detectLanguageFromExtension(path);
   const effectiveTheme = useEffectiveTheme();
+  const settings = useEditorSettings();
 
   return (
     <DiffEditor
@@ -26,7 +28,7 @@ export function DiffView({ path, original, modified, sideBySide }: DiffViewProps
         readOnly: true,
         renderSideBySide: sideBySide,
         automaticLayout: true,
-        fontSize: 13,
+        fontSize: settings.fontSize,
         minimap: { enabled: false },
         scrollBeyondLastLine: false,
         renderOverviewRuler: false,

@@ -15,6 +15,8 @@ import { useEffectiveTheme } from '../theme';
 
 interface TerminalPanelProps {
   sessionId: string;
+  /** MULTI_TERMINAL: which terminal of the chat this panel shows (defaults to "main"). */
+  terminalId?: string;
   /** Focus the terminal as soon as it is ready (e.g. right after the user opened it). */
   autoFocus?: boolean;
 }
@@ -75,17 +77,17 @@ const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 // PTY mode (dev only): the server runs a real shell, xterm is a dumb pipe in both directions.
 // ---------------------------------------------------------------------------------------------
 
-function startPtySession(term: Terminal, chatId: string, t: Translate): TerminalSession {
+function startPtySession(term: Terminal, chatId: string, terminalId: string, t: Translate): TerminalSession {
   let disposed = false;
   let started = false;
 
-  const unsubscribe = signalrService.onTerminalOutput(chatId, (data) => {
+  const unsubscribe = signalrService.onTerminalOutput(chatId, terminalId, (data) => {
     if (!disposed) term.write(data);
   });
 
   const input = term.onData((data) => {
     if (!started) return;
-    void signalrService.sendTerminalInput(chatId, data).catch(() => {
+    void signalrService.sendTerminalInput(chatId, terminalId, data).catch(() => {
       // The connection is being restored; keystrokes typed meanwhile are dropped, like a laggy ssh.
     });
   });
@@ -95,10 +97,10 @@ function startPtySession(term: Terminal, chatId: string, t: Translate): Terminal
       // Join the chat group (task_{chatId}) so this connection receives both the pty output and
       // the agent's mirrored bash output.
       await signalrService.joinTask(chatId);
-      await signalrService.startTerminal(chatId);
+      await signalrService.startTerminal(chatId, terminalId);
       if (disposed) return;
       started = true;
-      await signalrService.resizeTerminal(chatId, term.cols, term.rows);
+      await signalrService.resizeTerminal(chatId, terminalId, term.cols, term.rows);
     } catch (e) {
       if (disposed) return;
       const message = isForbiddenError(e) ? t('terminal.forbidden') : t('terminal.startFailed', { message: hubErrorText(e) });
@@ -108,7 +110,7 @@ function startPtySession(term: Terminal, chatId: string, t: Translate): Terminal
 
   return {
     onResize: (cols, rows) => {
-      if (started) void signalrService.resizeTerminal(chatId, cols, rows).catch(() => {});
+      if (started) void signalrService.resizeTerminal(chatId, terminalId, cols, rows).catch(() => {});
     },
     dispose: () => {
       disposed = true;
@@ -147,8 +149,8 @@ function cleanText(text: string): string {
   return text.replace(/\t/g, ' ').replace(/[\x00-\x1f\x7f]/g, '');
 }
 
-function startSandboxSession(term: Terminal, chatId: string, t: Translate): TerminalSession {
-  const history = historyFor(chatId);
+function startSandboxSession(term: Terminal, chatId: string, terminalId: string, t: Translate): TerminalSession {
+  const history = historyFor(`${chatId}:${terminalId}`);
   let historyIndex = history.length; // === history.length → editing a fresh line
   let draftBeforeHistory = '';
 
@@ -279,7 +281,7 @@ function startSandboxSession(term: Terminal, chatId: string, t: Translate): Term
     busy = true;
     try {
       await ensureJoined();
-      const res = await runSandboxCommand(chatId, command);
+      const res = await runSandboxCommand(chatId, terminalId, command);
       if (disposed) return;
       if (!atLineStart) term.write('\r\n');
       atLineStart = true;
@@ -320,7 +322,7 @@ function startSandboxSession(term: Terminal, chatId: string, t: Translate): Term
       term.write(dim('^C'));
       atLineStart = false;
       queue.length = 0;
-      void cancelSandboxCommand(chatId).catch(() => {
+      void cancelSandboxCommand(chatId, terminalId).catch(() => {
         // Nothing to cancel any more or the connection is down: the command result will tell.
       });
       return;
@@ -446,7 +448,7 @@ function startSandboxSession(term: Terminal, chatId: string, t: Translate): Term
     void submit();
   }
 
-  const unsubscribe = signalrService.onTerminalOutput(chatId, writeOutput);
+  const unsubscribe = signalrService.onTerminalOutput(chatId, terminalId, writeOutput);
   const inputDisposable = term.onData(handleData);
 
   term.write(`${dim(t('terminal.sandboxBanner'))}\r\n`);
@@ -485,7 +487,7 @@ function startSandboxSession(term: Terminal, chatId: string, t: Translate): Term
 // чата) или «unavailable» (Docker нет — показываем пояснение). Компонент монтируется заново на
 // каждый чат (key={chatId} у родителя), а всё, что он создал, освобождается в cleanup.
 /** Workspace terminal for one chat (xterm). */
-export function TerminalPanel({ sessionId, autoFocus }: TerminalPanelProps) {
+export function TerminalPanel({ sessionId, terminalId = 'main', autoFocus }: TerminalPanelProps) {
   const { t } = useTranslation();
   const effectiveTheme = useEffectiveTheme();
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
@@ -546,7 +548,9 @@ export function TerminalPanel({ sessionId, autoFocus }: TerminalPanelProps) {
     fit();
 
     const session =
-      readyMode === 'pty' ? startPtySession(term, sessionId, (k, o) => tRef.current(k, o)) : startSandboxSession(term, sessionId, (k, o) => tRef.current(k, o));
+      readyMode === 'pty'
+        ? startPtySession(term, sessionId, terminalId, (k, o) => tRef.current(k, o))
+        : startSandboxSession(term, sessionId, terminalId, (k, o) => tRef.current(k, o));
     const resizeDisposable = term.onResize(({ cols, rows }) => session.onResize(cols, rows));
 
     let frame = 0;
@@ -568,7 +572,7 @@ export function TerminalPanel({ sessionId, autoFocus }: TerminalPanelProps) {
     };
     // autoFocus only matters for the first mount of a given chat's terminal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [readyMode, sessionId]);
+  }, [readyMode, sessionId, terminalId]);
 
   // Follow the app theme without re-creating the terminal (that would drop the scrollback).
   useEffect(() => {

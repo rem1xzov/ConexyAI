@@ -28,6 +28,8 @@ public class IdeController : ControllerBase
     private readonly ISymbolService _symbols;
     // DEBUG_TRACE: добавлено 2026-10-05 — точки останова и трассировка выполнения Python.
     private readonly IDebugService _debug;
+    // SEARCH_REPLACE: добавлено 2026-10-05 — глобальный поиск/замена по проекту.
+    private readonly IProjectSearchService _search;
     private readonly ILogger<IdeController> _logger;
 
     public IdeController(
@@ -38,6 +40,7 @@ public class IdeController : ControllerBase
         IConexyBashService bash,
         ISymbolService symbols,
         IDebugService debug,
+        IProjectSearchService search,
         ILogger<IdeController> logger)
     {
         _fileService = fileService;
@@ -47,6 +50,7 @@ public class IdeController : ControllerBase
         _bash = bash;
         _symbols = symbols;
         _debug = debug;
+        _search = search;
         _logger = logger;
     }
 
@@ -511,6 +515,38 @@ public class IdeController : ControllerBase
             return BadRequest(new { error = "Invalid request body." });
 
         try { return Ok(await _debug.RunAsync(sessionId, request, ct)); }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
+    // SEARCH_REPLACE: добавлено 2026-10-05 — глобальный поиск/замена по проекту.
+    /// <summary>Searches the whole workspace for a string or a regular expression.</summary>
+    [HttpPost("{sessionId:guid}/search")]
+    public async Task<ActionResult<ProjectSearchResult>> SearchProject(
+        Guid sessionId, [FromBody] ProjectSearchRequest? request, CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        if (!await _chatAccess.CanReadAsync(userId, sessionId, ct))
+            return Forbidden();
+        if (request is null)
+            return BadRequest(new { error = "Invalid request body." });
+
+        try { return Ok(await _search.SearchAsync(sessionId, request, ct)); }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
+    /// <summary>Replaces a string or regular expression across the workspace (owner only).</summary>
+    [HttpPost("{sessionId:guid}/search/replace")]
+    public async Task<IActionResult> ReplaceProject(
+        Guid sessionId, [FromBody] ProjectReplaceRequest? request, CancellationToken ct = default)
+    {
+        var denied = await AuthorizeWriteAsync(sessionId, ct);
+        if (denied is not null)
+            return denied;
+        if (request is null)
+            return BadRequest(new { error = "Invalid request body." });
+
+        try { return Ok(await _search.ReplaceAsync(sessionId, request, ct)); }
         catch (Exception ex) { return MapError(ex); }
     }
 

@@ -98,15 +98,15 @@ public class ConexyRunService : IConexyRunService
         }
 
         // Ensure the pty exists even if the terminal tab was not opened yet.
-        await _terminalService.StartAsync(chatId, ct);
+        await _terminalService.StartAsync(chatId, TerminalIds.Main, ct);
 
         // Stop any process still occupying the shell before re-running. On a fresh prompt
         // this only clears the current (empty) line, which is harmless.
-        await _terminalService.SendInputAsync(chatId, "\x03", ct);
+        await _terminalService.SendInputAsync(chatId, TerminalIds.Main, "\x03", ct);
 
         // Label the command in the shared terminal feed, then type it into the pty.
         await SendUserCommandAsync(chatId, command, ct);
-        await _terminalService.SendInputAsync(chatId, command + "\r", ct);
+        await _terminalService.SendInputAsync(chatId, TerminalIds.Main, command + "\r", ct);
 
         _logger.LogInformation("Run command for chat {ChatId}: {Command}", chatId, command);
         return new RunProjectResult { Command = command, NeedsManualConfig = false };

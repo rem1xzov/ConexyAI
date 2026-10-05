@@ -53,6 +53,11 @@ public class RenameFileRequest
 public class TerminalOutputEvent
 {
     public required Guid SessionId { get; set; }
+
+    // MULTI_TERMINAL: добавлено 2026-10-05 — вывод адресуется конкретному терминалу чата.
+    // Пусто/null — основной терминал (сюда же идёт зеркальный вывод агента).
+    public string? TerminalId { get; set; }
+
     public required string Data { get; set; }
 
     /// <summary>

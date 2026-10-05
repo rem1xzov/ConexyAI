@@ -165,32 +165,32 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
 
     // ---- Interactive terminal (pty) ----
 
-    /// <summary>Creates (or reuses) the session's interactive shell.</summary>
-    public async Task StartTerminal(Guid sessionId)
+    /// <summary>Creates (or reuses) the session's interactive shell for one terminal.</summary>
+    public async Task StartTerminal(Guid sessionId, string? terminalId)
     {
         await EnsureChatOwnerAsync(sessionId);
-        await _terminalService.StartAsync(sessionId);
+        await _terminalService.StartAsync(sessionId, terminalId);
     }
 
-    /// <summary>Forwards keystrokes to the session shell's stdin.</summary>
-    public async Task SendInput(Guid sessionId, string data)
+    /// <summary>Forwards keystrokes to the terminal's stdin.</summary>
+    public async Task SendInput(Guid sessionId, string data, string? terminalId)
     {
         await EnsureChatOwnerAsync(sessionId);
-        await _terminalService.SendInputAsync(sessionId, data);
+        await _terminalService.SendInputAsync(sessionId, terminalId, data);
     }
 
-    /// <summary>Updates the session terminal window size.</summary>
-    public async Task ResizeTerminal(Guid sessionId, int cols, int rows)
+    /// <summary>Updates the terminal window size.</summary>
+    public async Task ResizeTerminal(Guid sessionId, int cols, int rows, string? terminalId)
     {
         await EnsureChatOwnerAsync(sessionId);
-        await _terminalService.ResizeAsync(sessionId, cols, rows);
+        await _terminalService.ResizeAsync(sessionId, terminalId, cols, rows);
     }
 
-    /// <summary>Explicitly closes the session shell.</summary>
-    public async Task StopTerminal(Guid sessionId)
+    /// <summary>Explicitly closes one terminal shell.</summary>
+    public async Task StopTerminal(Guid sessionId, string? terminalId)
     {
         await EnsureChatOwnerAsync(sessionId);
-        await _terminalService.StopAsync(sessionId);
+        await _terminalService.StopAsync(sessionId, terminalId);
     }
 
     /// <summary>Returns the backend host OS so the UI can adapt (e.g. Run behavior on Windows).</summary>
@@ -203,17 +203,17 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     public Task<string> GetTerminalMode() => _sandboxTerminal.GetModeAsync(Context.ConnectionAborted);
 
     /// <summary>Runs one user command in the chat's sandbox; output streams as TerminalOutput.</summary>
-    public async Task<SandboxCommandResult> RunSandboxCommand(Guid chatId, string command)
+    public async Task<SandboxCommandResult> RunSandboxCommand(Guid chatId, string command, string? terminalId)
     {
         await EnsureChatWritableAsync(chatId);
-        return await _sandboxTerminal.RunAsync(chatId, command, Context.ConnectionAborted);
+        return await _sandboxTerminal.RunAsync(chatId, terminalId, command, Context.ConnectionAborted);
     }
 
-    /// <summary>Cancels the chat's running user command.</summary>
-    public async Task<bool> CancelSandboxCommand(Guid chatId)
+    /// <summary>Cancels the terminal's running user command.</summary>
+    public async Task<bool> CancelSandboxCommand(Guid chatId, string? terminalId)
     {
         await EnsureChatOwnerAsync(chatId);
-        return _sandboxTerminal.Cancel(chatId);
+        return _sandboxTerminal.Cancel(chatId, terminalId);
     }
 
     // ---- Run project (Ctrl+F5) ----

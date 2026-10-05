@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
+import type { CSSProperties, DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   createIdeFile,
@@ -11,6 +11,7 @@ import {
   getGitFileDiff,
   getIdeFileContent,
   getWorkspaceFiles,
+  renameIdeFile,
   saveIdeFileContent,
   setDebugBreakpoints,
   uploadWorkspaceZip,
@@ -22,6 +23,7 @@ import { changedLineNumbers } from '../utils/diff';
 import { humanError } from '../utils/humanError';
 import { triggerDownload } from '../utils/download';
 import { formatCode, formatterSupports } from '../utils/formatter';
+import { matchesHotkey, useEditorSettings } from '../utils/editorSettings';
 import { CodeEditor, disposeEditorModels, editorModelUri } from './CodeEditor';
 import { TodoPanel } from './TodoPanel';
 import { FileTypeIcon } from './FileTypeIcon';
@@ -33,6 +35,8 @@ import { SourceControlPanel } from './SourceControlPanel';
 import { OutlinePanel } from './OutlinePanel';
 import { DebugPanel } from './DebugPanel';
 import { DiffView } from './DiffView';
+import { SearchPanel } from './SearchPanel';
+import { EditorSettingsDialog } from './EditorSettingsDialog';
 import { OPEN_LOCATION_EVENT } from '../utils/monacoLsp';
 import { MenuBar, type Menu } from './MenuBar';
 import {
@@ -96,12 +100,22 @@ type BottomTab = 'todo' | 'terminal' | 'problems' | 'debug';
 
 type DialogState =
   | { kind: 'confirm'; title: string; message?: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void }
-  | { kind: 'prompt'; title: string; message?: string; placeholder?: string; onSubmit: (value: string) => void }
+  | { kind: 'prompt'; title: string; message?: string; placeholder?: string; initialValue?: string; onSubmit: (value: string) => void }
   | null;
 
 function fileName(path: string): string {
   const parts = path.split('/');
   return parts[parts.length - 1] || path;
+}
+
+// FILE_TREE_UX: добавлено 2026-10-05 — путь к родительской папке и сборка пути для rename/move.
+function parentDirOf(path: string): string {
+  const index = path.lastIndexOf('/');
+  return index < 0 ? '' : path.slice(0, index);
+}
+
+function joinPath(dir: string, name: string): string {
+  return dir ? `${dir}/${name}` : name;
 }
 
 function isDirty(tab: OpenTab): boolean {
@@ -194,19 +208,59 @@ function EditorEmptyState({ title, text }: { title: string; text: string }) {
   );
 }
 
-interface TreeNodeProps {
-  node: WorkspaceFileEntry;
-  depth: number;
+interface TreeApi {
   activePath: string | null;
   dirtyPaths?: Set<string>;
+  renamingPath: string | null;
+  dragPath: string | null;
   onOpenFile: (path: string) => void;
   onDelete: (path: string, isDirectory: boolean) => void;
+  onStartRename: (path: string) => void;
+  onCommitRename: (path: string, isDirectory: boolean, newName: string) => void;
+  onCancelRename: () => void;
+  onContextMenu: (e: ReactMouseEvent<HTMLElement>, path: string, isDirectory: boolean) => void;
+  onDragStart: (path: string, isDirectory: boolean) => void;
+  onDragEnd: () => void;
+  onDropOn: (targetPath: string, targetIsDirectory: boolean) => void;
 }
 
-function TreeNode({ node, depth, activePath, dirtyPaths, onOpenFile, onDelete }: TreeNodeProps) {
+type MouseEventOrElement = ReactMouseEvent<HTMLElement>;
+type DragEventOrElement = ReactDragEvent<HTMLElement>;
+
+/** Inline rename field shown in a tree row (F2 / double-click / context menu). */
+function RenameInput({ initial, onCommit, onCancel }: { initial: string; onCommit: (value: string) => void; onCancel: () => void }) {
+  const [value, setValue] = useState(initial);
+  const finished = useRef(false);
+  return (
+    <input
+      className="file-tree__rename"
+      autoFocus
+      value={value}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => setValue(e.target.value)}
+      onFocus={(e) => e.target.select()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') {
+          finished.current = true;
+          onCommit(value.trim());
+        } else if (e.key === 'Escape') {
+          finished.current = true;
+          onCancel();
+        }
+      }}
+      onBlur={() => {
+        if (!finished.current) onCommit(value.trim());
+      }}
+    />
+  );
+}
+
+function TreeNode({ node, depth, api }: { node: WorkspaceFileEntry; depth: number; api: TreeApi }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(depth === 0);
   const indent = { paddingLeft: `${depth * 14 + 8}px` };
+  const renaming = api.renamingPath === node.path;
 
   const deleteButton = (
     <button
@@ -215,26 +269,64 @@ function TreeNode({ node, depth, activePath, dirtyPaths, onOpenFile, onDelete }:
       aria-label={t('workspace.deleteItem', { name: node.name })}
       onClick={(e) => {
         e.stopPropagation();
-        onDelete(node.path, node.isDirectory);
+        api.onDelete(node.path, node.isDirectory);
       }}
     >
       <TrashIcon size={13} />
     </button>
   );
 
+  const dragProps = {
+    draggable: !renaming,
+    onDragStart: (e: DragEventOrElement) => {
+      e.stopPropagation();
+      e.dataTransfer.effectAllowed = 'move';
+      api.onDragStart(node.path, node.isDirectory);
+    },
+    onDragEnd: () => api.onDragEnd(),
+    onDragOver: (e: DragEventOrElement) => {
+      if (api.dragPath && api.dragPath !== node.path) e.preventDefault();
+    },
+    onDrop: (e: DragEventOrElement) => {
+      if (!api.dragPath) return;
+      e.preventDefault();
+      e.stopPropagation();
+      api.onDropOn(node.path, node.isDirectory);
+    },
+  };
+
+  const nameCell = renaming ? (
+    <RenameInput
+      initial={node.name}
+      onCommit={(value) => api.onCommitRename(node.path, node.isDirectory, value)}
+      onCancel={api.onCancelRename}
+    />
+  ) : (
+    <span className="file-tree__name">{node.name}</span>
+  );
+
   if (node.isDirectory) {
     return (
       <div>
         <div
-          className="file-tree__row file-tree__row--folder"
+          className={`file-tree__row file-tree__row--folder ${api.dragPath === node.path ? 'file-tree__row--dragging' : ''}`}
           style={indent}
           onClick={() => setOpen((o) => !o)}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            setOpen(true);
+          }}
+          onContextMenu={(e) => api.onContextMenu(e, node.path, true)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
+            if (e.key === 'F2') {
+              e.preventDefault();
+              api.onStartRename(node.path);
+            } else if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
               setOpen((o) => !o);
             }
           }}
+          {...dragProps}
           role="button"
           tabIndex={0}
           aria-expanded={open}
@@ -242,41 +334,50 @@ function TreeNode({ node, depth, activePath, dirtyPaths, onOpenFile, onDelete }:
         >
           <span className={`file-tree__chevron ${open ? 'file-tree__chevron--open' : ''}`}>▸</span>
           <FileTypeIcon path={node.path} isFolder size={14} />
-          <span className="file-tree__name">{node.name}</span>
-          {deleteButton}
+          {nameCell}
+          {!renaming && deleteButton}
         </div>
         {open &&
-          node.children.map((child) => (
-            <TreeNode
-              key={child.path}
-              node={child}
-              depth={depth + 1}
-              activePath={activePath}
-              dirtyPaths={dirtyPaths}
-              onOpenFile={onOpenFile}
-              onDelete={onDelete}
-            />
-          ))}
+          node.children.map((child) => <TreeNode key={child.path} node={child} depth={depth + 1} api={api} />)}
       </div>
     );
   }
 
   return (
     <div
-      className={`file-tree__row file-tree__row--file ${activePath === node.path ? 'file-tree__row--active' : ''}`}
+      className={`file-tree__row file-tree__row--file ${api.activePath === node.path ? 'file-tree__row--active' : ''} ${api.dragPath === node.path ? 'file-tree__row--dragging' : ''}`}
       style={indent}
-      onClick={() => onOpenFile(node.path)}
+      onClick={() => {
+        if (!renaming) api.onOpenFile(node.path);
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        api.onStartRename(node.path);
+      }}
+      onContextMenu={(e) => api.onContextMenu(e, node.path, false)}
+      onKeyDown={(e) => {
+        if (e.key === 'F2') {
+          e.preventDefault();
+          api.onStartRename(node.path);
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          api.onOpenFile(node.path);
+        }
+      }}
+      {...dragProps}
+      role="button"
+      tabIndex={0}
       title={node.path}
     >
       <span className="file-tree__chevron file-tree__chevron--spacer" />
       <FileTypeIcon path={node.path} size={14} />
-      <span className="file-tree__name">{node.name}</span>
-      {dirtyPaths?.has(node.path) && (
+      {nameCell}
+      {!renaming && api.dirtyPaths?.has(node.path) && (
         <span className="file-tree__dirty" title={t('workspace.unsavedChanges')}>
           M
         </span>
       )}
-      {deleteButton}
+      {!renaming && deleteButton}
     </div>
   );
 }
@@ -309,6 +410,11 @@ export function WorkspacePanel({
   const [bottomTab, setBottomTab] = useState<BottomTab>('todo');
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalFocusNonce, setTerminalFocusNonce] = useState(0);
+  // EDITOR_SETTINGS: модальное окно настроек редактора (тема, шрифт, табы, хоткеи).
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // MULTI_TERMINAL: несколько терминалов на чат — свой таб для сервера, тестов и т.п.
+  const [terminals, setTerminals] = useState<{ id: string; title: string }[]>([{ id: 'main', title: 'main' }]);
+  const [activeTerminalId, setActiveTerminalId] = useState('main');
   const [bottomHeight, setBottomHeight] = useState<number>(() => readBottomHeight() ?? BOTTOM_DEFAULT);
   // Save state and agent conflicts are per file, so switching tabs never shows another file's state.
   const [saveStatus, setSaveStatus] = useState<Record<string, SaveStatus>>({});
@@ -326,7 +432,8 @@ export function WorkspacePanel({
   const [explorerVisible, setExplorerVisible] = useState(true);
   // IDE_GIT: боковая панель показывает либо файлы, либо Source Control.
   // LSP_LITE: добавлен третий вид — Outline (структура файла).
-  const [sideView, setSideView] = useState<'files' | 'git' | 'outline'>('files');
+  // SEARCH_REPLACE: четвёртый вид — глобальный поиск и замена.
+  const [sideView, setSideView] = useState<'files' | 'git' | 'outline' | 'search'>('files');
   // DEBUG_TRACE: точки останова по файлам (path → строки), синхронизируются с бэкендом.
   const [breakpoints, setBreakpoints] = useState<Record<string, number[]>>({});
   // FORMATTER: форматирование Prettier — сигнал для редактора и флаг «форматировать при сохранении».
@@ -347,6 +454,12 @@ export function WorkspacePanel({
     binary: boolean;
     sideBySide: boolean;
   } | null>(null);
+  // SPLIT_VIEW: до двух дополнительных панелей редактора рядом с основной (всего до 3 файлов).
+  const [sidePanes, setSidePanes] = useState<string[]>([]);
+  // FILE_TREE_UX: инлайн-переименование, drag&drop и контекстное меню в дереве файлов.
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [dragItem, setDragItem] = useState<{ path: string; isDirectory: boolean } | null>(null);
+  const [fileMenu, setFileMenu] = useState<{ x: number; y: number; path: string; isDirectory: boolean } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const toastTimer = useRef<number | null>(null);
@@ -366,6 +479,8 @@ export function WorkspacePanel({
   // Monotonic token used to ignore out-of-order file-tree responses.
   const loadSeqRef = useRef(0);
   const openSeqRef = useRef(0);
+  // MULTI_TERMINAL: счётчик для уникальных id новых терминалов.
+  const terminalSeqRef = useRef(0);
   const saveSeqRef = useRef(new Map<string, number>());
   const reloadSeqRef = useRef(new Map<string, number>());
   const mountedRef = useRef(false);
@@ -684,6 +799,30 @@ export function WorkspacePanel({
   }
   openLocationRef.current = openLocation;
 
+  // SEARCH_REPLACE: после глобальной замены перечитываем открытые (и не грязные) вкладки с диска.
+  async function refreshPathsFromDisk(paths: string[]) {
+    const chatId = chatIdRef.current;
+    if (!chatId || paths.length === 0) return;
+    for (const path of paths) {
+      const tab = tabsRef.current.find((x) => x.path === path);
+      if (!tab || tab.isBinary || isDirty(tab)) continue;
+      try {
+        const res = await getIdeFileContent(chatId, path);
+        if (!isCurrentChat(chatId)) return;
+        updateTabs((prev) =>
+          prev.map((x) =>
+            x.path === path
+              ? { ...x, content: res.content, savedContent: res.content, isBinary: res.isBinary, rev: x.rev + 1 }
+              : x,
+          ),
+        );
+      } catch {
+        // The file itself was replaced or removed by the change; the tree reload below reflects it.
+      }
+    }
+    void loadFiles(chatId);
+  }
+
   // IDE_DIFF: открыть режим сравнения «до/после» для файла из панели Source Control.
   async function openGitDiff(path: string) {
     const id = chatIdRef.current;
@@ -738,6 +877,21 @@ export function WorkspacePanel({
       cancelled = true;
     };
   }, [sessionId]);
+
+  // MULTI_TERMINAL: смена чата — сбрасываем список терминалов к одному основному.
+  useEffect(() => {
+    setTerminals([{ id: 'main', title: 'main' }]);
+    setActiveTerminalId('main');
+    terminalSeqRef.current = 0;
+  }, [sessionId]);
+
+  // FILE_TREE_UX: закрываем контекстное меню по клику вне него.
+  useEffect(() => {
+    if (!fileMenu) return;
+    const close = () => setFileMenu(null);
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [fileMenu]);
 
   function persistBreakpoints(map: Record<string, number[]>): void {
     const id = chatIdRef.current;
@@ -857,6 +1011,8 @@ export function WorkspacePanel({
     if (removed.length === 0) return;
     const remaining = tabsRef.current.filter((tab) => !match(tab.path));
     updateTabs(() => remaining);
+    // SPLIT_VIEW: a closed file must not stay pinned in a side pane.
+    setSidePanes((prev) => prev.filter((p) => !match(p)));
     if (activePathRef.current && match(activePathRef.current)) {
       setActivePath(remaining.length > 0 ? remaining[remaining.length - 1].path : null);
     }
@@ -883,6 +1039,128 @@ export function WorkspacePanel({
       return;
     }
     removeTabs((p) => p === path);
+  }
+
+  // SPLIT_VIEW: разделить редактор — открыть рядом ещё один файл (до двух панелей).
+  function splitEditor() {
+    const open = tabsRef.current.map((tab) => tab.path);
+    if (open.length === 0) return;
+    setDiffView(null);
+    setSidePanes((prev) => {
+      if (prev.length >= 2) return prev;
+      const shown = new Set<string>([activePathRef.current ?? '', ...prev]);
+      const next = open.find((p) => !shown.has(p)) ?? activePathRef.current ?? open[0];
+      return [...prev, next];
+    });
+  }
+
+  function closeSidePane(index: number) {
+    setSidePanes((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function setSidePanePath(index: number, path: string) {
+    setSidePanes((prev) => prev.map((p, i) => (i === index ? path : p)));
+  }
+
+  // FILE_TREE_UX: добавлено 2026-10-05 — переименование, перемещение и контекстное меню дерева.
+  function startRename(path: string) {
+    setFileMenu(null);
+    setRenamingPath(path);
+  }
+
+  function cancelRename() {
+    setRenamingPath(null);
+  }
+
+  function commitRename(path: string, isDirectory: boolean, newName: string) {
+    setRenamingPath(null);
+    if (!newName || newName === fileName(path)) return;
+    if (newName.includes('/') || newName.includes('\\') || newName === '.' || newName === '..') {
+      notify(t('workspace.invalidName'));
+      return;
+    }
+    void movePath(path, joinPath(parentDirOf(path), newName), isDirectory);
+  }
+
+  function dropOn(targetPath: string, targetIsDirectory: boolean) {
+    const drag = dragItem;
+    setDragItem(null);
+    if (!drag || drag.path === targetPath) return;
+    const targetDir = targetIsDirectory ? targetPath : parentDirOf(targetPath);
+    // Never move a folder into itself or one of its descendants.
+    if (drag.isDirectory && (targetDir === drag.path || targetDir.startsWith(`${drag.path}/`))) {
+      notify(t('workspace.cannotDrop'));
+      return;
+    }
+    const newPath = joinPath(targetDir, fileName(drag.path));
+    if (newPath === drag.path) return;
+    void movePath(drag.path, newPath, drag.isDirectory);
+  }
+
+  async function movePath(oldPath: string, newPath: string, isDirectory: boolean) {
+    const chatId = chatIdRef.current;
+    if (!chatId || oldPath === newPath) return;
+    try {
+      await renameIdeFile(chatId, oldPath, newPath);
+      if (!isCurrentChat(chatId)) return;
+      repathAfterMove(oldPath, newPath, isDirectory);
+      await loadFiles(chatId);
+    } catch (e) {
+      if (isCurrentChat(chatId)) notify(humanError(e, t));
+    }
+  }
+
+  // Re-points open tabs and per-path state after a rename/move, so nothing is lost.
+  function repathAfterMove(oldPath: string, newPath: string, isDirectory: boolean) {
+    const affected = (p: string) => p === oldPath || (isDirectory && p.startsWith(`${oldPath}/`));
+    const remap = (p: string) => (isDirectory ? `${newPath}${p.slice(oldPath.length)}` : newPath);
+    const oldModelPaths = tabsRef.current.filter((tab) => affected(tab.path)).map((tab) => tab.path);
+
+    updateTabs((prev) =>
+      prev.map((tab) => (affected(tab.path) ? { ...tab, path: remap(tab.path), name: fileName(remap(tab.path)) } : tab)),
+    );
+    setSidePanes((prev) => prev.map((p) => (affected(p) ? remap(p) : p)));
+    setActivePath((p) => (p && affected(p) ? remap(p) : p));
+    setBreakpoints((prev) => {
+      const next: Record<string, number[]> = {};
+      for (const [key, value] of Object.entries(prev)) next[affected(key) ? remap(key) : key] = value;
+      persistBreakpoints(next);
+      return next;
+    });
+    setConflicts((prev) => {
+      const next = { ...prev };
+      for (const key of Object.keys(next)) if (affected(key)) delete next[key];
+      return next;
+    });
+    setSaveStatus((prev) => {
+      const next = { ...prev };
+      for (const key of Object.keys(next)) if (affected(key)) delete next[key];
+      return next;
+    });
+
+    const chatId = chatIdRef.current;
+    if (chatId && oldModelPaths.length > 0) disposeModelsLater(chatId, oldModelPaths);
+  }
+
+  function promptCreateFileIn(dir: string) {
+    setFileMenu(null);
+    setDialog({
+      kind: 'prompt',
+      title: t('workspace.newFile'),
+      placeholder: 'src/app.cs',
+      initialValue: dir ? `${dir}/` : '',
+      onSubmit: (value) => void doCreateFile(value),
+    });
+  }
+
+  function openFileMenu(e: ReactMouseEvent<HTMLElement>, path: string, isDirectory: boolean) {
+    e.preventDefault();
+    e.stopPropagation();
+    setFileMenu({ x: e.clientX, y: e.clientY, path, isDirectory });
+  }
+
+  function copyPath(path: string) {
+    void navigator.clipboard?.writeText(path).catch(() => undefined);
   }
 
   // CONFIRM_DIALOGS: добавлено 2026-09-24 (M21) — удаление из дерева файлов необратимо, поэтому
@@ -1026,6 +1304,28 @@ export function WorkspacePanel({
     setBottomTab('todo');
   }
 
+  // MULTI_TERMINAL: новый терминал (сервер/тесты/git) — свой pty и свой скроллбек.
+  function addTerminal() {
+    terminalSeqRef.current += 1;
+    const id = `term-${terminalSeqRef.current}`;
+    setTerminals((prev) => [...prev, { id, title: id }]);
+    setActiveTerminalId(id);
+    if (!terminalOpen) onEnsureWorkspace?.();
+    setTerminalOpen(true);
+    setBottomTab('terminal');
+    setTerminalFocusNonce((n) => n + 1);
+  }
+
+  function closeTerminalTab(id: string) {
+    const chatId = chatIdRef.current;
+    if (chatId) void signalrService.stopTerminal(chatId, id).catch(() => undefined);
+    setTerminals((prev) => {
+      const next = prev.filter((term) => term.id !== id);
+      return next.length > 0 ? next : [{ id: 'main', title: 'main' }];
+    });
+    if (activeTerminalId === id) setActiveTerminalId('main');
+  }
+
   function startBottomResize(e: ReactPointerEvent<HTMLDivElement>) {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -1062,39 +1362,66 @@ export function WorkspacePanel({
   // Keep stable references so the global shortcuts always invoke the latest handlers.
   const runHandlerRef = useRef<() => void>(() => {});
   const terminalHandlerRef = useRef<() => void>(() => {});
+  const saveHandlerRef = useRef<() => void>(() => {});
+  // EDITOR_SETTINGS: хоткеи берутся из настроек и могут быть переназначены.
+  const editorSettings = useEditorSettings();
+  const editorSettingsRef = useRef(editorSettings);
+  editorSettingsRef.current = editorSettings;
   useEffect(() => {
     runHandlerRef.current = handleRun;
     terminalHandlerRef.current = toggleTerminal;
+    saveHandlerRef.current = () => {
+      if (activePathRef.current) void saveTab(activePathRef.current);
+    };
   });
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.ctrlKey && e.key === 'F5') {
+      const hk = editorSettingsRef.current.hotkeys;
+      // Don't hijack typing in plain inputs; the Monaco editor is exempt (its textarea lives inside
+      // .monaco-editor) so save/format keep working there.
+      const target = e.target as HTMLElement | null;
+      const inPlainInput =
+        !!target &&
+        !target.closest('.monaco-editor') &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+      if (inPlainInput) return;
+
+      if (matchesHotkey(e, hk.run)) {
         e.preventDefault();
         runHandlerRef.current();
         return;
       }
-      const paletteKey = e.ctrlKey && (e.key === 'k' || e.key === 'K' || (e.shiftKey && (e.key === 'P' || e.key === 'p')));
-      if (paletteKey) {
-        e.preventDefault();
-        setPaletteOpen((o) => !o);
-      }
-    }
-    // Ctrl+` (by key position, so it also works on layouts where that key is "ё"). Listened to in
-    // the capture phase: a focused xterm or Monaco would otherwise swallow the key.
-    function onTerminalShortcut(e: KeyboardEvent) {
-      if (e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Backquote') {
+      if (matchesHotkey(e, hk.terminal)) {
         e.preventDefault();
         e.stopPropagation();
         terminalHandlerRef.current();
+        return;
+      }
+      if (matchesHotkey(e, hk.palette)) {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+        return;
+      }
+      if (matchesHotkey(e, hk.search)) {
+        e.preventDefault();
+        setExplorerVisible(true);
+        setSideView('search');
+        return;
+      }
+      if (matchesHotkey(e, hk.save)) {
+        e.preventDefault();
+        saveHandlerRef.current();
+        return;
+      }
+      if (matchesHotkey(e, hk.format)) {
+        e.preventDefault();
+        setFormatSignal((n) => n + 1);
       }
     }
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keydown', onTerminalShortcut, true);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keydown', onTerminalShortcut, true);
-    };
+    // Capture phase: a focused xterm or Monaco would otherwise swallow the keys.
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, []);
 
   // Refresh the tree when the agent mutates files (create / str_replace / insert).
@@ -1220,13 +1547,32 @@ export function WorkspacePanel({
       label: t('workspace.menuView'),
       items: [
         { label: t('workspace.menuToggleExplorer'), action: () => setExplorerVisible((v) => !v) },
-        { label: t('terminal.menuToggle'), shortcut: 'Ctrl+`', action: () => toggleTerminal() },
+        { label: t('terminal.menuToggle'), shortcut: editorSettings.hotkeys.terminal, action: () => toggleTerminal() },
+        { separator: true },
+        { label: t('settings.open'), action: () => setSettingsOpen(true) },
       ],
     },
   ];
 
   const activeSaveStatus: SaveStatus = (activePath && saveStatus[activePath]) || 'idle';
   const terminalVisible = terminalOpen && bottomTab === 'terminal';
+
+  // FILE_TREE_UX: единый набор колбэков для дерева (переименование, drag&drop, контекстное меню).
+  const treeApi: TreeApi = {
+    activePath,
+    dirtyPaths,
+    renamingPath,
+    dragPath: dragItem?.path ?? null,
+    onOpenFile: (p) => void openFile(p),
+    onDelete: requestDelete,
+    onStartRename: startRename,
+    onCommitRename: commitRename,
+    onCancelRename: cancelRename,
+    onContextMenu: openFileMenu,
+    onDragStart: (p, isDirectory) => setDragItem({ path: p, isDirectory }),
+    onDragEnd: () => setDragItem(null),
+    onDropOn: dropOn,
+  };
 
   return (
     <div className="workspace" style={style} ref={rootRef}>
@@ -1319,6 +1665,13 @@ export function WorkspacePanel({
             >
               {t('workspace.outline')}
             </button>
+            <button
+              type="button"
+              className={`workspace__side-tab ${sideView === 'search' ? 'workspace__side-tab--active' : ''}`}
+              onClick={() => setSideView('search')}
+            >
+              {t('search.tab')}
+            </button>
           </div>
           {sideView === 'git' ? (
             <SourceControlPanel
@@ -1336,6 +1689,12 @@ export function WorkspacePanel({
               active={sideView === 'outline'}
               onOpenLocation={openLocation}
             />
+          ) : sideView === 'search' ? (
+            <SearchPanel
+              sessionId={sessionId}
+              onOpenLocation={openLocation}
+              onReplaced={(paths) => void refreshPathsFromDisk(paths)}
+            />
           ) : (
           <>
           {!sessionId && <div className="workspace__hint">{t('workspace.runTaskHint')}</div>}
@@ -1343,17 +1702,24 @@ export function WorkspacePanel({
           {error && <div className="workspace__hint workspace__hint--error">{error}</div>}
           {!loading && !error && listing && !hasFiles && <div className="workspace__hint">{t('workspace.noFiles')}</div>}
           {listing && hasFiles && (
-            <div className="file-tree">
+            <div
+              className="file-tree"
+              onContextMenu={(e) => {
+                // Right-click on empty space: create a file at the workspace root.
+                e.preventDefault();
+                setFileMenu({ x: e.clientX, y: e.clientY, path: '', isDirectory: true });
+              }}
+              onDragOver={(e) => {
+                if (dragItem) e.preventDefault();
+              }}
+              onDrop={(e) => {
+                if (!dragItem) return;
+                e.preventDefault();
+                dropOn('', true);
+              }}
+            >
               {listing.tree.map((node) => (
-                <TreeNode
-                  key={node.path}
-                  node={node}
-                  depth={0}
-                  activePath={activePath}
-                  dirtyPaths={dirtyPaths}
-                  onOpenFile={(p) => void openFile(p)}
-                  onDelete={requestDelete}
-                />
+                <TreeNode key={node.path} node={node} depth={0} api={treeApi} />
               ))}
             </div>
           )}
@@ -1392,6 +1758,18 @@ export function WorkspacePanel({
               </div>
             ))}
             {tabs.length === 0 && <div className="workspace__tabs-empty">{t('workspace.noOpenFiles')}</div>}
+            <div className="workspace__tabs-actions">
+              <button
+                className="workspace__tab-action"
+                onClick={() => splitEditor()}
+                disabled={tabs.length === 0 || sidePanes.length >= 2}
+                title={t('workspace.split')}
+                aria-label={t('workspace.split')}
+                type="button"
+              >
+                ▥
+              </button>
+            </div>
           </div>
 
           {activeTab && !activeTab.isBinary && (
@@ -1413,7 +1791,8 @@ export function WorkspacePanel({
             </div>
           )}
 
-          <div className="workspace__editor-body">
+          <div className={`workspace__editor-body${sidePanes.length > 0 ? ' workspace__editor-body--split' : ''}`}>
+            <div className="workspace__pane workspace__pane--primary">
             {diffView ? (
               <div className="diff-view">
                 <div className="diff-view__toolbar">
@@ -1513,6 +1892,58 @@ export function WorkspacePanel({
             ) : (
               <EditorEmptyState title={t('workspace.generateTitle')} text={t('workspace.generateText')} />
             )}
+            </div>
+            {!diffView &&
+              sidePanes.map((panePath, index) => {
+                const paneTab = tabs.find((x) => x.path === panePath);
+                return (
+                  <div className="workspace__pane" key={`${index}:${panePath}`}>
+                    <div className="workspace__pane-head">
+                      <select
+                        className="workspace__pane-select"
+                        value={paneTab ? panePath : ''}
+                        onChange={(e) => setSidePanePath(index, e.target.value)}
+                      >
+                        {!paneTab && <option value="">{t('workspace.paneFileClosed')}</option>}
+                        {tabs.map((x) => (
+                          <option key={x.path} value={x.path}>
+                            {x.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className="workspace__pane-close"
+                        onClick={() => closeSidePane(index)}
+                        title={t('workspace.splitClose')}
+                        aria-label={t('workspace.splitClose')}
+                        type="button"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="workspace__pane-body">
+                      {!paneTab ? (
+                        <div className="workspace__hint workspace__hint--center">{t('workspace.paneFileClosed')}</div>
+                      ) : paneTab.isBinary ? (
+                        <div className="workspace__hint workspace__hint--center">{t('workspace.binaryFile')}</div>
+                      ) : (
+                        <CodeEditor
+                          path={paneTab.path}
+                          modelPath={sessionId ? editorModelUri(sessionId, paneTab.path) : undefined}
+                          content={paneTab.content}
+                          revision={paneTab.rev}
+                          onChange={(v) => handleEditorChange(paneTab.path, v)}
+                          onSave={() => void saveTab(paneTab.path)}
+                          highlight={highlight && highlight.path === paneTab.path ? highlight : null}
+                          onCursorChange={onCursorChange}
+                          breakpoints={breakpoints[paneTab.path] ?? []}
+                          onToggleBreakpoint={(line) => toggleBreakpoint(paneTab.path, line)}
+                        />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
           </div>
         </section>
       </div>
@@ -1588,9 +2019,62 @@ export function WorkspacePanel({
           // Hidden rather than unmounted on the Todo tab, so the scrollback survives tab switches.
           <div className="workspace__bottom-body workspace__bottom-body--terminal" hidden={bottomTab !== 'terminal'}>
             {sessionId ? (
-              <Suspense fallback={<div className="terminal-notice">{t('terminal.connecting')}</div>}>
-                <TerminalPanel key={sessionId} sessionId={sessionId} autoFocus={terminalFocusNonce > 0} />
-              </Suspense>
+              <div className="terminal-tabs">
+                <div className="terminal-tabs__strip" role="tablist">
+                  {terminals.map((term) => (
+                    <div
+                      key={term.id}
+                      className={`terminal-tab ${term.id === activeTerminalId ? 'terminal-tab--active' : ''}`}
+                    >
+                      <button
+                        className="terminal-tab__label"
+                        onClick={() => setActiveTerminalId(term.id)}
+                        title={term.title}
+                        type="button"
+                      >
+                        <TerminalIcon size={12} /> {term.title}
+                      </button>
+                      {term.id !== 'main' && (
+                        <button
+                          className="terminal-tab__close"
+                          onClick={() => closeTerminalTab(term.id)}
+                          title={t('terminal.closeTab')}
+                          aria-label={t('terminal.closeTab')}
+                          type="button"
+                        >
+                          <CloseIcon size={10} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    className="terminal-tabs__add"
+                    onClick={() => addTerminal()}
+                    title={t('terminal.new')}
+                    aria-label={t('terminal.new')}
+                    type="button"
+                  >
+                    +
+                  </button>
+                </div>
+                <div className="terminal-tabs__panels">
+                  {terminals.map((term) => (
+                    <div
+                      key={`${sessionId}:${term.id}`}
+                      className="terminal-tabs__panel"
+                      hidden={term.id !== activeTerminalId}
+                    >
+                      <Suspense fallback={<div className="terminal-notice">{t('terminal.connecting')}</div>}>
+                        <TerminalPanel
+                          sessionId={sessionId}
+                          terminalId={term.id}
+                          autoFocus={term.id === activeTerminalId && terminalFocusNonce > 0}
+                        />
+                      </Suspense>
+                    </div>
+                  ))}
+                </div>
+              </div>
             ) : (
               <div className="workspace__empty workspace__empty--panel">
                 <div className="workspace__empty-text">{t('terminal.noChat')}</div>
@@ -1633,6 +2117,53 @@ export function WorkspacePanel({
         onSave={() => activePath && void saveTab(activePath)}
       />
 
+      {fileMenu && (
+        <div
+          className="file-menu"
+          style={{ left: fileMenu.x, top: fileMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          {fileMenu.path && (
+            <button className="file-menu__item" onClick={() => startRename(fileMenu.path)} type="button">
+              {t('workspace.rename')}
+            </button>
+          )}
+          {fileMenu.isDirectory && (
+            <button className="file-menu__item" onClick={() => promptCreateFileIn(fileMenu.path)} type="button">
+              {t('workspace.newFile')}
+            </button>
+          )}
+          {fileMenu.path && (
+            <button
+              className="file-menu__item"
+              onClick={() => {
+                copyPath(fileMenu.path);
+                setFileMenu(null);
+              }}
+              type="button"
+            >
+              {t('workspace.copyPath')}
+            </button>
+          )}
+          {fileMenu.path && <div className="file-menu__sep" />}
+          {fileMenu.path && (
+            <button
+              className="file-menu__item file-menu__item--danger"
+              onClick={() => {
+                setFileMenu(null);
+                requestDelete(fileMenu.path, fileMenu.isDirectory);
+              }}
+              type="button"
+            >
+              {t('workspace.delete')}
+            </button>
+          )}
+        </div>
+      )}
+
+      <EditorSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
       {dialog?.kind === 'confirm' && (
         <ConfirmDialog
           title={dialog.title}
@@ -1652,6 +2183,7 @@ export function WorkspacePanel({
           title={dialog.title}
           message={dialog.message}
           placeholder={dialog.placeholder}
+          initialValue={dialog.initialValue}
           onSubmit={(value) => {
             dialog.onSubmit(value);
             setDialog(null);

@@ -25,6 +25,8 @@ import type {
   IdeSymbolSearchResult,
   IdeSymbolsResult,
   ProblemsResult,
+  ProjectReplaceResult,
+  ProjectSearchResult,
   SaveFileDto,
   SharedChat,
   SubscriptionUsage,
@@ -409,6 +411,12 @@ export async function deleteIdePath(sessionId: string, path: string): Promise<vo
   await http.delete(`/sessions/${sessionId}/files`, { params: { path } });
 }
 
+// FILE_TREE_UX: добавлено 2026-10-05 — переименование и перемещение (drag&drop) в дереве файлов.
+/** Renames or moves a file/folder in the workspace. */
+export async function renameIdeFile(sessionId: string, oldPath: string, newPath: string): Promise<void> {
+  await http.post(`/sessions/${sessionId}/files/rename`, { oldPath, newPath });
+}
+
 // IDE_GIT: добавлено 2026-10-04 — Source Control через IDE API.
 /** Working-tree status of the workspace repository. */
 export async function getGitStatus(sessionId: string, repoFolder?: string): Promise<GitStatusResult> {
@@ -437,6 +445,45 @@ export async function getGitFileDiff(
   repoFolder?: string,
 ): Promise<GitFileDiffResult> {
   const { data } = await http.get<GitFileDiffResult>(`/sessions/${sessionId}/git/file`, { params: { path, rev, repoFolder } });
+  return data;
+}
+
+// SEARCH_REPLACE: добавлено 2026-10-05 — глобальный поиск и замена по проекту.
+/** Searches the workspace for a string or regular expression. */
+export async function searchProject(
+  sessionId: string,
+  query: string,
+  regex: boolean,
+  caseSensitive: boolean,
+  includeGlob?: string,
+): Promise<ProjectSearchResult> {
+  const { data } = await http.post<ProjectSearchResult>(`/sessions/${sessionId}/search`, {
+    query,
+    regex,
+    caseSensitive,
+    includeGlob,
+  });
+  return data;
+}
+
+/** Replaces a string or regular expression across the workspace (or a single file). */
+export async function replaceProject(
+  sessionId: string,
+  query: string,
+  replacement: string,
+  regex: boolean,
+  caseSensitive: boolean,
+  includeGlob?: string,
+  path?: string,
+): Promise<ProjectReplaceResult> {
+  const { data } = await http.post<ProjectReplaceResult>(`/sessions/${sessionId}/search/replace`, {
+    query,
+    replacement,
+    regex,
+    caseSensitive,
+    includeGlob,
+    path,
+  });
   return data;
 }
 

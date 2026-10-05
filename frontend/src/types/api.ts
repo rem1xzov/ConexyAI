@@ -375,6 +375,37 @@ export interface GitFileDiffResult {
   error?: string | null;
 }
 
+// SEARCH_REPLACE: добавлено 2026-10-05 — глобальный поиск и замена по проекту.
+export interface SearchMatch {
+  path: string;
+  line: number;
+  column: number;
+  length: number;
+  preview: string;
+}
+
+export interface ProjectSearchResult {
+  success: boolean;
+  matches: SearchMatch[];
+  totalMatches: number;
+  filesSearched: number;
+  truncated: boolean;
+  error?: string | null;
+}
+
+export interface ReplaceFileResult {
+  path: string;
+  count: number;
+}
+
+export interface ProjectReplaceResult {
+  success: boolean;
+  filesChanged: number;
+  replacements: number;
+  files: ReplaceFileResult[];
+  error?: string | null;
+}
+
 // PROBLEMS_PANEL: добавлено 2026-10-04 — единая панель проблем (ошибки/предупреждения всего проекта).
 export interface ProblemItem {
   file: string;

@@ -46,8 +46,8 @@ export function getTerminalMode(): Promise<TerminalMode> {
 }
 
 /** Runs one command in the chat's sandbox; resolves when it finishes (server timeout: 120 s). */
-export async function runSandboxCommand(chatId: string, command: string): Promise<SandboxCommandResult> {
-  const raw = await signalrService.invokeHub<Partial<SandboxCommandResult> | null>('RunSandboxCommand', chatId, command);
+export async function runSandboxCommand(chatId: string, terminalId: string, command: string): Promise<SandboxCommandResult> {
+  const raw = await signalrService.invokeHub<Partial<SandboxCommandResult> | null>('RunSandboxCommand', chatId, command, terminalId);
   return {
     exitCode: typeof raw?.exitCode === 'number' ? raw.exitCode : -1,
     timedOut: raw?.timedOut === true,
@@ -55,9 +55,9 @@ export async function runSandboxCommand(chatId: string, command: string): Promis
   };
 }
 
-/** Asks the server to stop the chat's running sandbox command; false when nothing was running. */
-export async function cancelSandboxCommand(chatId: string): Promise<boolean> {
-  const res = await signalrService.invokeHub<boolean>('CancelSandboxCommand', chatId);
+/** Asks the server to stop the terminal's running sandbox command; false when nothing was running. */
+export async function cancelSandboxCommand(chatId: string, terminalId: string): Promise<boolean> {
+  const res = await signalrService.invokeHub<boolean>('CancelSandboxCommand', chatId, terminalId);
   return res === true;
 }
 

@@ -2,6 +2,12 @@ import * as signalR from '@microsoft/signalr';
 import { recoverFromUnauthorized } from '../api/client';
 import type { AgentStatusPayload, BuildProblemsPayload, FileCreatedPayload, PendingActionPayload, RunProjectErrorPayload, RunProjectResult, SearchStatusPayload, SignalrCallbacks, StopGenerationResult, SupportMessagePayload, TaskCompletedPayload, TerminalOutputPayload, TodoUpdatePayload, ToolActionEvent } from '../types/signalr';
 
+// MULTI_TERMINAL: добавлено 2026-10-05 — вывод терминала адресуется конкретному терминалу чата.
+const MAIN_TERMINAL = 'main';
+function terminalKey(sessionId: string, terminalId: string): string {
+  return `${sessionId}\u0000${terminalId || MAIN_TERMINAL}`;
+}
+
 export type ConnectionStatus =
   | 'connected'
   | 'connecting'
@@ -236,34 +242,35 @@ class SignalrService {
 
   // ---- Interactive terminal (pty) ----
 
-  /** Subscribes to pty output for a single session; returns an unsubscribe function. */
-  onTerminalOutput(sessionId: string, handler: (data: string) => void): () => void {
-    this.terminalOutputHandlers.set(sessionId, handler);
+  /** Subscribes to one terminal's output (terminalId "main" also receives the agent's mirrored output). */
+  onTerminalOutput(sessionId: string, terminalId: string, handler: (data: string) => void): () => void {
+    const key = terminalKey(sessionId, terminalId);
+    this.terminalOutputHandlers.set(key, handler);
     return () => {
-      if (this.terminalOutputHandlers.get(sessionId) === handler) {
-        this.terminalOutputHandlers.delete(sessionId);
+      if (this.terminalOutputHandlers.get(key) === handler) {
+        this.terminalOutputHandlers.delete(key);
       }
     };
   }
 
-  async startTerminal(sessionId: string): Promise<void> {
+  async startTerminal(sessionId: string, terminalId: string): Promise<void> {
     await this.ensureConnected();
-    await this.connection!.invoke('StartTerminal', sessionId);
+    await this.connection!.invoke('StartTerminal', sessionId, terminalId);
   }
 
-  async sendTerminalInput(sessionId: string, data: string): Promise<void> {
+  async sendTerminalInput(sessionId: string, terminalId: string, data: string): Promise<void> {
     if (!this.connection) return;
-    await this.connection.invoke('SendInput', sessionId, data);
+    await this.connection.invoke('SendInput', sessionId, data, terminalId);
   }
 
-  async resizeTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
+  async resizeTerminal(sessionId: string, terminalId: string, cols: number, rows: number): Promise<void> {
     if (!this.connection) return;
-    await this.connection.invoke('ResizeTerminal', sessionId, cols, rows);
+    await this.connection.invoke('ResizeTerminal', sessionId, cols, rows, terminalId);
   }
 
-  async stopTerminal(sessionId: string): Promise<void> {
+  async stopTerminal(sessionId: string, terminalId: string): Promise<void> {
     if (!this.connection) return;
-    await this.connection.invoke('StopTerminal', sessionId);
+    await this.connection.invoke('StopTerminal', sessionId, terminalId);
   }
 
   // STOP_CONFIRM: изменено 2026-09-24 (M17, контракт C-5) — хаб теперь подтверждает остановку.
@@ -489,7 +496,7 @@ class SignalrService {
       this.supportHandlers.forEach((h) => h(payload));
     });
     this.connection.on('TerminalOutput', (payload: TerminalOutputPayload) => {
-      this.terminalOutputHandlers.get(payload.sessionId)?.(payload.data);
+      this.terminalOutputHandlers.get(terminalKey(payload.sessionId, payload.terminalId ?? 'main'))?.(payload.data);
     });
   }
 

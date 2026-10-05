@@ -869,7 +869,7 @@ async Task TestTerminalReuseAndOutputAsync()
         Assert(terminal.ActiveSessionCount == 1, "a repeated start must reuse the existing pty, not spawn a second one");
 
         var marker = "CONEXY_PTY_OK_" + Guid.NewGuid().ToString("N");
-        await terminal.SendInputAsync(sessionId, "echo " + marker + Environment.NewLine);
+        await terminal.SendInputAsync(sessionId, TerminalIds.Main, "echo " + marker + Environment.NewLine);
 
         var received = await WaitForTerminalOutputAsync(hub, marker, TimeSpan.FromSeconds(15));
         Assert(received, "terminal output should contain the echoed marker");

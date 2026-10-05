@@ -245,6 +245,8 @@ builder.Services.AddScoped<IDiagnosticsService, ConexyDiagnosticsService>();
 builder.Services.AddScoped<ISymbolService, ConexySymbolService>();
 // DEBUG_TRACE: добавлено 2026-10-05 — точки останова и трассировка выполнения Python в песочнице.
 builder.Services.AddScoped<IDebugService, ConexyDebugService>();
+// SEARCH_REPLACE: добавлено 2026-10-05 — глобальный поиск/замена по проекту.
+builder.Services.AddScoped<IProjectSearchService, ConexyProjectSearchService>();
 // AGENT_HOOKS: добавлено 2026-10-04 — хуки проекта из .conexy/hooks.json.
 builder.Services.AddScoped<IAgentHooksService, ConexyAgentHooksService>();
 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17

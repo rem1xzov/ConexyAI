@@ -4,6 +4,7 @@ import { detectLanguageFromExtension } from '../utils/fileTypes';
 import { registerLspProviders } from '../utils/monacoLsp';
 import { registerFormattingProvider } from '../utils/monacoFormatter';
 import { formatCode, formatterSupports } from '../utils/formatter';
+import { useEditorSettings } from '../utils/editorSettings';
 import { useEffectiveTheme } from '../theme';
 
 type EditorInstance = Parameters<OnMount>[0];
@@ -77,6 +78,7 @@ interface CodeEditorProps {
 export function CodeEditor({ path, modelPath, content, revision = 0, onChange, onSave, highlight, onCursorChange, breakpoints, onToggleBreakpoint, formatSignal = 0 }: CodeEditorProps) {
   const language = detectLanguageFromExtension(path);
   const effectiveTheme = useEffectiveTheme();
+  const settings = useEditorSettings();
   const uri = modelPath ?? path;
   const breakpointsKey = (breakpoints ?? []).join(',');
 
@@ -268,16 +270,18 @@ export function CodeEditor({ path, modelPath, content, revision = 0, onChange, o
   const options = useMemo(
     () => ({
       minimap: { enabled: true },
-      fontSize: 14,
+      fontSize: settings.fontSize,
       automaticLayout: true,
       scrollBeyondLastLine: false,
-      tabSize: 2,
+      tabSize: settings.tabSize,
+      insertSpaces: true,
+      detectIndentation: false,
       wordWrap: 'off' as const,
       renderWhitespace: 'selection' as const,
       // DEBUG_TRACE: место для точек останова слева от номера строки.
       glyphMargin: true,
     }),
-    [],
+    [settings.fontSize, settings.tabSize],
   );
 
   return (
@@ -305,8 +309,12 @@ export function CodeEditor({ path, modelPath, content, revision = 0, onChange, o
 
         // LSP_LITE: go-to-definition / hover / symbols / completion (registered once per Monaco).
         registerLspProviders(monaco);
-        // FORMATTER: Prettier as Monaco's document formatter + Shift+Alt+F bound to it.
+        // FORMATTER: Prettier as Monaco's document formatter.
         registerFormattingProvider(monaco);
+        // HOTKEYS: unbind Monaco's built-in Shift+Alt+F format — the rebindable global handler owns it.
+        monaco.editor.addKeybindingRules([
+          { keybinding: monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, command: null },
+        ]);
 
         syncModelWithContent();
         applyHighlight();
@@ -315,11 +323,6 @@ export function CodeEditor({ path, modelPath, content, revision = 0, onChange, o
         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
           if (!showsOwnModel()) return;
           onSaveRef.current();
-        });
-
-        // FORMATTER: Shift+Alt+F formats with Prettier (overrides Monaco's built-in formatter).
-        editor.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => {
-          void formatEditor();
         });
 
         // DEBUG_TRACE: клик по гаттеру ставит/снимает точку останова.
