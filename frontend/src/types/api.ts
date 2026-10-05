@@ -362,6 +362,19 @@ export interface GitOperationResult {
   error?: string | null;
 }
 
+// IDE_DIFF: добавлено 2026-10-05 — diff-редактор «до/после» одного файла.
+export interface GitFileDiffResult {
+  success: boolean;
+  path: string;
+  revision: string;
+  hasOriginal: boolean;
+  hasModified: boolean;
+  binary: boolean;
+  original: string;
+  modified: string;
+  error?: string | null;
+}
+
 // PROBLEMS_PANEL: добавлено 2026-10-04 — единая панель проблем (ошибки/предупреждения всего проекта).
 export interface ProblemItem {
   file: string;
@@ -380,4 +393,96 @@ export interface ProblemsResult {
   warnings: number;
   problems: ProblemItem[];
   error?: string | null;
+}
+
+// LSP_LITE: добавлено 2026-10-05 — Outline, go-to-definition, hover и подсказки по символам проекта.
+export interface IdeSymbolNode {
+  name: string;
+  kind: string;
+  detail?: string | null;
+  line: number;
+  column: number;
+  endLine: number;
+  endColumn: number;
+  children: IdeSymbolNode[];
+}
+
+export interface IdeSymbolsResult {
+  success: boolean;
+  path?: string | null;
+  language?: string | null;
+  symbols: IdeSymbolNode[];
+  error?: string | null;
+}
+
+export interface IdeLocation {
+  path: string;
+  line: number;
+  column: number;
+  kind: string;
+  text: string;
+}
+
+export interface IdeDefinitionResult {
+  found: boolean;
+  word: string;
+  locations: IdeLocation[];
+  error?: string | null;
+}
+
+export interface IdeHoverResult {
+  found: boolean;
+  word: string;
+  kind?: string | null;
+  signature?: string | null;
+  documentation?: string | null;
+  path?: string | null;
+  line: number;
+  error?: string | null;
+}
+
+export interface IdeSymbolSearchItem {
+  name: string;
+  kind: string;
+  path: string;
+  line: number;
+  column: number;
+}
+
+export interface IdeSymbolSearchResult {
+  success: boolean;
+  symbols: IdeSymbolSearchItem[];
+  error?: string | null;
+}
+
+// DEBUG_TRACE: добавлено 2026-10-05 — точки останова и трассировка выполнения Python (уровень A).
+export interface DebugBreakpoint {
+  path: string;
+  line: number;
+}
+
+export interface DebugBreakpointsResult {
+  success: boolean;
+  breakpoints: DebugBreakpoint[];
+  error?: string | null;
+}
+
+export interface DebugStep {
+  file: string;
+  line: number;
+  function: string;
+  locals: Record<string, string>;
+  stack: string[];
+  breakpoint: boolean;
+}
+
+export interface DebugResult {
+  success: boolean;
+  language?: string | null;
+  steps: DebugStep[];
+  output: string;
+  programError?: string | null;
+  error?: string | null;
+  truncated: boolean;
+  exitCode: number;
 }

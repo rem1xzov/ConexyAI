@@ -10,12 +10,20 @@ import type {
   ChatTranscript,
   ConexyRequest,
   ConexyResponse,
+  DebugBreakpoint,
+  DebugBreakpointsResult,
+  DebugResult,
   DevTokenResponse,
   GitBranchesResult,
+  GitFileDiffResult,
   GitLogResult,
   GitOperationResult,
   GitStatusResult,
+  IdeDefinitionResult,
   IdeFileContent,
+  IdeHoverResult,
+  IdeSymbolSearchResult,
+  IdeSymbolsResult,
   ProblemsResult,
   SaveFileDto,
   SharedChat,
@@ -420,6 +428,18 @@ export async function getGitBranches(sessionId: string, repoFolder?: string): Pr
   return data;
 }
 
+// IDE_DIFF: добавлено 2026-10-05 — содержимое файла в ревизии (по умолчанию HEAD) против рабочей копии.
+/** Returns a file's content at a revision versus its working-tree content, for the diff view. */
+export async function getGitFileDiff(
+  sessionId: string,
+  path: string,
+  rev?: string,
+  repoFolder?: string,
+): Promise<GitFileDiffResult> {
+  const { data } = await http.get<GitFileDiffResult>(`/sessions/${sessionId}/git/file`, { params: { path, rev, repoFolder } });
+  return data;
+}
+
 /** Stages or unstages paths (empty list = all). */
 export async function stageGitPaths(
   sessionId: string,
@@ -466,5 +486,76 @@ export async function analyzeProblems(
   path?: string,
 ): Promise<ProblemsResult> {
   const { data } = await http.post<ProblemsResult>(`/sessions/${sessionId}/problems/analyze`, { tool, path });
+  return data;
+}
+
+// LSP_LITE: добавлено 2026-10-05 — Outline, go-to-definition, hover и подсказки по символам.
+// Текст передаётся из живого буфера редактора, поэтому несохранённые правки тоже видны.
+/** Symbol tree (outline) of a file. */
+export async function getIdeSymbols(
+  sessionId: string,
+  path: string,
+  content?: string,
+): Promise<IdeSymbolsResult> {
+  const { data } = await http.post<IdeSymbolsResult>(`/sessions/${sessionId}/symbols`, { path, content });
+  return data;
+}
+
+/** Declarations of an identifier across the workspace. */
+export async function findIdeDefinition(
+  sessionId: string,
+  path: string,
+  word: string,
+  content?: string,
+): Promise<IdeDefinitionResult> {
+  const { data } = await http.post<IdeDefinitionResult>(`/sessions/${sessionId}/definition`, { path, word, content });
+  return data;
+}
+
+/** Signature and doc comment for the identifier under the cursor. */
+export async function getIdeHover(
+  sessionId: string,
+  path: string,
+  word: string,
+  content?: string,
+): Promise<IdeHoverResult> {
+  const { data } = await http.post<IdeHoverResult>(`/sessions/${sessionId}/hover`, { path, word, content });
+  return data;
+}
+
+/** Project-wide symbol lookup by name prefix (used for completion). */
+export async function searchIdeSymbols(
+  sessionId: string,
+  query: string,
+  limit = 30,
+): Promise<IdeSymbolSearchResult> {
+  const { data } = await http.post<IdeSymbolSearchResult>(`/sessions/${sessionId}/symbols/search`, { query, limit });
+  return data;
+}
+
+// DEBUG_TRACE: добавлено 2026-10-05 — точки останова и трассировка выполнения Python.
+/** Breakpoints saved for the chat. */
+export async function getDebugBreakpoints(sessionId: string): Promise<DebugBreakpointsResult> {
+  const { data } = await http.get<DebugBreakpointsResult>(`/sessions/${sessionId}/debug/breakpoints`);
+  return data;
+}
+
+/** Replaces the chat's saved breakpoints. */
+export async function setDebugBreakpoints(
+  sessionId: string,
+  breakpoints: DebugBreakpoint[],
+): Promise<DebugBreakpointsResult> {
+  const { data } = await http.put<DebugBreakpointsResult>(`/sessions/${sessionId}/debug/breakpoints`, { breakpoints });
+  return data;
+}
+
+/** Runs the entry script under the trace harness and returns the recorded steps. */
+export async function runDebug(
+  sessionId: string,
+  path: string,
+  breakpoints: DebugBreakpoint[],
+  recordAll: boolean,
+): Promise<DebugResult> {
+  const { data } = await http.post<DebugResult>(`/sessions/${sessionId}/debug/run`, { path, breakpoints, recordAll });
   return data;
 }

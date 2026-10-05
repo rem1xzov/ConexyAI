@@ -8657,3 +8657,87 @@ html[data-theme="light"]:not([data-incognito="true"]) .artifact-panel {
 .problems__msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .problems__code { flex: 0 0 auto; color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }
 .problems__loc { flex: 0 0 auto; color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }
+
+/* LSP_LITE: добавлено 2026-10-05 — панель Outline (дерево структуры файла). */
+.outline { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.outline__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.outline__file { flex: 1; min-width: 0; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.outline__tree { overflow-y: auto; padding: 4px 0; }
+.outline__row { display: flex; align-items: center; gap: 6px; padding: 2px 6px; cursor: pointer; font-size: 12px; color: var(--text); }
+.outline__row:hover { background: var(--surface-2); }
+.outline__toggle { width: 12px; padding: 0; border: none; background: none; color: var(--muted); cursor: pointer; font-size: 10px; line-height: 1; }
+.outline__toggle--empty { cursor: default; }
+.outline__kind { flex: 0 0 auto; width: 14px; text-align: center; font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; color: var(--accent); }
+.outline__kind--method,
+.outline__kind--function { color: #3b82f6; }
+.outline__kind--field,
+.outline__kind--property,
+.outline__kind--variable { color: #16a34a; }
+.outline__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* DEBUG_TRACE: добавлено 2026-10-05 — точка останова в гаттере редактора. */
+.code-breakpoint::before {
+  content: '';
+  display: block;
+  width: 10px;
+  height: 10px;
+  margin: 4px auto 0;
+  border-radius: 50%;
+  background: #e51400;
+}
+
+/* DEBUG_TRACE: добавлено 2026-10-05 — панель отладки (шаги, переменные, стек вызовов). */
+.debug { display: flex; flex-direction: column; height: 100%; overflow: hidden; font-size: 12px; }
+.debug__toolbar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+.debug__entry { max-width: 30%; color: var(--muted); font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.debug__toggle { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+.debug__run { margin-left: auto; font-size: 12px; }
+.debug__breakpoints { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 10px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+.debug__breakpoints-title { color: var(--muted); }
+.debug__bp { display: inline-flex; align-items: center; gap: 2px; padding: 1px 2px 1px 6px; background: var(--surface-2); border-radius: 4px; }
+.debug__bp-path { padding: 0; border: none; background: none; color: var(--accent); cursor: pointer; font-family: ui-monospace, monospace; font-size: 11px; }
+.debug__bp-remove { padding: 0 3px; border: none; background: none; color: var(--muted); cursor: pointer; }
+.debug__bp-remove:hover { color: var(--danger); }
+.debug__result { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.debug__summary { display: flex; align-items: center; gap: 10px; padding: 4px 10px; color: var(--muted); flex: 0 0 auto; }
+.debug__truncated { color: #e2b93b; }
+.debug__split { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.debug__list { width: 40%; min-width: 160px; overflow-y: auto; border-right: 1px solid var(--border); }
+.debug__step { display: flex; align-items: center; gap: 6px; width: 100%; padding: 2px 10px; border: none; background: none; color: var(--text); cursor: pointer; font-size: 12px; text-align: left; }
+.debug__step:hover { background: var(--surface-2); }
+.debug__step--active { background: var(--surface-2); }
+.debug__step-bp { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #e51400; }
+.debug__step-fn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.debug__step-loc { flex: 0 0 auto; color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }
+.debug__details { flex: 1; min-width: 0; overflow-y: auto; padding: 6px 10px; }
+.debug__details-section { margin-bottom: 10px; }
+.debug__details-title { margin-bottom: 4px; color: var(--muted); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; }
+.debug__empty { color: var(--muted); }
+.debug__var { display: flex; gap: 8px; font-family: ui-monospace, monospace; }
+.debug__var-name { flex: 0 0 auto; color: var(--accent); }
+.debug__var-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.debug__frame { padding-left: 8px; color: var(--muted); font-family: ui-monospace, monospace; }
+.debug__pre { margin: 0; padding: 6px; background: var(--surface-2); border-radius: 4px; max-height: 160px; overflow: auto; font-family: ui-monospace, monospace; font-size: 11px; white-space: pre-wrap; word-break: break-word; }
+.debug__pre--error { color: var(--danger); }
+
+/* IDE_DIFF: добавлено 2026-10-05 — diff-редактор «до/после». */
+.scm__path--button { padding: 0; border: none; background: none; text-align: left; cursor: pointer; font: inherit; font-size: 12px; }
+.scm__path--button:hover { color: var(--accent); }
+.diff-view { display: flex; flex-direction: column; height: 100%; }
+.diff-view__toolbar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--border); flex: 0 0 auto; font-size: 12px; }
+.diff-view__title { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-view__rev { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }
+.diff-view__toggle { display: flex; align-items: center; gap: 4px; margin-left: auto; color: var(--muted); }
+.diff-view__close { padding: 0 4px; border: none; background: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; }
+.diff-view__close:hover { color: var(--danger); }
+.diff-view__body { flex: 1; min-height: 0; }
+
+/* FORMATTER: галочка у пункта меню ( например «Форматировать при сохранении»). */
+.menubar__check { flex: 0 0 auto; width: 12px; color: var(--accent); font-size: 11px; }

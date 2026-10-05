@@ -6,6 +6,8 @@ export interface MenuItem {
   action?: () => void;
   disabled?: boolean;
   separator?: boolean;
+  /** FORMATTER: shows a check mark (e.g. a toggle such as "Format on save"). */
+  checked?: boolean;
 }
 
 export interface Menu {
@@ -62,6 +64,9 @@ export function MenuBar({ menus }: { menus: Menu[] }) {
                     }}
                     type="button"
                   >
+                    <span className="menubar__check" aria-hidden>
+                      {item.checked ? '✓' : ''}
+                    </span>
                     <span className="menubar__item-label">{item.label}</span>
                     {item.shortcut && <span className="menubar__shortcut">{item.shortcut}</span>}
                   </button>

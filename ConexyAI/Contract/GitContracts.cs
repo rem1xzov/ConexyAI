@@ -35,3 +35,16 @@ public sealed record GitStageRequest(IReadOnlyList<string>? Paths, bool Staged, 
 public sealed record GitCommitRequest(string? Message, string? AuthorName, string? AuthorEmail, string? RepoFolder);
 
 public sealed record GitCheckoutRequest(string? Branch, string? RepoFolder);
+
+// IDE_DIFF: добавлено 2026-10-05 — diff-редактор «до/после»: версия файла в ревизии (по умолчанию
+// HEAD) против рабочей копии. Original/Modified пусты, а Binary=true для бинарных файлов.
+public sealed record GitFileDiffResult(
+    bool Success,
+    string Path,
+    string Revision,
+    bool HasOriginal,
+    bool HasModified,
+    bool Binary,
+    string Original,
+    string Modified,
+    string? Error);

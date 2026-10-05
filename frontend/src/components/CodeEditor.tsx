@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react';
 import Editor, { loader, type OnMount } from '@monaco-editor/react';
 import { detectLanguageFromExtension } from '../utils/fileTypes';
+import { registerLspProviders } from '../utils/monacoLsp';
+import { registerFormattingProvider } from '../utils/monacoFormatter';
+import { formatCode, formatterSupports } from '../utils/formatter';
 import { useEffectiveTheme } from '../theme';
 
 type EditorInstance = Parameters<OnMount>[0];
@@ -59,6 +62,11 @@ interface CodeEditorProps {
   /** Lines to flash after an agent edit, paired with a nonce so re-edits re-trigger. */
   highlight?: { lines: number[]; nonce: number } | null;
   onCursorChange?: (pos: { line: number; column: number; language: string }) => void;
+  // DEBUG_TRACE: точки останова текущего файла (1-based) и их переключение кликом по гаттеру.
+  breakpoints?: number[];
+  onToggleBreakpoint?: (line: number) => void;
+  // FORMATTER: сигнал «отформатируй документ» (счётчик), приходит из меню редактора.
+  formatSignal?: number;
 }
 
 /**
@@ -66,14 +74,16 @@ interface CodeEditorProps {
  * Ctrl/Cmd+S triggers an explicit save (no autosave to avoid racing the agent's
  * str_replace_editor edits).
  */
-export function CodeEditor({ path, modelPath, content, revision = 0, onChange, onSave, highlight, onCursorChange }: CodeEditorProps) {
+export function CodeEditor({ path, modelPath, content, revision = 0, onChange, onSave, highlight, onCursorChange, breakpoints, onToggleBreakpoint, formatSignal = 0 }: CodeEditorProps) {
   const language = detectLanguageFromExtension(path);
   const effectiveTheme = useEffectiveTheme();
   const uri = modelPath ?? path;
+  const breakpointsKey = (breakpoints ?? []).join(',');
 
   const editorRef = useRef<EditorInstance | null>(null);
   const monacoRef = useRef<MonacoApi | null>(null);
   const decorationIdsRef = useRef<string[]>([]);
+  const breakpointDecorationIdsRef = useRef<string[]>([]);
   const highlightRef = useRef<{ lines: number[]; nonce: number } | null | undefined>(highlight);
   useEffect(() => {
     highlightRef.current = highlight;
@@ -86,12 +96,43 @@ export function CodeEditor({ path, modelPath, content, revision = 0, onChange, o
   const pathRef = useRef(path);
   const uriRef = useRef(uri);
   const contentRef = useRef(content);
+  const breakpointsRef = useRef<number[]>(breakpoints ?? []);
+  const onToggleBreakpointRef = useRef(onToggleBreakpoint);
   onSaveRef.current = onSave;
   onChangeRef.current = onChange;
   onCursorChangeRef.current = onCursorChange;
   pathRef.current = path;
   uriRef.current = uri;
   contentRef.current = content;
+  breakpointsRef.current = breakpoints ?? [];
+  onToggleBreakpointRef.current = onToggleBreakpoint;
+
+  /** Redraws the breakpoint dots in the glyph margin for the file currently shown. */
+  function applyBreakpoints() {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
+
+    if (breakpointDecorationIdsRef.current.length) {
+      try {
+        editor.deltaDecorations(breakpointDecorationIdsRef.current, []);
+      } catch {
+        /* decorations may belong to a model that was swapped out */
+      }
+      breakpointDecorationIdsRef.current = [];
+    }
+
+    const lines = breakpointsRef.current;
+    if (lines.length === 0) return;
+
+    breakpointDecorationIdsRef.current = editor.deltaDecorations(
+      [],
+      lines.map((line) => ({
+        range: new monaco.Range(line, 1, line, 1),
+        options: { isWholeLine: false, glyphMarginClassName: 'code-breakpoint' },
+      })),
+    );
+  }
 
   /** True when the editor currently shows the model of the file this component is rendering. */
   function showsOwnModel(): boolean {
@@ -118,6 +159,26 @@ export function CodeEditor({ path, modelPath, content, revision = 0, onChange, o
     const next = contentRef.current;
     if (model.getValue() === next) return;
     editor.executeEdits('external', [{ range: model.getFullModelRange(), text: next, forceMoveMarkers: true }]);
+    editor.pushUndoStop();
+  }
+
+  /** FORMATTER: formats the current document with Prettier and applies it as a single undoable edit. */
+  async function formatEditor() {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model || !showsOwnModel()) return;
+
+    const currentPath = pathRef.current;
+    if (!formatterSupports(currentPath)) return;
+
+    const source = model.getValue();
+    const formatted = await formatCode(currentPath, source);
+
+    // The tab may have switched, or the user may have typed, while Prettier was loading.
+    if (!showsOwnModel() || editor.getModel() !== model) return;
+    if (formatted == null || formatted === model.getValue()) return;
+
+    editor.executeEdits('prettier', [{ range: model.getFullModelRange(), text: formatted, forceMoveMarkers: true }]);
     editor.pushUndoStop();
   }
 
@@ -173,6 +234,7 @@ export function CodeEditor({ path, modelPath, content, revision = 0, onChange, o
     }
 
     syncModelWithContent();
+    applyBreakpoints();
 
     const pos = editor.getPosition();
     if (pos) {
@@ -191,6 +253,18 @@ export function CodeEditor({ path, modelPath, content, revision = 0, onChange, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revision]);
 
+  // Breakpoints were toggled, or the file on screen changed: redraw the glyph dots.
+  useEffect(() => {
+    applyBreakpoints();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [breakpointsKey, uri]);
+
+  // FORMATTER: «Format document» из меню (счётчик) форматирует текущий документ.
+  useEffect(() => {
+    if (formatSignal > 0) void formatEditor();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formatSignal]);
+
   const options = useMemo(
     () => ({
       minimap: { enabled: true },
@@ -200,6 +274,8 @@ export function CodeEditor({ path, modelPath, content, revision = 0, onChange, o
       tabSize: 2,
       wordWrap: 'off' as const,
       renderWhitespace: 'selection' as const,
+      // DEBUG_TRACE: место для точек останова слева от номера строки.
+      glyphMargin: true,
     }),
     [],
   );
@@ -227,12 +303,30 @@ export function CodeEditor({ path, modelPath, content, revision = 0, onChange, o
         editorRef.current = editor;
         monacoRef.current = monaco;
 
+        // LSP_LITE: go-to-definition / hover / symbols / completion (registered once per Monaco).
+        registerLspProviders(monaco);
+        // FORMATTER: Prettier as Monaco's document formatter + Shift+Alt+F bound to it.
+        registerFormattingProvider(monaco);
+
         syncModelWithContent();
         applyHighlight();
+        applyBreakpoints();
 
         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
           if (!showsOwnModel()) return;
           onSaveRef.current();
+        });
+
+        // FORMATTER: Shift+Alt+F formats with Prettier (overrides Monaco's built-in formatter).
+        editor.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => {
+          void formatEditor();
+        });
+
+        // DEBUG_TRACE: клик по гаттеру ставит/снимает точку останова.
+        editor.onMouseDown((e: { target: { type: number; position?: { lineNumber: number } | null } }) => {
+          if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
+          const line = e.target.position?.lineNumber;
+          if (line) onToggleBreakpointRef.current?.(line);
         });
 
         editor.onDidChangeCursorPosition((e: { position: { lineNumber: number; column: number } }) => {

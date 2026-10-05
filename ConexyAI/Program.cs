@@ -241,6 +241,10 @@ builder.Services.AddScoped<IConexyBashService, ConexyBashService>();
 builder.Services.AddScoped<ITestRunnerService, ConexyTestRunnerService>();
 // DIAGNOSTICS: добавлено 2026-10-04 — структурированные ошибки компиляции/типов (get_diagnostics).
 builder.Services.AddScoped<IDiagnosticsService, ConexyDiagnosticsService>();
+// LSP_LITE: добавлено 2026-10-05 — Outline, go-to-definition, hover и подсказки по символам IDE.
+builder.Services.AddScoped<ISymbolService, ConexySymbolService>();
+// DEBUG_TRACE: добавлено 2026-10-05 — точки останова и трассировка выполнения Python в песочнице.
+builder.Services.AddScoped<IDebugService, ConexyDebugService>();
 // AGENT_HOOKS: добавлено 2026-10-04 — хуки проекта из .conexy/hooks.json.
 builder.Services.AddScoped<IAgentHooksService, ConexyAgentHooksService>();
 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17

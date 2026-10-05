@@ -7,9 +7,12 @@ import {
   deleteWorkspaceFile,
   downloadWorkspaceRaw,
   downloadWorkspaceZip,
+  getDebugBreakpoints,
+  getGitFileDiff,
   getIdeFileContent,
   getWorkspaceFiles,
   saveIdeFileContent,
+  setDebugBreakpoints,
   uploadWorkspaceZip,
 } from '../api/conexyApi';
 import type { WorkspaceFileEntry, WorkspaceListing } from '../types/api';
@@ -18,6 +21,7 @@ import { signalrService } from '../services/signalrService';
 import { changedLineNumbers } from '../utils/diff';
 import { humanError } from '../utils/humanError';
 import { triggerDownload } from '../utils/download';
+import { formatCode, formatterSupports } from '../utils/formatter';
 import { CodeEditor, disposeEditorModels, editorModelUri } from './CodeEditor';
 import { TodoPanel } from './TodoPanel';
 import { FileTypeIcon } from './FileTypeIcon';
@@ -26,6 +30,10 @@ import { CommandPalette } from './CommandPalette';
 import { ConfirmDialog, PromptDialog } from './Dialog';
 import { ProblemsPanel } from './ProblemsPanel';
 import { SourceControlPanel } from './SourceControlPanel';
+import { OutlinePanel } from './OutlinePanel';
+import { DebugPanel } from './DebugPanel';
+import { DiffView } from './DiffView';
+import { OPEN_LOCATION_EVENT } from '../utils/monacoLsp';
 import { MenuBar, type Menu } from './MenuBar';
 import {
   CheckIcon,
@@ -84,7 +92,7 @@ type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 // STATUS_TAB_REMOVED: добавлено 2026-09-22 — вкладка «Статус» удалена целиком: она дублировала
 // ленту чата (те же команды и карточки подтверждения).
 // SANDBOX_TERMINAL: добавлено 2026-09-24 — вторая вкладка нижней панели: терминал.
-type BottomTab = 'todo' | 'terminal' | 'problems';
+type BottomTab = 'todo' | 'terminal' | 'problems' | 'debug';
 
 type DialogState =
   | { kind: 'confirm'; title: string; message?: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void }
@@ -317,7 +325,28 @@ export function WorkspacePanel({
   const [leaveBusy, setLeaveBusy] = useState(false);
   const [explorerVisible, setExplorerVisible] = useState(true);
   // IDE_GIT: боковая панель показывает либо файлы, либо Source Control.
-  const [sideView, setSideView] = useState<'files' | 'git'>('files');
+  // LSP_LITE: добавлен третий вид — Outline (структура файла).
+  const [sideView, setSideView] = useState<'files' | 'git' | 'outline'>('files');
+  // DEBUG_TRACE: точки останова по файлам (path → строки), синхронизируются с бэкендом.
+  const [breakpoints, setBreakpoints] = useState<Record<string, number[]>>({});
+  // FORMATTER: форматирование Prettier — сигнал для редактора и флаг «форматировать при сохранении».
+  const [formatSignal, setFormatSignal] = useState(0);
+  const [formatOnSave, setFormatOnSave] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('conexy.formatOnSave') === '1';
+    } catch {
+      return false;
+    }
+  });
+  // IDE_DIFF: открытый diff «до/после» (null — обычный редактор).
+  const [diffView, setDiffView] = useState<{
+    path: string;
+    revision: string;
+    original: string;
+    modified: string;
+    binary: boolean;
+    sideBySide: boolean;
+  } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const toastTimer = useRef<number | null>(null);
@@ -340,6 +369,11 @@ export function WorkspacePanel({
   const saveSeqRef = useRef(new Map<string, number>());
   const reloadSeqRef = useRef(new Map<string, number>());
   const mountedRef = useRef(false);
+  // LSP_LITE: go-to-definition в другой файл открывает его через этот колбэк (последняя версия).
+  const openLocationRef = useRef<(path: string, line: number, column: number) => void>(() => {});
+  // FORMATTER: актуальный флаг format-on-save для async saveTab.
+  const formatOnSaveRef = useRef(formatOnSave);
+  formatOnSaveRef.current = formatOnSave;
 
   useLayoutEffect(() => {
     chatIdRef.current = sessionId;
@@ -610,6 +644,7 @@ export function WorkspacePanel({
   async function openFile(path: string) {
     const chatId = chatIdRef.current;
     if (!chatId) return;
+    setDiffView(null);
     const request = ++openSeqRef.current;
     if (tabsRef.current.some((tab) => tab.path === path)) {
       setActivePath(path);
@@ -640,6 +675,87 @@ export function WorkspacePanel({
     } catch (e) {
       if (isCurrentChat(chatId)) setError(humanError(e, t));
     }
+  }
+
+  // LSP_LITE: открыть файл и подсветить/показать нужную строку (Outline и cross-file definition).
+  function openLocation(path: string, line: number, column: number) {
+    void openFile(path);
+    setHighlight({ path, lines: [line], nonce: Date.now() });
+  }
+  openLocationRef.current = openLocation;
+
+  // IDE_DIFF: открыть режим сравнения «до/после» для файла из панели Source Control.
+  async function openGitDiff(path: string) {
+    const id = chatIdRef.current;
+    if (!id) return;
+    try {
+      const res = await getGitFileDiff(id, path);
+      if (!isCurrentChat(id)) return;
+      if (!res.success) {
+        notify(res.error ? humanError(new Error(res.error), t) : t('diff.failed'));
+        return;
+      }
+      setDiffView({
+        path: res.path,
+        revision: res.revision,
+        original: res.original,
+        modified: res.modified,
+        binary: res.binary,
+        sideBySide: true,
+      });
+    } catch (e) {
+      if (isCurrentChat(id)) notify(humanError(e, t));
+    }
+  }
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { path?: string; line?: number; column?: number } | undefined;
+      if (!detail?.path || !detail.line) return;
+      openLocationRef.current(detail.path, detail.line, detail.column ?? 1);
+    };
+    window.addEventListener(OPEN_LOCATION_EVENT, handler);
+    return () => window.removeEventListener(OPEN_LOCATION_EVENT, handler);
+  }, []);
+
+  // DEBUG_TRACE: загрузить точки останова чата при его открытии.
+  useEffect(() => {
+    if (!sessionId) {
+      setBreakpoints({});
+      return;
+    }
+    let cancelled = false;
+    void getDebugBreakpoints(sessionId)
+      .then((res) => {
+        if (cancelled || !res.success) return;
+        const map: Record<string, number[]> = {};
+        for (const bp of res.breakpoints ?? []) (map[bp.path] ??= []).push(bp.line);
+        for (const key of Object.keys(map)) map[key].sort((a, b) => a - b);
+        setBreakpoints(map);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  function persistBreakpoints(map: Record<string, number[]>): void {
+    const id = chatIdRef.current;
+    if (!id) return;
+    const list = Object.entries(map).flatMap(([file, lines]) => lines.map((line) => ({ path: file, line })));
+    void setDebugBreakpoints(id, list).catch(() => undefined);
+  }
+
+  function toggleBreakpoint(path: string, line: number): void {
+    const current = breakpoints[path] ?? [];
+    const next = current.includes(line)
+      ? current.filter((l) => l !== line)
+      : [...current, line].sort((a, b) => a - b);
+    const map = { ...breakpoints };
+    if (next.length > 0) map[path] = next;
+    else delete map[path];
+    setBreakpoints(map);
+    persistBreakpoints(map);
   }
 
   async function doCreateFile(path: string) {
@@ -680,8 +796,24 @@ export function WorkspacePanel({
 
   async function saveTab(path: string) {
     const chatId = chatIdRef.current;
+    const found = tabsRef.current.find((x) => x.path === path);
+    if (!chatId || !found || found.isBinary) return;
+
+    // FORMATTER: format-on-save (Prettier) before writing. If the user types while Prettier loads,
+    // this save skips formatting rather than overwriting the newer text.
+    if (formatOnSaveRef.current && formatterSupports(path)) {
+      const source = found.content;
+      const formatted = await formatCode(path, source);
+      const fresh = tabsRef.current.find((x) => x.path === path);
+      if (formatted != null && formatted !== source && fresh && fresh.content === source) {
+        updateTabs((prev) =>
+          prev.map((x) => (x.path === path ? { ...x, content: formatted, version: x.version + 1, rev: x.rev + 1 } : x)),
+        );
+      }
+    }
+
     const tab = tabsRef.current.find((x) => x.path === path);
-    if (!chatId || !tab || tab.isBinary) return;
+    if (!tab) return;
 
     // Exactly this snapshot is sent, and only this snapshot is marked as saved afterwards: text
     // typed while the request is in flight stays "unsaved" instead of being silently lost.
@@ -1061,6 +1193,30 @@ export function WorkspacePanel({
       ],
     },
     {
+      label: t('workspace.menuEdit'),
+      items: [
+        {
+          label: t('formatter.formatDocument'),
+          shortcut: 'Shift+Alt+F',
+          disabled: !activePath || !formatterSupports(activePath),
+          action: () => setFormatSignal((n) => n + 1),
+        },
+        {
+          label: t('formatter.formatOnSave'),
+          checked: formatOnSave,
+          action: () => {
+            const next = !formatOnSave;
+            setFormatOnSave(next);
+            try {
+              localStorage.setItem('conexy.formatOnSave', next ? '1' : '0');
+            } catch {
+              /* localStorage may be unavailable */
+            }
+          },
+        },
+      ],
+    },
+    {
       label: t('workspace.menuView'),
       items: [
         { label: t('workspace.menuToggleExplorer'), action: () => setExplorerVisible((v) => !v) },
@@ -1156,6 +1312,13 @@ export function WorkspacePanel({
             >
               {t('scm.tab')}
             </button>
+            <button
+              type="button"
+              className={`workspace__side-tab ${sideView === 'outline' ? 'workspace__side-tab--active' : ''}`}
+              onClick={() => setSideView('outline')}
+            >
+              {t('workspace.outline')}
+            </button>
           </div>
           {sideView === 'git' ? (
             <SourceControlPanel
@@ -1163,6 +1326,15 @@ export function WorkspacePanel({
               authorName={gitAuthorName}
               authorEmail={gitAuthorEmail}
               onChanged={() => void loadFiles(chatIdRef.current)}
+              onOpenDiff={(p) => void openGitDiff(p)}
+            />
+          ) : sideView === 'outline' ? (
+            <OutlinePanel
+              sessionId={sessionId}
+              path={activePath}
+              content={activeTab?.content ?? ''}
+              active={sideView === 'outline'}
+              onOpenLocation={openLocation}
             />
           ) : (
           <>
@@ -1196,7 +1368,10 @@ export function WorkspacePanel({
               <div
                 key={tab.path}
                 className={`workspace__tab ${tab.path === activePath ? 'workspace__tab--active' : ''}`}
-                onClick={() => setActivePath(tab.path)}
+                onClick={() => {
+                  setActivePath(tab.path);
+                  setDiffView(null);
+                }}
                 title={conflicts[tab.path] !== undefined ? t('workspace.conflictBadge') : tab.path}
               >
                 <FileTypeIcon path={tab.path} size={14} />
@@ -1239,7 +1414,48 @@ export function WorkspacePanel({
           )}
 
           <div className="workspace__editor-body">
-            {activeTab ? (
+            {diffView ? (
+              <div className="diff-view">
+                <div className="diff-view__toolbar">
+                  <FileTypeIcon path={diffView.path} size={14} />
+                  <span className="diff-view__title" title={diffView.path}>
+                    {fileName(diffView.path)}
+                  </span>
+                  <span className="diff-view__rev">
+                    {diffView.revision} ↔ {t('diff.workingTree')}
+                  </span>
+                  <label className="diff-view__toggle">
+                    <input
+                      type="checkbox"
+                      checked={diffView.sideBySide}
+                      onChange={(e) => setDiffView((d) => (d ? { ...d, sideBySide: e.target.checked } : d))}
+                    />
+                    {t('diff.sideBySide')}
+                  </label>
+                  <button
+                    className="diff-view__close"
+                    onClick={() => setDiffView(null)}
+                    title={t('diff.close')}
+                    aria-label={t('diff.close')}
+                    type="button"
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="diff-view__body">
+                  {diffView.binary ? (
+                    <div className="workspace__hint workspace__hint--center">{t('diff.binary')}</div>
+                  ) : (
+                    <DiffView
+                      path={diffView.path}
+                      original={diffView.original}
+                      modified={diffView.modified}
+                      sideBySide={diffView.sideBySide}
+                    />
+                  )}
+                </div>
+              </div>
+            ) : activeTab ? (
               activeTab.isBinary ? (
                 <div className="workspace__hint workspace__hint--center">
                   {t('workspace.binaryFile')}
@@ -1268,6 +1484,9 @@ export function WorkspacePanel({
                   onSave={() => void saveTab(activeTab.path)}
                   highlight={highlight && highlight.path === activeTab.path ? highlight : null}
                   onCursorChange={onCursorChange}
+                  breakpoints={breakpoints[activeTab.path] ?? []}
+                  onToggleBreakpoint={(line) => toggleBreakpoint(activeTab.path, line)}
+                  formatSignal={formatSignal}
                 />
               )
             ) : hasFiles ? (
@@ -1347,6 +1566,14 @@ export function WorkspacePanel({
           >
             {t('workspace.problems')}
           </button>
+          <button
+            role="tab"
+            aria-selected={bottomTab === 'debug'}
+            className={`workspace__bottom-tab ${bottomTab === 'debug' ? 'workspace__bottom-tab--active' : ''}`}
+            onClick={() => setBottomTab('debug')}
+          >
+            {t('debug.tab')}
+          </button>
         </div>
         <div className="workspace__bottom-body" hidden={bottomTab !== 'todo'}>
           {todos.length > 0 ? (
@@ -1380,6 +1607,17 @@ export function WorkspacePanel({
               void openFile(path);
               setHighlight({ path, lines: [line], nonce: Date.now() });
             }}
+          />
+        </div>
+        <div className="workspace__bottom-body" hidden={bottomTab !== 'debug'}>
+          <DebugPanel
+            key={sessionId ?? 'none'}
+            sessionId={sessionId}
+            active={bottomTab === 'debug'}
+            entryPath={activePath}
+            breakpoints={breakpoints}
+            onRemoveBreakpoint={toggleBreakpoint}
+            onOpenLocation={openLocation}
           />
         </div>
       </div>

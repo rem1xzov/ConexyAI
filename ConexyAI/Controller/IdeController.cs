@@ -24,6 +24,10 @@ public class IdeController : ControllerBase
     // PROBLEMS_PANEL: добавлено 2026-10-04 — анализ ошибок/предупреждений для панели Problems.
     private readonly IDiagnosticsService _diagnostics;
     private readonly IConexyBashService _bash;
+    // LSP_LITE: добавлено 2026-10-05 — Outline, go-to-definition, hover и подсказки по символам IDE.
+    private readonly ISymbolService _symbols;
+    // DEBUG_TRACE: добавлено 2026-10-05 — точки останова и трассировка выполнения Python.
+    private readonly IDebugService _debug;
     private readonly ILogger<IdeController> _logger;
 
     public IdeController(
@@ -32,6 +36,8 @@ public class IdeController : ControllerBase
         IConexyWorkspaceService workspace,
         IDiagnosticsService diagnostics,
         IConexyBashService bash,
+        ISymbolService symbols,
+        IDebugService debug,
         ILogger<IdeController> logger)
     {
         _fileService = fileService;
@@ -39,6 +45,8 @@ public class IdeController : ControllerBase
         _workspace = workspace;
         _diagnostics = diagnostics;
         _bash = bash;
+        _symbols = symbols;
+        _debug = debug;
         _logger = logger;
     }
 
@@ -253,6 +261,27 @@ public class IdeController : ControllerBase
         catch (Exception ex) { return MapError(ex); }
     }
 
+    // IDE_DIFF: добавлено 2026-10-05 — diff-редактор «до/после» для одного файла.
+    /// <summary>Content of a file at a revision (default HEAD) versus its working-tree content.</summary>
+    [HttpGet("{sessionId:guid}/git/file")]
+    public async Task<ActionResult<GitFileDiffResult>> GetGitFileDiff(
+        Guid sessionId,
+        [FromQuery] string path,
+        [FromQuery] string? rev = null,
+        [FromQuery] string? repoFolder = null,
+        CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        if (!await _chatAccess.CanReadAsync(userId, sessionId, ct))
+            return Forbidden();
+        if (string.IsNullOrWhiteSpace(path))
+            return BadRequest(new { error = "Query parameter 'path' is required." });
+
+        try { return Ok(await _workspace.GitFileDiffAsync(sessionId, path, rev, repoFolder, ct)); }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
     /// <summary>Stages or unstages paths (empty = all).</summary>
     [HttpPost("{sessionId:guid}/git/stage")]
     public async Task<IActionResult> Stage(
@@ -359,6 +388,130 @@ public class IdeController : ControllerBase
             _logger.LogWarning(ex, "Problems analysis failed for session {SessionId}", sessionId);
             return Ok(new ProblemsResult(false, null, 0, 0, Array.Empty<BuildProblem>(), "PROBLEMS_FAILED"));
         }
+    }
+
+    // LSP_LITE: добавлено 2026-10-05 — Outline, go-to-definition, hover и подсказки по символам
+    // для редактора IDE. Текст берётся из живого буфера редактора (content), поэтому несохранённые
+    // правки тоже видны.
+    /// <summary>Returns the symbol tree (outline) of a file.</summary>
+    [HttpPost("{sessionId:guid}/symbols")]
+    public async Task<ActionResult<IdeSymbolsResult>> GetSymbols(
+        Guid sessionId, [FromBody] IdeSymbolRequest? request, CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        if (!await _chatAccess.CanReadAsync(userId, sessionId, ct))
+            return Forbidden();
+        if (request is null || string.IsNullOrWhiteSpace(request.Path))
+            return BadRequest(new { error = "Path is required." });
+
+        if (request.Content is null && _workspace.GetTaskWorkspacePathIfExists(sessionId) is null)
+            return Ok(new IdeSymbolsResult(true, request.Path, null, Array.Empty<IdeSymbol>(), null));
+
+        try { return Ok(await _symbols.GetDocumentSymbolsAsync(sessionId, request.Path, request.Content, ct)); }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
+    /// <summary>Finds the declaration(s) of an identifier across the workspace.</summary>
+    [HttpPost("{sessionId:guid}/definition")]
+    public async Task<ActionResult<IdeDefinitionResult>> FindDefinition(
+        Guid sessionId, [FromBody] IdeDefinitionRequest? request, CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        if (!await _chatAccess.CanReadAsync(userId, sessionId, ct))
+            return Forbidden();
+        if (request is null || string.IsNullOrWhiteSpace(request.Word))
+            return Ok(new IdeDefinitionResult(false, request?.Word ?? string.Empty, Array.Empty<IdeLocation>(), null));
+
+        if (request.Content is null && _workspace.GetTaskWorkspacePathIfExists(sessionId) is null)
+            return Ok(new IdeDefinitionResult(false, request.Word, Array.Empty<IdeLocation>(), null));
+
+        try { return Ok(await _symbols.FindDefinitionsAsync(sessionId, request.Path, request.Word, request.Content, ct)); }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
+    /// <summary>Returns a signature + doc comment for the identifier under the cursor.</summary>
+    [HttpPost("{sessionId:guid}/hover")]
+    public async Task<ActionResult<IdeHoverResult>> GetHover(
+        Guid sessionId, [FromBody] IdeHoverRequest? request, CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        if (!await _chatAccess.CanReadAsync(userId, sessionId, ct))
+            return Forbidden();
+        if (request is null || string.IsNullOrWhiteSpace(request.Word))
+            return Ok(new IdeHoverResult(false, request?.Word ?? string.Empty, null, null, null, null, 0, null));
+
+        if (request.Content is null && _workspace.GetTaskWorkspacePathIfExists(sessionId) is null)
+            return Ok(new IdeHoverResult(false, request.Word, null, null, null, null, 0, null));
+
+        try { return Ok(await _symbols.GetHoverAsync(sessionId, request.Path, request.Word, request.Content, ct)); }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
+    /// <summary>Project-wide symbol lookup by name prefix (used for completion).</summary>
+    [HttpPost("{sessionId:guid}/symbols/search")]
+    public async Task<ActionResult<IdeSymbolSearchResult>> SearchSymbols(
+        Guid sessionId, [FromBody] IdeSymbolSearchRequest? request, CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        if (!await _chatAccess.CanReadAsync(userId, sessionId, ct))
+            return Forbidden();
+        if (request is null || string.IsNullOrWhiteSpace(request.Query))
+            return Ok(new IdeSymbolSearchResult(true, Array.Empty<IdeSymbolSearchItem>(), null));
+
+        if (_workspace.GetTaskWorkspacePathIfExists(sessionId) is null)
+            return Ok(new IdeSymbolSearchResult(true, Array.Empty<IdeSymbolSearchItem>(), null));
+
+        try { return Ok(await _symbols.SearchSymbolsAsync(sessionId, request.Query, request.Limit, ct)); }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
+    // DEBUG_TRACE: добавлено 2026-10-05 — «уровень A» отладчика: точки останова и трассировка
+    // выполнения Python (sys.settrace) в песочнице. Запуск кода — только владельцу чата.
+    /// <summary>Returns the chat's saved breakpoints.</summary>
+    [HttpGet("{sessionId:guid}/debug/breakpoints")]
+    public async Task<ActionResult<DebugBreakpointsResult>> GetBreakpoints(
+        Guid sessionId, CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        if (!await _chatAccess.CanReadAsync(userId, sessionId, ct))
+            return Forbidden();
+
+        try { return Ok(await _debug.GetBreakpointsAsync(sessionId, ct)); }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
+    /// <summary>Replaces the chat's saved breakpoints.</summary>
+    [HttpPut("{sessionId:guid}/debug/breakpoints")]
+    public async Task<IActionResult> SetBreakpoints(
+        Guid sessionId, [FromBody] DebugBreakpointsRequest? request, CancellationToken ct = default)
+    {
+        var denied = await AuthorizeWriteAsync(sessionId, ct);
+        if (denied is not null)
+            return denied;
+
+        try { return Ok(await _debug.SetBreakpointsAsync(sessionId, request?.Breakpoints ?? Array.Empty<DebugBreakpoint>(), ct)); }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
+    /// <summary>Runs the entry script under the trace harness and returns recorded steps.</summary>
+    [HttpPost("{sessionId:guid}/debug/run")]
+    public async Task<IActionResult> RunDebug(
+        Guid sessionId, [FromBody] DebugRunRequest? request, CancellationToken ct = default)
+    {
+        var denied = await AuthorizeWriteAsync(sessionId, ct);
+        if (denied is not null)
+            return denied;
+
+        if (request is null)
+            return BadRequest(new { error = "Invalid request body." });
+
+        try { return Ok(await _debug.RunAsync(sessionId, request, ct)); }
+        catch (Exception ex) { return MapError(ex); }
     }
 
     private ObjectResult Forbidden() =>

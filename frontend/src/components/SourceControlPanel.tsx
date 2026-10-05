@@ -18,9 +18,11 @@ interface SourceControlPanelProps {
   onChanged?: () => void;
   authorName?: string;
   authorEmail?: string;
+  // IDE_DIFF: клик по файлу открывает сравнение «до/после».
+  onOpenDiff?: (path: string) => void;
 }
 
-export function SourceControlPanel({ sessionId, onChanged, authorName, authorEmail }: SourceControlPanelProps) {
+export function SourceControlPanel({ sessionId, onChanged, authorName, authorEmail, onOpenDiff }: SourceControlPanelProps) {
   const { t } = useTranslation();
   const [branch, setBranch] = useState<string | null>(null);
   const [isRepo, setIsRepo] = useState(true);
@@ -193,7 +195,14 @@ export function SourceControlPanel({ sessionId, onChanged, authorName, authorEma
                 </button>
               </div>
               {staged.map((c) => (
-                <ScmRow key={c.path} change={c} onToggle={() => void toggle(c.path, false)} label={t('scm.unstage')} symbol="−" />
+                <ScmRow
+                  key={c.path}
+                  change={c}
+                  onToggle={() => void toggle(c.path, false)}
+                  onOpen={onOpenDiff ? () => onOpenDiff(c.path) : undefined}
+                  label={t('scm.unstage')}
+                  symbol="−"
+                />
               ))}
             </div>
           )}
@@ -214,7 +223,14 @@ export function SourceControlPanel({ sessionId, onChanged, authorName, authorEma
             </div>
             {unstaged.length === 0 && <div className="workspace__hint">{t('scm.noChanges')}</div>}
             {unstaged.map((c) => (
-              <ScmRow key={c.path} change={c} onToggle={() => void toggle(c.path, true)} label={t('scm.stage')} symbol="+" />
+              <ScmRow
+                key={c.path}
+                change={c}
+                onToggle={() => void toggle(c.path, true)}
+                onOpen={onOpenDiff ? () => onOpenDiff(c.path) : undefined}
+                label={t('scm.stage')}
+                symbol="+"
+              />
             ))}
           </div>
 
@@ -239,20 +255,29 @@ export function SourceControlPanel({ sessionId, onChanged, authorName, authorEma
 function ScmRow({
   change,
   onToggle,
+  onOpen,
   label,
   symbol,
 }: {
   change: GitFileChange;
   onToggle: () => void;
+  onOpen?: () => void;
   label: string;
   symbol: string;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="scm__row" title={change.path}>
       <span className={`scm__badge scm__badge--${badgeClass(change.status)}`}>
         {change.status !== ' ' ? change.status : 'M'}
       </span>
-      <span className="scm__path">{change.path}</span>
+      {onOpen ? (
+        <button className="scm__path scm__path--button" onClick={onOpen} title={t('diff.open')} type="button">
+          {change.path}
+        </button>
+      ) : (
+        <span className="scm__path">{change.path}</span>
+      )}
       <button className="scm__row-btn" onClick={onToggle} title={label} aria-label={label} type="button">
         {symbol}
       </button>

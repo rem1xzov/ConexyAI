@@ -84,6 +84,10 @@ public interface IConexyWorkspaceService
     /// <summary>Local branches with the current one flagged.</summary>
     Task<GitBranchesResult> GitBranchesAsync(Guid chatId, string? repoFolder = null, CancellationToken ct = default);
 
+    // IDE_DIFF: добавлено 2026-10-05 — diff-редактор IDE: содержимое файла в ревизии против рабочей копии.
+    /// <summary>Content of one file at a revision (default HEAD) versus its working-tree content.</summary>
+    Task<GitFileDiffResult> GitFileDiffAsync(Guid chatId, string path, string? revision = null, string? repoFolder = null, CancellationToken ct = default);
+
     /// <summary>Stages the given files, commits them and pushes to the target branch.</summary>
     /// <remarks>
     /// GITHUB_PAT_PER_USER: <paramref name="authorName"/>/<paramref name="authorEmail"/> — личность

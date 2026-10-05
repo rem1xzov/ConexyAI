@@ -45,6 +45,7 @@ internal static class SecurityTests
         Add("GITHUB_DELETE_BRANCH: deletes a branch and refuses protected ones", TestGitDeleteBranchAsync, GitInstalled);
         Add("GITHUB_FULL: switch/merge branches and a clean pull refusal", TestGitSyncAsync, GitInstalled);
         Add("IDE_GIT: status lists changes, staging/commit/log/branches work", TestIdeGitAsync, GitInstalled);
+        Add("IDE_DIFF: a file compares its revision against the working copy, traversal is refused", TestIdeGitDiffAsync, GitInstalled);
         Add("GREP_GLOB: content search and file globs stay inside the workspace", TestGrepGlobAsync);
         Add("TEST_RUNNER: parses failures and auto-detects the framework", TestTestRunnerAsync);
         Add("DIAGNOSTICS: parses compiler/linter output and auto-detects the checker", TestDiagnosticsAsync);
@@ -1078,6 +1079,53 @@ internal static class SecurityTests
             var branches = await workspace.GitBranchesAsync(chatId, "app");
             Assert(branches.Success && branches.Branches.Any(b => b.Name == "main" && b.IsCurrent), "the current branch is flagged");
             Assert(branches.Branches.Any(b => b.Name == "feature/x"), "other branches are listed");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    // IDE_DIFF: diff-редактор — версия файла в ревизии против рабочей копии.
+    private static async Task TestIdeGitDiffAsync()
+    {
+        var root = TempRoot();
+        try
+        {
+            var workspace = Workspace(root);
+            var chatId = Guid.NewGuid();
+            var workspaceDir = workspace.GetTaskWorkspacePath(chatId);
+            var repoDir = Path.Combine(workspaceDir, "app");
+            Directory.CreateDirectory(repoDir);
+            RunGit(repoDir, "init", "-q", "-b", "main");
+            RunGit(repoDir, "config", "user.email", "a@b.c");
+            RunGit(repoDir, "config", "user.name", "t");
+            await File.WriteAllTextAsync(Path.Combine(repoDir, "a.txt"), "a\n");
+            await File.WriteAllTextAsync(Path.Combine(repoDir, "img.bin"), "\0\u0001binary");
+            RunGit(repoDir, "add", "-A");
+            RunGit(repoDir, "commit", "-q", "-m", "init");
+
+            // A modified text file has both sides.
+            await File.WriteAllTextAsync(Path.Combine(repoDir, "a.txt"), "a\nchanged\n");
+            var modified = await workspace.GitFileDiffAsync(chatId, "a.txt", "HEAD", "app");
+            Assert(modified.Success && modified.HasOriginal && modified.HasModified, "the diff has both sides: " + modified.Error);
+            Assert(modified.Original == "a\n" && modified.Modified == "a\nchanged\n", "the diff carries before/after content");
+            Assert(!modified.Binary, "a text file is not binary");
+
+            // A brand-new file has no original side.
+            await File.WriteAllTextAsync(Path.Combine(repoDir, "b.txt"), "b\n");
+            var added = await workspace.GitFileDiffAsync(chatId, "b.txt", "HEAD", "app");
+            Assert(added.Success && !added.HasOriginal && added.HasModified && added.Modified == "b\n", "a new file has no original side");
+
+            // Binary content is flagged and never sent as text.
+            var binary = await workspace.GitFileDiffAsync(chatId, "img.bin", "HEAD", "app");
+            Assert(binary.Success && binary.Binary && binary.Original.Length == 0, "a binary file is flagged as binary");
+
+            // Path traversal and an option-like revision are refused.
+            var traversal = await workspace.GitFileDiffAsync(chatId, "../escape.txt", "HEAD", "app");
+            Assert(!traversal.Success, "path traversal is refused");
+            var badRev = await workspace.GitFileDiffAsync(chatId, "a.txt", "HEAD;rm -rf /", "app");
+            Assert(!badRev.Success, "an invalid revision is refused");
         }
         finally
         {

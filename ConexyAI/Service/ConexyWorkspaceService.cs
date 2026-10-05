@@ -841,6 +841,66 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
         return new GitBranchesResult(true, branches, null);
     }
 
+    // IDE_DIFF: добавлено 2026-10-05 — «до/после» для diff-редактора: версия файла в ревизии
+    // (по умолчанию HEAD) и его текущее содержимое в рабочей копии.
+    private const int MaxDiffBytes = 2_000_000;
+
+    public async Task<GitFileDiffResult> GitFileDiffAsync(Guid chatId, string path, string? revision = null, string? repoFolder = null, CancellationToken ct = default)
+    {
+        var rev = string.IsNullOrWhiteSpace(revision) ? "HEAD" : revision.Trim();
+        var normalized = NormalizeRepoPath(path);
+        if (normalized is null)
+            return new GitFileDiffResult(false, path ?? string.Empty, rev, false, false, false, string.Empty, string.Empty, "Invalid path.");
+        if (!IsSafeRefName(rev))
+            return new GitFileDiffResult(false, normalized, rev, false, false, false, string.Empty, string.Empty, "Invalid revision.");
+
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
+        var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
+        if (unsafeRepo is not null)
+            return new GitFileDiffResult(false, normalized, rev, false, false, false, string.Empty, string.Empty, unsafeRepo);
+
+        // Original side: the blob at the requested revision. Absent (new file / unborn HEAD) is not fatal.
+        var show = await RunGitAsync(workspaceDir, new[] { "show", $"{rev}:{normalized}" }, null, ct, TimeSpan.FromSeconds(30));
+        var hasOriginal = show.Success;
+        var original = show.Success ? show.StdOut : string.Empty;
+
+        // Modified side: the working-tree file, read through the workspace jail.
+        var fullPath = Path.Combine(workspaceDir, normalized.Replace('/', Path.DirectorySeparatorChar));
+        try
+        {
+            ValidateWorkspacePath(fullPath);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new GitFileDiffResult(false, normalized, rev, false, false, false, string.Empty, string.Empty, "Invalid path.");
+        }
+
+        var hasModified = false;
+        var modified = string.Empty;
+        try
+        {
+            if (File.Exists(fullPath))
+            {
+                var bytes = await File.ReadAllBytesAsync(fullPath, ct);
+                hasModified = true;
+                modified = System.Text.Encoding.UTF8.GetString(bytes);
+            }
+        }
+        catch (IOException)
+        {
+            // Unreadable file: report it as absent rather than failing the whole diff.
+        }
+
+        // Binary (NUL byte) or oversized files are not diffable in the editor.
+        var binary = original.Contains('\0') || modified.Contains('\0')
+                     || original.Length > MaxDiffBytes || modified.Length > MaxDiffBytes;
+        if (binary)
+            return new GitFileDiffResult(true, normalized, rev, hasOriginal, hasModified, true, string.Empty, string.Empty, null);
+
+        return new GitFileDiffResult(true, normalized, rev, hasOriginal, hasModified, false, original, modified, null);
+    }
+
     private static string? NullIfEmpty(string value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
     // IDE_GIT: pathspec safety — no absolute paths, no parent traversal, never an option-looking value.
@@ -1149,7 +1209,10 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            // Git writes UTF-8; pin the decoding so Cyrillic file content and commit messages survive.
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
         };
         foreach (var argument in arguments)
         {
