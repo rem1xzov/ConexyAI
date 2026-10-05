@@ -787,5 +787,24 @@
     "screenshotsOmitted_few": "{{count}} скриншота не хранятся на этом устройстве",
     "screenshotsOmitted_many": "{{count}} скриншотов не хранятся на этом устройстве",
     "screenshotsOmitted_other": "{{count}} скриншота не хранятся на этом устройстве"
+  },
+  "scm": {
+    "tab": "Git",
+    "branch": "Ветка",
+    "refresh": "Обновить",
+    "commitPlaceholder": "Сообщение коммита",
+    "commit": "Закоммитить",
+    "working": "Работаю…",
+    "staged": "Подготовлено",
+    "unstageAll": "Снять всё",
+    "unstage": "Убрать из индекса",
+    "changes": "Изменения",
+    "stageAll": "Подготовить всё",
+    "stage": "Подготовить",
+    "history": "История",
+    "noChanges": "Изменений нет.",
+    "noCommits": "Коммитов пока нет.",
+    "notARepo": "В рабочей области нет git-репозитория.",
+    "error": "Не удалось выполнить git-операцию."
   }
 }

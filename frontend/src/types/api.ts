@@ -312,3 +312,52 @@ export interface IdeFileContent {
   content: string;
   isBinary: boolean;
 }
+
+// IDE_GIT: добавлено 2026-10-04 — Source Control (панель git в IDE).
+export interface GitFileChange {
+  path: string;
+  indexStatus: string;
+  workTreeStatus: string;
+  staged: boolean;
+  /** Single-letter badge the backend computes for the row. */
+  status: string;
+}
+
+export interface GitStatusResult {
+  success: boolean;
+  isRepository: boolean;
+  branch?: string | null;
+  changes: GitFileChange[];
+  error?: string | null;
+}
+
+export interface GitCommitInfo {
+  hash: string;
+  shortHash: string;
+  author: string;
+  date: string;
+  subject: string;
+}
+
+export interface GitLogResult {
+  success: boolean;
+  commits: GitCommitInfo[];
+  error?: string | null;
+}
+
+export interface GitBranchInfo {
+  name: string;
+  isCurrent: boolean;
+}
+
+export interface GitBranchesResult {
+  success: boolean;
+  branches: GitBranchInfo[];
+  error?: string | null;
+}
+
+export interface GitOperationResult {
+  success: boolean;
+  message?: string | null;
+  error?: string | null;
+}

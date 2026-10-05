@@ -203,6 +203,103 @@ public class IdeController : ControllerBase
         }
     }
 
+    // IDE_GIT: добавлено 2026-10-04 — Source Control (локальный git в рабочей области).
+    /// <summary>Working-tree status of the workspace repository.</summary>
+    [HttpGet("{sessionId:guid}/git/status")]
+    public async Task<ActionResult<GitStatusResult>> GetGitStatus(
+        Guid sessionId, [FromQuery] string? repoFolder = null, CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        if (!await _chatAccess.CanReadAsync(userId, sessionId, ct))
+            return Forbidden();
+
+        try { return Ok(await _workspace.GitStatusAsync(sessionId, repoFolder, ct)); }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
+    /// <summary>Recent commits of the current branch.</summary>
+    [HttpGet("{sessionId:guid}/git/log")]
+    public async Task<ActionResult<GitLogResult>> GetGitLog(
+        Guid sessionId, [FromQuery] int limit = 30, [FromQuery] string? repoFolder = null, CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        if (!await _chatAccess.CanReadAsync(userId, sessionId, ct))
+            return Forbidden();
+
+        try { return Ok(await _workspace.GitLogAsync(sessionId, limit, repoFolder, ct)); }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
+    /// <summary>Local branches of the workspace repository.</summary>
+    [HttpGet("{sessionId:guid}/git/branches")]
+    public async Task<ActionResult<GitBranchesResult>> GetGitBranches(
+        Guid sessionId, [FromQuery] string? repoFolder = null, CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        if (!await _chatAccess.CanReadAsync(userId, sessionId, ct))
+            return Forbidden();
+
+        try { return Ok(await _workspace.GitBranchesAsync(sessionId, repoFolder, ct)); }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
+    /// <summary>Stages or unstages paths (empty = all).</summary>
+    [HttpPost("{sessionId:guid}/git/stage")]
+    public async Task<IActionResult> Stage(
+        Guid sessionId, [FromBody] GitStageRequest? request, CancellationToken ct = default)
+    {
+        var denied = await AuthorizeWriteAsync(sessionId, ct);
+        if (denied is not null)
+            return denied;
+
+        try
+        {
+            return Ok(await _workspace.GitStageAsync(sessionId, request?.Paths ?? Array.Empty<string>(), !(request?.Staged ?? true), request?.RepoFolder, ct));
+        }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
+    /// <summary>Commits the staged changes locally (no push).</summary>
+    [HttpPost("{sessionId:guid}/git/commit")]
+    public async Task<IActionResult> Commit(
+        Guid sessionId, [FromBody] GitCommitRequest? request, CancellationToken ct = default)
+    {
+        var denied = await AuthorizeWriteAsync(sessionId, ct);
+        if (denied is not null)
+            return denied;
+
+        if (request is null || string.IsNullOrWhiteSpace(request.Message))
+            return BadRequest(new { error = "Commit message is required." });
+
+        try
+        {
+            return Ok(await _workspace.GitCommitAsync(sessionId, request.Message, request.AuthorName, request.AuthorEmail, request.RepoFolder, ct));
+        }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
+    /// <summary>Switches to an existing branch (owner only).</summary>
+    [HttpPost("{sessionId:guid}/git/checkout")]
+    public async Task<IActionResult> Checkout(
+        Guid sessionId, [FromBody] GitCheckoutRequest? request, CancellationToken ct = default)
+    {
+        var denied = await AuthorizeOwnerAsync(sessionId, ct);
+        if (denied is not null)
+            return denied;
+
+        if (request is null || string.IsNullOrWhiteSpace(request.Branch))
+            return BadRequest(new { error = "Branch is required." });
+
+        try
+        {
+            return Ok(await _workspace.GitSwitchBranchAsync(sessionId, request.Branch, request.RepoFolder, ct));
+        }
+        catch (Exception ex) { return MapError(ex); }
+    }
+
     private ObjectResult Forbidden() =>
         StatusCode(StatusCodes.Status403Forbidden, new { error = "CHAT_FORBIDDEN" });
 

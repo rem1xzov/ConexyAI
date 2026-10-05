@@ -11,6 +11,10 @@ import type {
   ConexyRequest,
   ConexyResponse,
   DevTokenResponse,
+  GitBranchesResult,
+  GitLogResult,
+  GitOperationResult,
+  GitStatusResult,
   IdeFileContent,
   SaveFileDto,
   SharedChat,
@@ -394,4 +398,61 @@ export async function createIdeFile(sessionId: string, path: string, isDirectory
 /** Deletes a file or a folder in the workspace via the IDE file API. */
 export async function deleteIdePath(sessionId: string, path: string): Promise<void> {
   await http.delete(`/sessions/${sessionId}/files`, { params: { path } });
+}
+
+// IDE_GIT: добавлено 2026-10-04 — Source Control через IDE API.
+/** Working-tree status of the workspace repository. */
+export async function getGitStatus(sessionId: string, repoFolder?: string): Promise<GitStatusResult> {
+  const { data } = await http.get<GitStatusResult>(`/sessions/${sessionId}/git/status`, { params: { repoFolder } });
+  return data;
+}
+
+/** Recent commits of the current branch. */
+export async function getGitLog(sessionId: string, limit = 30, repoFolder?: string): Promise<GitLogResult> {
+  const { data } = await http.get<GitLogResult>(`/sessions/${sessionId}/git/log`, { params: { limit, repoFolder } });
+  return data;
+}
+
+/** Local branches of the workspace repository. */
+export async function getGitBranches(sessionId: string, repoFolder?: string): Promise<GitBranchesResult> {
+  const { data } = await http.get<GitBranchesResult>(`/sessions/${sessionId}/git/branches`, { params: { repoFolder } });
+  return data;
+}
+
+/** Stages or unstages paths (empty list = all). */
+export async function stageGitPaths(
+  sessionId: string,
+  paths: string[],
+  staged: boolean,
+  repoFolder?: string,
+): Promise<GitOperationResult> {
+  const { data } = await http.post<GitOperationResult>(`/sessions/${sessionId}/git/stage`, { paths, staged, repoFolder });
+  return data;
+}
+
+/** Commits the staged changes locally (no push). */
+export async function commitGit(
+  sessionId: string,
+  message: string,
+  authorName?: string,
+  authorEmail?: string,
+  repoFolder?: string,
+): Promise<GitOperationResult> {
+  const { data } = await http.post<GitOperationResult>(`/sessions/${sessionId}/git/commit`, {
+    message,
+    authorName,
+    authorEmail,
+    repoFolder,
+  });
+  return data;
+}
+
+/** Switches to an existing branch. */
+export async function checkoutGitBranch(
+  sessionId: string,
+  branch: string,
+  repoFolder?: string,
+): Promise<GitOperationResult> {
+  const { data } = await http.post<GitOperationResult>(`/sessions/${sessionId}/git/checkout`, { branch, repoFolder });
+  return data;
 }

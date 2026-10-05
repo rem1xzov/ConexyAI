@@ -771,5 +771,24 @@
     "toolSearchChats": "Searching past chats: {{query}}",
     "screenshotsOmitted_one": "{{count}} screenshot is not kept on this device",
     "screenshotsOmitted_other": "{{count}} screenshots are not kept on this device"
+  },
+  "scm": {
+    "tab": "Git",
+    "branch": "Branch",
+    "refresh": "Refresh",
+    "commitPlaceholder": "Commit message",
+    "commit": "Commit",
+    "working": "Working…",
+    "staged": "Staged",
+    "unstageAll": "Unstage all",
+    "unstage": "Unstage",
+    "changes": "Changes",
+    "stageAll": "Stage all",
+    "stage": "Stage",
+    "history": "History",
+    "noChanges": "No changes.",
+    "noCommits": "No commits yet.",
+    "notARepo": "There is no git repository in the workspace.",
+    "error": "The git operation failed."
   }
 }

@@ -668,6 +668,195 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             null);
     }
 
+    // IDE_GIT: добавлено 2026-10-04 — Source Control для панели IDE. Всё локально (без push), через тот же
+    // закалённый host-git, что и остальные операции агента.
+    public async Task<GitStatusResult> GitStatusAsync(Guid chatId, string? repoFolder = null, CancellationToken ct = default)
+    {
+        // Reading never creates the workspace: a brand-new chat simply has no repository yet.
+        if (GetTaskWorkspacePathIfExists(chatId) is null)
+            return new GitStatusResult(true, false, null, Array.Empty<GitFileChange>(), null);
+
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
+        var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
+        if (unsafeRepo is not null)
+            return new GitStatusResult(false, false, null, Array.Empty<GitFileChange>(), unsafeRepo);
+
+        var branchResult = await RunGitAsync(workspaceDir, new[] { "branch", "--show-current" }, null, ct, TimeSpan.FromSeconds(30));
+        var branch = branchResult.Success ? branchResult.StdOut.Trim() : string.Empty;
+
+        var statusResult = await RunGitAsync(workspaceDir,
+            new[] { "-c", "core.quotepath=false", "status", "--porcelain=v1", "--untracked-files=all" }, null, ct, TimeSpan.FromSeconds(30));
+        if (!statusResult.Success)
+            return new GitStatusResult(false, true, NullIfEmpty(branch), Array.Empty<GitFileChange>(), statusResult.StdErr);
+
+        var changes = new List<GitFileChange>();
+        foreach (var raw in statusResult.StdOut.Replace("\r\n", "\n").Split('\n'))
+        {
+            if (raw.Length < 4) continue;
+            var index = raw[0].ToString();
+            var work = raw[1].ToString();
+            var path = raw[3..];
+            if (path.Length == 0) continue;
+            var staged = index != " " && index != "?";
+            changes.Add(new GitFileChange(path, index, work, staged));
+        }
+
+        return new GitStatusResult(true, true, NullIfEmpty(branch), changes, null);
+    }
+
+    public async Task<GitOperationResult> GitStageAsync(Guid chatId, IReadOnlyList<string> paths, bool stage, string? repoFolder = null, CancellationToken ct = default)
+    {
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
+        var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
+        if (unsafeRepo is not null)
+            return new GitOperationResult(false, null, unsafeRepo);
+
+        var args = new List<string>();
+        if (paths is null || paths.Count == 0)
+        {
+            args.AddRange(stage ? new[] { "add", "-A" } : new[] { "reset", "-q" });
+        }
+        else
+        {
+            var safe = new List<string>();
+            foreach (var path in paths)
+            {
+                var normalized = NormalizeRepoPath(path);
+                if (normalized is null)
+                    return new GitOperationResult(false, null, $"Invalid path '{path}'.");
+                safe.Add(normalized);
+            }
+
+            if (stage)
+            {
+                args.Add("add");
+                args.Add("--");
+                args.AddRange(safe);
+            }
+            else
+            {
+                args.Add("reset");
+                args.Add("-q");
+                args.Add("HEAD");
+                args.Add("--");
+                args.AddRange(safe);
+            }
+        }
+
+        var result = await RunGitAsync(workspaceDir, args, token: null, ct, TimeSpan.FromSeconds(60));
+        if (!result.Success)
+            return new GitOperationResult(false, null, string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut.Trim() : result.StdErr);
+        return new GitOperationResult(true, stage ? "Staged." : "Unstaged.", null);
+    }
+
+    public async Task<GitOperationResult> GitCommitAsync(Guid chatId, string message, string? authorName, string? authorEmail, string? repoFolder = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return new GitOperationResult(false, null, "Commit message is required.");
+
+        var clean = message.Replace("\0", string.Empty).Trim();
+        if (clean.Length > 5000) clean = clean[..5000];
+
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
+        var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
+        if (unsafeRepo is not null)
+            return new GitOperationResult(false, null, unsafeRepo);
+
+        var name = string.IsNullOrWhiteSpace(authorName) ? "Conexy AI" : authorName.Trim();
+        var email = string.IsNullOrWhiteSpace(authorEmail) ? "agent@conexy.ai" : authorEmail.Trim();
+        var args = new List<string>
+        {
+            "-c", $"user.name={name}",
+            "-c", $"user.email={email}",
+            "commit", "-m", clean
+        };
+
+        var result = await RunGitAsync(workspaceDir, args, token: null, ct, TimeSpan.FromSeconds(60));
+        if (!result.Success)
+            return new GitOperationResult(false, null, string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut.Trim() : result.StdErr);
+
+        var summary = result.StdOut.Trim();
+        return new GitOperationResult(true, string.IsNullOrEmpty(summary) ? "Committed." : summary, null);
+    }
+
+    public async Task<GitLogResult> GitLogAsync(Guid chatId, int limit = 30, string? repoFolder = null, CancellationToken ct = default)
+    {
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
+        var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
+        if (unsafeRepo is not null)
+            return new GitLogResult(false, Array.Empty<GitCommitInfo>(), unsafeRepo);
+
+        var take = Math.Clamp(limit <= 0 ? 30 : limit, 1, 200);
+        var args = new[] { "-c", "core.quotepath=false", "log", "--pretty=format:%H%x1f%an%x1f%ad%x1f%s", "--date=short", "-n", take.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+        var result = await RunGitAsync(workspaceDir, args, token: null, ct, TimeSpan.FromSeconds(30));
+        if (!result.Success)
+        {
+            // Unborn HEAD (a repository with no commits yet) is not an error for the UI.
+            if ((result.StdErr ?? string.Empty).Contains("does not have any commits", StringComparison.OrdinalIgnoreCase))
+                return new GitLogResult(true, Array.Empty<GitCommitInfo>(), null);
+            return new GitLogResult(false, Array.Empty<GitCommitInfo>(), result.StdErr);
+        }
+
+        var commits = new List<GitCommitInfo>();
+        foreach (var line in result.StdOut.Replace("\r\n", "\n").Split('\n'))
+        {
+            if (line.Length == 0) continue;
+            var parts = line.Split('\u001f');
+            if (parts.Length < 4) continue;
+            var hash = parts[0];
+            commits.Add(new GitCommitInfo(hash, hash.Length > 7 ? hash[..7] : hash, parts[1], parts[2], parts[3]));
+        }
+
+        return new GitLogResult(true, commits, null);
+    }
+
+    public async Task<GitBranchesResult> GitBranchesAsync(Guid chatId, string? repoFolder = null, CancellationToken ct = default)
+    {
+        using var slot = await _sandboxActivity.AcquireAsync(chatId, ct);
+        var workspaceDir = ResolveRepositoryDirectory(chatId, repoFolder);
+        var unsafeRepo = await PrepareRepositoryAsync(workspaceDir, ct);
+        if (unsafeRepo is not null)
+            return new GitBranchesResult(false, Array.Empty<GitBranchInfo>(), unsafeRepo);
+
+        var currentResult = await RunGitAsync(workspaceDir, new[] { "branch", "--show-current" }, null, ct, TimeSpan.FromSeconds(30));
+        var current = currentResult.Success ? currentResult.StdOut.Trim() : string.Empty;
+
+        var listResult = await RunGitAsync(workspaceDir,
+            new[] { "-c", "core.quotepath=false", "for-each-ref", "--format=%(refname:short)", "refs/heads" }, null, ct, TimeSpan.FromSeconds(30));
+        if (!listResult.Success)
+            return new GitBranchesResult(false, Array.Empty<GitBranchInfo>(), listResult.StdErr);
+
+        var branches = new List<GitBranchInfo>();
+        foreach (var raw in listResult.StdOut.Replace("\r\n", "\n").Split('\n'))
+        {
+            var name = raw.Trim();
+            if (name.Length == 0) continue;
+            branches.Add(new GitBranchInfo(name, string.Equals(name, current, StringComparison.Ordinal)));
+        }
+
+        return new GitBranchesResult(true, branches, null);
+    }
+
+    private static string? NullIfEmpty(string value) => string.IsNullOrWhiteSpace(value) ? null : value;
+
+    // IDE_GIT: pathspec safety — no absolute paths, no parent traversal, never an option-looking value.
+    private static string? NormalizeRepoPath(string? path)
+    {
+        var normalized = (path ?? string.Empty).Trim().Replace('\\', '/');
+        if (normalized.Length == 0 || normalized.StartsWith('/') || normalized.StartsWith('-')) return null;
+        if (normalized.Length >= 2 && normalized[1] == ':') return null;
+        if (normalized.Contains('\0')) return null;
+        foreach (var segment in normalized.Split('/'))
+        {
+            if (segment == "..") return null;
+        }
+        return normalized;
+    }
+
     public async Task<GitOperationResult> GitCommitPushAsync(
         Guid chatId,
         string commitMessage,

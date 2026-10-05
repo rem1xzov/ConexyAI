@@ -68,6 +68,22 @@ public interface IConexyWorkspaceService
     /// <summary>Merges another branch into the current one (no-edit); conflicts are reported, not resolved.</summary>
     Task<GitOperationResult> GitMergeBranchAsync(Guid chatId, string branchName, string? repoFolder = null, CancellationToken ct = default);
 
+    // IDE_GIT: добавлено 2026-10-04 — Source Control для панели IDE (локально, без push).
+    /// <summary>Working-tree status of the workspace repository (branch + changed paths).</summary>
+    Task<GitStatusResult> GitStatusAsync(Guid chatId, string? repoFolder = null, CancellationToken ct = default);
+
+    /// <summary>Stages or unstages paths (empty list = all) in the workspace repository.</summary>
+    Task<GitOperationResult> GitStageAsync(Guid chatId, IReadOnlyList<string> paths, bool stage, string? repoFolder = null, CancellationToken ct = default);
+
+    /// <summary>Commits the staged changes locally (no push).</summary>
+    Task<GitOperationResult> GitCommitAsync(Guid chatId, string message, string? authorName, string? authorEmail, string? repoFolder = null, CancellationToken ct = default);
+
+    /// <summary>Recent commits of the current branch, newest first.</summary>
+    Task<GitLogResult> GitLogAsync(Guid chatId, int limit = 30, string? repoFolder = null, CancellationToken ct = default);
+
+    /// <summary>Local branches with the current one flagged.</summary>
+    Task<GitBranchesResult> GitBranchesAsync(Guid chatId, string? repoFolder = null, CancellationToken ct = default);
+
     /// <summary>Stages the given files, commits them and pushes to the target branch.</summary>
     /// <remarks>
     /// GITHUB_PAT_PER_USER: <paramref name="authorName"/>/<paramref name="authorEmail"/> — личность

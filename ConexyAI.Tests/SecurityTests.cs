@@ -44,6 +44,7 @@ internal static class SecurityTests
         Add("GITHUB_REPO_SUBDIR: branch/commit find a repository in a workspace subfolder", TestGitRepoSubfolderAsync, GitInstalled);
         Add("GITHUB_DELETE_BRANCH: deletes a branch and refuses protected ones", TestGitDeleteBranchAsync, GitInstalled);
         Add("GITHUB_FULL: switch/merge branches and a clean pull refusal", TestGitSyncAsync, GitInstalled);
+        Add("IDE_GIT: status lists changes, staging/commit/log/branches work", TestIdeGitAsync, GitInstalled);
         Add("GREP_GLOB: content search and file globs stay inside the workspace", TestGrepGlobAsync);
         Add("TEST_RUNNER: parses failures and auto-detects the framework", TestTestRunnerAsync);
         Add("DIAGNOSTICS: parses compiler/linter output and auto-detects the checker", TestDiagnosticsAsync);
@@ -1033,6 +1034,56 @@ internal static class SecurityTests
         "Actual:   2\n" +
         "  Stack Trace:\n" +
         "     at MathTests.Add() in /src/tests/MathTests.cs:line 42\n";
+
+    // IDE_GIT: Source Control — статус, staging, коммит, лог и ветки через workspace-сервис.
+    private static async Task TestIdeGitAsync()
+    {
+        var root = TempRoot();
+        try
+        {
+            var workspace = Workspace(root);
+            var chatId = Guid.NewGuid();
+            var workspaceDir = workspace.GetTaskWorkspacePath(chatId);
+            var repoDir = Path.Combine(workspaceDir, "app");
+            Directory.CreateDirectory(repoDir);
+            RunGit(repoDir, "init", "-q", "-b", "main");
+            RunGit(repoDir, "config", "user.email", "a@b.c");
+            RunGit(repoDir, "config", "user.name", "t");
+            await File.WriteAllTextAsync(Path.Combine(repoDir, "a.txt"), "a\n");
+            RunGit(repoDir, "add", "-A");
+            RunGit(repoDir, "commit", "-q", "-m", "init");
+
+            await File.WriteAllTextAsync(Path.Combine(repoDir, "a.txt"), "a\nchanged\n");
+            await File.WriteAllTextAsync(Path.Combine(repoDir, "b.txt"), "b\n");
+
+            var status = await workspace.GitStatusAsync(chatId, "app");
+            Assert(status.Success && status.IsRepository && status.Branch == "main",
+                $"status reports the branch: {status.Branch} ({status.Error})");
+            Assert(status.Changes.Any(c => c.Path == "a.txt" && c.Status == "M"), "the modified file is listed");
+            Assert(status.Changes.Any(c => c.Path == "b.txt" && c.IndexStatus == "?" && !c.Staged), "the untracked file is listed and unstaged");
+
+            var staged = await workspace.GitStageAsync(chatId, new[] { "b.txt" }, stage: true, repoFolder: "app");
+            Assert(staged.Success, "staging works: " + staged.Error);
+            var afterStage = await workspace.GitStatusAsync(chatId, "app");
+            Assert(afterStage.Changes.Single(c => c.Path == "b.txt").Staged, "the file is staged afterwards");
+
+            var committed = await workspace.GitCommitAsync(chatId, "add b", "t", "a@b.c", "app");
+            Assert(committed.Success, "commit works: " + committed.Error);
+
+            var log = await workspace.GitLogAsync(chatId, 10, "app");
+            Assert(log.Success && log.Commits.Count == 2, $"the log has two commits, got {log.Commits.Count}");
+            Assert(log.Commits[0].Subject == "add b" && log.Commits[0].ShortHash.Length == 7, "the newest commit is first with a short hash");
+
+            RunGit(repoDir, "branch", "feature/x");
+            var branches = await workspace.GitBranchesAsync(chatId, "app");
+            Assert(branches.Success && branches.Branches.Any(b => b.Name == "main" && b.IsCurrent), "the current branch is flagged");
+            Assert(branches.Branches.Any(b => b.Name == "feature/x"), "other branches are listed");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
 
     private static bool LocalBranchExists(string dir, string branch)
     {

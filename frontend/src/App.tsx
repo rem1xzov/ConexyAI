@@ -3038,6 +3038,8 @@ export default function App() {
                 hideRun={model === 'conexy-cowork'}
                 style={{ flex: `0 0 ${workspaceWidth}%` }}
                 onDirtyChange={setWorkspaceDirty}
+                gitAuthorName={user?.displayName}
+                gitAuthorEmail={user?.email}
               />
             </>
           )}

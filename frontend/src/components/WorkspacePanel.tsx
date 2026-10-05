@@ -24,6 +24,7 @@ import { FileTypeIcon } from './FileTypeIcon';
 import { Breadcrumbs } from './Breadcrumbs';
 import { CommandPalette } from './CommandPalette';
 import { ConfirmDialog, PromptDialog } from './Dialog';
+import { SourceControlPanel } from './SourceControlPanel';
 import { MenuBar, type Menu } from './MenuBar';
 import {
   CheckIcon,
@@ -60,6 +61,9 @@ interface WorkspacePanelProps {
   // чтобы родитель мог спросить подтверждение ДО переключения чата. Без него панель сама спрашивает
   // сразу после переключения (правки к этому моменту уже отложены в памяти, ничего не теряется).
   onDirtyChange?: (dirty: boolean) => void;
+  // IDE_GIT: автор коммита из Source Control (личность владельца чата).
+  gitAuthorName?: string;
+  gitAuthorEmail?: string;
 }
 
 interface OpenTab {
@@ -282,6 +286,8 @@ export function WorkspacePanel({
   onRunInSeparateWindow,
   hideRun,
   onDirtyChange,
+  gitAuthorName,
+  gitAuthorEmail,
 }: WorkspacePanelProps) {
   const { t } = useTranslation();
   const [listing, setListing] = useState<WorkspaceListing | null>(null);
@@ -309,6 +315,8 @@ export function WorkspacePanel({
   const [leavePrompt, setLeavePrompt] = useState<{ chatId: string; files: string[] } | null>(null);
   const [leaveBusy, setLeaveBusy] = useState(false);
   const [explorerVisible, setExplorerVisible] = useState(true);
+  // IDE_GIT: боковая панель показывает либо файлы, либо Source Control.
+  const [sideView, setSideView] = useState<'files' | 'git'>('files');
   const [toast, setToast] = useState<string | null>(null);
 
   const toastTimer = useRef<number | null>(null);
@@ -1132,7 +1140,31 @@ export function WorkspacePanel({
       <div className="workspace__body">
         {explorerVisible && (
         <aside className="workspace__explorer">
-          <div className="workspace__explorer-label">{t('workspace.fileExplorer')}</div>
+          <div className="workspace__side-switch">
+            <button
+              type="button"
+              className={`workspace__side-tab ${sideView === 'files' ? 'workspace__side-tab--active' : ''}`}
+              onClick={() => setSideView('files')}
+            >
+              {t('workspace.fileExplorer')}
+            </button>
+            <button
+              type="button"
+              className={`workspace__side-tab ${sideView === 'git' ? 'workspace__side-tab--active' : ''}`}
+              onClick={() => setSideView('git')}
+            >
+              {t('scm.tab')}
+            </button>
+          </div>
+          {sideView === 'git' ? (
+            <SourceControlPanel
+              sessionId={sessionId}
+              authorName={gitAuthorName}
+              authorEmail={gitAuthorEmail}
+              onChanged={() => void loadFiles(chatIdRef.current)}
+            />
+          ) : (
+          <>
           {!sessionId && <div className="workspace__hint">{t('workspace.runTaskHint')}</div>}
           {loading && !listing && <div className="workspace__hint">{t('common.loading')}</div>}
           {error && <div className="workspace__hint workspace__hint--error">{error}</div>}
@@ -1151,6 +1183,8 @@ export function WorkspacePanel({
                 />
               ))}
             </div>
+          )}
+          </>
           )}
         </aside>
         )}
