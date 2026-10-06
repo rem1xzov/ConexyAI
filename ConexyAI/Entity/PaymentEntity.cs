@@ -1,6 +1,14 @@
 namespace ConexyAI.Entity;
 
 // YOOKASSA: добавлено 2026-09-27
+// TOKEN_TOPUP: добавлено 2026-10-06 — виды покупаемого.
+/// <summary>Что даёт платёж: тариф на срок или разовое пополнение пула токенов.</summary>
+public static class PaymentPlanKind
+{
+    public const string Subscription = "subscription";
+    public const string Token = "token";
+}
+
 /// <summary>
 /// Локальная запись о платеже. Нужна, чтобы: связать возврат пользователя на сайт с платежом
 /// (по нашему id, а не по чужому), показать статус при поллинге, и не выдать тариф дважды, если
@@ -23,6 +31,16 @@ public class PaymentEntity
 
     /// <summary>Сумма в рублях.</summary>
     public int AmountRub { get; set; }
+
+    // TOKEN_TOPUP: добавлено 2026-10-06 — снимок вида покупки на момент оплаты.
+    /// <summary>Вид покупки: subscription (тариф) | token (пополнение пула токенов).</summary>
+    public string Kind { get; set; } = PaymentPlanKind.Subscription;
+
+    /// <summary>Сколько токенов начислить (только для <see cref="Kind"/> = token).</summary>
+    public long TokenAmount { get; set; }
+
+    /// <summary>Пул пополнения — Coder | Cowork (только для <see cref="Kind"/> = token).</summary>
+    public string? Pool { get; set; }
 
     /// <summary>Идентификатор платежа в ЮKassa (<c>id</c> из ответа API).</summary>
     public string ProviderPaymentId { get; set; } = string.Empty;

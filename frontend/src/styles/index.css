@@ -5763,6 +5763,47 @@ body {
   line-height: 1.45;
 }
 
+/* TOKEN_TOPUP: блок докупки токенов — нейтральная карточка под тарифами: обычная возможность,
+   а не акция, поэтому не акцентируем фон. */
+.upgrade-tokens {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-input);
+}
+
+.upgrade-tokens__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.upgrade-tokens__title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.upgrade-tokens__note {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.upgrade-tokens__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.upgrade-tokens__cta {
+  width: 100%;
+}
+
 .admin {
   height: 100vh;
   height: 100dvh;

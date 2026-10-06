@@ -18,7 +18,8 @@ public record PaymentStatusResponse(
     string Status,
     string PlanId,
     string Tier,
-    int AmountRub);
+    int AmountRub,
+    string Kind);
 
 // YOOKASSA: добавлено 2026-09-27 — админская сводка оплат для ручных чеков в «Мой налог».
 /// <summary>Одна строка сводки: дата, сумма, тариф и покупатель.</summary>

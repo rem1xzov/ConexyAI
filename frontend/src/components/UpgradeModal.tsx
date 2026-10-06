@@ -76,6 +76,10 @@ const PLANS: Plan[] = [
 const ANNUAL_PRICE_RUB = 16_990;
 const ANNUAL_MONTHS = 12;
 
+// TOKEN_TOPUP: докупка токенов — разовая и отдельно для Coder и Cowork. Цена одна (199 ₽ за
+// 1 000 000 токенов), реальную сумму берёт сервер из каталога планов (см. PaymentPlansOptions).
+const TOKEN_PRICE_RUB = 199;
+
 // I18N_FORMAT: добавлено 2026-09-24 — цена форматируется Intl по языку интерфейса («990 ₽» / «₽990»),
 // а «/мес» берётся из перевода, а не зашит по-русски.
 function formatRub(amount: number, lang: string): string {
@@ -213,6 +217,34 @@ export function UpgradeModal({ limitInfo, onClose, onBuy, busy = false }: Upgrad
           >
             {t('upgrade.buyAnnual')}
           </button>
+        </div>
+
+        {/* TOKEN_TOPUP: добавлено 2026-10-06 — разовая докупка токенов, отдельно для Coder и
+            Cowork. Токены зачисляются сразу и складываются с лимитом тарифа; покупать можно
+            повторно (каждая покупка — ещё +1 000 000). */}
+        <div className="upgrade-tokens">
+          <div className="upgrade-tokens__head">
+            <div className="upgrade-tokens__title">{t('upgrade.tokensTitle')}</div>
+            <span className="upgrade-tokens__note">{t('upgrade.tokensNote')}</span>
+          </div>
+          <div className="upgrade-tokens__row">
+            <button
+              className="dialog-btn upgrade-tokens__cta"
+              onClick={() => onBuy('TokenCoder')}
+              disabled={busy}
+              type="button"
+            >
+              {t('upgrade.buyTokensCoder', { price: formatRub(TOKEN_PRICE_RUB, lang) })}
+            </button>
+            <button
+              className="dialog-btn upgrade-tokens__cta"
+              onClick={() => onBuy('TokenCowork')}
+              disabled={busy}
+              type="button"
+            >
+              {t('upgrade.buyTokensCowork', { price: formatRub(TOKEN_PRICE_RUB, lang) })}
+            </button>
+          </div>
         </div>
 
         {/* LEGAL_DOCS: добавлено 2026-09-25 — оплата Тарифа является акцептом Оферты, поэтому

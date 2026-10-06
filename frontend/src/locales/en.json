@@ -338,6 +338,10 @@
     "annualMonthly": "≈ {{price}}/mo when paid yearly",
     "annualSave": "Cheaper than paying monthly: {{full}} otherwise — you save {{save}}",
     "annualIncludes": "Everything in ProMax",
+    "tokensTitle": "Top up tokens",
+    "tokensNote": "A one-time credit of 1,000,000 tokens. Buy as often as you like — credits stack on top of your plan's limit right away.",
+    "buyTokensCoder": "Coder — {{price}} for 1,000,000",
+    "buyTokensCowork": "Cowork — {{price}} for 1,000,000",
     "features": {
       "free1": "100 Flash requests/week",
       "free2": "20 Pro requests/week",
@@ -364,6 +368,7 @@
     "success": "Payment successful",
     "successHint": "The {{tier}} plan is now active. Thank you!",
     "successHintPlain": "The plan is now active. Thank you!",
+    "tokensSuccess": "1,000,000 tokens have been credited to your account. Thank you!",
     "canceled": "Payment failed",
     "canceledHint": "The payment was canceled or declined by the bank; nothing was charged. You can try again.",
     "timeout": "Payment is still processing",

@@ -33,6 +33,13 @@ public class User
     /// </summary>
     public DateTime? SubscriptionExpiresAt { get; set; }
 
+    // TOKEN_TOPUP: добавлено 2026-10-06 — разовые докупки токенов («Token», 199 ₽ за 1 000 000).
+    // Живут на пользователе, а не в UserUsageCounterEntity: счётчик обнуляется при смене тарифа и
+    // по ленивому сбросу окна, а купленные токены не должны пропадать. Лимит пула = бюджет тарифа +
+    // это пополнение (см. SubscriptionService). Повторная покупка просто увеличивает значение.
+    public long CoderTokenTopUp { get; set; }
+    public long CoworkTokenTopUp { get; set; }
+
     // EMAIL_AUTH: добавлено 2026-09-19
     /// <summary>Whether the user is an administrator (granted via AdminAccounts on login).</summary>
     public bool IsAdmin { get; set; }

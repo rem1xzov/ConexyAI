@@ -24,6 +24,9 @@ public class User_config : IEntityTypeConfiguration<User>
             .IsRequired();
         // YOOKASSA: добавлено 2026-09-27 — nullable: у бесплатных и «ручных» тарифов срока нет.
         builder.Property(x => x.SubscriptionExpiresAt).IsRequired(false);
+        // TOKEN_TOPUP: добавлено 2026-10-06 — купленные разово токены; у всех прежних строк 0.
+        builder.Property(x => x.CoderTokenTopUp).IsRequired();
+        builder.Property(x => x.CoworkTokenTopUp).IsRequired();
         // EMAIL_AUTH: добавлено 2026-09-19
         builder.Property(x => x.IsAdmin).IsRequired();
         builder.Property(x => x.CreatedAt).IsRequired();

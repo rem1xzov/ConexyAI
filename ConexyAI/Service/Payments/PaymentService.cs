@@ -81,6 +81,9 @@ public class PaymentService : IPaymentService
             Tier = plan.Tier,
             Months = plan.Months,
             AmountRub = plan.AmountRub,
+            Kind = plan.Kind,
+            TokenAmount = plan.TokenAmount,
+            Pool = plan.Pool,
             Status = "pending",
             // Ключ идемпотентности — id самого платежа: он уникален на каждый создаваемый платёж.
             IdempotenceKey = Guid.NewGuid().ToString("N"),
@@ -120,7 +123,7 @@ public class PaymentService : IPaymentService
         var payment = await _payments.GetByIdAsync(paymentId, ct);
         if (payment is null || payment.UserId != userId) return null;
 
-        return new PaymentStatusResponse(payment.Id, payment.Status, payment.PlanId, payment.Tier, payment.AmountRub);
+        return new PaymentStatusResponse(payment.Id, payment.Status, payment.PlanId, payment.Tier, payment.AmountRub, payment.Kind);
     }
 
     public async Task HandleNotificationAsync(
@@ -179,6 +182,14 @@ public class PaymentService : IPaymentService
     {
         if (payment.ActivatedAt is not null) return;
 
+        // TOKEN_TOPUP: пополнение пула токенов — не тариф: Tier у такого плана пустой, поэтому
+        // разбираем вид покупки ДО Enum.TryParse, иначе платёж отвалился бы как «неизвестный тариф».
+        if (string.Equals(payment.Kind, PaymentPlanKind.Token, StringComparison.OrdinalIgnoreCase))
+        {
+            await GrantTokensAsync(payment, ct);
+            return;
+        }
+
         if (!Enum.TryParse<SubscriptionTier>(payment.Tier, out var tier))
         {
             _logger.LogError("Payment {PaymentId}: unknown tier '{Tier}', tariff not granted.", payment.Id, payment.Tier);
@@ -212,6 +223,40 @@ public class PaymentService : IPaymentService
         _logger.LogInformation(
             "YooKassa: payment {ProviderId} activated — user {UserId} is on {Tier} until {Expires:u}.",
             payment.ProviderPaymentId, payment.UserId, granted, user.SubscriptionExpiresAt);
+    }
+
+    // TOKEN_TOPUP: добавлено 2026-10-06
+    /// <summary>
+    /// Начисляет разовую докупку токенов: тариф и срок НЕ трогает (это не подписка, а пополнение),
+    /// просто увеличивает пул пользователя. Повторная покупка добавляет ещё столько же.
+    /// </summary>
+    private async Task GrantTokensAsync(PaymentEntity payment, CancellationToken ct)
+    {
+        var user = await _users.GetByIdAsync(payment.UserId, ct);
+        if (user is null)
+        {
+            _logger.LogError("Payment {PaymentId}: user {UserId} not found, tokens not credited.", payment.Id, payment.UserId);
+            return;
+        }
+
+        if (payment.TokenAmount <= 0)
+        {
+            _logger.LogError("Payment {PaymentId}: token plan with non-positive amount, nothing credited.", payment.Id);
+            return;
+        }
+
+        if (string.Equals(payment.Pool, "Cowork", StringComparison.OrdinalIgnoreCase))
+            user.CoworkTokenTopUp += payment.TokenAmount;
+        else
+            user.CoderTokenTopUp += payment.TokenAmount;
+        await _users.UpdateAsync(user, ct);
+
+        payment.ActivatedAt = DateTime.UtcNow;
+        await _payments.UpdateAsync(payment, ct);
+
+        _logger.LogInformation(
+            "YooKassa: payment {ProviderId} credited {Amount} tokens to {Pool} for user {UserId}.",
+            payment.ProviderPaymentId, payment.TokenAmount, payment.Pool ?? "Coder", payment.UserId);
     }
 
     private string BuildReturnUrl(Guid paymentId)

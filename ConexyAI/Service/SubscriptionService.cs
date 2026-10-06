@@ -59,9 +59,9 @@ public class SubscriptionService : ISubscriptionService
             counter.Tier.ToString(),
             counter.FlashRequestsUsed, limits.FlashRequestsPerWindow, counter.FlashWindowResetAt,
             counter.ProRequestsUsed, limits.ProRequestsPerWindow, counter.ProWindowResetAt,
-            counter.AgentTokensUsed, limits.AgentTokenBudget, counter.AgentWindowResetAt,
+            counter.AgentTokensUsed, AgentBudget(limits, user), counter.AgentWindowResetAt,
             // COWORK_BUDGET: отдельный пул; 0 в лимите — режим не входит в тариф.
-            counter.CoworkTokensUsed, limits.CoworkTokenBudget, counter.CoworkWindowResetAt);
+            counter.CoworkTokensUsed, CoworkBudget(limits, user), counter.CoworkWindowResetAt);
     }
 
     public async Task<UsageDecision> CheckBeforeRunAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default)
@@ -74,6 +74,9 @@ public class SubscriptionService : ISubscriptionService
 
         var counter = await GetOrCreateAsync(userId, user, ct);
         var limits = GetTierLimits(counter.Tier);
+        // TOKEN_TOPUP: докупленные токены расширяют лимит пула (см. AgentBudget/CoworkBudget).
+        var agentBudget = AgentBudget(limits, user);
+        var coworkBudget = CoworkBudget(limits, user);
 
         switch (modelType)
         {
@@ -98,12 +101,12 @@ public class SubscriptionService : ISubscriptionService
             case ConexyModelType.ConexyCowork:
                 if (!limits.CoworkEnabled)
                     return new UsageDecision(UsageDecisionKind.LimitExceeded, CoworkPlanLimit, DateTime.UtcNow);
-                if (counter.CoworkTokensUsed >= limits.CoworkTokenBudget)
+                if (counter.CoworkTokensUsed >= coworkBudget)
                     return new UsageDecision(UsageDecisionKind.LimitExceeded, CoworkBudgetLimit, counter.CoworkWindowResetAt);
                 return new UsageDecision(UsageDecisionKind.Allowed);
 
             case ConexyModelType.ConexyCoder:
-                if (counter.AgentTokensUsed >= limits.AgentTokenBudget)
+                if (counter.AgentTokensUsed >= agentBudget)
                     return new UsageDecision(UsageDecisionKind.LimitExceeded, "agent", counter.AgentWindowResetAt);
                 return new UsageDecision(UsageDecisionKind.Allowed);
 
@@ -244,6 +247,17 @@ public class SubscriptionService : ISubscriptionService
         if (user.SubscriptionExpiresAt is { } expires && expires <= now) return SubscriptionTier.Free;
         return user.SubscriptionTier;
     }
+
+    // TOKEN_TOPUP: добавлено 2026-10-06
+    /// <summary>
+    /// Эффективный лимит пула = бюджет тарифа + разово докупленные токены. Пополнение хранится на
+    /// пользователе, поэтому переживает и смену тарифа, и сброс окна (счётчик при этом обнуляется).
+    /// </summary>
+    private static long AgentBudget(TierLimits limits, User? user) =>
+        limits.AgentTokenBudget + (user?.CoderTokenTopUp ?? 0L);
+
+    private static long CoworkBudget(TierLimits limits, User? user) =>
+        limits.CoworkTokenBudget + (user?.CoworkTokenTopUp ?? 0L);
 
     private TierLimits GetTierLimits(SubscriptionTier tier) => tier switch
     {

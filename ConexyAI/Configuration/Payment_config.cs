@@ -17,6 +17,10 @@ public class Payment_config : IEntityTypeConfiguration<PaymentEntity>
         builder.Property(x => x.Tier).IsRequired().HasMaxLength(20);
         builder.Property(x => x.Months).IsRequired();
         builder.Property(x => x.AmountRub).IsRequired();
+        // TOKEN_TOPUP: добавлено 2026-10-06 — вид покупки и параметры пополнения (для тарифов пусто).
+        builder.Property(x => x.Kind).IsRequired().HasMaxLength(20);
+        builder.Property(x => x.TokenAmount).IsRequired();
+        builder.Property(x => x.Pool).IsRequired(false).HasMaxLength(20);
         builder.Property(x => x.ProviderPaymentId).IsRequired().HasMaxLength(64);
         builder.Property(x => x.Status).IsRequired().HasMaxLength(32);
         builder.Property(x => x.IdempotenceKey).IsRequired().HasMaxLength(64);

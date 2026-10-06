@@ -196,6 +196,8 @@ export interface PaymentStatusResponse {
   planId: string;
   tier: string;
   amountRub: number;
+  // TOKEN_TOPUP: добавлено 2026-10-06 — 'subscription' | 'token'. У докупки токенов tier пустой.
+  kind: string;
 }
 
 export interface DevTokenResponse {

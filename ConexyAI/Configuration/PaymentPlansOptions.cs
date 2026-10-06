@@ -1,3 +1,5 @@
+using ConexyAI.Entity;
+
 namespace ConexyAI.Configuration;
 
 // YOOKASSA: добавлено 2026-09-27
@@ -32,4 +34,18 @@ public class PaymentPlan
 
     /// <summary>Название для описания платежа (в чеке и в интерфейсе ЮKassa).</summary>
     public string Title { get; set; } = string.Empty;
+
+    // TOKEN_TOPUP: добавлено 2026-10-06
+    /// <summary>
+    /// Что даёт план: <see cref="PaymentPlanKind.Subscription"/> — тариф на срок,
+    /// <see cref="PaymentPlanKind.Token"/> — разовое пополнение пула токенов. У токен-плана
+    /// <see cref="Tier"/> и <see cref="Months"/> не используются.
+    /// </summary>
+    public string Kind { get; set; } = PaymentPlanKind.Subscription;
+
+    /// <summary>Сколько токенов начислить разово (только для <see cref="Kind"/> = token).</summary>
+    public long TokenAmount { get; set; }
+
+    /// <summary>Пул пополнения — Coder | Cowork (только для <see cref="Kind"/> = token).</summary>
+    public string? Pool { get; set; }
 }

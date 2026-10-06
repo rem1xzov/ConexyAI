@@ -105,7 +105,11 @@ export function PaymentReturnModal({ paymentId, onClose, onPaid }: PaymentReturn
             </span>
             <p className="payment-modal__text">{t('payment.success')}</p>
             <p className="payment-modal__hint">
-              {status?.tier ? t('payment.successHint', { tier: status.tier }) : t('payment.successHintPlain')}
+              {status?.kind === 'token'
+                ? t('payment.tokensSuccess')
+                : status?.tier
+                  ? t('payment.successHint', { tier: status.tier })
+                  : t('payment.successHintPlain')}
             </p>
             <button className="dialog-btn dialog-btn--primary" onClick={onClose} type="button">
               {t('payment.close')}
