@@ -47,7 +47,7 @@ internal static class SubscriptionTests
         {
             // Числа те же, что в appsettings.json, но заданы здесь явно: этот тест проверяет ЛОГИКУ
             // лимитов, а не то, что кто-то не переписал конфиг.
-            o.Free = Limits(100, 20, 400 * K, 0, coworkEnabled: false, agentWindowDays: 30);
+            o.Free = Limits(100, 20, 250 * K, 0, coworkEnabled: false, agentWindowDays: 30);
             o.Go = Limits(150, 50, 1_000 * K, 1_000 * K, coworkEnabled: true);
             o.Pro = Limits(250, 150, 2_000 * K, 2_000 * K, coworkEnabled: true);
             o.ProMax = Limits(300, 200, 3_500 * K, 3_500 * K, coworkEnabled: true);

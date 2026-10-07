@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using ConexyAI.Configuration;
+using ConexyAI.Contract;
 using ConexyAI.DbContext;
 using ConexyAI.Entity;
 using ConexyAI.Model;
@@ -24,6 +25,7 @@ internal static class TokenTopUpTests
         TestRegistry.Add("token top-up: a repeated purchase credits the pool again", RepeatsStackAsync);
         TestRegistry.Add("token top-up: the Coder and Cowork pools stay separate", PoolsSeparateAsync);
         TestRegistry.Add("token top-up: the credit raises the limit and survives a tier change", LimitAndTierChangeAsync);
+        TestRegistry.Add("token top-up: bought Cowork tokens open Cowork on Free and close it when spent", CoworkUnlockedAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -118,6 +120,50 @@ internal static class TokenTopUpTests
         Assert(pro.Tier == "Pro", $"the tier must read Pro, got {pro.Tier}");
         Assert(pro.AgentLimit == 2_000_000 + 1_000_000, $"Pro limit = 2M + 1M credit, got {pro.AgentLimit}");
         Assert(pro.CoworkLimit == 1_000_000, $"only the tier budget applies to Cowork, got {pro.CoworkLimit}");
+    }
+
+    // TOKEN_TOPUP: изменено 2026-10-06 — покупка Cowork-токенов открывает режим на Free, а когда они
+    // израсходованы — закрывает; купленное конечно и не возобновляется сбросом окна.
+    private static async Task CoworkUnlockedAsync()
+    {
+        var dbName = "topup_" + Guid.NewGuid().ToString("N");
+        await using var context = NewContext(dbName);
+        var userId = Guid.NewGuid();
+        context.Users.Add(new User { Id = userId, SubscriptionTier = SubscriptionTier.Free });
+        await context.SaveChangesAsync();
+
+        var subscription = NewSubscriptionService(context);
+
+        // Free без покупки: Cowork заперт по тарифу.
+        var locked = await subscription.CheckBeforeRunAsync(userId, ConexyModelType.ConexyCowork);
+        Assert(locked.Kind == UsageDecisionKind.LimitExceeded && locked.LimitName == "cowork_plan",
+            $"Cowork must be plan-locked on Free without a purchase, got {locked.Kind}/{locked.LimitName}");
+
+        // Покупка Cowork-токенов открывает режим и на Free.
+        var user = (await context.Users.FindAsync(userId))!;
+        user.CoworkTokenTopUp = 1_000_000;
+        await new UserRepository(context).UpdateAsync(user);
+
+        Assert((await subscription.CheckBeforeRunAsync(userId, ConexyModelType.ConexyCowork)).Kind == UsageDecisionKind.Allowed,
+            "bought Cowork tokens must open the mode on Free");
+        var usage = await subscription.GetUsageAsync(userId);
+        Assert(usage.CoworkLimit == 1_000_000, $"the cowork limit must be the purchased amount, got {usage.CoworkLimit}");
+
+        // Расходуем всё купленное — режим снова закрыт.
+        await subscription.RecordAgentTokensAsync(userId, ConexyModelType.ConexyCowork, new LlmTokenUsage(UncachedInput: 1_000_000));
+        var spent = await subscription.CheckBeforeRunAsync(userId, ConexyModelType.ConexyCowork);
+        Assert(spent.Kind == UsageDecisionKind.LimitExceeded && spent.LimitName == "cowork",
+            $"Cowork must close once the purchased tokens are spent, got {spent.Kind}/{spent.LimitName}");
+
+        // Сброс окна НЕ возвращает купленное: расход купленных не привязан к окну тарифа.
+        var counter = await context.UserUsageCounters.FirstAsync(c => c.UserId == userId);
+        counter.CoworkWindowResetAt = DateTime.UtcNow.AddDays(-1);
+        await context.SaveChangesAsync();
+
+        var afterReset = await subscription.GetUsageAsync(userId);
+        Assert(afterReset.CoworkUsed == 1_000_000, $"the purchased spend must survive a window reset, got {afterReset.CoworkUsed}");
+        Assert((await subscription.CheckBeforeRunAsync(userId, ConexyModelType.ConexyCowork)).Kind == UsageDecisionKind.LimitExceeded,
+            "a window reset must not hand back spent purchased tokens");
     }
 
     private static async Task AddTokenPaymentAsync(DbConexy context, Guid userId, string providerId, string planId)

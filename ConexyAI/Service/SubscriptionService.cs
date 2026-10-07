@@ -61,9 +61,10 @@ public class SubscriptionService : ISubscriptionService
             counter.Tier.ToString(),
             counter.FlashRequestsUsed, limits.FlashRequestsPerWindow, counter.FlashWindowResetAt,
             counter.ProRequestsUsed, limits.ProRequestsPerWindow, counter.ProWindowResetAt,
-            counter.AgentTokensUsed, AgentBudget(limits, user), counter.AgentWindowResetAt,
+            // TOKEN_TOPUP: «использовано» = расход по тарифу (окно) + расход купленного (бессрочно).
+            counter.AgentTokensUsed + counter.CoderTopUpUsed, AgentBudget(limits, user), counter.AgentWindowResetAt,
             // COWORK_BUDGET: отдельный пул; 0 в лимите — режим не входит в тариф.
-            counter.CoworkTokensUsed, CoworkBudget(limits, user), counter.CoworkWindowResetAt);
+            counter.CoworkTokensUsed + counter.CoworkTopUpUsed, CoworkBudget(limits, user), counter.CoworkWindowResetAt);
     }
 
     public async Task<UsageDecision> CheckBeforeRunAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default)
@@ -76,9 +77,12 @@ public class SubscriptionService : ISubscriptionService
 
         var counter = await GetOrCreateAsync(userId, user, ct);
         var limits = GetTierLimits(counter.Tier);
-        // TOKEN_TOPUP: докупленные токены расширяют лимит пула (см. AgentBudget/CoworkBudget).
+        // TOKEN_TOPUP: докупленные токены расширяют лимит пула (см. AgentBudget/CoworkBudget), а
+        // «использовано» включает расход и тарифа (окно), и купленного (бессрочно).
         var agentBudget = AgentBudget(limits, user);
         var coworkBudget = CoworkBudget(limits, user);
+        var agentUsed = counter.AgentTokensUsed + counter.CoderTopUpUsed;
+        var coworkUsed = counter.CoworkTokensUsed + counter.CoworkTopUpUsed;
 
         switch (modelType)
         {
@@ -100,15 +104,18 @@ public class SubscriptionService : ISubscriptionService
             // COWORK_MODE / COWORK_BUDGET: изменено 2026-09-26 — Cowork вынесен в свой пул токенов и
             // доступен только на платных тарифах. Раньше он шёл по бюджету агента и не был ограничен
             // по тарифу вообще: на Free режим просто работал.
+            // TOKEN_TOPUP: изменено 2026-10-06 — если куплены Cowork-токены, режим открыт и на Free.
+            // «Не входит в тариф» — только когда купленного вообще не было; если покупали и израсходовали,
+            // открывается уже бюджетная причина, чтобы пользователь увидел «докупи», а не «возьми тариф».
             case ConexyModelType.ConexyCowork:
-                if (!limits.CoworkEnabled)
+                if (!limits.CoworkEnabled && (user?.CoworkTokenTopUp ?? 0L) <= 0)
                     return new UsageDecision(UsageDecisionKind.LimitExceeded, CoworkPlanLimit, DateTime.UtcNow);
-                if (counter.CoworkTokensUsed >= coworkBudget)
+                if (coworkUsed >= coworkBudget)
                     return new UsageDecision(UsageDecisionKind.LimitExceeded, CoworkBudgetLimit, counter.CoworkWindowResetAt);
                 return new UsageDecision(UsageDecisionKind.Allowed);
 
             case ConexyModelType.ConexyCoder:
-                if (counter.AgentTokensUsed >= agentBudget)
+                if (agentUsed >= agentBudget)
                     return new UsageDecision(UsageDecisionKind.LimitExceeded, "agent", counter.AgentWindowResetAt);
                 return new UsageDecision(UsageDecisionKind.Allowed);
 
@@ -141,15 +148,46 @@ public class SubscriptionService : ISubscriptionService
         // ADMIN_UNLIMITED: изменено 2026-10-01 — расход админа учитывается, но не блокирует.
         var user = await _userRepository.GetByIdAsync(userId, ct);
         var counter = await GetOrCreateAsync(userId, user, ct);
+        var limits = GetTierLimits(counter.Tier);
 
-        // COWORK_BUDGET: Cowork платит из своего бюджета, Coder — из агентского.
+        // TOKEN_TOPUP: billed сначала закрывает бюджет тарифа (окно), а его перелив — купленные токены
+        // (бессрочные). Так купленное действительно расходуется один раз, а не возобновляется каждую неделю.
+        // COWORK_BUDGET: Cowork платит из своего пула, Coder — из агентского.
         if (modelType == ConexyModelType.ConexyCowork)
-            counter.CoworkTokensUsed += billed;
+        {
+            var (toTier, toTopUp) = Split(billed, limits.CoworkTokenBudget, counter.CoworkTokensUsed,
+                user?.CoworkTokenTopUp ?? 0L, counter.CoworkTopUpUsed);
+            counter.CoworkTokensUsed += toTier;
+            counter.CoworkTopUpUsed += toTopUp;
+        }
         else
-            counter.AgentTokensUsed += billed;
+        {
+            var (toTier, toTopUp) = Split(billed, limits.AgentTokenBudget, counter.AgentTokensUsed,
+                user?.CoderTokenTopUp ?? 0L, counter.CoderTopUpUsed);
+            counter.AgentTokensUsed += toTier;
+            counter.CoderTopUpUsed += toTopUp;
+        }
 
         await _repository.UpsertAsync(counter, ct);
+        // Токен-брейкеру отдаём ПОЛНую взвешенную сумму: он сторожит перерасход внутри прогона
+        // и должен видеть реальный расход даже когда обе части лимита уже закрыты.
         return billed;
+    }
+
+    // TOKEN_TOPUP: добавлено 2026-10-06
+    /// <summary>
+    /// Делит начисленное между бюджетом тарифа и купленным пулом: сначала тарифное окно, остаток — в
+    /// купленное (но не больше, чем его осталось). Оба пула закрыты — лишнее никуда не пишется (вал
+    /// уже заблокирует следующий запуск).
+    /// </summary>
+    private static (long ToTier, long ToTopUp) Split(long billed, long tierBudget, long tierUsed, long topUpPurchased, long topUpUsed)
+    {
+        var tierRoom = Math.Max(0L, tierBudget - tierUsed);
+        var toTier = Math.Min(billed, tierRoom);
+        var overflow = billed - toTier;
+        var topUpRoom = Math.Max(0L, topUpPurchased - topUpUsed);
+        var toTopUp = Math.Min(overflow, topUpRoom);
+        return (toTier, toTopUp);
     }
 
     // PRICED_BILLING: добавлено 2026-10-06

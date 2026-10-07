@@ -345,7 +345,7 @@
     "features": {
       "free1": "100 Flash requests/week",
       "free2": "20 Pro requests/week",
-      "free3": "400,000 agent tokens/month",
+      "free3": "250,000 agent tokens/month",
       "go1": "150 Flash requests/week",
       "go2": "50 Pro requests/week",
       "go3": "1,000,000 agent tokens/week",

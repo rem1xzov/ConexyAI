@@ -27,6 +27,9 @@ public class UserUsageCounter_config : IEntityTypeConfiguration<UserUsageCounter
         builder.Property(x => x.FlashRequestsUsed).IsRequired();
         builder.Property(x => x.ProRequestsUsed).IsRequired();
         builder.Property(x => x.AgentTokensUsed).IsRequired();
+        // TOKEN_TOPUP: добавлено 2026-10-06 — расход купленных токенов (не сбрасывается окном).
+        builder.Property(x => x.CoderTopUpUsed).IsRequired();
+        builder.Property(x => x.CoworkTopUpUsed).IsRequired();
         builder.Property(x => x.FlashWindowResetAt).IsRequired();
         builder.Property(x => x.ProWindowResetAt).IsRequired();
         builder.Property(x => x.AgentWindowResetAt).IsRequired();

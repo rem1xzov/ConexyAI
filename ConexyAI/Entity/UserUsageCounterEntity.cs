@@ -21,6 +21,13 @@ public class UserUsageCounterEntity
     // прогоны не съедали бюджет агента-кодера и наоборот.
     public long CoworkTokensUsed { get; set; }
 
+    // TOKEN_TOPUP: добавлено 2026-10-06 — сколько РАЗОВО КУПЛЕННЫХ токенов уже израсходовано.
+    // В отличие от AgentTokensUsed/CoworkTokensUsed, эти счётчики НИКОГДА не сбрасываются ни по окну,
+    // ни при смене тарифа: покупка конечна («закрывается, когда израсходует»), а не пополняется
+    // каждую неделю. Купленный объём лежит на пользователе (User.CoderTokenTopUp/CoworkTokenTopUp).
+    public long CoderTopUpUsed { get; set; }
+    public long CoworkTopUpUsed { get; set; }
+
     public DateTime FlashWindowResetAt { get; set; }
     public DateTime ProWindowResetAt { get; set; }
     public DateTime AgentWindowResetAt { get; set; }
