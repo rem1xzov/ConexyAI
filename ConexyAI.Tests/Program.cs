@@ -65,6 +65,7 @@ await RunAsync("agent: auditor reviews only the files the agent changed", TestAg
 await RunAsync("worker startup: tasks orphaned by a dead process are closed", TestWorkerStartupClosesOrphanedTasksAsync);
 await RunAsync("cowork: its own charter and model id, same agent pipeline", TestCoworkModeRoutingAsync);
 await RunAsync("context: a new chat sees the user's other chats, never its own or incognito", TestCrossChatDigestAsync);
+await RunAsync("context: the stable charter keeps the cache prefix, volatile blocks come second", TestPrefixCacheOrderAsync);
 await RunAsync("context: memory is extracted after the first message of a chat", TestMemoryExtractedAfterFirstMessageAsync);
 await RunAsync("office: .docx/.xlsx/.pptx written from Markdown read back intact", TestOfficeRoundTripAsync);
 await RunAsync("office: document attachments reach the model as text, in every mode", TestAttachmentTextComposedAsync);
@@ -1357,15 +1358,46 @@ async Task TestCrossChatDigestAsync()
 
     var request = await service.BuildRequestAsync(
         new ConversationContext(Guid.NewGuid(), current, userId, "SYSTEM", "О чём мы говорили в прошлом чате?"));
-    var system = request[0].Text ?? "";
-    Assert(system.Contains("кофейни на Лесной") && system.Contains("найм бариста"),
-        "the other chat's start and last answer must reach the model");
-    Assert(!system.Contains("ТЕКУЩИЙ чат"), "the current chat is history, not an \"other chat\"");
-    Assert(!system.Contains("ЧУЖОЙ"), "another user's chats must never leak in");
+    // PREFIX_CACHE: изменяемые блоки (память, другие чаты) теперь во ВТОРОМ system-сообщении, чтобы не
+    // ломать кэш префикса; стабильный устав остаётся первым system-сообщением.
+    Assert(request[0].Role == "system" && (request[0].Text ?? "") == "SYSTEM",
+        "the first system message must stay the stable charter");
+    var volatileSystem = request[1].Text ?? "";
+    Assert(request[1].Role == "system" && volatileSystem.Contains("кофейни на Лесной") && volatileSystem.Contains("найм бариста"),
+        "the other chat's start and last answer must reach the model as a separate system block");
+    Assert(!volatileSystem.Contains("ТЕКУЩИЙ чат"), "the current chat is history, not an \"other chat\"");
+    Assert(!volatileSystem.Contains("ЧУЖОЙ"), "another user's chats must never leak in");
 
     var incognito = await service.BuildRequestAsync(
         new ConversationContext(Guid.NewGuid(), Guid.NewGuid(), userId, "SYSTEM", "вопрос", Incognito: true));
-    Assert(!(incognito[0].Text ?? "").Contains("кофейни"), "an incognito chat must not read other chats");
+    var incognitoVolatile = incognito.Count > 1 ? incognito[1].Text ?? "" : "";
+    Assert(!incognitoVolatile.Contains("кофейни"), "an incognito chat must not read other chats");
+}
+
+// PREFIX_CACHE: добавлено 2026-10-06 — кэш префикса DeepSeek совпадает, пока совпадает префикс запроса
+// (устав → system-блоки → схемы инструментов). Изменяемые блоки обязаны идти ВТОРЫМ system-сообщением,
+// иначе новый факт памяти или чат ломает кэш схем инструментов на каждом шаге.
+async Task TestPrefixCacheOrderAsync()
+{
+    await using var context = CreateContext("prefixcache_" + Guid.NewGuid().ToString("N"));
+    var (service, _, history) = CreateConversationService(context);
+    var userId = Guid.NewGuid();
+
+    // Память пользователя (изменяемый блок) должна доехать до модели.
+    var memory = ((object)service);
+    await history.AppendAsync(userId, Guid.NewGuid(), "user", "прошлый чат о маркетинге");
+
+    var request = await service.BuildRequestAsync(
+        new ConversationContext(Guid.NewGuid(), Guid.NewGuid(), userId, "СТАБИЛЬНЫЙ УСТАВ", "привет"));
+
+    Assert(request.Count >= 2 && request[0].Role == "system" && request[1].Role == "system",
+        "the request must open with two system messages: stable charter, then volatile context");
+    Assert((request[0].Text ?? "") == "СТАБИЛЬНЫЙ УСТАВ",
+        "the first system message must be exactly the stable charter, so its prefix stays cacheable");
+    Assert(!(request[0].Text ?? "").Contains("маркетинге"),
+        "volatile context must never sit inside the stable charter");
+    Assert((request[1].Text ?? "").Contains("маркетинге"),
+        "volatile context (recent chats) must be carried by the second system message");
 }
 
 async Task TestMemoryExtractedAfterFirstMessageAsync()

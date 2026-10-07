@@ -15,8 +15,13 @@ public class AgentOptions
     /// LOOP_GUARD: with the loop guard, the web budget and the token breaker in place there is no
     /// reason for a large number here — 25 covers complex tasks, and everything above it used to be a
     /// runaway loop burning quota. Must be &gt;= 1; a value of &lt;= 0 falls back to 25.
+    /// ITERATION_WRAPUP / TOKEN_ECONOMY: с 2026-10-06 значение снижено до 15. Каждый шаг пересылает
+    /// всю переписку заново, поэтому 25 шагов — это лишние пересылки на длинных задачах. На последнем
+    /// шаге агенту добавляется распоряжение подвести итог (PromptFragments.FinalStepWrapUp), поэтому
+    /// работа не теряется: прогон заканчивается ответом, а не служебной строкой. Продолжить всегда
+    /// можно новым сообщением в том же чате.
     /// </summary>
-    public int MaxIterations { get; set; } = 25;
+    public int MaxIterations { get; set; } = 15;
 
     /// <summary>
     /// AUDITOR_BUDGET: добавлено 2026-09-23. Hard upper bound, in seconds, for one Maker-Checker

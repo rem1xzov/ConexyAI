@@ -202,6 +202,16 @@ public class ConversationService : IConversationService
     {
         var systemPrompt = context.SystemPrompt;
 
+        // PREFIX_CACHE (CACHE_SAFE_ORDER): изменено 2026-10-06 — изменяемые блоки (персонализация,
+        // долговременная память, другие чаты) больше НЕ приклеиваются к основному system-сообщению,
+        // а идут ОТДЕЛЬНЫМ вторым system-сообщением сразу после него. Причина — кэш префикса DeepSeek:
+        // он совпадает, пока совпадает префикс ЗАПРОСА, а схемы инструментов идут ПОСЛЕ всех
+        // system-сообщений. Раньше любой новый факт памяти или другой чат меняли первое
+        // system-сообщение — и кэш рушился вместе со схемами (несколько тысяч токенов на каждом шаге).
+        // Теперь стабильный SystemPrompt (устав режима) кэшируется всегда, а волатильное живёт после
+        // него и на кэш стабильной части не влияет.
+        var volatileBlocks = new List<string>();
+
         // USER_PREFERENCES: добавлено 2026-09-24 — ТЗ 2, §5: «Обо мне» и «Как отвечать» из профиля идут
         // в системный промпт КАЖДОГО режима. Инкогнито их тоже получает: это настройки, заданные самим
         // пользователем, а не память о его диалогах.
@@ -210,7 +220,7 @@ public class ConversationService : IConversationService
         {
             var preferencesBlock = await _preferences.BuildPromptBlockAsync(context.UserId, ct);
             if (!string.IsNullOrEmpty(preferencesBlock))
-                systemPrompt += "\n" + preferencesBlock;
+                volatileBlocks.Add(preferencesBlock);
         }
 
         // SUBSCRIPTION_TIERS: durable user memory facts are injected in ONE place now, identically
@@ -223,7 +233,7 @@ public class ConversationService : IConversationService
         {
             var memoryBlock = await _memory.BuildPromptBlockAsync(context.UserId, ct);
             if (!string.IsNullOrEmpty(memoryBlock))
-                systemPrompt += "\n" + memoryBlock;
+                volatileBlocks.Add(memoryBlock);
         }
 
         // CROSS_CHAT_CONTEXT: добавлено 2026-09-23 — the other chats, for every mode at once. Until now
@@ -235,10 +245,14 @@ public class ConversationService : IConversationService
                 context.UserId, context.ChatId, _options.RecentChatsInContext, ct);
             var recentBlock = BuildRecentChatsBlock(recentChats);
             if (!string.IsNullOrEmpty(recentBlock))
-                systemPrompt += "\n" + recentBlock;
+                volatileBlocks.Add(recentBlock);
         }
 
+        // PREFIX_CACHE: стабильное system-сообщение первым, изменяемое — вторым. Содержимое промпта не
+        // меняется, меняется лишь его разбиение и порядок: волатильное уезжает из стабильного префикса.
         var messages = new List<ChatMessage> { new("system", systemPrompt) };
+        if (volatileBlocks.Count > 0)
+            messages.Add(new ChatMessage("system", string.Join("\n", volatileBlocks)));
 
         var depth = context.HistoryDepth ?? _options.HistoryDepth;
         var history = await GetHistoryAsync(context.UserId, context.ChatId, context.Incognito, depth: null, ct);
