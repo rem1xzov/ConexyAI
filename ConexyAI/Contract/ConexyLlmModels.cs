@@ -119,8 +119,16 @@ public record LlmChoice(
 );
 
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
+// DEEPSEEK_CACHE: изменено 2026-10-06 — добавлены поля кэша префикса. DeepSeek кэширует общий
+// префикс запроса автоматически; prompt_cache_hit_tokens — сколько входных токенов взято из кэша
+// (дешевле, но в total_tokens всё равно учтены), prompt_cache_miss_tokens — сколько оплачено
+// полностью. Логируем их, чтобы видеть, работает ли кэш и насколько большой префикс уходит заново.
 public record LlmUsage(
-    [property: JsonPropertyName("total_tokens")] int TotalTokens
+    [property: JsonPropertyName("total_tokens")] int TotalTokens,
+    [property: JsonPropertyName("prompt_tokens")] int PromptTokens = 0,
+    [property: JsonPropertyName("completion_tokens")] int CompletionTokens = 0,
+    [property: JsonPropertyName("prompt_cache_hit_tokens")] int PromptCacheHitTokens = 0,
+    [property: JsonPropertyName("prompt_cache_miss_tokens")] int PromptCacheMissTokens = 0
 );
 
 /// <summary>Result of a non-streaming chat completion: the message plus token usage.</summary>

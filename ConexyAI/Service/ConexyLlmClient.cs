@@ -112,9 +112,13 @@ public class ConexyLlmClient : IConexyLlmClient
 
             var body = await response.Content.ReadAsStringAsync(ct);
             var result = JsonSerializer.Deserialize<LlmChatResponse>(body, _jsonOptions);
+            // DEEPSEEK_CACHE: promptCacheHit/Miss показывают, попал ли общий префикс (системный промпт +
+            // схемы инструментов) в кэш. Если hit ≈ 0 на повторных запросах — кэш не работает и префикс
+            // оплачивается заново.
             _logger.LogInformation(
-                "DeepSeek response [task {TaskId}]: bodyBytes={Bytes} totalTokens={Tokens}",
-                taskId, body.Length, result?.Usage?.TotalTokens ?? 0);
+                "DeepSeek response [task {TaskId}]: bodyBytes={Bytes} totalTokens={Tokens} promptCacheHit={Hit} promptCacheMiss={Miss}",
+                taskId, body.Length, result?.Usage?.TotalTokens ?? 0,
+                result?.Usage?.PromptCacheHitTokens ?? 0, result?.Usage?.PromptCacheMissTokens ?? 0);
             var message = result?.Choices.FirstOrDefault()?.Message
                           ?? throw new InvalidOperationException("Invalid empty response from LLM upstream.");
             return new LlmChatResult(message, result?.Usage?.TotalTokens ?? 0);
@@ -353,6 +357,15 @@ public class ConexyLlmClient : IConexyLlmClient
                     {
                         totalTokens = totalTokensEl.GetInt32();
                         sawProgress = true;
+                        // DEEPSEEK_CACHE: попадание в кэш префикса видно только в usage-чанке — логируем,
+                        // чтобы оценивать реальную экономию (hit = переиспользованный префикс).
+                        var cacheHit = usageEl.TryGetProperty("prompt_cache_hit_tokens", out var hitEl) &&
+                                       hitEl.ValueKind == JsonValueKind.Number ? hitEl.GetInt32() : 0;
+                        var cacheMiss = usageEl.TryGetProperty("prompt_cache_miss_tokens", out var missEl) &&
+                                        missEl.ValueKind == JsonValueKind.Number ? missEl.GetInt32() : 0;
+                        _logger.LogInformation(
+                            "DeepSeek stream usage [task {TaskId}]: totalTokens={Tokens} promptCacheHit={Hit} promptCacheMiss={Miss}",
+                            taskId, totalTokens, cacheHit, cacheMiss);
                     }
 
                     if (doc.RootElement.TryGetProperty("choices", out var choices) &&

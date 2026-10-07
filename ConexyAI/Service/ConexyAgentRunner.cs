@@ -282,7 +282,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         Любой созданный файл должен физически появиться в файловой системе воркспейса.
 
         ИНСТРУМЕНТЫ:
-        Ты работаешь инструментами: `str_replace_editor` (view/create/str_replace/insert/undo), `apply_patch` (применить unified-diff патч в формате git — минус удаляет строки, плюс добавляет, можно несколько файлов), `file_read`/`file_write`/`file_patch`, `grep` (поиск по содержимому файлов регулярным выражением с фильтром `glob`), `glob` (поиск файлов по маске, поддерживает `**`), `bash`, `github_action` и `github_api` (операции с GitHub от имени пользователя по его личному токену), `web_search` (поиск актуальной информации в интернете), `fetch_web_page` (чтение страницы по URL), `search_user_chats` (поиск по прошлым чатам пользователя) и системная память задачи (`todo_write`).
+        Ты работаешь инструментами (их описания и параметры есть в схемах): `str_replace_editor`, `apply_patch`, `file_read`/`file_write`/`file_patch`, `grep`, `glob`, `bash`, `github_action`/`github_api`, `web_search`, `fetch_web_page`, `search_user_chats` и `todo_write`.
         Для поиска по коду в воркспейсе используй `grep` и `glob`, а не `bash: grep/rg/find` — эти инструменты не требуют подтверждения и не зависят от того, что установлено в песочнице.
         Для проверки кода используй `run_tests` — он сам определяет фреймворк и возвращает структурированный отчёт (кто упал, файл:строка, ожидали/получили), а не сырые логи. Не гоняй `npm test`/`pytest`/`dotnet test` через `bash`, чтобы потом вручную вычитывать простыню вывода.
         Чтобы увидеть ошибки компиляции, типов и линтера без запуска приложения и тестов, используй `get_diagnostics` — он сам подбирает проверку (dotnet build, tsc, eslint, cargo check, go vet, pyright/mypy/ruff) и отдаёт `severity: файл:строка:колонка [код] сообщение`. Вызывай его после правок, чтобы поймать ошибки типов до сборки.
@@ -637,6 +637,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var planWritten = false;
         var planNudged = false;
 
+        // ITERATION_WRAPUP: добавлено 2026-10-06 — на последнем шаге просим модель подвести итог,
+        // и только один раз (иначе на перезапуске этого же шага подсказка добавилась бы дважды).
+        var wrappedUp = false;
+
         // AGENT_TOOL_FAILURES: добавлено 2026-09-23 — бюджет ошибок ЛЮБОГО инструмента (раньше он был
         // только у bash-команд), чтобы инструмент, который в этом окружении не может сработать в
         // принципе (take_screenshot без Chromium), не мог бесконечно продолжать прогон.
@@ -685,6 +689,23 @@ public class ConexyAgentRunner : IConexyAgentRunner
         {
             completedSteps = step;
             ct.ThrowIfCancellationRequested();
+
+            // LOOP_GUARD: новый ход — новый бюджет интернет-обращений. Ограничиваем «взрыв» поисков
+            // внутри одного ответа, но НЕ поиск за задачу: пользователь может искать сколько угодно
+            // шагов подряд, и на каждом счётчик снова полон.
+            loopGuard.ResetWebBudget();
+
+            // TOKEN_ECONOMY: перед каждым ходом сжимаем старые длинные выводы инструментов, чтобы
+            // история не росла монотонно и каждый шаг не пересылал десятки тысяч токенов заново.
+            AgentContextCompressor.Compress(messages);
+
+            // ITERATION_WRAPUP: на последнем разрешённом шаге просим модель не вызывать инструменты, а
+            // подвести итог — иначе прогон заканчивался служебной строкой вместо ответа.
+            if (step == _maxIterations && !wrappedUp)
+            {
+                wrappedUp = true;
+                messages.Add(new ChatMessage("system", PromptFragments.FinalStepWrapUp));
+            }
 
             var thinkingLabel = step == 1
                 ? "Анализирую задачу и архитектуру..."
@@ -1104,7 +1125,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 ? "Генерация остановлена: исчерпан лимит токенов вашего тарифа."
                 : toolBudgetExhausted
                     ? "Не удалось завершить задачу: инструменты, которые нужны агенту, не работают в этом окружении. Запустите задачу заново после устранения ограничения."
-                    : "Task reached maximum autonomous iteration limit.",
+                    : "Достигнут предел шагов для одной задачи. Продолжите или уточните задачу отдельным сообщением.",
             note);
     }
 
@@ -1121,6 +1142,78 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // INCOGNITO_CHAT: an incognito turn must not read the user's other conversations, the same
         // rule the conversation service applies to memory and the cross-chat digest.
         !(tool == SearchUserChatsTool && _job.Incognito);
+
+    // TOOL_ROUTING: добавлено 2026-10-06
+    //
+    // Признак задачи внутри профиля. Coder всегда получал все ~28 схем инструментов (~6.4k токенов)
+    // на КАЖДОМ шаге, хотя конкретной задаче нужны единицы. Режем набор по типу: задача про документ
+    // не получает браузер, задача про сайт — документы и GitHub, и т. п. Правила консервативные:
+    // без явного признака инструмент остаётся.
+    [Flags]
+    private enum TaskKind
+    {
+        General = 0,
+        Browser = 1,
+        Github = 2,
+        Documents = 4,
+    }
+
+    private static readonly string[] BrowserWords =
+    {
+        "browser", "браузер", "playwright", "selenium", "webkit", "chromium", "headless",
+        "css", "html", "вёрстк", "верстк", "пиксел", "внешний вид", "отклик", "responsive",
+        "react", "vue", "angular", "svelte", "frontend", "фронтенд", "веб-страниц", "веб-сайт", "веб-приложен",
+    };
+    private static readonly string[] GithubWords =
+    {
+        "github", "гитхаб", "гитхабе", "пул-реквест", "пулл-реквест", "pull request", "pull-request", " p r ",
+        "issue", "ишью", "коммит", "commit", " ветк", "branches", "branch", " репозитор", "repo", "clone", "workflow", "actions",
+    };
+    private static readonly string[] DocumentWords =
+    {
+        "документ", "docx", "xlsx", "pptx", "report", "отчёт", "отчет", "презентац", "договор", "excel", "word",
+        "pdf", "таблиц", "презента", "brief", "справк", "инструкц", "регламент",
+    };
+
+    private static TaskKind DetectTaskKind(string? prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt)) return TaskKind.General;
+        var text = prompt.ToLowerInvariant();
+        var kind = TaskKind.General;
+        if (ContainsAny(text, BrowserWords)) kind |= TaskKind.Browser;
+        if (ContainsAny(text, GithubWords)) kind |= TaskKind.Github;
+        if (ContainsAny(text, DocumentWords)) kind |= TaskKind.Documents;
+        return kind;
+    }
+
+    private static bool ContainsAny(string text, string[] words)
+    {
+        foreach (var word in words)
+        {
+            if (text.Contains(word, StringComparison.Ordinal)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Нужен ли этот инструмент задаче. Инструмент, не подпадающий под спец-признаки, остаётся всегда —
+    /// режем только явно лишние группы (браузер/документы/GitHub) и только у Coder.
+    /// </summary>
+    private bool WantedForTask(string name, TaskKind kind)
+    {
+        if (_profile.Mode != "coder") return true; // Cowork и помощники сохраняют весь свой профиль.
+
+        if (IsBrowserTool(name))
+            return kind.HasFlag(TaskKind.Browser);
+
+        if (name is "create_document" or "read_document_file")
+            return kind.HasFlag(TaskKind.Documents);
+
+        if (name is "github_action" or "github_api")
+            return kind.HasFlag(TaskKind.Github);
+
+        return true;
+    }
 
     /// <summary>
     /// Tool set for the current run: the catalog filtered by the mode's profile. <c>take_screenshot</c>
@@ -1149,8 +1242,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // они разрешены профилем (Coder). Без доступного браузера они не предлагаются.
         var browserTools = screenshots && _browserService is not null && _profile.Allows("browser_open");
 
+        // TOOL_ROUTING: отбираем инструменты не только по профилю, но и по типу задачи — иначе Coder
+        // платит схемами браузера/документов/GitHub на каждом шаге даже там, где они не нужны.
+        var taskKind = DetectTaskKind(_job.Prompt);
         var tools = ToolCatalog
             .Where(tool => IsToolAllowed(tool.Name)
+                && WantedForTask(tool.Name, taskKind)
                 && (tool.Name != "take_screenshot" || screenshots)
                 && (!IsBrowserTool(tool.Name) || browserTools))
             .Select(tool => tool.Schema)

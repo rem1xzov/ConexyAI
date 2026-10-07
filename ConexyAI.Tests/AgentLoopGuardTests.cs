@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using ConexyAI.Service;
+using ConexyAI.Service.Prompts;
 
 // LOOP_GUARD: добавлено 2026-09-27
 /// <summary>
@@ -13,7 +14,8 @@ internal static class AgentLoopGuardTests
     {
         TestRegistry.Add("loop guard: the fourth identical call with the same output is refused", RefusesThirdRepeatAsync);
         TestRegistry.Add("loop guard: changing output or another call in between is not a loop", NotALoopAsync);
-        TestRegistry.Add("loop guard: web tools are capped per run, other tools do not spend the cap", WebBudgetAsync);
+        TestRegistry.Add("loop guard: web tools are capped per model turn, and the cap resets each turn", WebBudgetAsync);
+        TestRegistry.Add("loop guard: the last step asks the model to wrap up instead of stopping silently", WrapUpFragmentAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -91,6 +93,12 @@ internal static class AgentLoopGuardTests
             "fetch_web_page shares the same budget as web_search");
         Assert(guard.WebCallsUsed == AgentLoopGuard.WebCallBudget, $"budget accounting, got {guard.WebCallsUsed}");
 
+        // Бюджет — на один ход, а не на задачу: следующий ход открывает его заново.
+        guard.ResetWebBudget();
+        Assert(guard.Refuse("web_search", """{"query":"seven"}""") is null,
+            "a new model turn must open a fresh web budget");
+        Assert(guard.WebCallsUsed == 1, $"the counter restarts each turn, got {guard.WebCallsUsed}");
+
         // Обычные инструменты бюджет не тратят.
         var mixed = new AgentLoopGuard();
         for (var i = 0; i < 10; i++)
@@ -98,6 +106,17 @@ internal static class AgentLoopGuardTests
             Assert(mixed.Refuse("bash", $"{{\"command\":\"cmd {i}\"}}") is null, "bash must not be capped by the web budget");
         }
         Assert(mixed.WebCallsUsed == 0, $"bash must not spend the web budget, got {mixed.WebCallsUsed}");
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Последний шаг цикла обязан просить модель подвести итог, а не молча оборвать прогон.</summary>
+    private static Task WrapUpFragmentAsync()
+    {
+        var text = PromptFragments.FinalStepWrapUp;
+        Assert(!string.IsNullOrWhiteSpace(text), "the wrap-up fragment must not be empty");
+        Assert(text.Contains("Не вызывай инструменты"), "the model must be told not to call tools on the last step");
+        Assert(text.Contains("итог"), "the model must be told to sum up for the user");
 
         return Task.CompletedTask;
     }

@@ -2714,6 +2714,17 @@ export default function App() {
     onKeyboardClosed: () => setComposerFocused(false),
   });
 
+  // MOBILE_KEYBOARD: открытие ящика со списком чатов должно гасить экранную клавиатуру. Тап по
+  // кнопке-гамбургеру не снимает фокус с контрола ввода, поэтому клавиатура висела поверх списка.
+  // Снимаем фокус с активного поля, если оно не внутри самого ящика (поле поиска в ящике — можно).
+  useEffect(() => {
+    if (!isMobile || !sidebarOpen) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && !active.closest('.sidebar')) {
+      active.blur();
+    }
+  }, [isMobile, sidebarOpen]);
+
   // ADMIN_HOOKS_ORDER: возвраты для админки обязаны стоять ПОСЛЕ самого последнего хука этого
   // компонента. Раньше они были выше useEffect'а инкогнито, и переход на `#/admin` (без F5)
   // рендерил App с на один хук меньше — React падал с #300 «Rendered fewer hooks than expected».

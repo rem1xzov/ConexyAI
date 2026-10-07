@@ -55,6 +55,8 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent mcp: server tools are offered and dispatched by prefix", McpToolIsOfferedAndDispatchedAsync);
         TestRegistry.Add("agent mcp: a personal server overrides the operator one and sends its token", McpUserServerOverridesOperatorAsync);
         TestRegistry.Add("agent prompts: charters carry deep research, fetch_web_page, the plan rule and artifacts", ChartersAsync);
+        TestRegistry.Add("agent tools: the coder set is narrowed to the task (no browser/github/docs for a file fix)", ToolRoutingNarrowsCoderAsync);
+        TestRegistry.Add("agent tools: a browser task keeps the browser tools, and Cowork is never narrowed", ToolRoutingKeepsRelevantAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -1036,7 +1038,8 @@ internal static class AgentCapabilityTests
         Guid? chatId = null,
         bool incognito = false,
         IAgentHooksService? hooks = null,
-        IMcpRegistry? mcp = null)
+        IMcpRegistry? mcp = null,
+        string prompt = "Сделай задачу")
     {
         var workspace = new ConexyWorkspaceService(
             Options.Create(new WorkspaceOptions { RootPath = workspaceRoot }),
@@ -1066,7 +1069,7 @@ internal static class AgentCapabilityTests
             hooksService: hooks,
             mcpRegistryFactory: mcp is null ? null : new FakeMcpRegistryFactory(mcp));
 
-        var job = new ConexyJob(Guid.NewGuid(), chatId ?? Guid.NewGuid(), userId ?? Guid.NewGuid(), mode, "Сделай задачу", Incognito: incognito);
+        var job = new ConexyJob(Guid.NewGuid(), chatId ?? Guid.NewGuid(), userId ?? Guid.NewGuid(), mode, prompt, Incognito: incognito);
         var context = new ConversationContext(job.TaskId, job.ChatId, job.UserId, runner.GetSystemPrompt(mode), job.Prompt, Incognito: incognito);
         return (runner, job, context);
     }
@@ -1121,6 +1124,73 @@ internal static class AgentCapabilityTests
         {
             // Best effort: a temp directory left behind does not affect other tests.
         }
+    }
+
+    // TOOL_ROUTING: добавлено 2026-10-06
+    /// <summary>Задача про файл не должна получать браузер/документы/GitHub — их схемы стоят токенов.</summary>
+    private static async Task ToolRoutingNarrowsCoderAsync()
+    {
+        var root = TempWorkspace();
+        try
+        {
+            // Прогон завершается текстом на первом же шаге — нам важны только предложенные схемы.
+            var llm = new ScriptLlm(Text("Готово."));
+            var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(),
+                ConexyModelType.ConexyCoder, prompt: "Поправь опечатку в README.md");
+            await runner.RunLoopAsync(job, context, Guard());
+
+            Assert(llm.AdvertisedTools.Contains("str_replace_editor"), "a file task keeps the editor");
+            Assert(llm.AdvertisedTools.Contains("bash"), "a file task keeps bash");
+            Assert(!llm.AdvertisedTools.Any(t => t.StartsWith("browser_", StringComparison.Ordinal)),
+                "a non-browser task must not be offered browser_* tools");
+            Assert(!llm.AdvertisedTools.Contains("create_document") && !llm.AdvertisedTools.Contains("read_document_file"),
+                "a non-document task must not be offered document tools");
+            Assert(!llm.AdvertisedTools.Contains("github_action") && !llm.AdvertisedTools.Contains("github_api"),
+                "a non-github task must not be offered github tools");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    /// <summary>Признак задачи включает нужные инструменты; Cowork всегда получает свой весь профиль.</summary>
+    private static async Task ToolRoutingKeepsRelevantAsync()
+    {
+        var root = TempWorkspace();
+        try
+        {
+            var webLlm = new ScriptLlm(Text("Готово."));
+            var (webRunner, webJob, webContext) = CreateRunner(root, webLlm, new RecordingHubContext(),
+                ConexyModelType.ConexyCoder, prompt: "Собери React-страницу и проверь её вид в браузере");
+            await webRunner.RunLoopAsync(webJob, webContext, Guard());
+            // browser_* предлагаются только при доступном Chromium, а здесь его нет; но браузерный
+            // признак не должен убирать обычные инструменты правки.
+            Assert(webLlm.AdvertisedTools.Contains("str_replace_editor"), "a web task still keeps the editor");
+
+            var coworkLlm = new ScriptLlm(Text("Готово."));
+            var (coworkRunner, coworkJob, coworkContext) = CreateRunner(root, coworkLlm, new RecordingHubContext(),
+                ConexyModelType.ConexyCowork, prompt: "Сделай отчёт");
+            await coworkRunner.RunLoopAsync(coworkJob, coworkContext, Guard());
+            Assert(coworkLlm.AdvertisedTools.Contains("create_document"),
+                "Cowork must always keep its document tools regardless of the task wording");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    private static string TempWorkspace()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "conexy_tools_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static void Cleanup(string root)
+    {
+        try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
     }
 
     // ---------------------------------------------------------------- fakes
