@@ -678,15 +678,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             var llmTurn = await StreamAgentTurnAsync(taskId, messages, ct);
             var responseMessage = llmTurn.Message;
-            // SUBSCRIPTION_TIERS: добавлено 2026-09-17 — internal agent tokens count toward the agent budget.
-            // COWORK_BUDGET: с 2026-09-26 важен и режим: Cowork тратит свой пул, Coder — агентский.
-            await _subscriptionService.RecordAgentTokensAsync(job.UserId, job.ModelType, llmTurn.TotalTokens, ct);
+            // PRICED_BILLING: начисляем по цене (кэш − 2%, выход ×4) и берём именно начисленную сумму,
+            // чтобы токен-брейкер ниже сравнивал её с остатком того же (взвешенного) бюджета.
+            // SUBSCRIPTION_TIERS: внутренние токены агента идут в бюджет тарифа.
+            // COWORK_BUDGET: Cowork тратит свой пул, Coder — агентский.
+            var billedTokens = await _subscriptionService.RecordAgentTokensAsync(job.UserId, job.ModelType, llmTurn.Usage, ct);
             messages.Add(responseMessage);
 
             // TOKEN_BREAKER: счёт идёт по ЭТОМУ прогону, а не по счётчику в БД: сброс окна посреди
             // задачи не должен выглядеть как «лимит появился заново». Токены хода уже записаны
             // строкой выше, поэтому при обрыве они не теряются.
-            runTokens += llmTurn.TotalTokens;
+            runTokens += billedTokens;
             if (runTokens > remainingTokens)
             {
                 tokenBudgetExceeded = true;
@@ -1599,7 +1601,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var turn = await StreamAgentTurnAsync(taskId, messages, ct, streamToClient: false);
             // TOKEN_BREAKER: расход помощников идёт в тот же агентский пул тарифа — оркестр
             // «расходует больше токенов» именно здесь, и это видно в учёте, а не только на словах.
-            await _subscriptionService.RecordAgentTokensAsync(job.UserId, job.ModelType, turn.TotalTokens, ct);
+            // PRICED_BILLING: начисляется той же формулой, что и у ведущего агента (кэш дешёв, выход дорог).
+            await _subscriptionService.RecordAgentTokensAsync(job.UserId, job.ModelType, turn.Usage, ct);
             messages.Add(turn.Message);
 
             if (turn.Message.ToolCalls is not { Count: > 0 })
@@ -2472,7 +2475,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
     /// arriving as one block. Content, reasoning and the assembled tool calls are returned as a
     /// single assistant message so the rest of the loop is unchanged.
     /// </summary>
-    private async Task<(ChatMessage Message, int TotalTokens)> StreamAgentTurnAsync(
+    private async Task<(ChatMessage Message, int TotalTokens, LlmTokenUsage Usage)> StreamAgentTurnAsync(
         Guid taskId,
         List<ChatMessage> messages,
         CancellationToken ct,
@@ -2485,6 +2488,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var reasoning = new StringBuilder();
         List<LlmToolCall>? toolCalls = null;
         var totalTokens = 0;
+        // PRICED_BILLING: разбивка токенов последнего usage-чанка (для взвешенного начисления).
+        LlmTokenUsage? usage = null;
         var yieldedAnyDelta = false;
 
         var stream = _llmClient
@@ -2510,7 +2515,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     if (streamToClient) await group.SendAsync("OnLog", $"[Stream] Incremental output unavailable ({ex.Message}); falling back to a plain completion.", ct);
                     var fallback = await _llmClient.SendChatAsync(
                         _job.ModelType, messages, _tools, _job.ReasoningEffort, _job.TaskId, ct);
-                    return (fallback.Message, fallback.TotalTokens);
+                    return (fallback.Message, fallback.TotalTokens,
+                        fallback.Usage ?? new LlmTokenUsage(UncachedInput: fallback.TotalTokens));
                 }
 
                 yieldedAnyDelta = true;
@@ -2539,6 +2545,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 {
                     totalTokens = delta.TotalTokens.Value;
                 }
+
+                // PRICED_BILLING: usage-чанк приходит последним и несёт разбивку для взвешенного начисления.
+                if (delta.Usage is not null)
+                {
+                    usage = delta.Usage;
+                }
             }
         }
 
@@ -2549,6 +2561,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
             totalTokens = EstimateTokens(content.Length, reasoning.Length, toolCalls);
         }
 
+        // PRICED_BILLING: если апстрим не дал разбивку, считаем ход целиком обычным входом — счёт
+        // не занижается (тот же дух, что и EstimateTokens выше).
+        if (usage is null || usage.IsEmpty)
+        {
+            usage = new LlmTokenUsage(UncachedInput: totalTokens);
+        }
+
         var message = new ChatMessage(
             "assistant",
             content.Length > 0 ? content.ToString() : null,
@@ -2556,7 +2575,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             null,
             reasoning.Length > 0 ? reasoning.ToString() : null);
 
-        return (message, totalTokens);
+        return (message, totalTokens, usage);
     }
 
     /// <summary>
@@ -3139,7 +3158,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // SUBSCRIPTION_TIERS: добавлено 2026-09-17 — critic tokens count toward the agent budget.
             // COWORK_BUDGET: аудитор есть только у Coder (Cowork документы не ревьюит код), поэтому
             // здесь типом всегда идёт режим прогона — на Coder это агентский пул, иного и быть не может.
-            await _subscriptionService.RecordAgentTokensAsync(_job.UserId, _job.ModelType, response.TotalTokens, ct);
+            // PRICED_BILLING: не-стриминговый путь тоже отдаёт разбивку (LlmChatResult.Usage).
+            await _subscriptionService.RecordAgentTokensAsync(_job.UserId, _job.ModelType,
+                response.Usage ?? new LlmTokenUsage(UncachedInput: response.TotalTokens), ct);
             var verdict = ParseAuditVerdict(response.Message.Text ?? string.Empty);
 
             _logger.LogInformation(

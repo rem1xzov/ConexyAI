@@ -1722,8 +1722,8 @@ sealed class FakeSubscriptionService : ISubscriptionService
     public Task RecordRequestAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default) =>
         Task.CompletedTask;
 
-    public Task RecordAgentTokensAsync(Guid userId, ConexyModelType modelType, long tokens, CancellationToken ct = default) =>
-        Task.CompletedTask;
+    public Task<long> RecordAgentTokensAsync(Guid userId, ConexyModelType modelType, LlmTokenUsage usage, CancellationToken ct = default) =>
+        Task.FromResult(usage.Total);
 }
 
 sealed class FakeSandboxRunner : IDockerSandboxRunner

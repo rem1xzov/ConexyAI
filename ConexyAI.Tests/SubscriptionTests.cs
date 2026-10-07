@@ -25,6 +25,7 @@ internal static class SubscriptionTests
         TestRegistry.Add("subs TIER_SYNC: the counter follows the user's tier, its limits and windows", TierSyncAsync);
         TestRegistry.Add("subs COWORK: paid plans only, with a token budget of its own", CoworkAsync);
         TestRegistry.Add("subs ADMIN: admins are unlimited but their usage is tracked", AdminAsync);
+        TestRegistry.Add("subs BILLING: cache hits are cheap and output is priced up (weighted tokens)", BillingAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -154,7 +155,7 @@ internal static class SubscriptionTests
             "Cowork must be allowed on a paid plan");
 
         // Токены Cowork идут в свой пул и не трогают бюджет агента.
-        await subs.RecordAgentTokensAsync(pro, ConexyModelType.ConexyCowork, 2_000 * K);
+        await subs.RecordAgentTokensAsync(pro, ConexyModelType.ConexyCowork, new LlmTokenUsage(UncachedInput: 2_000 * K));
         var usage = await subs.GetUsageAsync(pro);
         Assert(usage.CoworkUsed == 2_000 * K, $"cowork tokens must land in the cowork pool, got {usage.CoworkUsed}");
         Assert(usage.AgentUsed == 0, $"cowork must not spend the agent budget, got {usage.AgentUsed}");
@@ -187,7 +188,7 @@ internal static class SubscriptionTests
         };
         await sp.GetRequiredService<IUserRepository>().AddAsync(admin);
 
-        await subs.RecordAgentTokensAsync(admin.Id, ConexyModelType.ConexyCoder, 123_456);
+        await subs.RecordAgentTokensAsync(admin.Id, ConexyModelType.ConexyCoder, new LlmTokenUsage(UncachedInput: 123_456));
         var usage = await subs.GetUsageAsync(admin.Id);
         Assert(usage.Tier == "Admin", $"an admin must read as Admin, got {usage.Tier}");
         Assert(usage.AgentUsed == 123_456, $"admin usage must be tracked, got {usage.AgentUsed}");
@@ -195,10 +196,41 @@ internal static class SubscriptionTests
         Assert(usage.CoworkLimit == long.MaxValue, "the admin cowork limit must be infinite (Cowork is open)");
 
         // Безлимит — запуск разрешён даже при огромном расходе.
-        await subs.RecordAgentTokensAsync(admin.Id, ConexyModelType.ConexyCoder, 1_000_000_000L);
+        await subs.RecordAgentTokensAsync(admin.Id, ConexyModelType.ConexyCoder, new LlmTokenUsage(UncachedInput: 1_000_000_000L));
         Assert((await subs.CheckBeforeRunAsync(admin.Id, ConexyModelType.ConexyCoder)).Kind == UsageDecisionKind.Allowed,
             "an admin must never be blocked by the agent budget");
         Assert((await subs.CheckBeforeRunAsync(admin.Id, ConexyModelType.ConexyCowork)).Kind == UsageDecisionKind.Allowed,
             "an admin always has Cowork");
+    }
+
+    // PRICED_BILLING: добавлено 2026-10-06 — бюджет считается по цене, а не по сырому total_tokens.
+    private static async Task BillingAsync()
+    {
+        await using var provider = BuildServices();
+        await using var scope = provider.CreateAsyncScope();
+        var sp = scope.ServiceProvider;
+        var subs = sp.GetRequiredService<ISubscriptionService>();
+        var user = await AddUserAsync(sp, SubscriptionTier.Pro);
+
+        // Кэш-хит 100k (×0.02), обычный вход 10k (×1), выход 1k (×4):
+        // 10 000 + 2 000 + 4 000 = 16 000 «эквивалентных» токенов вместо сырых 111 000.
+        var billed = await subs.RecordAgentTokensAsync(user, ConexyModelType.ConexyCoder,
+            new LlmTokenUsage(CachedInput: 100 * K, UncachedInput: 10 * K, Output: 1 * K));
+        Assert(billed == 16 * K, $"the billed amount must be weighted, got {billed}");
+
+        var usage = await subs.GetUsageAsync(user);
+        Assert(usage.AgentUsed == 16 * K, $"the pool must hold the weighted amount, got {usage.AgentUsed}");
+
+        // Чистый кэш-хит почти ничего не стоит: 100k хитов ≈ 2k бюджетных токенов.
+        var cacheOnly = await subs.RecordAgentTokensAsync(user, ConexyModelType.ConexyCoder,
+            new LlmTokenUsage(CachedInput: 100 * K));
+        Assert(cacheOnly == 2 * K, $"cache-only turns must be heavily discounted, got {cacheOnly}");
+
+        // Выход дороже входа: те же 10k входом и выходом дают разный счёт.
+        var inputOnly = await subs.RecordAgentTokensAsync(user, ConexyModelType.ConexyCoder,
+            new LlmTokenUsage(UncachedInput: 10 * K));
+        var outputOnly = await subs.RecordAgentTokensAsync(user, ConexyModelType.ConexyCoder,
+            new LlmTokenUsage(Output: 10 * K));
+        Assert(outputOnly == 4 * inputOnly, $"output must cost 4x input, got {outputOnly} vs {inputOnly}");
     }
 }

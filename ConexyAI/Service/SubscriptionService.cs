@@ -21,7 +21,9 @@ public interface ISubscriptionService
 
     // COWORK_BUDGET: с 2026-09-26 у Coder и Cowork разные бюджеты, поэтому тип модели обязателен:
     // без него токены Cowork уходили бы в пул агента-кодера.
-    Task RecordAgentTokensAsync(Guid userId, ConexyModelType modelType, long tokens, CancellationToken ct = default);
+    // PRICED_BILLING: с 2026-10-06 принимает разбивку хода (кэш/без кэша/выход) и возвращает
+    // фактически начисленную (взвешенную) сумму — её же накапливает токен-брейкер в раннере.
+    Task<long> RecordAgentTokensAsync(Guid userId, ConexyModelType modelType, LlmTokenUsage usage, CancellationToken ct = default);
 }
 
 public class SubscriptionService : ISubscriptionService
@@ -128,9 +130,13 @@ public class SubscriptionService : ISubscriptionService
         await _repository.UpsertAsync(counter, ct);
     }
 
-    public async Task RecordAgentTokensAsync(Guid userId, ConexyModelType modelType, long tokens, CancellationToken ct = default)
+    public async Task<long> RecordAgentTokensAsync(Guid userId, ConexyModelType modelType, LlmTokenUsage usage, CancellationToken ct = default)
     {
-        if (tokens <= 0) return;
+        // PRICED_BILLING: в бюджет идёт взвешенная сумма, а не сырой total_tokens: у DeepSeek кэш-хит
+        // стоит ~2% от обычного входа, а выход ~4× — без веса пользователь платил бы за кэшированное
+        // как за новое (85% его «расхода» — именно кэш-хиты).
+        var billed = BilledTokens(usage);
+        if (billed <= 0) return 0;
 
         // ADMIN_UNLIMITED: изменено 2026-10-01 — расход админа учитывается, но не блокирует.
         var user = await _userRepository.GetByIdAsync(userId, ct);
@@ -138,11 +144,27 @@ public class SubscriptionService : ISubscriptionService
 
         // COWORK_BUDGET: Cowork платит из своего бюджета, Coder — из агентского.
         if (modelType == ConexyModelType.ConexyCowork)
-            counter.CoworkTokensUsed += tokens;
+            counter.CoworkTokensUsed += billed;
         else
-            counter.AgentTokensUsed += tokens;
+            counter.AgentTokensUsed += billed;
 
         await _repository.UpsertAsync(counter, ct);
+        return billed;
+    }
+
+    // PRICED_BILLING: добавлено 2026-10-06
+    /// <summary>
+    /// Переводит разбивку хода в «эквивалент входного токена без кэша» с учётом реальных цен
+    /// (см. SubscriptionLimitsOptions.CacheHitTokenWeight / OutputTokenWeight). Округление вверх —
+    /// чтобы мелкие ходы не обнулялись.
+    /// </summary>
+    private long BilledTokens(LlmTokenUsage usage)
+    {
+        var weights = _options.Value;
+        var billed = usage.UncachedInput
+            + usage.CachedInput * weights.CacheHitTokenWeight
+            + usage.Output * weights.OutputTokenWeight;
+        return billed <= 0 ? 0 : (long)Math.Ceiling(billed);
     }
 
     private async Task<UserUsageCounterEntity> GetOrCreateAsync(Guid userId, User? user, CancellationToken ct)

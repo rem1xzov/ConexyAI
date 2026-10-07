@@ -21,6 +21,16 @@ public class SubscriptionLimitsOptions
 
     // ANNUAL_ULTRA: добавлено 2026-10-01 — годовой тариф Ultra (самые большие лимиты).
     public TierLimits Ultra { get; set; } = new();
+
+    // PRICED_BILLING: добавлено 2026-10-06 — коэффициенты цены для оплаты «по цене». Бюджет тарифа
+    // считается в «эквиваленте входного токена без кэша»: обычный вход ×1, вход с попаданием в кэш ×
+    // CacheHitTokenWeight, выход × OutputTokenWeight. По прайсу DeepSeek: кэш-хит = 0,003 / 0,15 = 0,02,
+    // выход = 0,60 / 0,15 = 4,0 (отношения одинаковы и для ночного, и для дневного тарифа).
+    /// <summary>Цена кэш-хит входного токена относительно обычного входа (без кэша).</summary>
+    public double CacheHitTokenWeight { get; set; } = 0.02;
+
+    /// <summary>Цена выходного токена относительно обычного входа (без кэша).</summary>
+    public double OutputTokenWeight { get; set; } = 4.0;
 }
 
 public class TierLimits

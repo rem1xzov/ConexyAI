@@ -121,7 +121,7 @@ public class ConexyLlmClient : IConexyLlmClient
                 result?.Usage?.PromptCacheHitTokens ?? 0, result?.Usage?.PromptCacheMissTokens ?? 0);
             var message = result?.Choices.FirstOrDefault()?.Message
                           ?? throw new InvalidOperationException("Invalid empty response from LLM upstream.");
-            return new LlmChatResult(message, result?.Usage?.TotalTokens ?? 0);
+            return new LlmChatResult(message, result?.Usage?.TotalTokens ?? 0, ToTokenUsage(result?.Usage));
         }
         catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
         {
@@ -344,6 +344,8 @@ public class ConexyLlmClient : IConexyLlmClient
                 string? reasoning = null;
                 string? finishReason = null;
                 int? totalTokens = null;
+                // PRICED_BILLING: разбивка токенов из usage-чанка (для оплаты «по цене»).
+                LlmTokenUsage? usage = null;
                 // FLASH_TIMEOUT: признак того, что чанк был не пустышкой (keep-alive его не ставит).
                 var sawProgress = false;
                 try
@@ -359,10 +361,16 @@ public class ConexyLlmClient : IConexyLlmClient
                         sawProgress = true;
                         // DEEPSEEK_CACHE: попадание в кэш префикса видно только в usage-чанке — логируем,
                         // чтобы оценивать реальную экономию (hit = переиспользованный префикс).
-                        var cacheHit = usageEl.TryGetProperty("prompt_cache_hit_tokens", out var hitEl) &&
-                                       hitEl.ValueKind == JsonValueKind.Number ? hitEl.GetInt32() : 0;
-                        var cacheMiss = usageEl.TryGetProperty("prompt_cache_miss_tokens", out var missEl) &&
-                                        missEl.ValueKind == JsonValueKind.Number ? missEl.GetInt32() : 0;
+                        var cacheHit = IntProp(usageEl, "prompt_cache_hit_tokens");
+                        var cacheMiss = IntProp(usageEl, "prompt_cache_miss_tokens");
+                        var promptTokens = IntProp(usageEl, "prompt_tokens");
+                        var completionTokens = IntProp(usageEl, "completion_tokens");
+                        // Как и в не-стриминговом пути: без разбивки кэша весь вход — обычный.
+                        if (cacheHit == 0 && cacheMiss == 0 && promptTokens > 0)
+                            cacheMiss = promptTokens;
+                        if (completionTokens == 0 && totalTokens > cacheHit + cacheMiss)
+                            completionTokens = totalTokens.Value - cacheHit - cacheMiss;
+                        usage = new LlmTokenUsage(cacheHit, cacheMiss, completionTokens);
                         _logger.LogInformation(
                             "DeepSeek stream usage [task {TaskId}]: totalTokens={Tokens} promptCacheHit={Hit} promptCacheMiss={Miss}",
                             taskId, totalTokens, cacheHit, cacheMiss);
@@ -425,7 +433,7 @@ public class ConexyLlmClient : IConexyLlmClient
 
                 if (totalTokens is not null)
                 {
-                    yield return new StreamDelta(TotalTokens: totalTokens);
+                    yield return new StreamDelta(TotalTokens: totalTokens, Usage: usage);
                 }
 
                 if (finishReason is not null)
@@ -566,6 +574,33 @@ public class ConexyLlmClient : IConexyLlmClient
 
     // PRIVACY_LOGS: тело ошибки upstream может цитировать запрос — в лог и клиенту идёт только начало.
     private static string Bounded(string text) => text.Length <= 500 ? text : text[..500] + "…";
+
+    // PRICED_BILLING: добавлено 2026-10-06
+    /// <summary>
+    /// Строит разбивку токенов для оплаты «по цене». Если апстрим не сообщил кэш (оба поля 0),
+    /// весь вход считаем обычным — счёт не занижается. Выход при отсутствии берётся как остаток
+    /// total − вход, чтобы бюджет всё равно начислялся.
+    /// </summary>
+    private static LlmTokenUsage ToTokenUsage(LlmUsage? usage)
+    {
+        if (usage is null) return new LlmTokenUsage();
+
+        var cached = usage.PromptCacheHitTokens;
+        var uncached = usage.PromptCacheMissTokens;
+        if (cached == 0 && uncached == 0 && usage.PromptTokens > 0)
+            uncached = usage.PromptTokens;
+
+        var output = usage.CompletionTokens;
+        if (output == 0 && usage.TotalTokens > cached + uncached)
+            output = usage.TotalTokens - cached - uncached;
+
+        return new LlmTokenUsage(cached, uncached, output);
+    }
+
+    private static int IntProp(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
+            ? value.GetInt32()
+            : 0;
 
     private static bool IsRetryable(HttpStatusCode status) =>
         status is HttpStatusCode.TooManyRequests

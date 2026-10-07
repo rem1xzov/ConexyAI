@@ -132,7 +132,21 @@ public record LlmUsage(
 );
 
 /// <summary>Result of a non-streaming chat completion: the message plus token usage.</summary>
-public record LlmChatResult(ChatMessage Message, int TotalTokens);
+public record LlmChatResult(ChatMessage Message, int TotalTokens, LlmTokenUsage? Usage = null);
+
+// PRICED_BILLING: добавлено 2026-10-06
+/// <summary>
+/// Разбивка токенов одного хода модели для оплаты «по цене». Цены DeepSeek различаются в разы:
+/// вход без кэша — базовый, вход с попаданием в кэш — ~2% от него, выход — ~4×. Поэтому бюджет
+/// тарифа считает не сырой <c>total_tokens</c>, а взвешенную сумму (см. SubscriptionService).
+/// </summary>
+public record LlmTokenUsage(long CachedInput = 0, long UncachedInput = 0, long Output = 0)
+{
+    /// <summary>Сырая сумма токенов хода (как её вернул апстрим).</summary>
+    public long Total => CachedInput + UncachedInput + Output;
+
+    public bool IsEmpty => CachedInput == 0 && UncachedInput == 0 && Output == 0;
+}
 
 /// <summary>A single streamed delta: answer content and/or reasoning content, plus the optional finish reason, any completed tool calls, and the upstream token usage (final chunk only).</summary>
 public record StreamDelta(
@@ -141,4 +155,6 @@ public record StreamDelta(
     string? FinishReason = null,
     List<LlmToolCall>? ToolCalls = null,
     // STREAM_USAGE: добавлено 2026-09-20
-    int? TotalTokens = null);
+    int? TotalTokens = null,
+    // PRICED_BILLING: добавлено 2026-10-06 — разбивка для оплаты «по цене» (приходит в usage-чанке).
+    LlmTokenUsage? Usage = null);
