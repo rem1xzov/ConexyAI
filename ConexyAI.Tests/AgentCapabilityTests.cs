@@ -54,6 +54,7 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent mcp: lists remote tools, handshakes and parses SSE tool results", McpRemoteServerAsync);
         TestRegistry.Add("agent mcp: server tools are offered and dispatched by prefix", McpToolIsOfferedAndDispatchedAsync);
         TestRegistry.Add("agent mcp: a personal server overrides the operator one and sends its token", McpUserServerOverridesOperatorAsync);
+        TestRegistry.Add("agent mcp: tool order is sorted so the prompt prefix stays cacheable", McpToolOrderIsStableAsync);
         TestRegistry.Add("agent prompts: charters carry deep research, fetch_web_page, the plan rule and artifacts", ChartersAsync);
         TestRegistry.Add("agent tools: the coder set is narrowed to the task (no browser/github/docs for a file fix)", ToolRoutingNarrowsCoderAsync);
         TestRegistry.Add("agent tools: a browser task keeps the browser tools, and Cowork is never narrowed", ToolRoutingKeepsRelevantAsync);
@@ -966,6 +967,28 @@ internal static class AgentCapabilityTests
         Assert(handler.Auths.Contains("Bearer user-tok"), "the user's token is sent: " + string.Join(",", handler.Auths));
     }
 
+    // PREFIX_CACHE: порядок MCP-инструментов не должен зависеть от порядка ответа сервера — схемы идут
+    // в префиксе запроса, и «дрожащий» порядок ломает кэш между прогонами.
+    private static async Task McpToolOrderIsStableAsync()
+    {
+        var handler = new McpHandler();
+        handler.Tools.Clear();
+        handler.Tools.Add("zeta.tool");
+        handler.Tools.Add("alpha.tool");
+        handler.Tools.Add("middle.tool");
+
+        var options = Options.Create(new McpOptions
+        {
+            Servers = { new McpServerOptions { Id = "notion", Name = "Notion", Url = "https://mcp.example.test/mcp" } }
+        });
+        var registry = new McpRegistryFactory(options, new FakeHttpClientFactory(handler), NullLogger<McpRegistry>.Instance).Create(null);
+
+        var tools = await registry.ListToolsAsync();
+        var names = tools.Select(t => t.FunctionName).ToList();
+        var sorted = names.OrderBy(n => n, StringComparer.Ordinal).ToList();
+        Assert(names.SequenceEqual(sorted), $"MCP tools must come back sorted: [{string.Join(", ", names)}]");
+    }
+
     private static async Task McpToolIsOfferedAndDispatchedAsync()
     {
         var root = CreateTempRoot();
@@ -1325,6 +1348,9 @@ internal static class AgentCapabilityTests
         public List<string> Urls { get; } = new();
         public List<string> Auths { get; } = new();
 
+        /// <summary>Имена инструментов, которые отдаёт фейк-сервер, РОВНО в этом порядке.</summary>
+        public List<string> Tools { get; } = new() { "search.pages" };
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var body = await request.Content!.ReadAsStringAsync(cancellationToken);
@@ -1354,7 +1380,9 @@ internal static class AgentCapabilityTests
 
             if (method == "tools/list")
             {
-                var json = $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"tools\":[{{\"name\":\"search.pages\",\"description\":\"Search pages\",\"inputSchema\":{{\"type\":\"object\"}}}}]}}}}";
+                var items = string.Join(",", Tools.Select(t =>
+                    $"{{\"name\":\"{t}\",\"description\":\"{t}\",\"inputSchema\":{{\"type\":\"object\"}}}}"));
+                var json = $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"tools\":[{items}]}}}}";
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
             }
 

@@ -105,6 +105,11 @@ public class McpRegistry : IMcpRegistry
             }
         }
 
+        // PREFIX_CACHE: порядок MCP-инструментов не должен зависеть от того, в каком порядке их вернули
+        // серверы. Схемы идут в префиксе запроса, и «дрожащий» порядок между прогонами ломает кэш
+        // префикса (тогда те же схемы оплачиваются заново). Сортируем по имени инструмента.
+        list.Sort((a, b) => string.CompareOrdinal(a.FunctionName, b.FunctionName));
+
         lock (_lock)
         {
             _cached = list;

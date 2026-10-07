@@ -247,14 +247,13 @@ public class ConexyBackgroundWorker : BackgroundService
                 ChatId: job.ChatId,
                 UserId: job.UserId,
                 // PRODUCT_KNOWLEDGE / USER_CONTEXT / CONTENT_POLICY: чат-режимам дописываем описание самого
-                // продукта (что умеет, какие тарифы), кто именно сейчас говорит с моделью и контент-политику.
-                // TOKEN_ECONOMY: агентские режимы (Coder/Cowork) платят за этот блок схемой на КАЖДОМ шаге
-                // автономного цикла, а он им не нужен: они не рассказывают о тарифах и не ведут личные
-                // беседы. Им — только базовая контент-политика (без кризисных телефонов), плюс краткая
-                // строка о тарифе пользователя (нужна для честных ответов про лимиты).
+                // продукта (что умеет, какие тарифы), кто именно сейчас говорит с моделью и контент-политику
+                // (базовую + кризисный блок с телефонами).
+                // TOKEN_ECONOMY: агентские режимы (Coder/Cowork) идут автономным циклом и платят за каждый
+                // блок на КАЖДОМ шаге. ContentPolicy/ProductKnowledge им не нужны — вместо них только
+                // короткая строка про тариф пользователя (для честных ответов про лимиты).
                 SystemPrompt: (isAgent
                     ? (smallTalk ? PromptEconomy.SmallTalkAgentPrompt : runner.GetSystemPrompt(job.ModelType))
-                        + "\n\n" + Prompts.PromptFragments.ContentPolicy
                         + "\n\n" + Prompts.PromptFragments.AudienceLine(job.IsAdmin, job.Tier)
                     : BuildChatSystemPrompt(job)
                         + "\n\n" + Prompts.PromptFragments.ContentPolicy
