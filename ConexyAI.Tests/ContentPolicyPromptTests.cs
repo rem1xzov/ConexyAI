@@ -63,6 +63,12 @@ internal static class ContentPolicyPromptTests
             "the short audience line must still name an admin");
         Assert(PromptFragments.AudienceLine(false, "Free").Contains("Free"),
             "the short audience line must still name the tier");
+        // AGENT_SAFETY: у агента вместо полной политики — одна строка; проверяем, что она закрывает
+        // именно то, что должна (изготовление оружия/наркотиков и помощь с преступлением).
+        Assert(PromptFragments.AgentSafetyLine.Contains("оружия") && PromptFragments.AgentSafetyLine.Contains("наркотиков"),
+            "the agent safety line must ban weapon and drug instructions");
+        Assert(PromptFragments.AgentSafetyLine.Contains("преступлен"),
+            "the agent safety line must refuse help with crimes");
         return Task.CompletedTask;
     }
 }

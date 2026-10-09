@@ -254,6 +254,7 @@ public class ConexyBackgroundWorker : BackgroundService
                 // короткая строка про тариф пользователя (для честных ответов про лимиты).
                 SystemPrompt: (isAgent
                     ? (smallTalk ? PromptEconomy.SmallTalkAgentPrompt : runner.GetSystemPrompt(job.ModelType))
+                        + "\n\n" + Prompts.PromptFragments.AgentSafetyLine
                         + "\n\n" + Prompts.PromptFragments.AudienceLine(job.IsAdmin, job.Tier)
                     : BuildChatSystemPrompt(job)
                         + "\n\n" + Prompts.PromptFragments.ContentPolicy
