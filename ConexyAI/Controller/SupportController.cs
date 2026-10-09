@@ -44,8 +44,10 @@ public class SupportController : ControllerBase
     }
 
     /// <summary>
-    /// Adds a message to a ticket. Regular users may only write in their own ticket; admins
-    /// (per the JWT <c>isAdmin</c> claim) may write in any ticket as an admin.
+    /// Adds a user message to the caller's own ticket. This endpoint is always the *user* side of
+    /// the conversation, even when the caller happens to be an admin: an admin testing support from
+    /// their own account must not be mistaken for an operator, or the bot would go silent (rule 8).
+    /// Operator replies go through the admin endpoint instead.
     /// </summary>
     [HttpPost("tickets/{id:guid}/messages")]
     public async Task<ActionResult<SupportMessageDto>> AddMessage(
@@ -56,7 +58,8 @@ public class SupportController : ControllerBase
 
         try
         {
-            var message = await _supportService.AddMessageAsync(id, userId, request.Content, User.IsAdmin(), ct);
+            // SUPPORT_ROLES: isFromAdmin всегда false — админ отвечает через AdminSupportController.
+            var message = await _supportService.AddMessageAsync(id, userId, request.Content, isFromAdmin: false, ct);
             return Ok(message);
         }
         catch (AuthException ex)

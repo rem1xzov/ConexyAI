@@ -192,6 +192,13 @@ export async function sendSupportMessage(ticketId: string, content: string): Pro
   return data;
 }
 
+// SUPPORT_ROLES: ответ оператора идёт отдельным админским эндпоинтом, чтобы он всегда помечался
+// как сообщение оператора (и глушил бота), даже если ответил админ-аккаунт, открывший свой тикет.
+export async function sendAdminSupportMessage(ticketId: string, content: string): Promise<SupportMessage> {
+  const { data } = await http.post<SupportMessage>(`/admin/support/tickets/${ticketId}/messages`, { content });
+  return data;
+}
+
 // SUPPORT_BOT: переходы состояния поддержки. Каждый возвращает обновлённый тикет.
 export async function escalateSupportTicket(ticketId: string): Promise<SupportTicket> {
   const { data } = await http.post<SupportTicket>(`/support/tickets/${ticketId}/escalate`);

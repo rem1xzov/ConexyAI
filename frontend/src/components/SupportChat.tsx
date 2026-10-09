@@ -4,6 +4,7 @@ import {
   cancelSupportTicket,
   createSupportTicket,
   escalateSupportTicket,
+  getMySupportTicket,
   returnSupportTicketToBot,
   sendSupportMessage,
 } from '../api/conexyApi';
@@ -102,6 +103,11 @@ export function SupportChat({ onClose, onToast }: SupportChatProps) {
       // Without this the message only appeared once the hub echoed it back — and never, when the
       // echo was lost (e.g. the support group was not re-joined after a reconnect).
       if (msg && msg.id) setTicket((tk) => (tk && tk.id === ticketId ? withMessage(tk, msg) : tk));
+      // SUPPORT_BOT_REPLY: ответ бота пишется синхронно внутри этого же POST, но эхо через хаб
+      // может опередить подписку на группу и потеряться. Перечитываем тикет, чтобы ответ бота
+      // появился сразу, а не только после перезагрузки.
+      const refreshed = await getMySupportTicket();
+      if (refreshed && refreshed.id === ticketId) setTicket(refreshed);
     } catch {
       onToast(t('support.sendError'));
       // Keep what the user typed so a failed send does not lose it.

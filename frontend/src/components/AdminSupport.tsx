@@ -4,7 +4,7 @@ import {
   closeSupportTicket,
   getAdminSupportTicket,
   getAdminSupportTickets,
-  sendSupportMessage,
+  sendAdminSupportMessage,
 } from '../api/conexyApi';
 import { signalrService } from '../services/signalrService';
 import type { AdminSupportTicket, SupportMessage, SupportTicket } from '../types/api';
@@ -144,7 +144,7 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
     setDraft('');
     draftsRef.current.delete(ticketId);
     try {
-      const msg = await sendSupportMessage(ticketId, content);
+      const msg = await sendAdminSupportMessage(ticketId, content);
       // Show our own reply at once (the hub echo is de-duplicated by id).
       if (msg && msg.id) {
         setSelected((s) => (s && s.id === ticketId ? withMessage(s, msg) : s));
