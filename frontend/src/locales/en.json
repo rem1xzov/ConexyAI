@@ -297,6 +297,17 @@
     "toastRevokedAdmin": "Admin rights revoked",
     "toastDeleted": "User deleted",
     "toastFailed": "Action failed",
+    "toastSubscription": "Subscription updated",
+    "sub": {
+      "button": "Subscription",
+      "title": "Assign a subscription",
+      "hint": "The tier applies at once and usage counters reset, so the new limits are available immediately. The Admin tier is not assigned here — use \"Make admin\" for that.",
+      "tierLabel": "Tier",
+      "durationLabel": "Duration",
+      "months": "{{count}} mo.",
+      "indefinite": "Indefinite",
+      "apply": "Assign"
+    },
     "roles": {
       "super": "Superadmin",
       "admin": "Admin",

@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import type { LimitExceededInfo } from '../types/api';
+import type { LimitExceededInfo, SubscriptionUsage } from '../types/api';
 // LEGAL_DOCS: добавлено 2026-09-25 — акцепт Оферты прямо на экране тарифов.
 import { LEGAL_PATHS } from './legal/LegalPage';
 import { CheckIcon, CloseIcon } from './Icons';
@@ -102,12 +102,16 @@ interface UpgradeModalProps {
   onBuy: (planId: string) => void;
   /** Идёт создание платежа: кнопки блокируем, чтобы не создать два платежа двойным кликом. */
   busy?: boolean;
+  // LIMIT_RESET: текущий расход — нужен, чтобы показать акцию сброса лимитов на Pro+ и админах.
+  usage?: SubscriptionUsage | null;
+  /** Сбросить лимиты (та же акция, что в Настройках → Лимиты). */
+  onReset?: () => Promise<void> | void;
 }
 
 // YOOKASSA: изменено 2026-09-27 — кнопки покупки больше не заглушки: они создают реальный платёж
 // (см. App.handleUpgradeBuy) и уводят браузер на страницу оплаты ЮKassa. Сумма берётся из серверного
 // каталога планов, поэтому клиент присылает только идентификатор тарифа.
-export function UpgradeModal({ limitInfo, onClose, onBuy, busy = false }: UpgradeModalProps) {
+export function UpgradeModal({ limitInfo, onClose, onBuy, busy = false, usage, onReset }: UpgradeModalProps) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? i18n.language;
 
@@ -131,6 +135,20 @@ export function UpgradeModal({ limitInfo, onClose, onBuy, busy = false }: Upgrad
         </div>
 
         {limitInfo && <div className="upgrade-modal__banner">{banner}</div>}
+
+        {/* LIMIT_RESET: у Pro+ и админов есть одна акция сброса лимитов — показываем её прямо на
+            экране тарифов, чтобы не искать в настройках, когда упёрся в лимит. */}
+        {usage?.limitResetAvailable && onReset && (
+          <div className="upgrade-reset">
+            <div className="upgrade-reset__text">
+              <div className="upgrade-reset__title">{t('limits.resetTitle')}</div>
+              <div className="upgrade-reset__hint">{t('limits.resetHint')}</div>
+            </div>
+            <button className="dialog-btn upgrade-reset__btn" onClick={() => void onReset()} disabled={busy} type="button">
+              {t('limits.resetButton')}
+            </button>
+          </div>
+        )}
 
         <div className="upgrade-modal__plans">
           {PLANS.map((plan) => (

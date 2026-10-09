@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
-function DialogShell({
+export function DialogShell({
   onCancel,
   labelledBy,
   children,

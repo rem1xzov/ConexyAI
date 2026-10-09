@@ -57,7 +57,7 @@ public class SubscriptionService : ISubscriptionService
         var counter = await GetOrCreateAsync(userId, user, ct);
 
         if (user?.IsAdmin == true)
-            return AdminUsage(counter);
+            return AdminUsage(counter, user);
 
         var limits = GetTierLimits(counter.Tier);
         return new SubscriptionUsageDto(
@@ -82,6 +82,11 @@ public class SubscriptionService : ISubscriptionService
     private static bool IsProOrHigher(SubscriptionTier tier) =>
         tier is SubscriptionTier.Pro or SubscriptionTier.ProMax or SubscriptionTier.Ultra;
 
+    // LIMIT_RESET: у админа сброс тоже есть, но «возобновляется» раз в месяц, а не по оплате —
+    // админский тариф не покупается, поэтому флаг оплаты к нему неприменим.
+    private static bool AdminResetAvailable(User user, DateTime now) =>
+        user.LimitResetUsedAt is null || user.LimitResetUsedAt < now.AddMonths(-1);
+
     // LIMIT_RESET: добавлено 2026-10-07 — сброс всех лимитов за текущий период.
     public async Task<SubscriptionUsageDto> ResetLimitsAsync(Guid userId, CancellationToken ct = default)
     {
@@ -90,11 +95,15 @@ public class SubscriptionService : ISubscriptionService
             throw new AuthException("user_not_found", "Пользователь не найден.", 404);
 
         var counter = await GetOrCreateAsync(userId, user, ct);
-        if (!IsProOrHigher(counter.Tier) || !user.LimitResetAvailable)
+        var now = DateTime.UtcNow;
+        // LIMIT_RESET: у Pro+ сброс даётся оплатой (user.LimitResetAvailable), у админа — раз в месяц.
+        var canReset = user.IsAdmin
+            ? AdminResetAvailable(user, now)
+            : IsProOrHigher(counter.Tier) && user.LimitResetAvailable;
+        if (!canReset)
             throw new AuthException("reset_unavailable", "Сброс лимитов недоступен.", 409);
 
         var limits = GetTierLimits(counter.Tier);
-        var now = DateTime.UtcNow;
         counter.FlashRequestsUsed = 0;
         counter.ProRequestsUsed = 0;
         counter.AgentTokensUsed = 0;
@@ -108,8 +117,10 @@ public class SubscriptionService : ISubscriptionService
         counter.CoworkCachedTokens = 0;
         await _repository.UpsertAsync(counter, ct);
 
-        // Купленный сброс — одноразовый: гасим и запоминаем время.
-        user.LimitResetAvailable = false;
+        // Купленный сброс — одноразовый: гасим и запоминаем время. У админа флага оплаты нет —
+        // запоминаем только время, чтобы следующий сброс был доступен через месяц.
+        if (!user.IsAdmin)
+            user.LimitResetAvailable = false;
         user.LimitResetUsedAt = now;
         await _userRepository.UpdateAsync(user, ct);
 
@@ -391,12 +402,13 @@ public class SubscriptionService : ISubscriptionService
 
     // ADMIN_UNLIMITED: изменено 2026-10-01 — расход админа реальный, а лимиты «бесконечные»,
     // поэтому один и тот же кружок работает и у обычного пользователя, и у админа.
-    private SubscriptionUsageDto AdminUsage(UserUsageCounterEntity counter) =>
+    private SubscriptionUsageDto AdminUsage(UserUsageCounterEntity counter, User user) =>
         new("Admin",
             counter.FlashRequestsUsed, long.MaxValue, counter.FlashWindowResetAt,
             counter.ProRequestsUsed, long.MaxValue, counter.ProWindowResetAt,
             counter.AgentTokensUsed, long.MaxValue, counter.AgentWindowResetAt,
             counter.CoworkTokensUsed, long.MaxValue, counter.CoworkWindowResetAt,
             counter.CoderCachedTokens, counter.CoworkCachedTokens, CacheHitDiscountPercent(),
-            false);
+            // LIMIT_RESET: у админа кнопка сброса есть — как у платных, но возобновляется раз в месяц.
+            AdminResetAvailable(user, DateTime.UtcNow));
 }

@@ -3103,6 +3103,8 @@ export default function App() {
         <UpgradeModal
           limitInfo={limitExceeded}
           busy={paymentBusy}
+          usage={usage}
+          onReset={handleLimitsReset}
           onClose={() => {
             setUpgradeOpen(false);
             setLimitExceeded(null);

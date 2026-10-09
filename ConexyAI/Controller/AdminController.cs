@@ -117,6 +117,39 @@ public class AdminController : ControllerBase
         return Ok(new { success = true });
     }
 
+    // ADMIN_SUBSCRIPTION: добавлено 2026-10-09 — админ назначает пользователю тариф вручную
+    // (Free/Go/Pro/ProMax/Ultra). Смена тарифа автоматически обнуляет счётчики (TIER_SYNC), поэтому
+    // лимиты нового тарифа доступны сразу. Тариф Admin здесь не выдаётся — для этого make-admin.
+    [HttpPost("users/{id:guid}/subscription")]
+    public async Task<ActionResult<AdminUserDto>> SetSubscription(
+        Guid id, [FromBody] AdminSetSubscriptionRequest request, CancellationToken ct)
+    {
+        if (!User.IsAdmin())
+            return Forbid();
+
+        var target = await _userRepository.GetByIdAsync(id, ct);
+        if (target is null)
+            return NotFound();
+
+        if (!Enum.TryParse<SubscriptionTier>(request.Tier, ignoreCase: true, out var tier) || tier == SubscriptionTier.Admin)
+            return BadRequest(new { code = "invalid_tier", message = "Неизвестный тариф." });
+
+        target.SubscriptionTier = tier;
+        // Months > 0 — до этой даты; иначе бессрочно (ручная выдача администратором).
+        target.SubscriptionExpiresAt = request.Months is > 0
+            ? DateTime.UtcNow.AddMonths(request.Months.Value)
+            : null;
+        // LIMIT_RESET: выданный вручную Pro+ тоже получает акцию сброса лимитов.
+        if (IsProOrHigher(tier))
+            target.LimitResetAvailable = true;
+
+        await _userRepository.UpdateAsync(target, ct);
+        _logger.LogInformation(
+            "Admin {Requester} set subscription of user {Target} to {Tier} for {Months} month(s).",
+            User.GetUserId(), id, tier, request.Months ?? 0);
+        return Ok(ToDto(target));
+    }
+
     /// <summary>Deletes a user and all their data via FK cascade (admin only; superadmins are protected).</summary>
     [HttpDelete("users/{id:guid}")]
     public async Task<IActionResult> DeleteUser(Guid id, CancellationToken ct)
@@ -197,6 +230,10 @@ public class AdminController : ControllerBase
     // ПОДТВЕРЖДЁННОМУ email. Иначе аккаунт, занявший email владельца через регистрацию, числился бы
     // «защищённым суперадмином», и его нельзя было бы удалить.
     private bool IsSuperAdmin(User user) => _adminOptions.Value.IsSuperAdmin(user);
+
+    // LIMIT_RESET: акция сброса доступна на Pro и выше.
+    private static bool IsProOrHigher(SubscriptionTier tier) =>
+        tier is SubscriptionTier.Pro or SubscriptionTier.ProMax or SubscriptionTier.Ultra;
 
     private AdminUserDto ToDto(User u) => new(
         u.Id,

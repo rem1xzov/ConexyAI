@@ -17,3 +17,8 @@ public record AdminUsersResponse(
     int Page,
     int PageSize,
     IReadOnlyList<AdminUserDto> Users);
+
+// ADMIN_SUBSCRIPTION: добавлено 2026-10-09 — админ назначает пользователю тариф вручную.
+/// <summary>Body for the admin "set subscription" action. <c>Months</c> &gt; 0 — до этой даты,
+/// иначе тариф выдаётся бессрочно (ручная выдача).</summary>
+public record AdminSetSubscriptionRequest(string Tier, int? Months);

@@ -282,5 +282,27 @@ internal static class SubscriptionTests
         try { await subs.ResetLimitsAsync(free); }
         catch (AuthException) { freeRefused = true; }
         Assert(freeRefused, "Free must not be allowed to reset");
+
+        // ADMIN: у админа кнопка сброса есть — как у платных, но возобновляется раз в месяц.
+        var admin = new User
+        {
+            Id = Guid.NewGuid(),
+            Email = $"admin-{Guid.NewGuid():N}@example.com",
+            EmailConfirmed = true,
+            IsAdmin = true,
+            SubscriptionTier = SubscriptionTier.Free,
+        };
+        await users.AddAsync(admin);
+        await subs.RecordAgentTokensAsync(admin.Id, ConexyModelType.ConexyCoder, new LlmTokenUsage(UncachedInput: 5_000 * K));
+        Assert((await subs.GetUsageAsync(admin.Id)).LimitResetAvailable, "an admin is offered the reset");
+
+        var adminAfter = await subs.ResetLimitsAsync(admin.Id);
+        Assert(adminAfter.AgentUsed == 0, "the admin reset must clear usage");
+
+        // Повторный сброс админу в течение месяца недоступен.
+        var adminSecondRefused = false;
+        try { await subs.ResetLimitsAsync(admin.Id); }
+        catch (AuthException) { adminSecondRefused = true; }
+        Assert(adminSecondRefused, "a second admin reset within the month must be refused");
     }
 }

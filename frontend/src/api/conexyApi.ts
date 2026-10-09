@@ -3,6 +3,7 @@ import axios from 'axios';
 import type {
   AdminPaymentSummary,
   AdminSupportTicket,
+  AdminUser,
   AdminUsersResponse,
   ChatListResponse,
   ChatShareLink,
@@ -156,6 +157,17 @@ export async function makeAdmin(id: string): Promise<void> {
 
 export async function revokeAdmin(id: string): Promise<void> {
   await http.post(`/admin/users/${id}/revoke-admin`);
+}
+
+// ADMIN_SUBSCRIPTION: добавлено 2026-10-09 — админ назначает тариф пользователю вручную.
+// months = null/0 — бессрочно.
+export async function setAdminUserSubscription(
+  id: string,
+  tier: string,
+  months: number | null,
+): Promise<AdminUser> {
+  const { data } = await http.post<AdminUser>(`/admin/users/${id}/subscription`, { tier, months });
+  return data;
 }
 
 export async function deleteUser(id: string): Promise<void> {

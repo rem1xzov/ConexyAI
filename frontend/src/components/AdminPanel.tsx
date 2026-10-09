@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { deleteUser, getAdminUsers, makeAdmin, revokeAdmin } from '../api/conexyApi';
+import { deleteUser, getAdminUsers, makeAdmin, revokeAdmin, setAdminUserSubscription } from '../api/conexyApi';
 import type { AdminUser } from '../types/api';
 import { humanError } from '../utils/humanError';
 import { ConfirmDialog } from './Dialog';
+import { AdminSubscriptionDialog } from './AdminSubscriptionDialog';
 import { ShieldIcon } from './Icons';
 import { AdminSupport } from './AdminSupport';
 // YOOKASSA: добавлено 2026-09-27 — сводка оплат для ручных чеков в «Мой налог».
@@ -45,6 +46,8 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
   // через подтверждение. Храним сам объект пользователя: список может перезагрузиться, пока
   // диалог открыт, и поиск по id тогда не нашёл бы, кого подтверждали.
   const [pendingAction, setPendingAction] = useState<{ kind: 'makeAdmin' | 'revokeAdmin' | 'delete'; user: AdminUser } | null>(null);
+  // ADMIN_SUBSCRIPTION: пользователь, которому сейчас назначаем тариф.
+  const [subUser, setSubUser] = useState<AdminUser | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   // SUPPORT: добавлено 2026-09-19
   const [tab, setTab] = useState<'users' | 'support' | 'payments'>('users');
@@ -124,6 +127,21 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
       await deleteUser(u.id);
       await load(page);
       onToast(t('admin.toastDeleted'));
+    } catch {
+      onToast(t('admin.toastFailed'));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // ADMIN_SUBSCRIPTION: назначение тарифа вручную (смена тарифа обнуляет счётчики).
+  async function handleSetSubscription(u: AdminUser, tier: string, months: number | null) {
+    setBusyId(u.id);
+    try {
+      await setAdminUserSubscription(u.id, tier, months);
+      setSubUser(null);
+      await load(page);
+      onToast(t('admin.toastSubscription'));
     } catch {
       onToast(t('admin.toastFailed'));
     } finally {
@@ -221,6 +239,14 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
                 </span>
               ) : (
                 <div className="admin-user__actions">
+                  <button
+                    className="admin-btn"
+                    onClick={() => setSubUser(u)}
+                    disabled={busyId === u.id}
+                    type="button"
+                  >
+                    {t('admin.sub.button')}
+                  </button>
                   {u.isAdmin ? (
                     <button className="admin-btn" onClick={() => setPendingAction({ kind: 'revokeAdmin', user: u })} disabled={busyId === u.id} type="button">
                       {t('admin.revokeAdmin')}
@@ -262,6 +288,15 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
         </button>
       </div>
         </>
+      )}
+
+      {subUser && (
+        <AdminSubscriptionDialog
+          user={subUser}
+          busy={busyId === subUser.id}
+          onSubmit={(tier, months) => void handleSetSubscription(subUser, tier, months)}
+          onCancel={() => setSubUser(null)}
+        />
       )}
 
       {pendingAction && (

@@ -3665,6 +3665,19 @@ body {
   border-color: var(--accent);
 }
 
+/* ADMIN_SUBSCRIPTION: подписанные поля в диалогах (тариф, срок) — подпись над контролом. */
+.dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.dialog-field__label {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
 /* PASSWORD_EYE: добавлено 2026-09-26 — поле пароля с кнопкой «показать/скрыть». Кнопка лежит внутри
    рамки поля и имеет полноценные 36px по высоте, чтобы по ней попадал палец, а не только курсор. */
 .password-field {
@@ -5627,6 +5640,39 @@ body {
   border: 1px solid rgba(255, 107, 122, 0.3);
   border-radius: 8px;
   padding: 8px 10px;
+}
+
+/* LIMIT_RESET: блок акции сброса лимитов прямо на экране тарифов (Pro+ и админы). */
+.upgrade-reset {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: linear-gradient(135deg, rgba(198, 139, 212, 0.10), rgba(230, 73, 128, 0.08));
+}
+
+.upgrade-reset__text {
+  flex: 1;
+  min-width: 180px;
+}
+
+.upgrade-reset__title {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.upgrade-reset__hint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+  margin-top: 2px;
+}
+
+.upgrade-reset__btn {
+  flex-shrink: 0;
 }
 
 .upgrade-modal__plans {
