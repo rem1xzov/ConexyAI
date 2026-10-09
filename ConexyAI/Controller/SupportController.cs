@@ -64,4 +64,35 @@ public class SupportController : ControllerBase
             return StatusCode(ex.StatusCode, new { code = ex.Code, message = ex.Message });
         }
     }
+
+    // SUPPORT_BOT: «Не помогло» — эскалация на оператора.
+    [HttpPost("tickets/{id:guid}/escalate")]
+    public Task<ActionResult<SupportTicketDto>> Escalate(Guid id, CancellationToken ct) =>
+        Transition(id, (userId, token) => _supportService.EscalateAsync(id, userId, token), ct);
+
+    // SUPPORT_BOT: «Вернуться к боту» — бот снова отвечает, оператор остаётся в чате.
+    [HttpPost("tickets/{id:guid}/return-to-bot")]
+    public Task<ActionResult<SupportTicketDto>> ReturnToBot(Guid id, CancellationToken ct) =>
+        Transition(id, (userId, token) => _supportService.ReturnToBotAsync(id, userId, token), ct);
+
+    // SUPPORT_BOT: «Отменить обращение» — тикет закрывается.
+    [HttpPost("tickets/{id:guid}/cancel")]
+    public Task<ActionResult<SupportTicketDto>> Cancel(Guid id, CancellationToken ct) =>
+        Transition(id, (userId, token) => _supportService.CancelAsync(id, userId, token), ct);
+
+    private async Task<ActionResult<SupportTicketDto>> Transition(
+        Guid id, Func<Guid, CancellationToken, Task<SupportTicketDto>> action, CancellationToken ct)
+    {
+        if (!User.TryGetUserId(out var userId))
+            return Unauthorized();
+
+        try
+        {
+            return Ok(await action(userId, ct));
+        }
+        catch (AuthException ex)
+        {
+            return StatusCode(ex.StatusCode, new { code = ex.Code, message = ex.Message });
+        }
+    }
 }

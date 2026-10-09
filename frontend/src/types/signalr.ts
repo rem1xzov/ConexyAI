@@ -150,12 +150,14 @@ export interface SignalrCallbacks {
 export type StopGenerationResult = 'stopping' | 'cancelled' | 'not_found';
 
 // SUPPORT: добавлено 2026-09-19
+// SUPPORT_BOT: authorType различает бота, оператора, систему и пользователя.
 export interface SupportMessagePayload {
   id: string;
   ticketId: string;
-  senderId: string;
+  senderId: string | null;
   content: string;
   createdAt: string;
+  authorType: 'User' | 'Bot' | 'Admin' | 'System';
   isFromAdmin: boolean;
 }
 

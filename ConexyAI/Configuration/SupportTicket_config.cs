@@ -20,6 +20,11 @@ public class SupportTicket_config : IEntityTypeConfiguration<SupportTicket>
             .IsRequired();
         builder.Property(x => x.CreatedAt).IsRequired();
         builder.Property(x => x.LastMessageAt).IsRequired();
+        // SUPPORT_BOT: отметки эскалации/закрытия и флаги активности бота/оператора.
+        builder.Property(x => x.EscalatedAt).IsRequired(false);
+        builder.Property(x => x.ClosedAt).IsRequired(false);
+        builder.Property(x => x.BotActive).IsRequired();
+        builder.Property(x => x.AdminActive).IsRequired();
 
         builder.HasOne(x => x.User)
             .WithMany()
@@ -40,16 +45,23 @@ public class SupportMessage_config : IEntityTypeConfiguration<SupportMessage>
         builder.HasKey(x => x.Id);
 
         builder.Property(x => x.TicketId).IsRequired();
-        builder.Property(x => x.SenderId).IsRequired();
+        // SUPPORT_BOT: у сообщений бота и системных нет пользователя-отправителя.
+        builder.Property(x => x.SenderId).IsRequired(false);
         builder.Property(x => x.Content).IsRequired();
         builder.Property(x => x.CreatedAt).IsRequired();
-        builder.Property(x => x.IsFromAdmin).IsRequired();
+        // SUPPORT_BOT: заменяет прежний IsFromAdmin.
+        builder.Property(x => x.AuthorType)
+            .HasConversion<string>()
+            .HasMaxLength(20)
+            .IsRequired();
 
         builder.HasOne(x => x.Ticket)
             .WithMany(t => t.Messages)
             .HasForeignKey(x => x.TicketId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        // SenderId nullable: FK сохраняется для пользовательских и админских сообщений, а у бота и
+        // системы он null. Каскад на удаление пользователя по-прежнему работает для непустых значений.
         builder.HasOne<User>()
             .WithMany()
             .HasForeignKey(x => x.SenderId)

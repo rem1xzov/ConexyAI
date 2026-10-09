@@ -192,6 +192,22 @@ export async function sendSupportMessage(ticketId: string, content: string): Pro
   return data;
 }
 
+// SUPPORT_BOT: переходы состояния поддержки. Каждый возвращает обновлённый тикет.
+export async function escalateSupportTicket(ticketId: string): Promise<SupportTicket> {
+  const { data } = await http.post<SupportTicket>(`/support/tickets/${ticketId}/escalate`);
+  return data;
+}
+
+export async function returnSupportTicketToBot(ticketId: string): Promise<SupportTicket> {
+  const { data } = await http.post<SupportTicket>(`/support/tickets/${ticketId}/return-to-bot`);
+  return data;
+}
+
+export async function cancelSupportTicket(ticketId: string): Promise<SupportTicket> {
+  const { data } = await http.post<SupportTicket>(`/support/tickets/${ticketId}/cancel`);
+  return data;
+}
+
 export async function getAdminSupportTickets(status?: string, search?: string): Promise<AdminSupportTicket[]> {
   const { data } = await http.get<AdminSupportTicket[]>('/admin/support/tickets', {
     params: { status, search },

@@ -6363,6 +6363,72 @@ body {
   margin-top: 2px;
 }
 
+/* SUPPORT_BOT: роли в переписке поддержки. Бот и оператор — слева с подписью автора; системные
+   плашки (эскалация, возврат, закрытие) — по центру, спокойным фоном. */
+.support-msg__author {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.support-msg--bot .support-msg__bubble {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.support-msg--admin .support-msg__bubble {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+}
+
+.support-msg--system {
+  align-self: center;
+  align-items: center;
+  max-width: 92%;
+}
+
+.support-msg--system .support-msg__bubble {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 2px 8px;
+}
+
+.support-chat__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.support-action {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.support-action:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.support-action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.support-action--danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 .support-chat__input {
   display: flex;
   gap: 8px;

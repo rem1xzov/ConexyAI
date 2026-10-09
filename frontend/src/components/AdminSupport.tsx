@@ -34,6 +34,20 @@ function withMessage(ticket: SupportTicket, msg: SupportMessage): SupportTicket 
   return { ...ticket, messages: [...ticket.messages, msg] };
 }
 
+// SUPPORT_BOT: оператор видит все роли; система — плашкой по центру.
+function adminMessageClass(m: SupportMessage): string {
+  switch (m.authorType) {
+    case 'Admin':
+      return 'support-msg support-msg--own support-msg--admin';
+    case 'Bot':
+      return 'support-msg support-msg--other support-msg--bot';
+    case 'System':
+      return 'support-msg support-msg--system';
+    default:
+      return 'support-msg support-msg--other';
+  }
+}
+
 // SUPPORT: добавлено 2026-09-19
 /** Admin-side support section: ticket list on the left, selected conversation on the right. */
 export function AdminSupport({ onToast }: AdminSupportProps) {
@@ -44,7 +58,8 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
   const [selected, setSelected] = useState<SupportTicket | null>(null);
   const [ticketLoading, setTicketLoading] = useState(false);
   const [search, setSearch] = useState('');
-  const [status, setStatus] = useState<'Open' | ''>('Open');
+  // SUPPORT_BOT: по умолчанию показываем эскалированные обращения — по ним нужен оператор.
+  const [status, setStatus] = useState<'Escalated' | 'BotHandling' | 'Closed' | ''>('Escalated');
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -182,9 +197,11 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
           <select
             className="dialog-input"
             value={status}
-            onChange={(e) => setStatus(e.target.value as 'Open' | '')}
+            onChange={(e) => setStatus(e.target.value as 'Escalated' | 'BotHandling' | 'Closed' | '')}
           >
-            <option value="Open">{t('support.openFilter')}</option>
+            <option value="Escalated">{t('support.statusEscalated')}</option>
+            <option value="BotHandling">{t('support.statusBot')}</option>
+            <option value="Closed">{t('support.statusClosed')}</option>
             <option value="">{t('support.allFilter')}</option>
           </select>
         </div>
@@ -219,11 +236,15 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
             <div className="admin-support__chat-head">
               <span className="admin-support__chat-user">{selectedUserName}</span>
               <span
-                className={`admin-support__chat-status ${selected.status === 'Open' ? 'admin-support__chat-status--open' : ''}`}
+                className={`admin-support__chat-status ${selected.status !== 'Closed' ? 'admin-support__chat-status--open' : ''}`}
               >
-                {selected.status === 'Open' ? t('support.open') : t('support.closed')}
+                {selected.status === 'Closed'
+                  ? t('support.statusClosed')
+                  : selected.status === 'Escalated'
+                    ? t('support.statusEscalated')
+                    : t('support.statusBot')}
               </span>
-              {selected.status === 'Open' && (
+              {selected.status !== 'Closed' && (
                 <button className="admin-btn" onClick={() => void handleClose()} type="button">
                   {t('support.close')}
                 </button>
@@ -232,9 +253,13 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
 
             <div className="admin-support__messages" ref={scrollRef}>
               {selected.messages.map((m) => (
-                <div key={m.id} className={`support-msg ${m.isFromAdmin ? 'support-msg--own' : 'support-msg--other'}`}>
+                <div key={m.id} className={adminMessageClass(m)}>
+                  {m.authorType === 'Bot' && <div className="support-msg__author">{t('support.botName')}</div>}
+                  {m.authorType === 'Admin' && <div className="support-msg__author">{t('support.operatorName')}</div>}
                   <div className="support-msg__bubble">{m.content}</div>
-                  <div className="support-msg__time">{formatTime(m.createdAt, lang)}</div>
+                  {m.authorType !== 'System' && (
+                    <div className="support-msg__time">{formatTime(m.createdAt, lang)}</div>
+                  )}
                 </div>
               ))}
             </div>
@@ -248,12 +273,12 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.nativeEvent.isComposing) void handleSend();
                 }}
-                disabled={selected.status !== 'Open'}
+                disabled={selected.status === 'Closed'}
               />
               <button
                 className="icon-btn"
                 onClick={() => void handleSend()}
-                disabled={!draft.trim() || sending || selected.status !== 'Open'}
+                disabled={!draft.trim() || sending || selected.status === 'Closed'}
                 aria-label={t('common.send')}
                 type="button"
               >

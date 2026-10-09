@@ -16,9 +16,10 @@ public class SupportRepository : ISupportRepository
 
     public async Task<SupportTicket?> GetOpenTicketByUserIdAsync(Guid userId, CancellationToken ct = default)
     {
+        // SUPPORT_BOT: «открытый» = любой, кроме Closed (бот или эскалация).
         return await _context.SupportTickets
             .AsNoTracking()
-            .FirstOrDefaultAsync(t => t.UserId == userId && t.Status == SupportTicketStatus.Open, ct);
+            .FirstOrDefaultAsync(t => t.UserId == userId && t.Status != SupportTicketStatus.Closed, ct);
     }
 
     public async Task<SupportTicket> AddTicketAsync(SupportTicket ticket, CancellationToken ct = default)
@@ -91,6 +92,20 @@ public class SupportRepository : ISupportRepository
             return;
 
         ticket.Status = SupportTicketStatus.Closed;
+        ticket.ClosedAt = DateTime.UtcNow;
+        ticket.BotActive = false;
+        await _context.SaveChangesAsync(ct);
+    }
+
+    // SUPPORT_BOT: добавлено 2026-10-07
+    public async Task UpdateTicketAsync(SupportTicket ticket, CancellationToken ct = default)
+    {
+        var local = _context.SupportTickets.Local.FirstOrDefault(t => t.Id == ticket.Id);
+        if (local is not null && !ReferenceEquals(local, ticket))
+            _context.Entry(local).CurrentValues.SetValues(ticket);
+        else if (local is null)
+            _context.SupportTickets.Update(ticket);
+
         await _context.SaveChangesAsync(ct);
     }
 }

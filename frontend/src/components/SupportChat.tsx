@@ -1,8 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { createSupportTicket, sendSupportMessage } from '../api/conexyApi';
+import {
+  cancelSupportTicket,
+  createSupportTicket,
+  escalateSupportTicket,
+  returnSupportTicketToBot,
+  sendSupportMessage,
+} from '../api/conexyApi';
 import { signalrService } from '../services/signalrService';
 import type { SupportMessage, SupportTicket } from '../types/api';
+import { ConfirmDialog } from './Dialog';
 import { CloseIcon, SendIcon } from './Icons';
 
 interface SupportChatProps {
@@ -24,14 +31,31 @@ function withMessage(ticket: SupportTicket, msg: SupportMessage): SupportTicket 
   return { ...ticket, messages: [...ticket.messages, msg] };
 }
 
+// SUPPORT_BOT: класс зависит от автора — своё справа, бот/оператор/система слева с разными стилями.
+function messageClass(m: SupportMessage): string {
+  switch (m.authorType) {
+    case 'User':
+      return 'support-msg support-msg--own';
+    case 'Bot':
+      return 'support-msg support-msg--other support-msg--bot';
+    case 'Admin':
+      return 'support-msg support-msg--other support-msg--admin';
+    default:
+      return 'support-msg support-msg--system';
+  }
+}
+
 // SUPPORT: добавлено 2026-09-19
-/** User-facing messenger-style support chat. */
+/** User-facing messenger-style support chat (AI bot first, operator escalation). */
 export function SupportChat({ onClose, onToast }: SupportChatProps) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? i18n.language;
   const [ticket, setTicket] = useState<SupportTicket | null>(null);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  // SUPPORT_BOT: идёт переход состояния (эскалация/возврат/отмена) или подтверждение.
+  const [busy, setBusy] = useState(false);
+  const [confirmEscalate, setConfirmEscalate] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -87,6 +111,27 @@ export function SupportChat({ onClose, onToast }: SupportChatProps) {
     }
   }
 
+  // SUPPORT_BOT: общий путь для эскалации/возврата/отмены — бэкенд возвращает обновлённый тикет.
+  async function transition(fn: (id: string) => Promise<SupportTicket>) {
+    if (!ticket || busy) return;
+    const ticketId = ticket.id;
+    setBusy(true);
+    try {
+      const updated = await fn(ticketId);
+      setTicket(updated);
+    } catch {
+      onToast(t('support.actionError'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const status = ticket?.status ?? '';
+  const showNotHelpful = !!ticket && ticket.botActive && status !== 'Closed';
+  const showReturnToBot = status === 'Escalated' && !ticket?.botActive;
+  const showCancel = status === 'Escalated';
+  const readOnly = status === 'Closed';
+
   return (
     <div className="dialog-overlay" onMouseDown={onClose}>
       <div className="dialog-card support-chat" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
@@ -104,28 +149,89 @@ export function SupportChat({ onClose, onToast }: SupportChatProps) {
             <p className="muted support-chat__hint">{t('support.hint')}</p>
           ) : (
             ticket.messages.map((m: SupportMessage) => (
-              <div key={m.id} className={`support-msg ${m.isFromAdmin ? 'support-msg--other' : 'support-msg--own'}`}>
+              <div key={m.id} className={messageClass(m)}>
+                {m.authorType === 'Bot' && <div className="support-msg__author">{t('support.botName')}</div>}
+                {m.authorType === 'Admin' && <div className="support-msg__author">{t('support.operatorName')}</div>}
                 <div className="support-msg__bubble">{m.content}</div>
-                <div className="support-msg__time">{formatTime(m.createdAt, lang)}</div>
+                {m.authorType !== 'System' && (
+                  <div className="support-msg__time">{formatTime(m.createdAt, lang)}</div>
+                )}
               </div>
             ))
           )}
         </div>
 
+        {/* SUPPORT_BOT: кнопки состояния. «Не помогло» — пока бот отвечает; «Вернуться к боту» и
+            «Отменить обращение» — на этапе оператора. */}
+        {ticket && !readOnly && (showNotHelpful || showReturnToBot || showCancel) && (
+          <div className="support-chat__actions">
+            {showNotHelpful && (
+              <button
+                className="support-action"
+                onClick={() => setConfirmEscalate(true)}
+                disabled={busy}
+                type="button"
+              >
+                {t('support.notHelpful')}
+              </button>
+            )}
+            {showReturnToBot && (
+              <button
+                className="support-action"
+                onClick={() => void transition(returnSupportTicketToBot)}
+                disabled={busy}
+                type="button"
+              >
+                {t('support.returnToBot')}
+              </button>
+            )}
+            {showCancel && (
+              <button
+                className="support-action support-action--danger"
+                onClick={() => void transition(cancelSupportTicket)}
+                disabled={busy}
+                type="button"
+              >
+                {t('support.cancelRequest')}
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="support-chat__input">
           <input
             className="dialog-input"
             value={draft}
-            placeholder={t('support.messagePlaceholder')}
+            placeholder={readOnly ? t('support.closedPlaceholder') : t('support.messagePlaceholder')}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.nativeEvent.isComposing) void handleSend();
             }}
+            disabled={readOnly}
           />
-          <button className="icon-btn" onClick={() => void handleSend()} disabled={!draft.trim() || sending} aria-label={t('common.send')} type="button">
+          <button
+            className="icon-btn"
+            onClick={() => void handleSend()}
+            disabled={!draft.trim() || sending || readOnly}
+            aria-label={t('common.send')}
+            type="button"
+          >
             <SendIcon size={18} />
           </button>
         </div>
+
+        {confirmEscalate && (
+          <ConfirmDialog
+            title={t('support.escalateConfirmTitle')}
+            message={t('support.escalateConfirm')}
+            confirmLabel={t('support.escalateConfirmYes')}
+            onConfirm={() => {
+              setConfirmEscalate(false);
+              void transition(escalateSupportTicket);
+            }}
+            onCancel={() => setConfirmEscalate(false)}
+          />
+        )}
       </div>
     </div>
   );

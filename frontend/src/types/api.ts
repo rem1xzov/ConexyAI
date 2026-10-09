@@ -260,30 +260,40 @@ export interface AdminPaymentSummary {
 }
 
 // SUPPORT: добавлено 2026-09-19
+// SUPPORT_BOT: добавлен authorType — в переписке теперь не только user/admin, но и bot/system.
+export type SupportAuthorType = 'User' | 'Bot' | 'Admin' | 'System';
+
 export interface SupportMessage {
   id: string;
   ticketId: string;
-  senderId: string;
+  senderId: string | null;
   content: string;
   createdAt: string;
+  authorType: SupportAuthorType;
   isFromAdmin: boolean;
 }
 
+// SUPPORT_BOT: статус — BotHandling | Escalated | Closed; botActive рулит кнопками бота.
 export interface SupportTicket {
   id: string;
   userId: string;
   status: string;
+  botActive: boolean;
+  escalatedAt: string | null;
+  closedAt: string | null;
   createdAt: string;
   lastMessageAt: string;
   messages: SupportMessage[];
 }
 
+// SUPPORT: добавлено 2026-09-19
 export interface AdminSupportTicket {
   id: string;
   userId: string;
   userEmail: string | null;
   userGitHubUsername: string | null;
   status: string;
+  botActive: boolean;
   createdAt: string;
   lastMessageAt: string;
   lastMessagePreview: string | null;
