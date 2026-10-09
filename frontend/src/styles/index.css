@@ -906,7 +906,7 @@ body {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border);
-  border-radius: 24px;
+  border-radius: 28px;
   padding: 8px 10px;
   max-width: 760px;
   width: 100%;
@@ -4451,6 +4451,21 @@ body {
 }
 
 /* Subtle, whole-chat reminder that nothing here is being recorded. */
+/* GLASS_AURA: цветные пятна под стеклом. Без них backdrop-filter не читается — на однородном
+   тёмном фоне (--bg-body) размывать нечего и пилюли выглядят просто заливкой. Фиксированный слой
+   ПОД контентом: .app имеет z-index: 1, поэтому аура с z-index: 0 уходит назад (как .incognito-aura).
+   pointer-events: none обязателен — слой не должен перехватывать клики. */
+.glass-aura {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 60% 40% at 20% 15%, rgba(198, 139, 212, 0.18) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 35% at 80% 70%, rgba(230, 73, 128, 0.12) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 30% at 50% 90%, rgba(147, 51, 234, 0.10) 0%, transparent 60%);
+}
+
 /* Incognito backdrop: the black canvas and the amber glow in a single layer that fades in, so
    switching the mode is smooth instead of a hard repaint. */
 .incognito-aura {
@@ -4596,8 +4611,13 @@ body {
 .chat-chip {
   padding: 6px 14px;
   border-radius: 999px;
-  border: 1px solid var(--border);
+  /* GLASS_CHIP: обводку-«рамку» убрали, вместо неё мягкая тень и блюр. Пятна под чипами — .glass-aura,
+     иначе блюрить было бы нечего. Состояние активного чипа (--on) задаёт свой border-color отдельно. */
+  border: 1px solid transparent;
   background: var(--surface);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;

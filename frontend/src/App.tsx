@@ -2771,6 +2771,10 @@ export default function App() {
 
   return (
     <>
+      {/* GLASS_AURA: базовый слой с цветными пятнами под стеклом — без него backdrop-filter на
+          однородном фоне не читается. Идёт ДО incognito-aura, чтобы непрозрачная аура инкогнито
+          (рисуется позже, тот же z-index) перекрывала его и режим инкогнито не ломался. */}
+      <div className="glass-aura" aria-hidden="true" />
       {incognitoActive && <div className="incognito-aura" aria-hidden="true" />}
       <ConnectionBanner />
       <div className="app">
