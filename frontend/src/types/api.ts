@@ -177,6 +177,8 @@ export interface SubscriptionUsage {
   agentCachedTokens: number;
   coworkCachedTokens: number;
   cacheHitDiscountPercent: number;
+  // LIMIT_RESET: доступна ли акция сброса лимитов (Pro+, одна на период).
+  limitResetAvailable: boolean;
 }
 
 export interface LimitExceededInfo {

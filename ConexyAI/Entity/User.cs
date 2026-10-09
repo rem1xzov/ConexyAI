@@ -41,6 +41,12 @@ public class User
     public long CoderTokenTopUp { get; set; }
     public long CoworkTokenTopUp { get; set; }
 
+    // LIMIT_RESET: добавлено 2026-10-07 — акция для Pro и выше: раз в месяц (как куплена подписка)
+    // доступен один сброс всех лимитов. Выдаётся при оплате Pro+, гасится после использования и
+    // выдаётся заново при следующей оплате.
+    public bool LimitResetAvailable { get; set; }
+    public DateTime? LimitResetUsedAt { get; set; }
+
     // EMAIL_AUTH: добавлено 2026-09-19
     /// <summary>Whether the user is an administrator (granted via AdminAccounts on login).</summary>
     public bool IsAdmin { get; set; }

@@ -27,6 +27,9 @@ public class User_config : IEntityTypeConfiguration<User>
         // TOKEN_TOPUP: добавлено 2026-10-06 — купленные разово токены; у всех прежних строк 0.
         builder.Property(x => x.CoderTokenTopUp).IsRequired();
         builder.Property(x => x.CoworkTokenTopUp).IsRequired();
+        // LIMIT_RESET: акция сброса лимитов (Pro+); по умолчанию нет.
+        builder.Property(x => x.LimitResetAvailable).IsRequired();
+        builder.Property(x => x.LimitResetUsedAt).IsRequired(false);
         // EMAIL_AUTH: добавлено 2026-09-19
         builder.Property(x => x.IsAdmin).IsRequired();
         builder.Property(x => x.CreatedAt).IsRequired();

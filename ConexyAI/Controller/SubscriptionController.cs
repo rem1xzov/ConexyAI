@@ -29,5 +29,22 @@ public class SubscriptionController : ControllerBase
         return Ok(await _subscriptionService.GetUsageAsync(userId, ct));
     }
 
+    // LIMIT_RESET: сброс всех лимитов (акция Pro+, одна на период).
+    [HttpPost("reset-limits")]
+    public async Task<ActionResult<SubscriptionUsageDto>> ResetLimits(CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        try
+        {
+            return Ok(await _subscriptionService.ResetLimitsAsync(userId, ct));
+        }
+        catch (AuthException ex)
+        {
+            return StatusCode(ex.StatusCode, new { code = ex.Code, message = ex.Message });
+        }
+    }
+
     private bool TryGetUserId(out Guid userId) => User.TryGetUserId(out userId);
 }

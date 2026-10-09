@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
-import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, getTaskStatus, runTask, createChatShareLink, type VerificationChallenge } from './api/conexyApi';
+import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, resetLimits, getTaskStatus, runTask, createChatShareLink, type VerificationChallenge } from './api/conexyApi';
 // YOOKASSA: добавлено 2026-09-27 — создание платежа и окно возврата после оплаты.
 import { createPayment } from './api/paymentsApi';
 // USER_NAME: имя из персонализации подписывает приветствие на стартовом экране.
@@ -704,6 +704,16 @@ export default function App() {
       setUsage(await getSubscriptionUsage());
     } catch {
       // Best-effort; the indicator simply stays unchanged on transient failures.
+    }
+  }
+
+  // LIMIT_RESET: сброс всех лимитов (акция Pro+) — берём обновлённый расход прямо из ответа.
+  async function handleLimitsReset() {
+    try {
+      setUsage(await resetLimits());
+      showToast(t('limits.resetDone'));
+    } catch {
+      showToast(t('limits.resetError'));
     }
   }
 
@@ -3144,6 +3154,7 @@ export default function App() {
           onLanguageChange={handleLanguageChange}
           onClose={() => setSettingsOpen(false)}
           usage={usage}
+          onLimitsReset={handleLimitsReset}
           onPreferencesSaved={(p: UserPreferences) => setPreferredName(p.name.trim() ? p.name.trim() : null)}
         />
       )}

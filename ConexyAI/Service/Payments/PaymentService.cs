@@ -215,6 +215,9 @@ public class PaymentService : IPaymentService
 
         user.SubscriptionTier = granted;
         user.SubscriptionExpiresAt = from.AddMonths(Math.Max(1, payment.Months));
+        // LIMIT_RESET: акция для Pro и выше — при каждой оплате выдаём один сброс лимитов на период.
+        if (IsProOrHigher(granted))
+            user.LimitResetAvailable = true;
         await _users.UpdateAsync(user, ct);
 
         payment.ActivatedAt = now;
@@ -258,6 +261,10 @@ public class PaymentService : IPaymentService
             "YooKassa: payment {ProviderId} credited {Amount} tokens to {Pool} for user {UserId}.",
             payment.ProviderPaymentId, payment.TokenAmount, payment.Pool ?? "Coder", payment.UserId);
     }
+
+    // LIMIT_RESET: акция сброса лимитов — только Pro и выше.
+    private static bool IsProOrHigher(SubscriptionTier tier) =>
+        tier is SubscriptionTier.Pro or SubscriptionTier.ProMax or SubscriptionTier.Ultra;
 
     private string BuildReturnUrl(Guid paymentId)
     {

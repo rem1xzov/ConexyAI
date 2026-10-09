@@ -37,6 +37,8 @@ interface SettingsModalProps {
   initialSection?: SettingsSection;
   // USAGE_LIMITS_SECTION: снимок расхода для раздела «Лимиты» (может быть null, пока не загружен).
   usage?: SubscriptionUsage | null;
+  // LIMIT_RESET: вызвать сброс всех лимитов (акция Pro+); при наличии кнопка показывается в разделе.
+  onLimitsReset?: () => Promise<void> | void;
   // USER_NAME: сохранённые настройки — приветствие на старте обновляется без перезагрузки.
   onPreferencesSaved?: (prefs: UserPreferences) => void;
 }
@@ -651,6 +653,7 @@ export function SettingsModal({
   onClose,
   initialSection = 'general',
   usage = null,
+  onLimitsReset,
   onPreferencesSaved,
 }: SettingsModalProps) {
   const { t } = useTranslation();
@@ -755,7 +758,7 @@ export function SettingsModal({
 
             {/* Sections stay mounted (only hidden) so switching tabs never drops typed text. */}
             <div hidden={section !== 'limits'}>
-              <LimitsSection usage={usage} />
+              <LimitsSection usage={usage} onReset={onLimitsReset} />
             </div>
 
             <div hidden={section !== 'personalization'}>
@@ -812,8 +815,11 @@ function formatLimitCount(n: number): string {
 // показываем как «∞».
 const INFINITE_LIMIT = 1e15;
 
-function LimitsSection({ usage }: { usage: SubscriptionUsage | null }) {
+function LimitsSection({ usage, onReset }: { usage: SubscriptionUsage | null; onReset?: () => Promise<void> | void }) {
   const { t, i18n } = useTranslation();
+  // LIMIT_RESET: подтверждение и состояние запроса для кнопки сброса лимитов (акция Pro+).
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   if (!usage) {
     return (
@@ -872,6 +878,37 @@ function LimitsSection({ usage }: { usage: SubscriptionUsage | null }) {
           );
         })}
       </div>
+
+      {/* LIMIT_RESET: акция сброса доступна (Pro+) и ещё не израсходована. */}
+      {usage.limitResetAvailable && onReset && (
+        <div className="settings-modal__section limits-reset">
+          <div className="settings-modal__label">{t('limits.resetTitle')}</div>
+          <p className="limits-intro">{t('limits.resetHint')}</p>
+          <button
+            className="admin-btn limits-reset__btn"
+            type="button"
+            disabled={resetting}
+            onClick={() => setConfirmReset(true)}
+          >
+            {t('limits.resetButton')}
+          </button>
+        </div>
+      )}
+
+      {confirmReset && (
+        <ConfirmDialog
+          title={t('limits.resetConfirmTitle')}
+          message={t('limits.resetConfirm')}
+          confirmLabel={t('limits.resetButton')}
+          busy={resetting}
+          onConfirm={() => {
+            setConfirmReset(false);
+            setResetting(true);
+            void Promise.resolve(onReset?.()).finally(() => setResetting(false));
+          }}
+          onCancel={() => setConfirmReset(false)}
+        />
+      )}
     </div>
   );
 }

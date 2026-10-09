@@ -48,4 +48,6 @@ public record SubscriptionUsageDto(
     // (для показа «прочитано из кэша — со скидкой», на лимит не влияет), и процент этой скидки.
     long AgentCachedTokens,
     long CoworkCachedTokens,
-    int CacheHitDiscountPercent);
+    int CacheHitDiscountPercent,
+    // LIMIT_RESET: доступна ли пользователю акция сброса лимитов (Pro+ и не израсходована).
+    bool LimitResetAvailable);

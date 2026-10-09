@@ -237,6 +237,12 @@ export async function getSubscriptionUsage(): Promise<SubscriptionUsage> {
   return data;
 }
 
+// LIMIT_RESET: сброс всех лимитов (акция Pro+, одна на период). Возвращает обновлённый расход.
+export async function resetLimits(): Promise<SubscriptionUsage> {
+  const { data } = await http.post<SubscriptionUsage>('/subscription/reset-limits');
+  return data;
+}
+
 /** Sends recorded audio (raw 16 kHz LPCM) to SpeechKit STT and returns the recognized text. */
 // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
 // export async function recognizeSpeech(audio: Blob): Promise<string> {

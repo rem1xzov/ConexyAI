@@ -26,6 +26,7 @@ internal static class SubscriptionTests
         TestRegistry.Add("subs COWORK: paid plans only, with a token budget of its own", CoworkAsync);
         TestRegistry.Add("subs ADMIN: admins are unlimited but their usage is tracked", AdminAsync);
         TestRegistry.Add("subs BILLING: cache hits are cheap and output is priced up (weighted tokens)", BillingAsync);
+        TestRegistry.Add("subs LIMIT_RESET: Pro+ resets every pool once, others cannot", LimitResetAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -47,11 +48,11 @@ internal static class SubscriptionTests
         {
             // Числа те же, что в appsettings.json, но заданы здесь явно: этот тест проверяет ЛОГИКУ
             // лимитов, а не то, что кто-то не переписал конфиг.
-            o.Free = Limits(100, 20, 250 * K, 0, coworkEnabled: false, agentWindowDays: 30);
-            o.Go = Limits(150, 50, 1_000 * K, 1_000 * K, coworkEnabled: true);
-            o.Pro = Limits(250, 150, 2_000 * K, 2_000 * K, coworkEnabled: true);
-            o.ProMax = Limits(300, 200, 3_500 * K, 3_500 * K, coworkEnabled: true);
-            o.Ultra = Limits(300, 200, 4_000 * K, 4_000 * K, coworkEnabled: true);
+            o.Free = Limits(100, 20, 300 * K, 0, coworkEnabled: false, agentWindowDays: 30);
+            o.Go = Limits(150, 50, 2_000 * K, 2_000 * K, coworkEnabled: true);
+            o.Pro = Limits(250, 150, 3_000 * K, 3_000 * K, coworkEnabled: true);
+            o.ProMax = Limits(300, 200, 5_000 * K, 5_000 * K, coworkEnabled: true);
+            o.Ultra = Limits(300, 200, 5_500 * K, 5_500 * K, coworkEnabled: true);
         });
         services.AddScoped<ISubscriptionService, SubscriptionService>();
         return services.BuildServiceProvider();
@@ -96,8 +97,8 @@ internal static class SubscriptionTests
         var proMax = await AddUserAsync(sp, SubscriptionTier.ProMax);
         var proMaxUsage = await subs.GetUsageAsync(proMax);
         Assert(proMaxUsage.Tier == "ProMax", $"the counter must adopt the user's tier, got {proMaxUsage.Tier}");
-        Assert(proMaxUsage.AgentLimit == 3_500 * K, $"ProMax agent budget must be 3.5M, got {proMaxUsage.AgentLimit}");
-        Assert(proMaxUsage.CoworkLimit == 3_500 * K, $"ProMax cowork budget must equal the agent budget, got {proMaxUsage.CoworkLimit}");
+        Assert(proMaxUsage.AgentLimit == 5_000 * K, $"ProMax agent budget must be 5M, got {proMaxUsage.AgentLimit}");
+        Assert(proMaxUsage.CoworkLimit == 5_000 * K, $"ProMax cowork budget must equal the agent budget, got {proMaxUsage.CoworkLimit}");
         Assert(proMaxUsage.FlashLimit == 300 && proMaxUsage.ProLimit == 200,
             "the flash/pro request limits must stay as they were");
 
@@ -105,14 +106,14 @@ internal static class SubscriptionTests
         var ultra = await AddUserAsync(sp, SubscriptionTier.Ultra);
         var ultraUsage = await subs.GetUsageAsync(ultra);
         Assert(ultraUsage.Tier == "Ultra", $"Ultra must be a tier of its own, got {ultraUsage.Tier}");
-        Assert(ultraUsage.AgentLimit == 4_000 * K && ultraUsage.CoworkLimit == 4_000 * K, "Ultra token budgets");
+        Assert(ultraUsage.AgentLimit == 5_500 * K && ultraUsage.CoworkLimit == 5_500 * K, "Ultra token budgets");
 
         // Go: свои числа запросов и токенов.
         var go = await AddUserAsync(sp, SubscriptionTier.Go);
         var goUsage = await subs.GetUsageAsync(go);
         Assert(goUsage.Tier == "Go", $"Go must be a tier of its own, got {goUsage.Tier}");
         Assert(goUsage.FlashLimit == 150 && goUsage.ProLimit == 50, "Go request limits");
-        Assert(goUsage.AgentLimit == 1_000 * K && goUsage.CoworkLimit == 1_000 * K, "Go token budgets");
+        Assert(goUsage.AgentLimit == 2_000 * K && goUsage.CoworkLimit == 2_000 * K, "Go token budgets");
 
         // Смена тарифа (как после оплаты): счётчик переезжает, старый расход не переносится.
         await subs.RecordRequestAsync(go, ConexyModelType.ConexyV1Flash);
@@ -128,7 +129,7 @@ internal static class SubscriptionTests
         var upgraded = await subs.GetUsageAsync(go);
         Assert(upgraded.Tier == "Pro", $"the upgrade must reach the counter, got {upgraded.Tier}");
         Assert(upgraded.FlashUsed == 0, $"a tier change must reset the counters, got {upgraded.FlashUsed}");
-        Assert(upgraded.AgentLimit == 2_000 * K, $"Pro agent budget must be 2M, got {upgraded.AgentLimit}");
+        Assert(upgraded.AgentLimit == 3_000 * K, $"Pro agent budget must be 3M, got {upgraded.AgentLimit}");
     }
 
     private static async Task CoworkAsync()
@@ -154,10 +155,11 @@ internal static class SubscriptionTests
         Assert((await subs.CheckBeforeRunAsync(pro, ConexyModelType.ConexyCowork)).Kind == UsageDecisionKind.Allowed,
             "Cowork must be allowed on a paid plan");
 
-        // Токены Cowork идут в свой пул и не трогают бюджет агента.
-        await subs.RecordAgentTokensAsync(pro, ConexyModelType.ConexyCowork, new LlmTokenUsage(UncachedInput: 2_000 * K));
+        // Токены Cowork идут в свой пул и не трогают бюджет агента. Записываем ровно бюджет Pro (3M):
+        // пул не превышает лимит, поэтому именно это значение и должно оказаться в счётчике.
+        await subs.RecordAgentTokensAsync(pro, ConexyModelType.ConexyCowork, new LlmTokenUsage(UncachedInput: 3_000 * K));
         var usage = await subs.GetUsageAsync(pro);
-        Assert(usage.CoworkUsed == 2_000 * K, $"cowork tokens must land in the cowork pool, got {usage.CoworkUsed}");
+        Assert(usage.CoworkUsed == 3_000 * K, $"cowork tokens must land in the cowork pool, got {usage.CoworkUsed}");
         Assert(usage.AgentUsed == 0, $"cowork must not spend the agent budget, got {usage.AgentUsed}");
 
         // Исчерпанный бюджет Cowork: своя причина и дата сброса.
@@ -235,5 +237,50 @@ internal static class SubscriptionTests
         var outputOnly = await subs.RecordAgentTokensAsync(user, ConexyModelType.ConexyCoder,
             new LlmTokenUsage(Output: 10 * K));
         Assert(outputOnly == 4 * inputOnly, $"output must cost 4x input, got {outputOnly} vs {inputOnly}");
+    }
+
+    // LIMIT_RESET: добавлено 2026-10-07 — акция сброса всех лимитов для Pro+ (одна на период).
+    private static async Task LimitResetAsync()
+    {
+        await using var provider = BuildServices();
+        await using var scope = provider.CreateAsyncScope();
+        var sp = scope.ServiceProvider;
+        var subs = sp.GetRequiredService<ISubscriptionService>();
+        var users = sp.GetRequiredService<IUserRepository>();
+
+        // Pro: акция есть, расход обнуляется по всем пулам.
+        var pro = await AddUserAsync(sp, SubscriptionTier.Pro);
+        var proRow = (await users.GetByIdAsync(pro))!;
+        proRow.LimitResetAvailable = true;
+        await users.UpdateAsync(proRow);
+
+        await subs.RecordAgentTokensAsync(pro, ConexyModelType.ConexyCoder, new LlmTokenUsage(UncachedInput: 1_000 * K));
+        await subs.RecordRequestAsync(pro, ConexyModelType.ConexyV1Flash);
+        var before = await subs.GetUsageAsync(pro);
+        Assert(before.AgentUsed > 0 && before.FlashUsed > 0 && before.LimitResetAvailable,
+            "usage accrued and the promo is offered");
+
+        var after = await subs.ResetLimitsAsync(pro);
+        Assert(after.AgentUsed == 0 && after.FlashUsed == 0 && after.ProUsed == 0 && after.CoworkUsed == 0,
+            "the reset must clear every pool");
+        Assert(!after.LimitResetAvailable, "the promo is single-use");
+
+        // Повторный сброс недоступен (до следующей оплаты).
+        var secondRefused = false;
+        try { await subs.ResetLimitsAsync(pro); }
+        catch (AuthException) { secondRefused = true; }
+        Assert(secondRefused, "a second reset must be refused");
+
+        // Free: даже с флагом акция не предлагается и не выполняется.
+        var free = await AddUserAsync(sp, SubscriptionTier.Free);
+        var freeRow = (await users.GetByIdAsync(free))!;
+        freeRow.LimitResetAvailable = true;
+        await users.UpdateAsync(freeRow);
+        Assert(!(await subs.GetUsageAsync(free)).LimitResetAvailable, "Free must not be offered the reset");
+
+        var freeRefused = false;
+        try { await subs.ResetLimitsAsync(free); }
+        catch (AuthException) { freeRefused = true; }
+        Assert(freeRefused, "Free must not be allowed to reset");
     }
 }

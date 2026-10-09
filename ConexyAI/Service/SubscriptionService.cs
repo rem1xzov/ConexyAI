@@ -24,6 +24,9 @@ public interface ISubscriptionService
     // PRICED_BILLING: с 2026-10-06 принимает разбивку хода (кэш/без кэша/выход) и возвращает
     // фактически начисленную (взвешенную) сумму — её же накапливает токен-брейкер в раннере.
     Task<long> RecordAgentTokensAsync(Guid userId, ConexyModelType modelType, LlmTokenUsage usage, CancellationToken ct = default);
+
+    // LIMIT_RESET: акция сброса всех лимитов — раз в месяц для Pro и выше.
+    Task<SubscriptionUsageDto> ResetLimitsAsync(Guid userId, CancellationToken ct = default);
 }
 
 public class SubscriptionService : ISubscriptionService
@@ -66,12 +69,52 @@ public class SubscriptionService : ISubscriptionService
             // COWORK_BUDGET: отдельный пул; 0 в лимите — режим не входит в тариф.
             counter.CoworkTokensUsed + counter.CoworkTopUpUsed, CoworkBudget(limits, user), counter.CoworkWindowResetAt,
             // CACHE_STATS: сырой объём из кэша + процент скидки — только для показа.
-            counter.CoderCachedTokens, counter.CoworkCachedTokens, CacheHitDiscountPercent());
+            counter.CoderCachedTokens, counter.CoworkCachedTokens, CacheHitDiscountPercent(),
+            // LIMIT_RESET: акция сброса доступна только активному Pro+ и пока не израсходована.
+            user.LimitResetAvailable && IsProOrHigher(counter.Tier));
     }
 
     // CACHE_STATS: процент скидки на кэш-хит, выведенный из веса цены (0.02 → 98%).
     private int CacheHitDiscountPercent() =>
         (int)Math.Round((1 - _options.Value.CacheHitTokenWeight) * 100);
+
+    // LIMIT_RESET: акция только для Pro и выше (Go и Free — нет).
+    private static bool IsProOrHigher(SubscriptionTier tier) =>
+        tier is SubscriptionTier.Pro or SubscriptionTier.ProMax or SubscriptionTier.Ultra;
+
+    // LIMIT_RESET: добавлено 2026-10-07 — сброс всех лимитов за текущий период.
+    public async Task<SubscriptionUsageDto> ResetLimitsAsync(Guid userId, CancellationToken ct = default)
+    {
+        var user = await _userRepository.GetByIdAsync(userId, ct);
+        if (user is null)
+            throw new AuthException("user_not_found", "Пользователь не найден.", 404);
+
+        var counter = await GetOrCreateAsync(userId, user, ct);
+        if (!IsProOrHigher(counter.Tier) || !user.LimitResetAvailable)
+            throw new AuthException("reset_unavailable", "Сброс лимитов недоступен.", 409);
+
+        var limits = GetTierLimits(counter.Tier);
+        var now = DateTime.UtcNow;
+        counter.FlashRequestsUsed = 0;
+        counter.ProRequestsUsed = 0;
+        counter.AgentTokensUsed = 0;
+        counter.CoworkTokensUsed = 0;
+        counter.FlashWindowResetAt = now.AddDays(limits.FlashWindowDays);
+        counter.ProWindowResetAt = now.AddDays(limits.ProWindowDays);
+        counter.AgentWindowResetAt = now.AddDays(limits.AgentWindowDays);
+        counter.CoworkWindowResetAt = now.AddDays(limits.CoworkWindowDays);
+        // Показные счётчики кэша — тоже часть «расхода за период».
+        counter.CoderCachedTokens = 0;
+        counter.CoworkCachedTokens = 0;
+        await _repository.UpsertAsync(counter, ct);
+
+        // Купленный сброс — одноразовый: гасим и запоминаем время.
+        user.LimitResetAvailable = false;
+        user.LimitResetUsedAt = now;
+        await _userRepository.UpdateAsync(user, ct);
+
+        return await GetUsageAsync(userId, ct);
+    }
 
     public async Task<UsageDecision> CheckBeforeRunAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default)
     {
@@ -354,5 +397,6 @@ public class SubscriptionService : ISubscriptionService
             counter.ProRequestsUsed, long.MaxValue, counter.ProWindowResetAt,
             counter.AgentTokensUsed, long.MaxValue, counter.AgentWindowResetAt,
             counter.CoworkTokensUsed, long.MaxValue, counter.CoworkWindowResetAt,
-            counter.CoderCachedTokens, counter.CoworkCachedTokens, CacheHitDiscountPercent());
+            counter.CoderCachedTokens, counter.CoworkCachedTokens, CacheHitDiscountPercent(),
+            false);
 }

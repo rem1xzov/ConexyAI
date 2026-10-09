@@ -8497,6 +8497,19 @@ html[data-theme="light"]:not([data-incognito="true"]) .artifact-panel {
   font-variant-numeric: tabular-nums;
 }
 
+/* LIMIT_RESET: карточка акции «сброс лимитов» — заметна на фоне обычных карточек,
+   доступна только Pro+ и подсвечивается как бонус, а не часть базового тарифа. */
+.limits-reset {
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, rgba(198, 139, 212, 0.10), rgba(230, 73, 128, 0.08));
+}
+
+.limits-reset__btn {
+  margin-top: 12px;
+}
+
 /* AI_DISCLAIMER: приписка под каждым ответом модели (чат, flash/pro, Coder, Cowork). Переносится
    по словам и ужимается на узких экранах, чтобы текст всегда был виден целиком. */
 .msg-disclaimer {

@@ -1716,7 +1716,7 @@ sealed class FakeSubscriptionService : ISubscriptionService
             // COWORK_BUDGET: у заглушки нулевой бюджет Cowork — эти тесты лимиты не проверяют.
             0, 0, DateTime.UtcNow,
             // CACHE_STATS: заглушке показывать нечего.
-            0, 0, 98));
+            0, 0, 98, false));
 
     public Task<UsageDecision> CheckBeforeRunAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default) =>
         Task.FromResult(new UsageDecision(UsageDecisionKind.Allowed));
@@ -1726,6 +1726,9 @@ sealed class FakeSubscriptionService : ISubscriptionService
 
     public Task<long> RecordAgentTokensAsync(Guid userId, ConexyModelType modelType, LlmTokenUsage usage, CancellationToken ct = default) =>
         Task.FromResult(usage.Total);
+
+    public Task<SubscriptionUsageDto> ResetLimitsAsync(Guid userId, CancellationToken ct = default) =>
+        GetUsageAsync(userId, ct);
 }
 
 sealed class FakeSandboxRunner : IDockerSandboxRunner
