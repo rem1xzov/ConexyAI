@@ -1714,7 +1714,9 @@ sealed class FakeSubscriptionService : ISubscriptionService
             0, 0, DateTime.UtcNow,
             0, 0, DateTime.UtcNow,
             // COWORK_BUDGET: у заглушки нулевой бюджет Cowork — эти тесты лимиты не проверяют.
-            0, 0, DateTime.UtcNow));
+            0, 0, DateTime.UtcNow,
+            // CACHE_STATS: заглушке показывать нечего.
+            0, 0, 98));
 
     public Task<UsageDecision> CheckBeforeRunAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default) =>
         Task.FromResult(new UsageDecision(UsageDecisionKind.Allowed));

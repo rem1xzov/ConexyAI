@@ -64,8 +64,14 @@ public class SubscriptionService : ISubscriptionService
             // TOKEN_TOPUP: «использовано» = расход по тарифу (окно) + расход купленного (бессрочно).
             counter.AgentTokensUsed + counter.CoderTopUpUsed, AgentBudget(limits, user), counter.AgentWindowResetAt,
             // COWORK_BUDGET: отдельный пул; 0 в лимите — режим не входит в тариф.
-            counter.CoworkTokensUsed + counter.CoworkTopUpUsed, CoworkBudget(limits, user), counter.CoworkWindowResetAt);
+            counter.CoworkTokensUsed + counter.CoworkTopUpUsed, CoworkBudget(limits, user), counter.CoworkWindowResetAt,
+            // CACHE_STATS: сырой объём из кэша + процент скидки — только для показа.
+            counter.CoderCachedTokens, counter.CoworkCachedTokens, CacheHitDiscountPercent());
     }
+
+    // CACHE_STATS: процент скидки на кэш-хит, выведенный из веса цены (0.02 → 98%).
+    private int CacheHitDiscountPercent() =>
+        (int)Math.Round((1 - _options.Value.CacheHitTokenWeight) * 100);
 
     public async Task<UsageDecision> CheckBeforeRunAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default)
     {
@@ -159,6 +165,8 @@ public class SubscriptionService : ISubscriptionService
                 user?.CoworkTokenTopUp ?? 0L, counter.CoworkTopUpUsed);
             counter.CoworkTokensUsed += toTier;
             counter.CoworkTopUpUsed += toTopUp;
+            // CACHE_STATS: сырой объём из кэша — только для показа пользователю.
+            counter.CoworkCachedTokens += usage.CachedInput;
         }
         else
         {
@@ -166,6 +174,7 @@ public class SubscriptionService : ISubscriptionService
                 user?.CoderTokenTopUp ?? 0L, counter.CoderTopUpUsed);
             counter.AgentTokensUsed += toTier;
             counter.CoderTopUpUsed += toTopUp;
+            counter.CoderCachedTokens += usage.CachedInput;
         }
 
         await _repository.UpsertAsync(counter, ct);
@@ -235,6 +244,9 @@ public class SubscriptionService : ISubscriptionService
             counter.ProRequestsUsed = 0;
             counter.AgentTokensUsed = 0;
             counter.CoworkTokensUsed = 0;
+            // CACHE_STATS: показный объём из кэша тоже начинается заново.
+            counter.CoderCachedTokens = 0;
+            counter.CoworkCachedTokens = 0;
             counter.FlashWindowResetAt = now.AddDays(limits.FlashWindowDays);
             counter.ProWindowResetAt = now.AddDays(limits.ProWindowDays);
             counter.AgentWindowResetAt = now.AddDays(limits.AgentWindowDays);
@@ -259,6 +271,7 @@ public class SubscriptionService : ISubscriptionService
         if (now >= counter.AgentWindowResetAt)
         {
             counter.AgentTokensUsed = 0;
+            counter.CoderCachedTokens = 0;
             counter.AgentWindowResetAt = now.AddDays(limits.AgentWindowDays);
             changed = true;
         }
@@ -266,6 +279,7 @@ public class SubscriptionService : ISubscriptionService
         if (now >= counter.CoworkWindowResetAt)
         {
             counter.CoworkTokensUsed = 0;
+            counter.CoworkCachedTokens = 0;
             counter.CoworkWindowResetAt = now.AddDays(limits.CoworkWindowDays);
             changed = true;
         }
@@ -334,10 +348,11 @@ public class SubscriptionService : ISubscriptionService
 
     // ADMIN_UNLIMITED: изменено 2026-10-01 — расход админа реальный, а лимиты «бесконечные»,
     // поэтому один и тот же кружок работает и у обычного пользователя, и у админа.
-    private static SubscriptionUsageDto AdminUsage(UserUsageCounterEntity counter) =>
+    private SubscriptionUsageDto AdminUsage(UserUsageCounterEntity counter) =>
         new("Admin",
             counter.FlashRequestsUsed, long.MaxValue, counter.FlashWindowResetAt,
             counter.ProRequestsUsed, long.MaxValue, counter.ProWindowResetAt,
             counter.AgentTokensUsed, long.MaxValue, counter.AgentWindowResetAt,
-            counter.CoworkTokensUsed, long.MaxValue, counter.CoworkWindowResetAt);
+            counter.CoworkTokensUsed, long.MaxValue, counter.CoworkWindowResetAt,
+            counter.CoderCachedTokens, counter.CoworkCachedTokens, CacheHitDiscountPercent());
 }

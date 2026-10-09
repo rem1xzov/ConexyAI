@@ -30,6 +30,9 @@ public class UserUsageCounter_config : IEntityTypeConfiguration<UserUsageCounter
         // TOKEN_TOPUP: добавлено 2026-10-06 — расход купленных токенов (не сбрасывается окном).
         builder.Property(x => x.CoderTopUpUsed).IsRequired();
         builder.Property(x => x.CoworkTopUpUsed).IsRequired();
+        // CACHE_STATS: добавлено 2026-10-06 — сырой объём из кэша (для показа, не для лимита).
+        builder.Property(x => x.CoderCachedTokens).IsRequired();
+        builder.Property(x => x.CoworkCachedTokens).IsRequired();
         builder.Property(x => x.FlashWindowResetAt).IsRequired();
         builder.Property(x => x.ProWindowResetAt).IsRequired();
         builder.Property(x => x.AgentWindowResetAt).IsRequired();

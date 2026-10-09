@@ -43,4 +43,9 @@ public record SubscriptionUsageDto(
     DateTime AgentResetsAt,
     long CoworkUsed,
     long CoworkLimit,
-    DateTime CoworkResetsAt);
+    DateTime CoworkResetsAt,
+    // CACHE_STATS: добавлено 2026-10-06 — сырой объём входных токенов, прочитанных из кэша префикса
+    // (для показа «прочитано из кэша — со скидкой», на лимит не влияет), и процент этой скидки.
+    long AgentCachedTokens,
+    long CoworkCachedTokens,
+    int CacheHitDiscountPercent);

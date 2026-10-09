@@ -172,6 +172,11 @@ export interface SubscriptionUsage {
   coworkUsed: number;
   coworkLimit: number;
   coworkResetsAt: string;
+  // CACHE_STATS: сырой объём входных токенов, прочитанных из кэша (для показа «со скидкой»), и
+  // процент этой скидки. На лимит не влияет — его считает взвешенная сумма выше.
+  agentCachedTokens: number;
+  coworkCachedTokens: number;
+  cacheHitDiscountPercent: number;
 }
 
 export interface LimitExceededInfo {

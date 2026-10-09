@@ -5581,6 +5581,13 @@ body {
   color: var(--muted);
 }
 
+/* CACHE_STATS: строка «из кэша … (скидка N%)» — спокойный тон, чтобы снять тревогу от больших чисел. */
+.usage-indicator__cached {
+  font-size: 10px;
+  color: var(--ok);
+  opacity: 0.85;
+}
+
 /* ---------- ADMIN_PANEL: добавлено 2026-09-19 ---------- */
 .upgrade-modal {
   width: min(720px, 94vw);

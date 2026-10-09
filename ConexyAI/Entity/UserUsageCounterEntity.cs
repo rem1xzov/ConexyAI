@@ -28,6 +28,13 @@ public class UserUsageCounterEntity
     public long CoderTopUpUsed { get; set; }
     public long CoworkTopUpUsed { get; set; }
 
+    // CACHE_STATS: добавлено 2026-10-06 — сколько ВХОДНЫХ токенов прочитано из кэша префикса (сырые,
+    // до скидки). Нужно ТОЛЬКО для показа пользователю («прочитано из кэша — со скидкой»); на лимит не
+    // влияет (его считает взвешенная сумма в CoderTopUpUsed/CoworkTopUpUsed и *TokensUsed).
+    // Сбрасывается вместе с окном, как AgentTokensUsed/CoworkTokensUsed.
+    public long CoderCachedTokens { get; set; }
+    public long CoworkCachedTokens { get; set; }
+
     public DateTime FlashWindowResetAt { get; set; }
     public DateTime ProWindowResetAt { get; set; }
     public DateTime AgentWindowResetAt { get; set; }

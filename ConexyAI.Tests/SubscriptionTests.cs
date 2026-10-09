@@ -220,6 +220,9 @@ internal static class SubscriptionTests
 
         var usage = await subs.GetUsageAsync(user);
         Assert(usage.AgentUsed == 16 * K, $"the pool must hold the weighted amount, got {usage.AgentUsed}");
+        // CACHE_STATS: для показа отдаётся сырой объём из кэша и процент скидки.
+        Assert(usage.AgentCachedTokens == 100 * K, $"the cached volume must be reported, got {usage.AgentCachedTokens}");
+        Assert(usage.CacheHitDiscountPercent == 98, $"the cache discount must read 98%, got {usage.CacheHitDiscountPercent}");
 
         // Чистый кэш-хит почти ничего не стоит: 100k хитов ≈ 2k бюджетных токенов.
         var cacheOnly = await subs.RecordAgentTokensAsync(user, ConexyModelType.ConexyCoder,

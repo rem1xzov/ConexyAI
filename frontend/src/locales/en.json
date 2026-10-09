@@ -426,6 +426,7 @@
     "aria": "Usage limits",
     "tier": "Tier: {{tier}}",
     "reset": "Reset: {{date}}",
+    "cached": "from cache: {{tokens}} tokens ({{percent}}% off)",
     "tooltip": "{{used}} of {{limit}} agent tokens used ({{percent}}%). Limit resets: {{date}}",
     "exhausted": "Limit reached",
     "limitReached": "Token limit reached — the agent cannot start until the limit resets",

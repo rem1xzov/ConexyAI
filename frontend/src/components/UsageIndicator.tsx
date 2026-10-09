@@ -82,10 +82,22 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
   // USAGE_POPOVER: с 2026-10-01 в поповере кольца только агентские пулы (Agent и Cowork); Flash/Pro
   // переехали в настройки, в раздел «Лимиты» — там для них достаточно простой линии.
   const rows = [
-    { label: 'Agent', used: usage.agentUsed, limit: usage.agentLimit, resetsAt: usage.agentResetsAt },
+    {
+      label: 'Agent',
+      used: usage.agentUsed,
+      limit: usage.agentLimit,
+      resetsAt: usage.agentResetsAt,
+      cached: usage.agentCachedTokens,
+    },
     // COWORK_BUDGET: строка появляется только там, где режим реально входит в тариф (limit > 0).
     ...(usage.coworkLimit > 0
-      ? [{ label: 'Cowork', used: usage.coworkUsed, limit: usage.coworkLimit, resetsAt: usage.coworkResetsAt }]
+      ? [{
+          label: 'Cowork',
+          used: usage.coworkUsed,
+          limit: usage.coworkLimit,
+          resetsAt: usage.coworkResetsAt,
+          cached: usage.coworkCachedTokens,
+        }]
       : []),
   ];
 
@@ -153,6 +165,16 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
                   />
                 </div>
                 <div className="usage-indicator__reset">{t('usage.reset', { date: formatDate(r.resetsAt, i18n.language) })}</div>
+                {/* CACHE_STATS: сколько токенов прочитано из кэша — со скидкой. Убирает панику от
+                    «сырых» чисел: видно, что большая часть входа оплачена не по полной цене. */}
+                {r.cached > 0 && (
+                  <div className="usage-indicator__cached">
+                    {t('usage.cached', {
+                      tokens: formatCount(r.cached),
+                      percent: usage.cacheHitDiscountPercent,
+                    })}
+                  </div>
+                )}
               </div>
             );
           })}
