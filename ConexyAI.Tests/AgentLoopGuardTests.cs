@@ -79,23 +79,23 @@ internal static class AgentLoopGuardTests
     private static Task WebBudgetAsync()
     {
         var guard = new AgentLoopGuard();
-        var queries = new[] { "one", "two", "three", "four", "five" };
 
-        foreach (var query in queries)
+        // Ровно бюджет обращений разрешено, следующее — отказ (бюджет — на ОДИН ход модели).
+        for (var i = 1; i <= AgentLoopGuard.WebCallBudget; i++)
         {
-            Assert(guard.Refuse("web_search", $"{{\"query\":\"{query}\"}}") is null, $"web call '{query}' must be allowed");
+            Assert(guard.Refuse("web_search", $"{{\"query\":\"q{i}\"}}") is null, $"web call #{i} must be allowed");
         }
 
-        // Шестое обращение — отказ с текстом из ТЗ, и до сети дело не доходит.
-        Assert(guard.Refuse("web_search", """{"query":"six"}""") == AgentLoopGuard.WebBudgetRefusal,
-            "the sixth web call must hit the budget");
+        // Обращение сверх бюджета — отказ с текстом из ТЗ, и до сети дело не доходит.
+        Assert(guard.Refuse("web_search", """{"query":"over"}""") == AgentLoopGuard.WebBudgetRefusal,
+            "the call past the budget must be refused");
         Assert(guard.Refuse("fetch_web_page", """{"url":"https://example.com"}""") == AgentLoopGuard.WebBudgetRefusal,
             "fetch_web_page shares the same budget as web_search");
         Assert(guard.WebCallsUsed == AgentLoopGuard.WebCallBudget, $"budget accounting, got {guard.WebCallsUsed}");
 
         // Бюджет — на один ход, а не на задачу: следующий ход открывает его заново.
         guard.ResetWebBudget();
-        Assert(guard.Refuse("web_search", """{"query":"seven"}""") is null,
+        Assert(guard.Refuse("web_search", """{"query":"fresh"}""") is null,
             "a new model turn must open a fresh web budget");
         Assert(guard.WebCallsUsed == 1, $"the counter restarts each turn, got {guard.WebCallsUsed}");
 

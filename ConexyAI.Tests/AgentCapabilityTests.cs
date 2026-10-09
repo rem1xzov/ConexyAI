@@ -58,6 +58,7 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent prompts: charters carry deep research, fetch_web_page, the plan rule and artifacts", ChartersAsync);
         TestRegistry.Add("agent tools: the coder set is narrowed to the task (no browser/github/docs for a file fix)", ToolRoutingNarrowsCoderAsync);
         TestRegistry.Add("agent tools: a browser task keeps the browser tools, and Cowork is never narrowed", ToolRoutingKeepsRelevantAsync);
+        TestRegistry.Add("agent limits: an exhausted token budget does not stop the run, it finishes and reports", SoftTokenLimitAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -1062,7 +1063,8 @@ internal static class AgentCapabilityTests
         bool incognito = false,
         IAgentHooksService? hooks = null,
         IMcpRegistry? mcp = null,
-        string prompt = "Сделай задачу")
+        string prompt = "Сделай задачу",
+        ISubscriptionService? subscription = null)
     {
         var workspace = new ConexyWorkspaceService(
             Options.Create(new WorkspaceOptions { RootPath = workspaceRoot }),
@@ -1082,7 +1084,7 @@ internal static class AgentCapabilityTests
             dangerousCommandClassifier: approval,
             commandApproval: approval,
             pendingActionService: null!,
-            new FakeSubscriptionService(),
+            subscription ?? new FakeSubscriptionService(),
             new StaticConversationService(),
             NullLogger<ConexyAgentRunner>.Instance,
             documentService: null!,
@@ -1095,6 +1097,58 @@ internal static class AgentCapabilityTests
         var job = new ConexyJob(Guid.NewGuid(), chatId ?? Guid.NewGuid(), userId ?? Guid.NewGuid(), mode, prompt, Incognito: incognito);
         var context = new ConversationContext(job.TaskId, job.ChatId, job.UserId, runner.GetSystemPrompt(mode), job.Prompt, Incognito: incognito);
         return (runner, job, context);
+    }
+
+    // TOKEN_SOFT_LIMIT: превышенный лимит НЕ обрывает прогон — агент дорабатывает до конца и лишь в
+    // финале сообщает об исчерпании. Раньше здесь был break и работа обрывалась на полуслове.
+    private static async Task SoftTokenLimitAsync()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var bash = new ScriptedBashService(_ => new BashToolResult { Success = true, ExitCode = 0, Output = "ok" });
+            var llm = new ScriptLlm(
+                Turn(Call("c1", "bash", "{\"command\":\"echo hi\"}")),
+                Text("Готово, задача выполнена."));
+            var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(),
+                bash: bash, subscription: new TinyBudgetSubscriptionService());
+
+            var result = await runner.RunLoopAsync(job, context, Guard());
+
+            // Прогон дошёл до финального текста, а не оборвался на первом же шаге.
+            Assert(result.Contains("Готово, задача выполнена."),
+                $"the run must finish despite the blown budget, got '{result}'");
+            Assert(llm.Requests.Count >= 2, $"the loop must continue past the first step, was {llm.Requests.Count}");
+            // И финал честно говорит, что лимит исчерпан, но работа сделана.
+            Assert(result.Contains("лимит") && result.Contains("доделал"),
+                $"the run must report the blown budget in its final note, got '{result}'");
+        }
+        finally
+        {
+            DeleteDir(root);
+        }
+    }
+
+    /// <summary>Заглушка лимитов: крошечный бюджет и большой расход на каждый ход — лимит рвётся сразу.</summary>
+    private sealed class TinyBudgetSubscriptionService : ISubscriptionService
+    {
+        public Task<SubscriptionUsageDto> GetUsageAsync(Guid userId, CancellationToken ct = default) =>
+            Task.FromResult(new SubscriptionUsageDto(
+                "Free",
+                0, 0, DateTime.UtcNow,
+                0, 0, DateTime.UtcNow,
+                100_000, 50, DateTime.UtcNow,   // остаток 50 против расхода 100_000 за ход
+                100_000, 0, DateTime.UtcNow,
+                0, 0, 98));
+
+        public Task<UsageDecision> CheckBeforeRunAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default) =>
+            Task.FromResult(new UsageDecision(UsageDecisionKind.Allowed));
+
+        public Task RecordRequestAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<long> RecordAgentTokensAsync(Guid userId, ConexyModelType modelType, LlmTokenUsage usage, CancellationToken ct = default) =>
+            Task.FromResult(100_000L);
     }
 
     private static WebPageFetcher CreateFetcher(IHostAddressResolver resolver, HttpMessageHandler handler) =>

@@ -28,7 +28,7 @@ public sealed class AgentLoopGuard
     /// Счётчик сбрасывается на каждом шаге цикла (<see cref="ResetWebBudget"/>), поэтому в целом за
     /// задачу поиск не ограничен — ограничен только «взрыв» поисков внутри одного ответа.
     /// </summary>
-    public const int WebCallBudget = 5;
+    public const int WebCallBudget = 10;
 
     /// <summary>Текст отказа при повторе. Модель читает его как результат инструмента.</summary>
     public const string RepeatRefusal =

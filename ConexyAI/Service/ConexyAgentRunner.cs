@@ -681,23 +681,24 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var billedTokens = await _subscriptionService.RecordAgentTokensAsync(job.UserId, job.ModelType, llmTurn.Usage, ct);
             messages.Add(responseMessage);
 
-            // TOKEN_BREAKER: счёт идёт по ЭТОМУ прогону, а не по счётчику в БД: сброс окна посреди
-            // задачи не должен выглядеть как «лимит появился заново». Токены хода уже записаны
-            // строкой выше, поэтому при обрыве они не теряются.
+            // TOKEN_SOFT_LIMIT: счёт идёт по ЭТОМУ прогону, а не по счётчику в БД.
             runTokens += billedTokens;
-            if (runTokens > remainingTokens)
+
+            // TOKEN_SOFT_LIMIT: изменено 2026-10-06 — превышение лимита БОЛЬШЕ НЕ обрывает прогон.
+            // Агент доводит задачу до конца и отдаёт полный ответ, а про исчерпание сообщает припиской
+            // в финале (см. tokenLimitNote). Раньше здесь стоял break, и пользователь получал работу,
+            // оборванную на полуслове. Защита от перерасхода не исчезла: цикл всё равно ограничен
+            // MaxIterations, а страж цикла и бюджет ошибок инструментов гасят зацикливание.
+            if (!tokenBudgetExceeded && runTokens > remainingTokens)
             {
                 tokenBudgetExceeded = true;
                 _logger.LogWarning(
-                    "Agent stopped by the token breaker: token_limit_exceeded task={TaskId} model={Model} runTokens={Run} remaining={Remaining} pool={Pool} step={Step}",
+                    "Agent exceeded the token budget; continuing to completion: task={TaskId} model={Model} runTokens={Run} remaining={Remaining} pool={Pool} step={Step}",
                     taskId, job.ModelType, runTokens, remainingTokens, poolLimit, step);
                 await group.SendAsync(
                     "OnLog",
-                    $"[Token Limit] Лимит токенов тарифа исчерпан: доступно {remainingTokens}, израсходовано за запуск {runTokens}. Генерация остановлена.",
+                    $"[Token Limit] Лимит токенов тарифа исчерпан (доступно {remainingTokens}, израсходовано за запуск {runTokens}); довожу задачу до конца.",
                     ct);
-                await SendAgentStatusAsync(
-                    taskId, "token_limit_exceeded", "Лимит токенов тарифа исчерпан — генерация остановлена", ct: ct);
-                break;
             }
 
             // TASK_COMPLETION_DIAGNOSTICS: добавлено 2026-09-22 — по этой строке видно, крутится ли
@@ -794,6 +795,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
                 // TOOL_INTEGRITY: машинная (не модельная) приписка о том, что реально вызывалось.
                 var integrityNote = BuildToolIntegrityNote(executedToolCounts, toolFailureCounts, finalText);
+                // TOKEN_SOFT_LIMIT: если по ходу прогона лимит был превышен, сообщаем об этом припиской —
+                // но задача уже доведена до конца (прогон не обрывался).
+                var naturalTokenNote = tokenBudgetExceeded ? TokenLimitNote(remainingTokens, runTokens, poolResetsAt) : null;
                 await SendAgentStatusAsync(taskId, "idle", "Готово", ct: ct);
                 if (string.IsNullOrWhiteSpace(finalText) && answer.Length > 0)
                 {
@@ -810,6 +814,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     await StreamNoteAsync(group, answer, integrityNote, ct);
                 }
 
+                if (naturalTokenNote is not null)
+                {
+                    await StreamNoteAsync(group, answer, naturalTokenNote, ct);
+                }
+
                 await group.SendAsync("OnLog", "[Agent Completed] Solution finalized.", ct);
 
                 // AGENT_TERMINATION: без этой строки нельзя было отличить «модель закончила» от
@@ -824,11 +833,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // No file modifications were made: the model's text is the whole answer.
                 if (changedFiles.Count == 0)
                 {
-                    return AppendNote(answer, JoinNotes(redNote, integrityNote));
+                    return AppendNote(answer, JoinNotes(naturalTokenNote, redNote, integrityNote));
                 }
 
                 // File changes were made: return the final report plus a summary card.
-                return BuildFinalReport(AppendNote(finalText, JoinNotes(redNote, integrityNote)), changedFiles, executedCommands);
+                return BuildFinalReport(AppendNote(finalText, JoinNotes(naturalTokenNote, redNote, integrityNote)), changedFiles, executedCommands);
             }
 
             // AGENT_TOOL_FAILURES: инструменты, упавшие именно в этом ходе (для одного сообщения
@@ -1055,9 +1064,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // ошибок — не повод выбрасывать ответ: отдаём написанное и честно говорим, что ещё падает.
         var accumulated = _streamedOutput.ToString().Trim();
         var stillFailing = buildHealth.IsRed ? buildHealth.BuildStillFailingNote(selfCorrections) : null;
-        // TOKEN_BREAKER: причина остановки обязана быть в самом ответе. Задача закрывается как
-        // выполненная (как и на исчерпании шагов/бюджета ошибок), поэтому без явного сообщения
-        // пользователь увидел бы просто оборванный текст.
+        // TOKEN_SOFT_LIMIT: изменено 2026-10-06 — прогон больше НЕ обрывается на лимите, поэтому
+        // приписка сообщает, что задача всё же доведена до конца.
         var tokenLimitNote = tokenBudgetExceeded ? TokenLimitNote(remainingTokens, runTokens, poolResetsAt) : null;
         var stopIntegrityNote = BuildToolIntegrityNote(executedToolCounts, toolFailureCounts, accumulated);
         var note = JoinNotes(tokenLimitNote, stillFailing, stopIntegrityNote);
@@ -1066,8 +1074,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
             await StreamNoteAsync(group, accumulated, note, ct);
         }
 
-        // AGENT_HOOKS: прогон завершился досрочно из-за бюджета/лимита — даём хуку on_error шанс,
-        // затем after_task (оба best-effort).
+        // AGENT_HOOKS: прогон завершился аварийно (бюджет ошибок инструментов) или перерасходовал
+        // лимит токенов — даём хуку on_error шанс, затем after_task (оба best-effort).
         if (_hooks is not null && (toolBudgetExhausted || tokenBudgetExceeded))
         {
             var values = HookValues(chatId, "on_error");
@@ -1084,7 +1092,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         return AppendNote(
             tokenBudgetExceeded
-                ? "Генерация остановлена: исчерпан лимит токенов вашего тарифа."
+                ? "Лимит токенов вашего тарифа исчерпан — дождитесь сброса лимита, чтобы продолжить."
                 : toolBudgetExhausted
                     ? "Не удалось завершить задачу: инструменты, которые нужны агенту, не работают в этом окружении. Запустите задачу заново после устранения ограничения."
                     : "Достигнут предел шагов для одной задачи. Продолжите или уточните задачу отдельным сообщением.",
@@ -1278,12 +1286,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
             ? text
             : string.IsNullOrWhiteSpace(text) ? note : text.TrimEnd() + "\n\n" + note;
 
-    // TOKEN_BREAKER: добавлено 2026-09-27
-    /// <summary>Что именно сказать пользователю, когда прогон оборвал лимит токенов тарифа.</summary>
+    // TOKEN_SOFT_LIMIT: добавлено 2026-09-27, переписано 2026-10-06
+    /// <summary>
+    /// Что сказать пользователю, когда лимит токенов исчерпан, НО задача доведена до конца: прогон
+    /// больше не обрывается на лимите (см. TOKEN_SOFT_LIMIT выше), поэтому тут именно «доделал».
+    /// </summary>
     private static string TokenLimitNote(long remainingTokens, long runTokens, DateTime resetsAt) =>
-        $"Генерация остановлена: исчерпан лимит токенов вашего тарифа " +
-        $"(доступно: {remainingTokens}, использовано: {runTokens}). " +
-        $"Оформите подписку или дождитесь сброса лимита ({resetsAt:dd.MM.yyyy HH:mm} UTC).";
+        $"Лимит токенов вашего тарифа исчерпан (доступно: {remainingTokens}, израсходовано за запуск: {runTokens}), " +
+        $"но задачу я доделал. Чтобы продолжить работу, оформите подписку или дождитесь сброса лимита ({resetsAt:dd.MM.yyyy HH:mm} UTC).";
 
     /// <summary>Склеивает непустые примечания к ответу, сохраняя порядок.</summary>
     private static string? JoinNotes(params string?[] notes)
