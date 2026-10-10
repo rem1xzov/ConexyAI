@@ -115,7 +115,7 @@ internal static class SecurityTests
             var workspace = Workspace(root);
             var queue = new CapturingQueue();
             var guard = new ConexyQueueGuard(queue, NullLogger<ConexyQueueGuard>.Instance);
-            var service = new ConexyService(new ConexyRepository(db), guard, new DevEnvironment(), new FakeSubscriptionService(), Access(db, workspace));
+            var service = new ConexyService(new ConexyRepository(db), guard, new DevEnvironment(), new FakeSubscriptionService(), Access(db, workspace), new FakeUserIntegrationsService());
 
             var owner = Guid.NewGuid();
             var stranger = Guid.NewGuid();
@@ -480,7 +480,7 @@ internal static class SecurityTests
             await using var db = Db("h6" + Guid.NewGuid().ToString("N"));
             var queue = new CapturingQueue();
             var guard = new ConexyQueueGuard(queue, NullLogger<ConexyQueueGuard>.Instance);
-            var service = new ConexyService(new ConexyRepository(db), guard, new DevEnvironment(), new FakeSubscriptionService(), Access(db, Workspace(root)));
+            var service = new ConexyService(new ConexyRepository(db), guard, new DevEnvironment(), new FakeSubscriptionService(), Access(db, Workspace(root)), new FakeUserIntegrationsService());
             var user = Guid.NewGuid();
             var chatId = Guid.NewGuid().ToString();
 

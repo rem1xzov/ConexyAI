@@ -4,20 +4,21 @@ import type { Theme } from '../theme';
 import {
   PREFERENCE_MAX_LENGTH,
   PREFERENCE_NAME_MAX_LENGTH,
+  clearGitHubToken,
   clearMemory,
   deleteMemoryFact,
+  getGitHubTokenStatus,
+  getMcpServers,
   getMemory,
   getPreferences,
+  saveGitHubToken,
+  saveMcpServers,
   savePreferences,
   setMemoryEnabled,
   type MemoryFact,
   type UserPreferences,
 } from '../api/userApi';
 import { humanError } from '../utils/humanError';
-// GITHUB_PAT_PER_USER: личный GitHub-токен для git-операций агента.
-import { clearGitHubToken, readGitHubToken, storeGitHubToken } from '../utils/githubToken';
-// MCP: личные MCP-серверы пользователя (URL + токен) для агента.
-import { readMcpServers, storeMcpServers } from '../utils/mcpServers';
 import { ConfirmDialog } from './Dialog';
 import { CloseIcon, TrashIcon } from './Icons';
 // USAGE_LIMITS_SECTION: добавлено 2026-10-01 — лимиты Flash/Pro переехали из кольца в настройки.
@@ -500,60 +501,104 @@ function MemorySection({ active }: { active: boolean }) {
   );
 }
 
-// SETTINGS: добавлено 2026-09-19; разделы «Персонализация» и «Память» — 2026-09-24.
-/** Settings modal: theme/language, custom instructions and the user's memory. */
-// GITHUB_PAT_PER_USER: добавлено 2026-09-30 — личный токен GitHub для агента. Хранится в этом
-// браузере и уезжает с каждой агентской задачей, поэтому коммиты/PR идут от аккаунта пользователя,
-// а не от общего серверного PAT.
+// USER_INTEGRATIONS: добавлено 2026-10-10 — личный токен GitHub для агента теперь хранится на
+// СЕРВЕРЕ (зашифрованным), а не в браузере: переживает смену устройства и доступен фоновым задачам.
+// Доступен только владельцу и только как статус — сам токен сервер обратно не отдаёт.
 function GitHubSection() {
   const { t } = useTranslation();
-  const [token, setToken] = useState(() => readGitHubToken() ?? '');
+  const [token, setToken] = useState('');
+  const [configured, setConfigured] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const stored = readGitHubToken();
-  const dirty = token.trim() !== (stored ?? '');
+  const [error, setError] = useState<string | null>(null);
 
   function flashSaved() {
     setSaved(true);
     window.setTimeout(() => setSaved(false), 2000);
   }
 
-  function save() {
+  useEffect(() => {
+    let cancelled = false;
+    getGitHubTokenStatus()
+      .then((value) => {
+        if (!cancelled) {
+          setConfigured(value);
+          setLoaded(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function save() {
     const value = token.trim();
-    storeGitHubToken(value);
-    setToken(value);
-    flashSaved();
+    if (!value) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await saveGitHubToken(value);
+      setConfigured(true);
+      setToken('');
+      flashSaved();
+    } catch (e) {
+      const code = (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setError(code === 'TOKEN_REJECTED' ? t('settings.githubRejected') : t('settings.githubError'));
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function remove() {
-    clearGitHubToken();
-    setToken('');
-    flashSaved();
+  async function remove() {
+    setSaving(true);
+    setError(null);
+    try {
+      await clearGitHubToken();
+      setConfigured(false);
+      setToken('');
+      flashSaved();
+    } catch {
+      setError(t('settings.githubError'));
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <div className="settings-panel">
       <div className="settings-modal__section">
         <div className="settings-modal__label">{t('settings.githubLabel')}</div>
+        {loaded && configured && <p className="settings-github__hint">{t('settings.githubStored')}</p>}
         <input
           className="dialog-input settings-github__input"
           type="password"
           autoComplete="off"
           spellCheck={false}
-          placeholder={t('settings.githubPlaceholder')}
+          placeholder={configured ? t('settings.githubReplacePlaceholder') : t('settings.githubPlaceholder')}
           value={token}
           onChange={(e) => setToken(e.target.value)}
         />
         <p className="settings-github__hint">{t('settings.githubHint')}</p>
         <div className="settings-github__actions">
-          <button className="dialog-btn dialog-btn--primary" type="button" onClick={save} disabled={!dirty}>
+          <button
+            className="dialog-btn dialog-btn--primary"
+            type="button"
+            onClick={() => void save()}
+            disabled={!token.trim() || saving}
+          >
             {t('settings.githubSave')}
           </button>
-          {stored && (
-            <button className="dialog-btn" type="button" onClick={remove}>
+          {configured && (
+            <button className="dialog-btn" type="button" onClick={() => void remove()} disabled={saving}>
               {t('settings.githubClear')}
             </button>
           )}
           {saved && <span className="settings-github__saved">{t('settings.githubSaved')}</span>}
+          {error && <span className="settings-github__error">{error}</span>}
         </div>
         <p className="settings-github__hint">
           <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer">
@@ -565,35 +610,67 @@ function GitHubSection() {
   );
 }
 
-// MCP: добавлено 2026-10-04 — личные MCP-серверы пользователя. URL и токен хранятся ТОЛЬКО в
-// этом браузере и уезжают с задачами агента; на сервере не сохраняются.
+// USER_INTEGRATIONS: личные MCP-серверы хранятся на СЕРВЕРЕ (URL и токен зашифрованы) — переживают
+// смену устройства, а не только браузера.
 function McpSection() {
   const { t } = useTranslation();
-  const [servers, setServers] = useState<McpServerInput[]>(() => readMcpServers());
+  const [servers, setServers] = useState<McpServerInput[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const dirty = JSON.stringify(servers) !== JSON.stringify(readMcpServers());
+  const [error, setError] = useState<string | null>(null);
 
   function flashSaved() {
     setSaved(true);
     window.setTimeout(() => setSaved(false), 2000);
   }
 
+  useEffect(() => {
+    let cancelled = false;
+    getMcpServers()
+      .then((list) => {
+        if (!cancelled) {
+          setServers(list);
+          setLoaded(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function update(index: number, patch: Partial<McpServerInput>) {
     setServers((prev) => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)));
+    setDirty(true);
   }
 
   function add() {
     setServers((prev) => [...prev, { name: '', url: '', token: '' }]);
+    setDirty(true);
   }
 
   function removeAt(index: number) {
     setServers((prev) => prev.filter((_, i) => i !== index));
+    setDirty(true);
   }
 
-  function save() {
-    storeMcpServers(servers);
-    setServers(readMcpServers());
-    flashSaved();
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const stored = await saveMcpServers(servers);
+      setServers(stored);
+      setDirty(false);
+      flashSaved();
+    } catch {
+      setError(t('settings.mcpError'));
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -601,7 +678,7 @@ function McpSection() {
       <div className="settings-modal__section">
         <div className="settings-modal__label">{t('settings.mcpTitle')}</div>
         <p className="settings-github__hint">{t('settings.mcpHint')}</p>
-        {servers.length === 0 && <p className="settings-github__hint">{t('settings.mcpEmpty')}</p>}
+        {loaded && servers.length === 0 && <p className="settings-github__hint">{t('settings.mcpEmpty')}</p>}
         {servers.map((server, index) => (
           <div key={index} className="settings-mcp__row">
             <input
@@ -635,10 +712,11 @@ function McpSection() {
           <button className="dialog-btn" type="button" onClick={add}>
             {t('settings.mcpAdd')}
           </button>
-          <button className="dialog-btn dialog-btn--primary" type="button" onClick={save} disabled={!dirty}>
+          <button className="dialog-btn dialog-btn--primary" type="button" onClick={() => void save()} disabled={!dirty || saving}>
             {t('settings.mcpSave')}
           </button>
           {saved && <span className="settings-github__saved">{t('settings.mcpSaved')}</span>}
+          {error && <span className="settings-github__error">{error}</span>}
         </div>
       </div>
     </div>

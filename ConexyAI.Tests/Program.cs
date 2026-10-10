@@ -156,7 +156,7 @@ DbConexy CreateContext(string dbName)
         CreateWorkspaceService(Path.Combine(Path.GetTempPath(), "conexy-tests-access", Guid.NewGuid().ToString("N"))),
         new IncognitoChatStore(),
         NullLogger<ChatAccessService>.Instance);
-    return (new ConexyService(repo, guard, env, new FakeSubscriptionService(), chatAccess), queue);
+    return (new ConexyService(repo, guard, env, new FakeSubscriptionService(), chatAccess, new FakeUserIntegrationsService()), queue);
 }
 
 string AdminConnectionString() => "Host=localhost;Port=5433;Database=postgres;Username=postgres;Password=postgres";
@@ -1729,6 +1729,19 @@ sealed class FakeSubscriptionService : ISubscriptionService
 
     public Task<SubscriptionUsageDto> ResetLimitsAsync(Guid userId, CancellationToken ct = default) =>
         GetUsageAsync(userId, ct);
+}
+
+sealed class FakeUserIntegrationsService : IUserIntegrationsService
+{
+    public Task<bool> HasGitHubTokenAsync(Guid userId, CancellationToken ct = default) => Task.FromResult(false);
+    public Task SaveGitHubTokenAsync(Guid userId, string token, CancellationToken ct = default) => Task.CompletedTask;
+    public Task ClearGitHubTokenAsync(Guid userId, CancellationToken ct = default) => Task.CompletedTask;
+    public Task<IReadOnlyList<McpServerInput>> GetMcpServersAsync(Guid userId, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<McpServerInput>>(Array.Empty<McpServerInput>());
+    public Task SaveMcpServersAsync(Guid userId, IReadOnlyList<McpServerInput> servers, CancellationToken ct = default) =>
+        Task.CompletedTask;
+    public Task<StoredIntegrations> GetForRunAsync(Guid userId, CancellationToken ct = default) =>
+        Task.FromResult(new StoredIntegrations(null, Array.Empty<McpServerInput>()));
 }
 
 sealed class FakeSandboxRunner : IDockerSandboxRunner

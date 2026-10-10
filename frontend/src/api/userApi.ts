@@ -1,4 +1,5 @@
 import http from './client';
+import type { McpServerInput } from '../types/api';
 
 // USER_MEMORY / CUSTOM_INSTRUCTIONS: добавлено 2026-09-24 — клиент для контракта C-7
 // (память о пользователе и пользовательские инструкции). Ответы нормализуются: отсутствующие поля
@@ -83,4 +84,40 @@ export async function savePreferences(prefs: UserPreferences): Promise<UserPrefe
     aboutMe: typeof data?.aboutMe === 'string' ? data.aboutMe : prefs.aboutMe,
     responseStyle: typeof data?.responseStyle === 'string' ? data.responseStyle : prefs.responseStyle,
   };
+}
+
+// USER_INTEGRATIONS: добавлено 2026-10-10 — GitHub-токен и личные MCP-серверы хранятся на сервере
+// (зашифрованными), а не только в браузере. Так они переживают смену устройства и доступны фоновым
+// задачам агента. Наружу отдаётся только статус токена, не само значение.
+
+/** Whether the server has a GitHub token stored for this user. */
+export async function getGitHubTokenStatus(): Promise<boolean> {
+  const { data } = await http.get<{ configured?: boolean }>('/user/github');
+  return data?.configured === true;
+}
+
+/** Validates the token against GitHub and stores it; rejects with 400 TOKEN_REJECTED. */
+export async function saveGitHubToken(token: string): Promise<boolean> {
+  const { data } = await http.put<{ configured?: boolean }>('/user/github', { token });
+  return data?.configured === true;
+}
+
+export async function clearGitHubToken(): Promise<void> {
+  await http.delete('/user/github');
+}
+
+/** The user's personal MCP servers as stored on the server (tokens included, owner only). */
+export async function getMcpServers(): Promise<McpServerInput[]> {
+  const { data } = await http.get<{ servers?: McpServerInput[] }>('/user/mcp');
+  return Array.isArray(data?.servers)
+    ? data.servers.filter((s): s is McpServerInput => !!s && typeof s.url === 'string')
+    : [];
+}
+
+/** Replaces the stored MCP servers; resolves with what the server actually kept. */
+export async function saveMcpServers(servers: McpServerInput[]): Promise<McpServerInput[]> {
+  const { data } = await http.put<{ servers?: McpServerInput[] }>('/user/mcp', { servers });
+  return Array.isArray(data?.servers)
+    ? data.servers.filter((s): s is McpServerInput => !!s && typeof s.url === 'string')
+    : [];
 }

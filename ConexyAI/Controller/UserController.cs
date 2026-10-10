@@ -19,12 +19,22 @@ public class UserController : ControllerBase
 {
     private readonly IUserMemoryService _memory;
     private readonly IUserPreferencesService _preferences;
+    // USER_INTEGRATIONS: серверное хранение кредов агента.
+    private readonly IUserIntegrationsService _integrations;
+    private readonly IConexyGitHubService _github;
     private readonly ILogger<UserController> _logger;
 
-    public UserController(IUserMemoryService memory, IUserPreferencesService preferences, ILogger<UserController> logger)
+    public UserController(
+        IUserMemoryService memory,
+        IUserPreferencesService preferences,
+        IUserIntegrationsService integrations,
+        IConexyGitHubService github,
+        ILogger<UserController> logger)
     {
         _memory = memory;
         _preferences = preferences;
+        _integrations = integrations;
+        _github = github;
         _logger = logger;
     }
 
@@ -112,5 +122,76 @@ public class UserController : ControllerBase
 
         var saved = await _preferences.SaveInstructionsAsync(userId, dto.Name, dto.AboutMe, dto.ResponseStyle, ct);
         return Ok(new PreferencesDto(saved.Name, saved.AboutMe, saved.ResponseStyle));
+    }
+
+    // ---------------------------------------------------------------- integrations
+
+    // USER_INTEGRATIONS: GitHub-токен и MCP-серверы хранятся на сервере (зашифрованными), а не только
+    // в браузере. Агент подхватывает их автоматически, поэтому фоновая задача и другое устройство
+    // работают без повторного ввода.
+
+    /// <summary>Whether a GitHub token is stored server-side for this user.</summary>
+    [HttpGet("github")]
+    public async Task<ActionResult<GitHubTokenStatusDto>> GetGitHubToken(CancellationToken ct)
+    {
+        if (!User.TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        return Ok(new GitHubTokenStatusDto(await _integrations.HasGitHubTokenAsync(userId, ct)));
+    }
+
+    /// <summary>Validates the token against GitHub and stores it encrypted.</summary>
+    [HttpPut("github")]
+    public async Task<ActionResult<GitHubTokenStatusDto>> SaveGitHubToken(
+        [FromBody] SaveGitHubTokenRequest? dto, CancellationToken ct)
+    {
+        if (!User.TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        var token = dto?.Token?.Trim();
+        if (string.IsNullOrWhiteSpace(token))
+            return BadRequest(new { error = "TOKEN_REQUIRED" });
+
+        // Токен сохраняем, только если GitHub его принимает: иначе агент упал бы позже и непонятно.
+        var identity = await _github.GetIdentityAsync(token, ct);
+        if (identity is null)
+            return BadRequest(new { error = "TOKEN_REJECTED", message = "GitHub отклонил токен." });
+
+        await _integrations.SaveGitHubTokenAsync(userId, token, ct);
+        _logger.LogInformation("User {UserId} saved a GitHub token (account {Login}).", userId, identity.Login);
+        return Ok(new GitHubTokenStatusDto(true));
+    }
+
+    /// <summary>Removes the stored GitHub token.</summary>
+    [HttpDelete("github")]
+    public async Task<IActionResult> ClearGitHubToken(CancellationToken ct)
+    {
+        if (!User.TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        await _integrations.ClearGitHubTokenAsync(userId, ct);
+        return NoContent();
+    }
+
+    /// <summary>The user's personal MCP servers (URL, name, token), stored server-side.</summary>
+    [HttpGet("mcp")]
+    public async Task<ActionResult<McpServersDto>> GetMcpServers(CancellationToken ct)
+    {
+        if (!User.TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        return Ok(new McpServersDto((await _integrations.GetMcpServersAsync(userId, ct)).ToList()));
+    }
+
+    /// <summary>Replaces the user's personal MCP servers.</summary>
+    [HttpPut("mcp")]
+    public async Task<ActionResult<McpServersDto>> SaveMcpServers([FromBody] McpServersDto? dto, CancellationToken ct)
+    {
+        if (!User.TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        var servers = dto?.Servers ?? new List<McpServerInput>();
+        await _integrations.SaveMcpServersAsync(userId, servers, ct);
+        return Ok(new McpServersDto((await _integrations.GetMcpServersAsync(userId, ct)).ToList()));
     }
 }

@@ -30,6 +30,9 @@ public class DbConexy : Microsoft.EntityFrameworkCore.DbContext
     // USER_PREFERENCES: добавлено 2026-09-24
     public DbSet<UserPreferencesEntity> UserPreferences => Set<UserPreferencesEntity>();
 
+    // USER_INTEGRATIONS: добавлено 2026-10-10 — серверное хранение кредов агента (GitHub/MCP).
+    public DbSet<UserIntegrationsEntity> UserIntegrations => Set<UserIntegrationsEntity>();
+
     // RAG: добавлено 2026-09-17
     public DbSet<Document> Documents => Set<Document>();
     public DbSet<DocumentChunk> DocumentChunks => Set<DocumentChunk>();

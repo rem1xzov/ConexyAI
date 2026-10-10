@@ -280,6 +280,9 @@ builder.Services.AddHostedService<IncognitoCleanupService>();
 builder.Services.AddScoped<IChatAccessService, ChatAccessService>();
 // USER_PREFERENCES: добавлено 2026-09-24 — пользовательские инструкции и переключатель памяти.
 builder.Services.AddScoped<IUserPreferencesService, UserPreferencesService>();
+// USER_INTEGRATIONS: добавлено 2026-10-10 — серверное хранение кредов агента (GitHub PAT, MCP).
+builder.Services.AddSingleton<ISecretProtector, AesSecretProtector>();
+builder.Services.AddScoped<IUserIntegrationsService, UserIntegrationsService>();
 // USER_DATA_CLEANUP: добавлено 2026-09-24 — ревью M9: файлы пользователя удаляются вместе с ним.
 builder.Services.AddScoped<IUserDataCleanupService, UserDataCleanupService>();
 // RAG: добавлено 2026-09-17

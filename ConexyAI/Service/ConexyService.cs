@@ -33,6 +33,8 @@ public class ConexyService : IConexyService
     private readonly ISubscriptionService _subscriptionService;
     // CHAT_OWNERSHIP: добавлено 2026-09-24
     private readonly IChatAccessService _chatAccess;
+    // USER_INTEGRATIONS: креды агента (GitHub/MCP), сохранённые на сервере.
+    private readonly IUserIntegrationsService _integrations;
     private const int MaxRequestsPerWindow = 60;
     private static readonly TimeSpan WindowDuration = TimeSpan.FromMinutes(1);
 
@@ -44,13 +46,15 @@ public class ConexyService : IConexyService
         IConexyQueueGuard queueGuard,
         IWebHostEnvironment environment,
         ISubscriptionService subscriptionService,
-        IChatAccessService chatAccess)
+        IChatAccessService chatAccess,
+        IUserIntegrationsService integrations)
     {
         _chatAccess = chatAccess;
         _repository = repository;
         _queueGuard = queueGuard;
         _environment = environment;
         _subscriptionService = subscriptionService;
+        _integrations = integrations;
     }
 
     public async Task<ConexyResponse> ExecuteAsync(Guid userId, ConexyRequest request, CancellationToken ct = default)
@@ -161,8 +165,21 @@ public class ConexyService : IConexyService
                 entity = await _repository.CreateOrGetAsync(entity, ct);
             }
 
+            // USER_INTEGRATIONS: если клиент не прислал креды, подставляем сохранённые на сервере —
+            // так задача работает и с другого устройства, и из фоновых/оркестровых запусков.
+            var githubToken = request.GitHubToken;
+            var mcpServers = request.McpServers;
+            if (string.IsNullOrWhiteSpace(githubToken) || mcpServers is null || mcpServers.Count == 0)
+            {
+                var stored = await _integrations.GetForRunAsync(userId, ct);
+                if (string.IsNullOrWhiteSpace(githubToken))
+                    githubToken = stored.GitHubToken;
+                if ((mcpServers is null || mcpServers.Count == 0) && stored.McpServers.Count > 0)
+                    mcpServers = stored.McpServers.ToList();
+            }
+
             // Ставим задачу в фоновую очередь (GitHub-токен не сохраняется в БД, а передаётся только в памяти).
-            await _queueGuard.EnqueueReservedAsync(new ConexyJob(entity.Id, chatId, userId, modelType, request.Prompt, request.GitHubToken, request.GitHubRepo, request.Attachments, request.Thinking, request.ReasoningEffort, request.StudentsMode, request.SmartSearch, request.Incognito, request.AssistantPrefix, request.ChatKind, request.Regenerate, Orchestra: request.Orchestra, McpServers: request.McpServers), ct);
+            await _queueGuard.EnqueueReservedAsync(new ConexyJob(entity.Id, chatId, userId, modelType, request.Prompt, githubToken, request.GitHubRepo, request.Attachments, request.Thinking, request.ReasoningEffort, request.StudentsMode, request.SmartSearch, request.Incognito, request.AssistantPrefix, request.ChatKind, request.Regenerate, Orchestra: request.Orchestra, McpServers: mcpServers), ct);
 
             return ToResponse(entity);
         }
