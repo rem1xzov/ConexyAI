@@ -575,9 +575,8 @@ public class ConexyBackgroundWorker : BackgroundService
         // рендерятся на клиенте во всех режимах чата, поэтому модель знает об этих форматах и здесь.
         systemPrompt += "\n\n" + Prompts.PromptFragments.Artifacts + "\n\n" + Prompts.PromptFragments.RichFormatting;
 
-        // Always inject the current server time so "what day/time is it" questions are
-        // answered directly and reliably, without depending on the web search provider.
-        systemPrompt += $"\n\nТекущая дата и время (UTC): {DateTime.UtcNow:yyyy-MM-dd HH:mm}.";
+        // PREFIX_CACHE: текущую дату сюда НЕ добавляем — она волатильна и живёт в изменяемом system-блоке
+        // (ConversationService.BuildRequestAsync), чтобы стабильный устав и схемы инструментов кэшировались.
         return systemPrompt;
     }
 

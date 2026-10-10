@@ -1398,6 +1398,8 @@ async Task TestPrefixCacheOrderAsync()
         "volatile context must never sit inside the stable charter");
     Assert((request[1].Text ?? "").Contains("маркетинге"),
         "volatile context (recent chats) must be carried by the second system message");
+    Assert((request[1].Text ?? "").Contains("Текущая дата"),
+        "the current date is a volatile block, never part of the stable charter");
 }
 
 async Task TestMemoryExtractedAfterFirstMessageAsync()
@@ -1546,8 +1548,11 @@ async Task TestCoworkModeRoutingAsync()
         var (runner, _, _) = CreateAgentRunner(root, new ScriptedAgentLlm(), new RecordingHubContext(), 30);
         var coworkPrompt = runner.GetSystemPrompt(ConexyModelType.ConexyCowork);
         var coderPrompt = runner.GetSystemPrompt(ConexyModelType.ConexyCoder);
-        Assert(coworkPrompt.Contains("ConexyAI Cowork") && coworkPrompt.Contains("Текущая дата"),
-            "Cowork gets its own charter with the current date");
+        Assert(coworkPrompt.Contains("ConexyAI Cowork"),
+            "Cowork gets its own charter");
+        // PREFIX_CACHE: дата волатильна и НЕ должна сидеть в стабильном уставе.
+        Assert(!coworkPrompt.Contains("Текущая дата"),
+            "the current date must not be part of the stable charter (it would break the prefix cache)");
         Assert(coderPrompt.Contains("ConexyAI Coder") && !coderPrompt.Contains("Cowork"), "Coder keeps its charter");
     }
     finally

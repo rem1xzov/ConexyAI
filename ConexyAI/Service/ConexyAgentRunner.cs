@@ -101,7 +101,6 @@ public class ConexyAgentRunner : IConexyAgentRunner
     /// offered, and Cowork must never reach <c>bash</c>.</param>
     /// <param name="AuditsCode">Whether the Maker-Checker code auditor reviews the changed files. Its
     /// charter is about code (race conditions, injections), which is meaningless for a report.</param>
-    /// <param name="IncludesDate">Research answers depend on "now"; the coder charter never needed it.</param>
     /// <param name="EnforcesPlan">
     /// PLAN_REQUIRED: добавлено 2026-09-24 — multi-step work (several files, or a build to fix) without a
     /// <c>todo_write</c> plan gets one explicit reminder. The coder charter requires the plan; the
@@ -112,18 +111,18 @@ public class ConexyAgentRunner : IConexyAgentRunner
         string SystemPrompt,
         IReadOnlySet<string>? AllowedTools,
         bool AuditsCode,
-        bool IncludesDate,
         bool EnforcesPlan)
     {
         public bool Allows(string tool) => AllowedTools is null || AllowedTools.Contains(tool);
 
-        public string BuildSystemPrompt() => IncludesDate
-            ? SystemPrompt + $"\n\nТекущая дата и время (UTC): {DateTime.UtcNow:yyyy-MM-dd HH:mm}."
-            : SystemPrompt;
+        // PREFIX_CACHE: устав НЕ содержит текущую дату — она волатильна (меняется каждую минуту) и
+        // живёт в отдельном изменяемом system-блоке (см. ConversationService). Иначе она ломала бы
+        // кэш префикса (устав + схемы инструментов) на каждом шаге автономного цикла.
+        public string BuildSystemPrompt() => SystemPrompt;
     }
 
     private static readonly AgentProfile CoderProfile = new(
-        "coder", WorkerSystemPrompt, AllowedTools: null, AuditsCode: true, IncludesDate: false, EnforcesPlan: true);
+        "coder", WorkerSystemPrompt, AllowedTools: null, AuditsCode: true, EnforcesPlan: true);
 
     // COWORK_MODE: no bash/terminal_exec/github/screenshot and no legacy file_* tools — only reading
     // and writing documents in the chat workspace, the user's knowledge base, the web and a plan.
@@ -151,7 +150,6 @@ public class ConexyAgentRunner : IConexyAgentRunner
             "view_image",
         },
         AuditsCode: false,
-        IncludesDate: true,
         EnforcesPlan: false);
 
     // SEARCH_USER_CHATS: добавлено 2026-09-24
@@ -203,7 +201,6 @@ public class ConexyAgentRunner : IConexyAgentRunner
             SearchUserChatsTool,
         },
         AuditsCode: false,
-        IncludesDate: true,
         EnforcesPlan: false);
 
     // COWORK_MODE: добавлено 2026-09-23 — устав режима Cowork (нетехнические задачи).
