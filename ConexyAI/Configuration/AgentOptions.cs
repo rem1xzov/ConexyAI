@@ -29,9 +29,18 @@ public class AgentOptions
     /// runs AFTER the final answer has already been streamed to the chat, so every second it takes is
     /// a second the user sees a finished answer on a task that is still "running". When the bound is
     /// hit the answer is finalized without review instead of failing the task.
-    /// A value of &lt;= 0 falls back to the default (90).
+    /// AUDIT_HANG: снижено с 90 до 45 (2026-10-10) — 90-секундная пауза после готового ответа
+    /// выглядела как зависание. Значение можно менять без пересборки (Agent__AuditTimeoutSeconds).
+    /// A value of &lt;= 0 falls back to the default (45).
     /// </summary>
-    public int AuditTimeoutSeconds { get; set; } = 90;
+    public int AuditTimeoutSeconds { get; set; } = 45;
+
+    /// <summary>
+    /// AUDIT_HANG: добавлено 2026-10-10 — выключатель Maker-Checker. Аудит — это отдельный большой
+    /// вызов модели ПОСЛЕ уже доставленного ответа: он улучшает качество, но добавляет молчаливую
+    /// паузу (и повторные круги при REJECT). Можно выключить без пересборки — Agent__AuditEnabled=false.
+    /// </summary>
+    public bool AuditEnabled { get; set; } = true;
 
     /// <summary>
     /// SELF_CORRECTION: добавлено 2026-09-24. How many times the agent is sent back when it tries to

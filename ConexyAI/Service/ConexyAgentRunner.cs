@@ -68,7 +68,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly int _maxIterations;
 
     // Сколько раз аудитор может вернуть работу на доработку.
-    private const int MaxAuditReworks = 3;
+    // AUDIT_HANG: снижено с 3 до 1 (2026-10-10): каждый круг — ещё один молчаливый вызов модели после
+    // уже готового ответа, и три круга складывались в минуты «висит». Одного хватает.
+    private const int MaxAuditReworks = 1;
 
     // SELF_CORRECTION: добавлено 2026-09-24 — сколько раз агента возвращают, если он пытается
     // закончить при красной сборке/тестах (AgentOptions.MaxSelfCorrectionAttempts).
@@ -79,6 +81,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // HTTP-клиента: 180 с на попытку и до 3 повторов на 429/5xx, то есть до ~12 минут «ответ готов, а
     // задача running», после чего исключение ещё и роняло уже законченную задачу в Failed.
     private readonly TimeSpan _auditTimeout;
+    // AUDIT_HANG: выключатель аудитора (Agent:AuditEnabled), см. ReviewWorkspaceAsync.
+    private readonly bool _auditEnabled;
 
     // AUDITOR_BUDGET: аудитор смотрит только файлы, которые менял агент. Раньше он брал первые 60
     // файлов из РЕКУРСИВНОГО списка всего воркспейса — после `npm install` это node_modules и .git,
@@ -473,7 +477,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _maxIterations = configured <= 0 ? 25 : configured;
 
         var auditSeconds = agentOptions.Value.AuditTimeoutSeconds;
-        _auditTimeout = TimeSpan.FromSeconds(auditSeconds <= 0 ? 90 : auditSeconds);
+        _auditTimeout = TimeSpan.FromSeconds(auditSeconds <= 0 ? 45 : auditSeconds);
+        _auditEnabled = agentOptions.Value.AuditEnabled;
 
         var corrections = agentOptions.Value.MaxSelfCorrectionAttempts;
         _maxSelfCorrectionAttempts = corrections <= 0 ? 5 : Math.Min(corrections, 20);
@@ -724,7 +729,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
                 // Maker-Checker only applies to real code changes. A pure dialog reply
                 // must be returned verbatim instead of being swallowed by the auditor.
-                if (_profile.AuditsCode && changedFiles.Count > 0 && auditReworks < MaxAuditReworks)
+                if (_auditEnabled && _profile.AuditsCode && changedFiles.Count > 0 && auditReworks < MaxAuditReworks)
                 {
                     // AGENT_TERMINATION: аудитор — это отдельный большой запрос к модели, который
                     // идёт ПОСЛЕ того, как ответ уже улетел в чат токенами. Без этой строки пауза
