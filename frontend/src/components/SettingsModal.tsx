@@ -576,7 +576,8 @@ function GitHubSection() {
         <input
           className="dialog-input settings-github__input"
           type="password"
-          autoComplete="off"
+          name="conexy-github-token"
+          autoComplete="new-password"
           spellCheck={false}
           placeholder={configured ? t('settings.githubReplacePlaceholder') : t('settings.githubPlaceholder')}
           value={token}
@@ -683,12 +684,16 @@ function McpSection() {
           <div key={index} className="settings-mcp__row">
             <input
               className="dialog-input"
+              name="conexy-mcp-name"
+              autoComplete="off"
               placeholder={t('settings.mcpNamePlaceholder')}
               value={server.name ?? ''}
               onChange={(e) => update(index, { name: e.target.value })}
             />
             <input
               className="dialog-input"
+              name="conexy-mcp-url"
+              autoComplete="off"
               spellCheck={false}
               placeholder={t('settings.mcpUrlPlaceholder')}
               value={server.url}
@@ -697,7 +702,8 @@ function McpSection() {
             <input
               className="dialog-input"
               type="password"
-              autoComplete="off"
+              name="conexy-mcp-token"
+              autoComplete="new-password"
               spellCheck={false}
               placeholder={t('settings.mcpTokenPlaceholder')}
               value={server.token ?? ''}

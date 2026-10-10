@@ -180,7 +180,16 @@ export function Sidebar(props: SidebarProps) {
         <>
           <div className="search-pill">
             <SearchIcon size={16} className="search-pill__icon" />
+            {/* AUTOFILL_FIX: без type/name/autoComplete Chrome принимал это поле за логин и
+                подставлял сюда email, как только в настройках открывались поля с паролем. */}
             <input
+              type="search"
+              name="conexy-chat-search"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              enterKeyHint="search"
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
               placeholder={t('sidebar.search')}
