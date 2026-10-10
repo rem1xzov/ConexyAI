@@ -1152,8 +1152,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
     };
     private static readonly string[] GithubWords =
     {
-        "github", "гитхаб", "гитхабе", "пул-реквест", "пулл-реквест", "pull request", "pull-request", " p r ",
-        "issue", "ишью", "коммит", "commit", " ветк", "branches", "branch", " репозитор", "repo", "clone", "workflow", "actions",
+        // TOOL_ROUTING_FIX: добавлено 2026-10-10 — раньше «git pull / подтяни код» не распознавалось
+        // как GitHub-задача, и github_action/github_api вырезались из набора — модель честно говорила
+        // «инструмент не выдан». Теперь любое git-действие в промпте сохраняет эту группу.
+        "github", "гитхаб", "гитхабе", "git", "pull request", "pull-request", "pull", "push",
+        "merge", "rebase", "origin", "upstream", "форк", "fork",
+        "issue", "ишью", "коммит", "commit", "закоммит", "ветк", "branch", "репозитор", "repo",
+        "clone", "клонир", "склонир", "workflow", "actions", "подтян", "запуш",
     };
     private static readonly string[] DocumentWords =
     {

@@ -1370,6 +1370,14 @@ internal static class AgentCapabilityTests
             await coworkRunner.RunLoopAsync(coworkJob, coworkContext, Guard());
             Assert(coworkLlm.AdvertisedTools.Contains("create_document"),
                 "Cowork must always keep its document tools regardless of the task wording");
+
+            // TOOL_ROUTING_FIX: git-задача («git pull», «подтяни коммиты») должна сохранять github-инструменты.
+            var gitLlm = new ScriptLlm(Text("Готово."));
+            var (gitRunner, gitJob, gitContext) = CreateRunner(root, gitLlm, new RecordingHubContext(),
+                ConexyModelType.ConexyCoder, prompt: "сделай git pull и подтяни новые коммиты");
+            await gitRunner.RunLoopAsync(gitJob, gitContext, Guard());
+            Assert(gitLlm.AdvertisedTools.Contains("github_action") && gitLlm.AdvertisedTools.Contains("github_api"),
+                $"a git task must keep the github tools, got [{string.Join(", ", gitLlm.AdvertisedTools)}]");
         }
         finally
         {
