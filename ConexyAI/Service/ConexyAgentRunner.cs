@@ -283,7 +283,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         ИНСТРУМЕНТЫ:
         Для поиска по коду в воркспейсе используй `grep` и `glob`, а не `bash: grep/rg/find` — эти инструменты не требуют подтверждения и не зависят от того, что установлено в песочнице.
-        Для проверки кода используй `run_tests` — он сам определяет фреймворк и возвращает структурированный отчёт (кто упал, файл:строка, ожидали/получили), а не сырые логи. Не гоняй `npm test`/`pytest`/`dotnet test` через `bash`, чтобы потом вручную вычитывать простыню вывода.
+        Для проверки кода используй `run_tests` — он сам определяет фреймворк и возвращает структурированный отчёт (кто упал, файл:строка, ожидали/получили), а не сырые логи. Тесты через `bash` (`npm test`/`pytest`/`dotnet test`/…), чистые проверки типов и линтеры (`tsc`/`eslint`/`mypy`/`ruff`/`cargo check`/`go vet`/`npm run lint`) система ОТКЛОНЯЕТ с подсказкой — не повторяй их, а сразу вызывай `run_tests`/`get_diagnostics`. Каноничная сборка (`dotnet build`, `npm run build`) по-прежнему идёт через `bash`.
         Чтобы увидеть ошибки компиляции, типов и линтера без запуска приложения и тестов, используй `get_diagnostics` — он сам подбирает проверку (dotnet build, tsc, eslint, cargo check, go vet, pyright/mypy/ruff) и отдаёт `severity: файл:строка:колонка [код] сообщение`. Вызывай его после правок, чтобы поймать ошибки типов до сборки.
         Для правок предпочитай `apply_patch` с unified-diff: когда меняешь несколько строк или файлов, патч точнее и дешевле по токенам, чем `str_replace`. Если хунк не совпал с файлом, инструмент скажет об этом и ничего не поменяет — тогда перечитай файл и пришли патч заново.
         Если пользователь приложил картинку (макет, скриншот бага) или ссылается на изображение в рабочей области, вызови `view_image` — только так ты реально «видишь» изображение. Пользовательские картинки сохраняются в корне рабочей области и доступны повторно по `path`.
@@ -369,7 +369,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             `after_file_change`, `on_error`, `after_task`) — их система запускает сама; тебе не нужно
             вызывать их вручную. Если хук упал — система скажет об этом отдельной заметкой `[Hooks]`, учти это.
 
-        14. **GitHub — только через `github_action` и `github_api`.** Не выполняй операции GitHub `bash`-командами `git`. Полный перечень операций есть в схемах инструментов. **Перед ревью PR сначала прочитай дифф через `get_pull_request_files` и обсуждение через `get_pull_request_comments`, и только потом выноси вердикт `review_pull_request`** — иначе ревью будет выдуманным. Личный токен пользователя доступен ТОЛЬКО этому инструменту: в песочнице креденшелов нет, поэтому `bash: git push` и приватные клоны там не работают (публичные репозитории можно клонировать обычным `bash: git clone`). Не ищи токен в `bash`, `env`, `~/.git-credentials`, `.netrc` или переменных окружения и не пытайся обойти ограничение — его там нет и не должно быть.
+        14. **GitHub — только через `github_action` и `github_api`.** Не выполняй операции GitHub `bash`-командами `git`. Полный перечень операций есть в схемах инструментов. **Перед ревью PR сначала прочитай дифф через `get_pull_request_files` и обсуждение через `get_pull_request_comments`, и только потом выноси вердикт `review_pull_request`** — иначе ревью будет выдуманным. Личный токен пользователя доступен ТОЛЬКО этому инструменту: в песочнице креденшелов нет, поэтому `bash: git push` и приватные клоны там не работают (публичные репозитории можно клонировать обычным `bash: git clone`). Команды `bash: git push/pull/fetch/remote`, `gh …` и любые клоны с токеном в URL система ОТКЛОНЯЕТ с подсказкой — не повторяй их, а сразу вызывай `github_action`. Не ищи токен в `bash`, `env`, `~/.git-credentials`, `.netrc` или переменных окружения и не пытайся обойти ограничение — его там нет и не должно быть.
             Если ты клонировал репозиторий в подпапку (`target_folder`), передавай ту же папку параметром `repo_folder`; инструмент сам найдёт её, если репозиторий в рабочей области один. Если `github_action` отвечает, что токена нет или он отклонён, — останови работу и скажи пользователю добавить Personal Access Token: Настройки → GitHub. Никогда не советуй «пробросить токен в песочницу» — это неверное лечение. Иную ошибку приведи дословно, не пересказывая причину.
 
         ## Работа с документами и базой знаний
@@ -960,6 +960,21 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         _logger.LogInformation(
                             "Agent build health: {Change} ({Checks}) task={TaskId}",
                             change, buildHealth.IsRed ? buildHealth.FailingChecks : "all green", taskId);
+                    }
+                }
+
+                // P0_TOOL_REDIRECT: run_tests/get_diagnostics выполняют проверочные команды, но не
+                // идут через bash — без этой ветки редирект ослепил бы гейт самокоррекции. Команда и
+                // результат читаются из их же структурированного отчёта.
+                if (toolAllowed && result.CommandExecuted && toolName is "run_tests" or "get_diagnostics"
+                    && ReadVerificationOutcome(toolName, result.Output) is { } verification)
+                {
+                    var change = buildHealth.Observe(verification.Command, verification.Succeeded, result.Output);
+                    if (change != BuildHealthChange.None)
+                    {
+                        _logger.LogInformation(
+                            "Agent build health: {Change} ({Checks}) via {Tool} task={TaskId}",
+                            change, buildHealth.IsRed ? buildHealth.FailingChecks : "all green", toolName, taskId);
                     }
                 }
 
@@ -1878,6 +1893,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     if (string.IsNullOrEmpty(command))
                         return new ConexyToolResult(toolCall.Id, "terminal_exec requires 'command'.", true);
 
+                    // P0_TOOL_REDIRECT: legacy-инструмент идёт через тот же редирект, что и `bash`.
+                    if (AgentToolRedirect.RefusedBashCommand(command) is { } terminalRedirect)
+                    {
+                        await LogAsync(taskId, $"[Redirect] terminal_exec: {command}", ct);
+                        return new ConexyToolResult(toolCall.Id, terminalRedirect, true);
+                    }
+
                     var legacyRequest = new BashToolRequest
                     {
                         Command = command,
@@ -1931,6 +1953,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     var request = JsonSerializer.Deserialize<BashToolRequest>(toolCall.Function.Arguments);
                     if (request is null || string.IsNullOrWhiteSpace(request.Command))
                         return new ConexyToolResult(toolCall.Id, "bash requires 'command'.", true);
+
+                    // P0_TOOL_REDIRECT: команду, для которой есть профильный инструмент, не выполняем —
+                    // отдаём модели КОНКРЕТНУЮ инструкцию, что вызвать вместо неё.
+                    if (AgentToolRedirect.RefusedBashCommand(request.Command) is { } bashRedirect)
+                    {
+                        await LogAsync(taskId, $"[Redirect] bash: {request.Command}", ct);
+                        return new ConexyToolResult(toolCall.Id, bashRedirect, true);
+                    }
 
                     // COMMAND_CONFIRM: добавлено 2026-09-20 — раньше подтверждение требовалось
                     // только для команд из DangerousCommandClassifier. Теперь через него идёт любая
@@ -3273,6 +3303,31 @@ public class ConexyAgentRunner : IConexyAgentRunner
         {
             return string.Empty;
         }
+    }
+
+    // P0_TOOL_REDIRECT: run_tests/get_diagnostics отдают отчёт с строкой «Command: <команда>» и
+    // заголовком, по которому видно, прошло ли всё. Это нужно, чтобы гейт самокоррекции видел их
+    // результат так же, как видел бы те же команды через bash.
+    private static (string Command, bool Succeeded)? ReadVerificationOutcome(string toolName, string output)
+    {
+        const string marker = "Command: ";
+        var at = output.IndexOf(marker, StringComparison.Ordinal);
+        if (at < 0)
+            return null;
+
+        var rest = output[(at + marker.Length)..];
+        var lineEnd = rest.IndexOf('\n');
+        var command = (lineEnd >= 0 ? rest[..lineEnd] : rest).Trim();
+        if (command.Length == 0)
+            return null;
+
+        var succeeded = toolName switch
+        {
+            "run_tests" => output.StartsWith("TESTS PASSED", StringComparison.Ordinal),
+            "get_diagnostics" => output.StartsWith("DIAGNOSTICS: clean", StringComparison.Ordinal),
+            _ => false,
+        };
+        return (command, succeeded);
     }
 
     private static string? Optional(JsonElement root, string name)
