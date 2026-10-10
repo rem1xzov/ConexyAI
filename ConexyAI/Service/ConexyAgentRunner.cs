@@ -345,6 +345,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "или конфиг без проекта для сборки) — прямо скажи это в ответе и завершай.";
     private const int MaxVerificationNudges = 1;
 
+    // ANTI_LIE: добавлено 2026-10-10 — модель повторила ложный отчёт о выполнении GitHub-операции
+    // (трижды подряд вживую): писала «git pull выполнен / папка удалена», не вызвав ни одного
+    // инструмента. Пассивной приписки внизу было мало — теперь ответ с таким расхождением
+    // ОТПРАВЛЯЕТСЯ НА ДОРАБОТКУ, а не завершается. Ограничено, чтобы не зациклиться.
+    private const string FalseClaimPrompt =
+        "[Anti-Lie] Ты написал, что выполнил операцию с GitHub/git (клон, pull/fetch, ветки, «удалил ветку/репозиторий», commit/push, PR), " +
+        "но за этот прогон инструмент `github_action` не вызывался или все его вызовы упали. Это запрещено. " +
+        "Либо сделай операцию РЕАЛЬНО через `github_action` (например `pull`/`fetch` с `repo_folder`), либо честно напиши, что не смог и почему. " +
+        "Никогда не сообщай о выполнении того, чего не было.";
+    private const int MaxClaimPushbacks = 2;
+
     // PROJECT_RULES: добавлено 2026-09-24 — файлы правил проекта в корне рабочей области чата, в порядке
     // приоритета, и их бюджет в промпте (каждый файл и все вместе).
     private static readonly string[] ProjectRuleFiles = { "CONEXY.md", "CLAUDE.md", ".conexy/rules.md" };
@@ -532,6 +543,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var planNudged = false;
         // P2_DEFINITION_OF_DONE: сколько раз мы просили проверить изменения перед завершением.
         var verificationNudged = 0;
+        // ANTI_LIE: сколько раз мы ловили ложный отчёт о GitHub-работе.
+        var claimPushbacks = 0;
 
         // ITERATION_WRAPUP: добавлено 2026-10-06 — на последнем шаге просим модель подвести итог,
         // и только один раз (иначе на перезапуске этого же шага подсказка добавилась бы дважды).
@@ -693,6 +706,22 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
                 var finalText = ExtractTextContent(responseMessage);
 
+                // ANTI_LIE: модель заявляет о GitHub-операции, которой не было — это не финал, а отказ:
+                // отправляем на доработку (сделай реально или скажи честно), а не завершаем с пассивной
+                // припиской, которую пользователь читает уже после вранья.
+                var integrityNote = BuildToolIntegrityNote(executedToolCounts, toolFailureCounts, finalText);
+                if (integrityNote is not null && claimPushbacks < MaxClaimPushbacks)
+                {
+                    claimPushbacks++;
+                    _logger.LogWarning(
+                        "Agent anti-lie: the answer claims GitHub work that never ran; sending back {Attempt}/{Max}. task={TaskId}",
+                        claimPushbacks, MaxClaimPushbacks, taskId);
+                    await group.SendAsync("OnLog", $"[Anti-Lie] The answer claims a GitHub action that was not executed — sending back ({claimPushbacks}/{MaxClaimPushbacks}).", ct);
+                    await SendAgentStatusAsync(taskId, "thinking", "Проверяю расхождение с фактами…", ct: ct);
+                    messages.Add(new ChatMessage("system", FalseClaimPrompt));
+                    continue;
+                }
+
                 // Maker-Checker only applies to real code changes. A pure dialog reply
                 // must be returned verbatim instead of being swallowed by the auditor.
                 if (_profile.AuditsCode && changedFiles.Count > 0 && auditReworks < MaxAuditReworks)
@@ -744,8 +773,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     ? verificationNote is not null && !buildHealth.IsGreen ? string.Empty : "Готово. Задача выполнена."
                     : finalText;
 
-                // TOOL_INTEGRITY: машинная (не модельная) приписка о том, что реально вызывалось.
-                var integrityNote = BuildToolIntegrityNote(executedToolCounts, toolFailureCounts, finalText);
+                // TOOL_INTEGRITY: машинная (не модельная) приписка о том, что реально вызывалось
+                // (integrityNote посчитан выше и уже использован для гейта ANTI_LIE).
                 // TOKEN_SOFT_LIMIT: если по ходу прогона лимит был превышен, сообщаем об этом припиской —
                 // но задача уже доведена до конца (прогон не обрывался).
                 var naturalTokenNote = tokenBudgetExceeded ? TokenLimitNote(remainingTokens, runTokens, poolResetsAt) : null;
@@ -1317,9 +1346,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // режиме с доступом к github_action, поэтому обычные ответы Cowork/чата не шумят.
     private static readonly string[] ToolClaimMarkers =
     {
-        "github_action", "Switched to branch", "Deleted branch", "Pushed '",
-        "to origin", "Created pull request", "pull request #", "git push",
-        "git clone", "git commit", "запушен", "запушил", "закоммитил",
+        "github_action", "git push", "git pull", "git fetch", "git clone", "git commit",
+        "Switched to branch", "Deleted branch", "Created pull request", "pull request #",
+        "запушен", "запушил", "закоммитил", "склонировал", "склонирован", "клонирован", "подтянул",
     };
 
     private string? BuildToolIntegrityNote(

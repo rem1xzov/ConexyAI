@@ -45,6 +45,8 @@ internal static class AgentCapabilityTests
         // P2_DEFINITION_OF_DONE / P2_PLAN_FIRST: добавлено 2026-10-10.
         TestRegistry.Add("agent definition-of-done: changes without a verification are sent back then noted", DefinitionOfDoneAsync);
         TestRegistry.Add("agent plan: a multi-file batch without a plan is refused until todo_write", PlanFirstAsync);
+        // ANTI_LIE: добавлено 2026-10-10.
+        TestRegistry.Add("agent integrity: a claimed GitHub action that never ran is sent back", AntiLieAsync);
         TestRegistry.Add("agent rules: CONEXY.md / .conexy/rules.md are injected right after the system prompt", ProjectRulesInjectedAsync);
         TestRegistry.Add("agent vision: screenshot targets stay in the chat workspace or on public hosts (H9)", ScreenshotPolicyAsync);
         TestRegistry.Add("agent vision: the screenshot image follows all tool results of the turn (L9)", ScreenshotImageAfterToolResultsAsync);
@@ -656,6 +658,34 @@ internal static class AgentCapabilityTests
                 $"the plan refusal applies only to the first multi-file batch, got [{string.Join(" | ", allToolResults)}]");
             Assert(allToolResults.Last().Contains("a.txt"),
                 $"after the plan, edits actually run, got [{string.Join(" | ", allToolResults)}]");
+        }
+        finally
+        {
+            DeleteDir(root);
+        }
+    }
+
+    // ANTI_LIE: модель пишет «git pull выполнен», не вызвав github_action — это не финал, а отказ;
+    // после исчерпания бюджета ответ завершается честно.
+    private static async Task AntiLieAsync()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var llm = new ScriptLlm(
+                Text("Готово: git pull выполнен, репозиторий обновлён."),
+                Text("Согласен, заявил о том, чего не делал — закоммитил и запушил."),
+                Text("Не выполнял никакой GitHub-операции, вызвать github_action не удалось."));
+            var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(), todo: new FakeTodoService());
+
+            var result = await runner.RunLoopAsync(job, context, Guard());
+
+            Assert(llm.Requests.Count == 3, $"two false claims get two push-backs, then the honest turn, was {llm.Requests.Count}");
+            Assert((llm.Requests[1].Last().Text ?? "").Contains("[Anti-Lie]"),
+                "a first false claim must be sent back");
+            Assert((llm.Requests[2].Last().Text ?? "").Contains("[Anti-Lie]"),
+                "a second false claim must be sent back too");
+            Assert(result.Contains("Не выполнял никакой GitHub-операции"), $"the honest final answer stands, got '{result}'");
         }
         finally
         {
