@@ -1200,8 +1200,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
         if (name is "create_document" or "read_document_file")
             return kind.HasFlag(TaskKind.Documents);
 
+        // TOOL_ROUTING_SAFE: добавлено 2026-10-10 — github-инструменты больше НЕ режутся по задаче.
+        // Признак считается по ОДНОМУ текущему промпту, поэтому короткий follow-up («просто сделай»,
+        // «попробуй ещё раз») терял git-слова — и github_action ИСЧЕЗАЛ из набора. Модель честно
+        // писала «инструмент не выдан», а отказ bash советовал его же использовать. Экономия на двух
+        // схемах не стоит таких провалов: у Coder эти инструменты есть всегда.
         if (name is "github_action" or "github_api")
-            return kind.HasFlag(TaskKind.Github);
+            return true;
 
         return true;
     }
@@ -1356,6 +1361,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "запушен", "запушил", "закоммитил", "склонировал", "склонирован", "клонирован", "подтянул",
     };
 
+    // ANTI_LIE: слова-признания («не смог», «не выполнил», «отклонено») означают честный отчёт о неудаче,
+    // а не ложь. Без этого гейт бил бы по модели именно тогда, когда она говорит правду.
+    private static readonly string[] DenialMarkers =
+    {
+        "не смог", "не выполнил", "не выполнен", "не вызывал", "не удалось", "не делал", "не был",
+        "не выдан", "недоступ", "отклон", "не запускал", "невозможно",
+    };
+
     private string? BuildToolIntegrityNote(
         IReadOnlyDictionary<string, int> executedTools,
         IReadOnlyDictionary<string, int> failedTools,
@@ -1368,6 +1381,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         if (string.IsNullOrWhiteSpace(finalText))
             return null;
         if (!ToolClaimMarkers.Any(m => finalText.Contains(m, StringComparison.OrdinalIgnoreCase)))
+            return null;
+
+        // Честное «не смог / не выполнил / не вызывал / не выдан» — это признание, а не ложь.
+        if (DenialMarkers.Any(m => finalText.Contains(m, StringComparison.OrdinalIgnoreCase)))
             return null;
 
         var githubCalls = executedTools.GetValueOrDefault("github_action");

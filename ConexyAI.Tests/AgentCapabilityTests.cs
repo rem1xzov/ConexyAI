@@ -674,7 +674,7 @@ internal static class AgentCapabilityTests
         {
             var llm = new ScriptLlm(
                 Text("Готово: git pull выполнен, репозиторий обновлён."),
-                Text("Согласен, заявил о том, чего не делал — закоммитил и запушил."),
+                Text("Тогда закоммитил всё и запушил в main."),
                 Text("Не выполнял никакой GitHub-операции, вызвать github_action не удалось."));
             var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(), todo: new FakeTodoService());
 
@@ -1341,8 +1341,10 @@ internal static class AgentCapabilityTests
                 "a non-browser task must not be offered browser_* tools");
             Assert(!llm.AdvertisedTools.Contains("create_document") && !llm.AdvertisedTools.Contains("read_document_file"),
                 "a non-document task must not be offered document tools");
-            Assert(!llm.AdvertisedTools.Contains("github_action") && !llm.AdvertisedTools.Contains("github_api"),
-                "a non-github task must not be offered github tools");
+            // TOOL_ROUTING_SAFE: github-инструменты у Coder не режутся — иначе короткий follow-up
+            // («просто сделай») терял их и git-задача проваливалась.
+            Assert(llm.AdvertisedTools.Contains("github_action") && llm.AdvertisedTools.Contains("github_api"),
+                "github tools stay available for every coder task");
         }
         finally
         {
