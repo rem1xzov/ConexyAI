@@ -61,8 +61,13 @@ public static class AgentToolRedirect
             var sub = GitSubcommand(words);
             return sub switch
             {
-                "push" or "pull" or "fetch" or "remote" or "submodule" or "ls-remote" or "credential" =>
+                // Сетевые/пишущие операции git в песочнице без креденшелов — только через github_action.
+                "push" or "pull" or "fetch" or "submodule" or "ls-remote" =>
                     GithubRedirect(segment),
+                // `git remote -v`/`show` — безобидное чтение, его нельзя отклонять (ложное «защита от
+                // утечки токена» только сбивало модель). Блокируем лишь remote с кредами в URL.
+                "remote" when CredentialedClone.IsMatch(segment) => CredentialSmugglingRedirect(segment),
+                "credential" => CredentialSmugglingRedirect(segment),
                 "clone" when CredentialedClone.IsMatch(segment) => CredentialSmugglingRedirect(segment),
                 "config" when CredentialConfig.IsMatch(segment) => CredentialSmugglingRedirect(segment),
                 _ => null,
@@ -152,11 +157,13 @@ public static class AgentToolRedirect
     private static string Third(string[] words) => words.Length > 2 ? words[2].ToLowerInvariant() : string.Empty;
 
     private static string GithubRedirect(string command) =>
-        $"Отклонено: `{command}` — у песочницы нет git-креденшелов (это by design), поэтому операции с " +
-        "GitHub здесь невозможны. Используй инструмент `github_action` (clone_repo, create_branch, " +
-        "switch_branch, commit_and_push, create_pull_request, delete_branch) — он работает с Personal " +
-        "Access Token пользователя, который сервер подставляет сам. Для чтения GitHub без клона " +
-        "(issues, PR, ветки, CI) используй `github_api`. Не ищи токен в bash/env и не пробуй обойти это.";
+        $"Отклонено: `{command}` — у песочницы намеренно НЕТ git-креденшелов, поэтому сетевые и пишущие " +
+        "операции git здесь не выполняются. Используй `github_action` (токен пользователя сервер подставляет " +
+        "сам): `clone_repo` — свежая копия; `fetch`/`pull` — ОБНОВИТЬ уже склонированный репозиторий " +
+        "(передай `repo_folder` с папкой клона, не клонируй заново); `create_branch`/`switch_branch`/" +
+        "`commit_and_push`/`merge_branch`/`create_pull_request`/`delete_branch`. Для чтения GitHub без клона " +
+        "(issues, PR, ветки, коммиты, CI) — `github_api`. Не ищи токен в bash/env/.netrc и не советуй " +
+        "«пробросить токен в песочницу».";
 
     private static string CredentialSmugglingRedirect(string command) =>
         $"Отклонено: `{command}` — креды нельзя подсовывать в песочницу. Убери токен из URL/конфига git и " +

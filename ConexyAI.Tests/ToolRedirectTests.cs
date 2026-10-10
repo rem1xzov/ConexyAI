@@ -24,20 +24,24 @@ internal static class ToolRedirectTests
         Assert(Refused("git -C /repo push"), "git push with -C must be refused");
         Assert(Refused("cd /repo && git push"), "git push after && must be refused");
         Assert(Refused("sudo git push"), "sudo git push must be refused");
-        Assert(Refused("git pull"), "git pull must be refused");
-        Assert(Refused("git fetch --all"), "git fetch must be refused");
-        Assert(Refused("git remote add origin url"), "git remote must be refused");
+        Assert(Refused("git pull"), "git pull must be refused (use github_action pull)");
+        Assert(Refused("git fetch --all"), "git fetch must be refused (use github_action fetch)");
         Assert(Refused("gh pr create --fill"), "gh must be refused");
         Assert(Refused("git clone https://x-access-token:ghp_secret@github.com/a/b.git"),
             "a credentialed clone must be refused");
         Assert(Refused("git config --global credential.helper store"),
             "credential.helper config must be refused");
+        Assert(Refused("git remote set-url origin https://x-access-token:ghp_secret@github.com/a/b.git"),
+            "a credentialed remote must be refused");
 
-        // Локальные и публичные операции трогать нельзя.
+        // Локальные, публичные и безобидные read-only операции трогать нельзя.
         Assert(!Refused("git status"), "git status must be allowed");
         Assert(!Refused("git diff --stat"), "git diff must be allowed");
         Assert(!Refused("git log --oneline -5"), "git log must be allowed");
         Assert(!Refused("git add . && git commit -m x"), "local add/commit must be allowed");
+        Assert(!Refused("git remote -v"), "git remote -v must be allowed (read-only)");
+        Assert(!Refused("git remote add origin https://github.com/owner/public.git"),
+            "a plain remote add must be allowed");
         Assert(!Refused("git clone https://github.com/owner/public.git"), "a public clone must be allowed");
         return Task.CompletedTask;
     }
