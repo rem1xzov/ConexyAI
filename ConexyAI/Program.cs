@@ -144,7 +144,13 @@ builder.Services.Configure<SandboxOptions>(builder.Configuration.GetSection(Sand
 builder.Services.Configure<SmtpOptions>(options =>
 {
     builder.Configuration.GetSection(SmtpOptions.SectionName).Bind(options);
-    options.Password = builder.Configuration[SmtpOptions.PasswordEnvVar] ?? "";
+    // EMAIL_VERIFICATION: пароль приходит одним из двух путей — напрямую переменной SMTP_PASSWORD
+    // либо как Smtp__Password (именно так его передаёт docker-compose.prod.yml, где он биндится в
+    // Smtp:Password). Раньше эта строка безусловно затирала уже привязанное значение пустой строкой,
+    // потому что в контейнере переменной SMTP_PASSWORD нет — и почта навсегда считалась
+    // ненастроенной (регистрация отвечала 503 email_not_configured). Берём то, что реально задано.
+    if (string.IsNullOrWhiteSpace(options.Password))
+        options.Password = builder.Configuration[SmtpOptions.PasswordEnvVar] ?? "";
 });
 // LEGAL_DOCS: добавлено 2026-09-26 — реквизиты оператора для публичных правовых документов.
 // Приходят из окружения (Operator__Name, Operator__Inn, …), чтобы не попадать в репозиторий, образ
