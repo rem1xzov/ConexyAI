@@ -302,7 +302,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         Задача готова, только когда результат проверен. Запрещено:
         - **НЕ ВЫДУМЫВАЙ ФАКТЫ.** Не придумывай цифры, даты, версии, API, флаги, цитаты, источники. Не знаешь — скажи «не уверен» и проверь через `web_search`/документы/файлы. Не утверждай, что чего-то не существует, не проверив поиском.
         - **Не ври о действиях.** Нельзя говорить, что вызвал инструмент, проверил, собрал, прогнал тест или запушил, если этого не было. Ошибку инструмента приводи текстом как есть и не выдумывай причину. Не проверял — так и скажи.
-        - **Не сдавай красную сборку за готовое.** Либо доведи проверку до зелёной, либо прямо назови, что и почему всё ещё падает.
+        - **Не сдавай красную сборку и не завершай без проверки.** Если изменил код — сначала прогони сборку/тесты/линтер и доведи до зелёного; либо прямо назови, что и почему всё ещё падает или почему проверка неприменима. Система сама припишет к ответу результат проверки.
 
         ## Формат ответа
         Короткое резюме после задачи: что изменено, что показали финальная сборка/тесты, известные ограничения и следующие шаги. Live Action Status не пересказывай.
@@ -337,6 +337,16 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "[Plan Required] Задача затрагивает несколько файлов или требует цикла «сборка → исправление», а плана нет. " +
         "Прежде чем продолжать, вызови `todo_write`: перечисли все шаги (уже сделанные — `completed`, текущий — `in_progress`, " +
         "остальные — `pending`) и дальше обновляй статусы после каждого ключевого этапа.";
+
+    // P2_DEFINITION_OF_DONE: добавлено 2026-10-10 — отказ завершить прогон, если файлы изменены,
+    // но ни одной проверки (сборка/тесты/линтер) не запускалось. Одно напоминание, затем результат
+    // всё равно отдаётся — но с системной припиской «не проверено».
+    private const string MissingVerificationPrompt =
+        "[Definition of Done] Ты изменил файлы, но за прогон не запускалось ни одной проверки. Прежде чем завершать: " +
+        "запусти сборку (`bash: dotnet build` / `npm run build`) или тесты (`run_tests`) / проверку типов и линтера " +
+        "(`get_diagnostics`) и добейся успеха. Если проверка для этой задачи неприменима (например, изменён только текст " +
+        "или конфиг без проекта для сборки) — прямо скажи это в ответе и завершай.";
+    private const int MaxVerificationNudges = 1;
 
     // PROJECT_RULES: добавлено 2026-09-24 — файлы правил проекта в корне рабочей области чата, в порядке
     // приоритета, и их бюджет в промпте (каждый файл и все вместе).
@@ -523,6 +533,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // PLAN_REQUIRED: добавлено 2026-09-24
         var planWritten = false;
         var planNudged = false;
+        // P2_DEFINITION_OF_DONE: сколько раз мы просили проверить изменения перед завершением.
+        var verificationNudged = 0;
 
         // ITERATION_WRAPUP: добавлено 2026-10-06 — на последнем шаге просим модель подвести итог,
         // и только один раз (иначе на перезапуске этого же шага подсказка добавилась бы дважды).
@@ -668,6 +680,20 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         selfCorrections, buildHealth.FailingChecks, taskId);
                 }
 
+                // P2_DEFINITION_OF_DONE: изменения без единой проверки — один отказ завершить.
+                // Красная сборка сюда не доходит: она уже прошла выше (и означает, что проверка была).
+                if (_profile.AuditsCode && changedFiles.Count > 0 && !buildHealth.AnyVerificationRan
+                    && verificationNudged < MaxVerificationNudges)
+                {
+                    verificationNudged++;
+                    _logger.LogInformation(
+                        "Agent definition-of-done: changes without any verification; asking to run a check. task={TaskId}", taskId);
+                    await group.SendAsync("OnLog", "[Definition of Done] Changes made but nothing was built or tested — asking for a check.", ct);
+                    await SendAgentStatusAsync(taskId, "thinking", "Изменения не проверены — запускаю проверку…", ct: ct);
+                    messages.Add(new ChatMessage("system", MissingVerificationPrompt));
+                    continue;
+                }
+
                 var finalText = ExtractTextContent(responseMessage);
 
                 // Maker-Checker only applies to real code changes. A pure dialog reply
@@ -710,14 +736,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         taskId);
                 }
 
-                // SELF_CORRECTION: an honest finish — what still fails is said in the answer itself.
-                var redNote = buildHealth.IsRed ? buildHealth.BuildStillFailingNote(selfCorrections) : null;
+                // P2_DEFINITION_OF_DONE: системная приписка о состоянии проверки — красная сборка,
+                // «не проверено» или подтверждённый зелёный результат.
+                var verificationNote = BuildVerificationNote(changedFiles.Count, buildHealth, selfCorrections, _profile.AuditsCode);
 
                 // STREAM_TOKENS: добавлено 2026-09-20 — the answer already reached the client
                 // token by token while the turn streamed, so only a turn that produced no text
-                // at all needs a fallback line here (and never "done" while the build is red).
+                // at all needs a fallback line here (and never "done" while unverified or red).
                 var answer = string.IsNullOrWhiteSpace(finalText)
-                    ? redNote is null ? "Готово. Задача выполнена." : string.Empty
+                    ? verificationNote is not null && !buildHealth.IsGreen ? string.Empty : "Готово. Задача выполнена."
                     : finalText;
 
                 // TOOL_INTEGRITY: машинная (не модельная) приписка о том, что реально вызывалось.
@@ -731,9 +758,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     await group.SendAsync("OnContentToken", answer, ct);
                 }
 
-                if (redNote is not null)
+                if (verificationNote is not null)
                 {
-                    await StreamNoteAsync(group, answer, redNote, ct);
+                    await StreamNoteAsync(group, answer, verificationNote, ct);
                 }
 
                 if (integrityNote is not null)
@@ -760,11 +787,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // No file modifications were made: the model's text is the whole answer.
                 if (changedFiles.Count == 0)
                 {
-                    return AppendNote(answer, JoinNotes(naturalTokenNote, redNote, integrityNote));
+                    return AppendNote(answer, JoinNotes(naturalTokenNote, verificationNote, integrityNote));
                 }
 
                 // File changes were made: return the final report plus a summary card.
-                return BuildFinalReport(AppendNote(finalText, JoinNotes(naturalTokenNote, redNote, integrityNote)), changedFiles, executedCommands);
+                return BuildFinalReport(AppendNote(finalText, JoinNotes(naturalTokenNote, verificationNote, integrityNote)), changedFiles, executedCommands);
             }
 
             // AGENT_TOOL_FAILURES: инструменты, упавшие именно в этом ходе (для одного сообщения
@@ -780,6 +807,23 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var hookedErrorTools = new HashSet<string>(StringComparer.Ordinal);
             var filesBeforeBatch = new HashSet<string>(changedFiles, StringComparer.Ordinal);
 
+            // P2_PLAN_FIRST: многофайловая работа без плана — сначала план. Правки этого батча не
+            // выполняем: каждому вызову отдаём отказ-подсказку (протокол tool-ответов остаётся целым,
+            // ведь assistant(tool_calls) уже в messages), и модель обязана вызвать `todo_write` до
+            // правок. Срабатывает один раз (planNudged).
+            string? planRefusal = null;
+            if (_profile.EnforcesPlan && !planWritten && !planNudged)
+            {
+                var batchFiles = FilesTouchedByBatch(responseMessage.ToolCalls);
+                if (batchFiles.Count >= 2 || (batchFiles.Count >= 1 && changedFiles.Count >= 1))
+                {
+                    planNudged = true;
+                    planRefusal = PlanRequiredPrompt;
+                    _logger.LogInformation("Agent plan: multi-file batch without a plan; asking for todo_write first. task={TaskId}", taskId);
+                    await group.SendAsync("OnLog", "[Plan] Multi-step work without a plan — asking for todo_write before edits.", ct);
+                }
+            }
+
             foreach (var toolCall in responseMessage.ToolCalls)
             {
                 var toolName = toolCall.Function.Name;
@@ -790,7 +834,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // LOOP_GUARD: повтор одного и того же и исчерпанный интернет-бюджет проверяются ДО
                 // вызова инструмента. Проверка после запуска была бы бесполезной: команда уже
                 // выполнилась в четвёртый раз (и снова сожгла время), а отказ пришёл бы к её результату.
-                var refusal = toolAllowed ? loopGuard.Refuse(toolName, toolCall.Function.Arguments) : null;
+                // P2_PLAN_FIRST: отказ-план имеет приоритет над прочими (правки не выполняются вовсе).
+                var refusal = planRefusal ?? (toolAllowed ? loopGuard.Refuse(toolName, toolCall.Function.Arguments) : null);
 
                 if (toolAllowed && refusal is null)
                 {
@@ -801,7 +846,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     "OnLog",
                     refusal is null
                         ? $"[Tool Call] Executing {toolName}..."
-                        : $"[Loop Guard] {toolName} не выполняется: {refusal}",
+                        : planRefusal is not null
+                            ? $"[Plan] {toolName} не выполняется: сначала нужен план."
+                            : $"[Loop Guard] {toolName} не выполняется: {refusal}",
                     ct);
 
                 ConexyToolResult result;
@@ -1005,7 +1052,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // Failed, а всё, что модель уже написала, пропадало. Исчерпанный лимит шагов или бюджет
         // ошибок — не повод выбрасывать ответ: отдаём написанное и честно говорим, что ещё падает.
         var accumulated = _streamedOutput.ToString().Trim();
-        var stillFailing = buildHealth.IsRed ? buildHealth.BuildStillFailingNote(selfCorrections) : null;
+        // P2_DEFINITION_OF_DONE: и на аварийном завершении приписка о проверке строится системой.
+        var stillFailing = BuildVerificationNote(changedFiles.Count, buildHealth, selfCorrections, _profile.AuditsCode);
         // TOKEN_SOFT_LIMIT: изменено 2026-10-06 — прогон больше НЕ обрывается на лимите, поэтому
         // приписка сообщает, что задача всё же доведена до конца.
         var tokenLimitNote = tokenBudgetExceeded ? TokenLimitNote(remainingTokens, runTokens, poolResetsAt) : null;
@@ -1227,6 +1275,26 @@ public class ConexyAgentRunner : IConexyAgentRunner
         note is null
             ? text
             : string.IsNullOrWhiteSpace(text) ? note : text.TrimEnd() + "\n\n" + note;
+
+    // P2_DEFINITION_OF_DONE: добавлено 2026-10-10 — системная приписка о результате проверки.
+    // Строится по ФАКТИЧЕСКИМ командам прогона (BuildHealth), а не по словам модели, поэтому её
+    // нельзя пропустить или переписать. Возвращает null там, где проверка не ожидается
+    // (нет изменений файлов или режим без кода).
+    private static string? BuildVerificationNote(int changedFiles, BuildHealth health, int attempts, bool enforce)
+    {
+        // Красная проверка — всегда: она не должна потеряться, даже если файлы не менялись.
+        if (health.IsRed)
+            return health.BuildStillFailingNote(attempts);
+
+        if (!enforce || changedFiles == 0)
+            return null;
+
+        if (!health.AnyVerificationRan)
+            return "---\n**Изменения не проверены.** За прогон не запускалось ни одной сборки, тестов или линтера — " +
+                   "результат не подтверждён. Запустите проверку вручную или попросите меня её выполнить.";
+
+        return "---\n**Проверено системой:** сборка/тесты/линтер завершились успешно.";
+    }
 
     // TOKEN_SOFT_LIMIT: добавлено 2026-09-27, переписано 2026-10-06
     /// <summary>
@@ -3257,6 +3325,58 @@ public class ConexyAgentRunner : IConexyAgentRunner
         return (command, succeeded);
     }
 
+    // P2_PLAN_FIRST: какие файлы рабочей области изменит батч вызовов (best-effort по аргументам).
+    // Нужно только чтобы понять, многофайловая ли это работа: apply_patch разбирается по '+++ b/';
+    // для str_replace_editor учитываются только команды, меняющие файл (не view/undo).
+    private static HashSet<string> FilesTouchedByBatch(IReadOnlyList<LlmToolCall> calls)
+    {
+        var files = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var call in calls)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(call.Function.Arguments);
+                var root = doc.RootElement;
+                switch (call.Function.Name)
+                {
+                    case "file_write":
+                    case "file_patch":
+                        AddPath(files, GetString(root, "path"));
+                        break;
+                    case "str_replace_editor":
+                        var command = GetString(root, "command");
+                        if (command is "create" or "str_replace" or "insert")
+                            AddPath(files, GetString(root, "path"));
+                        break;
+                    case "apply_patch":
+                        var patch = GetString(root, "patch");
+                        if (!string.IsNullOrEmpty(patch) && Regex.IsMatch(patch, @"^\+\+\+\s", RegexOptions.Multiline))
+                        {
+                            foreach (Match m in Regex.Matches(patch, @"^\+\+\+\s+(?:b/)?(\S+)", RegexOptions.Multiline))
+                                files.Add(m.Groups[1].Value);
+                        }
+                        else
+                        {
+                            AddPath(files, GetString(root, "path"));
+                        }
+                        break;
+                }
+            }
+            catch (JsonException)
+            {
+                // Malformed args are reported by the tool itself; here they just say nothing about files.
+            }
+        }
+        return files;
+    }
+
+    private static void AddPath(HashSet<string> files, string path)
+    {
+        var p = path?.Trim();
+        if (!string.IsNullOrEmpty(p))
+            files.Add(p);
+    }
+
     private static string? Optional(JsonElement root, string name)
     {
         var value = GetString(root, name);
@@ -3926,6 +4046,14 @@ public sealed class BuildHealth
 
     public bool IsRed => _failing.Count > 0;
 
+    // P2_DEFINITION_OF_DONE: добавлено 2026-10-10 — запускалась ли за прогон хоть одна
+    // проверочная команда (сборка/тесты/линтер). Нужно, чтобы отличить «проверено и зелено»
+    // от «не проверено вообще»: без проверки завершать задачу нельзя.
+    public bool AnyVerificationRan { get; private set; }
+
+    /// <summary>Проверка запускалась и сейчас ничего не падает.</summary>
+    public bool IsGreen => AnyVerificationRan && !IsRed;
+
     /// <summary>Failing checks, for logs (metadata only — no command text, no output).</summary>
     public string FailingChecks => string.Join(", ", _failing.Keys);
 
@@ -3936,6 +4064,8 @@ public sealed class BuildHealth
         var verification = VerificationCommands.Classify(command);
         if (verification is null)
             return BuildHealthChange.None;
+
+        AnyVerificationRan = true;
 
         bool failed;
         if (!verification.ExitCodeMasked)

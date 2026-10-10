@@ -42,6 +42,9 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent self-correction: build/test commands are recognised, masked exit codes are read from the output", VerificationCommandsAsync);
         TestRegistry.Add("agent self-correction: a red build is sent back, then the run ends honestly", SelfCorrectionBudgetAsync);
         TestRegistry.Add("agent self-correction: a later green build clears the gate", SelfCorrectionClearsWhenGreenAsync);
+        // P2_DEFINITION_OF_DONE / P2_PLAN_FIRST: добавлено 2026-10-10.
+        TestRegistry.Add("agent definition-of-done: changes without a verification are sent back then noted", DefinitionOfDoneAsync);
+        TestRegistry.Add("agent plan: a multi-file batch without a plan is refused until todo_write", PlanFirstAsync);
         TestRegistry.Add("agent rules: CONEXY.md / .conexy/rules.md are injected right after the system prompt", ProjectRulesInjectedAsync);
         TestRegistry.Add("agent vision: screenshot targets stay in the chat workspace or on public hosts (H9)", ScreenshotPolicyAsync);
         TestRegistry.Add("agent vision: the screenshot image follows all tool results of the turn (L9)", ScreenshotImageAfterToolResultsAsync);
@@ -592,6 +595,74 @@ internal static class AgentCapabilityTests
         }
     }
 
+    // ---------------------------------------------------------------- P2: definition of done + plan
+
+    // P2_DEFINITION_OF_DONE: файлы изменены, но ни одной проверки не запускалось — система один раз
+    // отправляет на доработку, затем честно приписывает «не проверено» и не пишет «Готово».
+    private static async Task DefinitionOfDoneAsync()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var llm = new ScriptLlm(
+                Turn(Call("w", "file_write", "{\"path\":\"a.txt\",\"content\":\"x\"}")),
+                Text("Готово, файл изменён."),
+                Text("Проверка тут неприменима — изменил только текст."));
+            var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(), todo: new FakeTodoService());
+
+            var result = await runner.RunLoopAsync(job, context, Guard());
+
+            Assert(llm.Requests.Count == 3, $"tool turn + one push-back + final, was {llm.Requests.Count}");
+            var pushBack = llm.Requests[2].Last();
+            Assert(pushBack.Role == "system" && (pushBack.Text ?? "").Contains("[Definition of Done]"),
+                $"finishing without a verification must be sent back, got '{pushBack.Text}'");
+            Assert(result.Contains("Изменения не проверены"),
+                $"the answer carries the system 'not verified' note, got '{result}'");
+        }
+        finally
+        {
+            DeleteDir(root);
+        }
+    }
+
+    // P2_PLAN_FIRST: многофайловый батч без плана не выполняется — отдаётся отказ-подсказка; после
+    // todo_write правки идут нормально.
+    private static async Task PlanFirstAsync()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var todo = new FakeTodoService();
+            var llm = new ScriptLlm(
+                Turn(
+                    Call("a", "file_write", "{\"path\":\"a.txt\",\"content\":\"x\"}"),
+                    Call("b", "file_write", "{\"path\":\"b.txt\",\"content\":\"y\"}")),
+                Turn(Call("p", "todo_write", "{\"todos\":[{\"id\":\"1\",\"content\":\"Правка A\",\"status\":\"in_progress\"},{\"id\":\"2\",\"content\":\"Правка B\",\"status\":\"pending\"}]}")),
+                Turn(Call("a2", "file_write", "{\"path\":\"a.txt\",\"content\":\"x\"}")),
+                Text("Готово."));
+            var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(), todo: todo);
+
+            await runner.RunLoopAsync(job, context, Guard());
+
+            // Первый многофайловый батч отклонён планом.
+            var firstBatch = llm.Requests[1].Where(m => m.Role == "tool").Select(m => m.Text ?? "").ToList();
+            Assert(firstBatch.Count == 2 && firstBatch.All(t => t.Contains("[Plan Required]")),
+                $"a multi-file batch without a plan must be refused with the plan prompt, got [{string.Join(" | ", firstBatch)}]");
+            Assert(todo.Writes.Count == 1, $"the model then writes a plan, was {todo.Writes.Count}");
+
+            // После плана правки уже выполняются — плановый отказ был только для первого батча.
+            var allToolResults = llm.Requests[3].Where(m => m.Role == "tool").Select(m => m.Text ?? "").ToList();
+            Assert(allToolResults.Count(t => t.Contains("[Plan Required]")) == 2,
+                $"the plan refusal applies only to the first multi-file batch, got [{string.Join(" | ", allToolResults)}]");
+            Assert(allToolResults.Last().Contains("a.txt"),
+                $"after the plan, edits actually run, got [{string.Join(" | ", allToolResults)}]");
+        }
+        finally
+        {
+            DeleteDir(root);
+        }
+    }
+
     // ---------------------------------------------------------------- project rules
 
     private static async Task ProjectRulesInjectedAsync()
@@ -1064,7 +1135,8 @@ internal static class AgentCapabilityTests
         IAgentHooksService? hooks = null,
         IMcpRegistry? mcp = null,
         string prompt = "Сделай задачу",
-        ISubscriptionService? subscription = null)
+        ISubscriptionService? subscription = null,
+        IConexyTodoService? todo = null)
     {
         var workspace = new ConexyWorkspaceService(
             Options.Create(new WorkspaceOptions { RootPath = workspaceRoot }),
@@ -1078,7 +1150,7 @@ internal static class AgentCapabilityTests
             githubService: null!,
             editorService: null!,
             bashService: bash!,
-            todoService: null!,
+            todoService: todo!,
             webSearchService: null!,
             hub,
             dangerousCommandClassifier: approval,
@@ -1127,6 +1199,20 @@ internal static class AgentCapabilityTests
         {
             DeleteDir(root);
         }
+    }
+
+    /// <summary>P2_PLAN_FIRST: заглушка todo-сервиса — считает вызовы, всегда успешна.</summary>
+    private sealed class FakeTodoService : IConexyTodoService
+    {
+        public List<TodoWriteRequest> Writes { get; } = new();
+
+        public Task<TodoWriteResult> WriteAsync(Guid sessionId, TodoWriteRequest request, CancellationToken ct = default)
+        {
+            Writes.Add(request);
+            return Task.FromResult(new TodoWriteResult { Success = true });
+        }
+
+        public void Clear(Guid sessionId) { }
     }
 
     /// <summary>Заглушка лимитов: крошечный бюджет и большой расход на каждый ход — лимит рвётся сразу.</summary>
