@@ -306,7 +306,6 @@ builder.Services.AddSingleton<IWorkspacePathValidator, WorkspacePathValidator>()
 builder.Services.AddSingleton<IConexyEditorStateService, ConexyEditorStateService>();
 builder.Services.AddSingleton<IIdeTerminalService, IdeTerminalService>();
 builder.Services.AddSingleton<IIdeFileService, IdeFileService>();
-builder.Services.AddSingleton<IConexyRunService, ConexyRunService>();
 builder.Services.AddSingleton<IConexyVisionService, ConexyVisionService>();
 // BROWSER_AUTOMATION: один Chromium на процесс (скриншоты + браузерные инструменты) и DOM-автоматизация.
 builder.Services.AddSingleton<IChromiumHost, ChromiumHost>();

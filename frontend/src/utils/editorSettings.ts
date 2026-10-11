@@ -4,9 +4,9 @@ import { useEffect, useState } from 'react';
 // размер табов) и переназначение горячих клавиш. Хранятся в localStorage и рассылаются подписчикам,
 // поэтому изменение применяется сразу во всех открытых редакторах.
 
-export type HotkeyAction = 'save' | 'format' | 'terminal' | 'palette' | 'run' | 'search';
+export type HotkeyAction = 'save' | 'format' | 'terminal' | 'palette' | 'search';
 
-export const HOTKEY_ACTIONS: HotkeyAction[] = ['save', 'format', 'terminal', 'palette', 'run', 'search'];
+export const HOTKEY_ACTIONS: HotkeyAction[] = ['save', 'format', 'terminal', 'palette', 'search'];
 
 export interface EditorSettings {
   /** Editor font size in px (10..24). */
@@ -25,7 +25,6 @@ export const DEFAULT_SETTINGS: EditorSettings = {
     format: 'Shift+Alt+F',
     terminal: 'Ctrl+`',
     palette: 'Ctrl+K',
-    run: 'Ctrl+F5',
     search: 'Ctrl+Shift+F',
   },
 };

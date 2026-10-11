@@ -200,7 +200,6 @@
     "action_format": "Format document",
     "action_terminal": "Toggle terminal",
     "action_palette": "Command palette",
-    "action_run": "Run project",
     "action_search": "Search in files"
   },
   "memory": {
@@ -469,10 +468,8 @@
     "upgrade": "Increase the limit"
   },
   "toast": {
-    "runProject": "Project is launching in a separate console window",
     "confirmFailed": "Failed to submit the command decision",
-    "confirmExpired": "The decision was not applied: this command is no longer waiting for confirmation",
-    "runError": "Launch error: {{message}}"
+    "confirmExpired": "The decision was not applied: this command is no longer waiting for confirmation"
   },
   "agent": {
     "searching": "Searching the web: {{query}}",
@@ -559,7 +556,6 @@
     "counter": "{{index}} of {{total}}"
   },
   "palette": {
-    "runProject": "Run project",
     "openTerminal": "Open terminal",
     "toggleTodo": "Toggle todo panel",
     "saveFile": "Save file",
@@ -655,10 +651,6 @@
     "showIde": "Show Workspace IDE",
     "hideIde": "Hide Workspace IDE",
     "title": "Workspace",
-    "run": "Run",
-    "running": "Running…",
-    "runTitle": "Run project (Ctrl+F5)",
-    "runAria": "Run project",
     "saving": "Saving…",
     "saved": "Saved",
     "saveError": "Save error",
@@ -687,7 +679,6 @@
     "emptyText": "Describe a task to the agent — it will create files, and the editor, project tree and edit status will appear here. Or create a file manually.",
     "createFile": "Create file",
     "commands": "commands",
-    "launch": "run",
     "generateTitle": "Run a task to generate files",
     "generateText": "Send a request to the agent to create your project.",
     "terminal": "Terminal",
@@ -704,8 +695,6 @@
     "outlineEmpty": "No symbols found in this file.",
     "outlineFailed": "Could not build the file outline.",
     "outlineRefresh": "Refresh outline",
-    "windowsTerminal": "The interactive terminal is unavailable in the Windows dev build — it will be available on the Linux production build. Use the Run button to launch the project.",
-    "terminalEmpty": "Terminal is empty. Type a command or press Run.",
     "statusEmpty": "Agent actions will appear here once it starts working.",
     "todoEmpty": "The plan will appear when the agent starts a multi-step task.",
     "noProblems": "No problems have been detected in the workspace.",
@@ -739,8 +728,6 @@
     "uploading": "Uploading project…",
     "uploaded": "Project uploaded",
     "uploadError": "Upload error: {{message}}",
-    "runCommandTitle": "Run command",
-    "runCommandMsg": "Could not determine the run command. Enter it manually:",
     "noFileToSave": "No open file to save",
     "emptyDownload": "Workspace is empty — nothing to download",
     "menuFile": "File",

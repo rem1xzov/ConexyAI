@@ -43,7 +43,6 @@ import {
   CheckIcon,
   CloseIcon,
   DownloadIcon,
-  PlayIcon,
   RefreshIcon,
   SearchIcon,
   TerminalIcon,
@@ -68,9 +67,6 @@ interface WorkspacePanelProps {
   todos?: TodoItem[];
   style?: CSSProperties;
   onCursorChange?: (pos: { line: number; column: number; language: string }) => void;
-  onRunInSeparateWindow?: () => void;
-  // COWORK_MODE: Cowork produces documents, not programs — there is nothing to "Run".
-  hideRun?: boolean;
   // WORKSPACE_RACES: добавлено 2026-09-24 — сообщает, есть ли в открытом чате несохранённые файлы,
   // чтобы родитель мог спросить подтверждение ДО переключения чата. Без него панель сама спрашивает
   // сразу после переключения (правки к этому моменту уже отложены в памяти, ничего не теряется).
@@ -394,8 +390,6 @@ export function WorkspacePanel({
   todos = [],
   style,
   onCursorChange,
-  onRunInSeparateWindow,
-  hideRun,
   onDirtyChange,
   gitAuthorName,
   gitAuthorEmail,
@@ -422,11 +416,8 @@ export function WorkspacePanel({
   /** path -> the agent's version of a file the user was editing (waiting for "keep mine / take agent's"). */
   const [conflicts, setConflicts] = useState<Record<string, string>>({});
   const [zipping, setZipping] = useState(false);
-  const [runBusy, setRunBusy] = useState(false);
-  const [runError, setRunError] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<{ path: string; lines: number[]; nonce: number } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [isWindows, setIsWindows] = useState(false);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [leavePrompt, setLeavePrompt] = useState<{ chatId: string; files: string[] } | null>(null);
   const [leaveBusy, setLeaveBusy] = useState(false);
@@ -550,16 +541,6 @@ export function WorkspacePanel({
     });
   }
 
-  // Detect the backend host OS once so Run can adapt (Windows => visible console window).
-  useEffect(() => {
-    void signalrService
-      .getPlatform()
-      .then((p) => setIsWindows(p === 'windows'))
-      .catch(() => {
-        // Default to the Linux/pty behavior if the platform can't be determined.
-      });
-  }, []);
-
   const activeTab = tabs.find((t) => t.path === activePath) ?? null;
   const hasFiles = (listing?.files.length ?? 0) > 0;
   const dirtyPaths = new Set(tabs.filter(isDirty).map((t) => t.path));
@@ -676,7 +657,6 @@ export function WorkspacePanel({
     setDialog(null);
     setListing(null);
     setError(null);
-    setRunError(null);
     if (!terminalOpen) setBottomTab('todo');
     void loadFiles(sessionId);
 
@@ -1236,56 +1216,6 @@ export function WorkspacePanel({
     }
   }
 
-  async function handleRun() {
-    // Ctrl+F5 and the command palette reach this too, not only the (hidden) button.
-    const chatId = chatIdRef.current;
-    if (!chatId || runBusy || hideRun) return;
-    setRunBusy(true);
-    setRunError(null);
-    try {
-      // Subscribe to the task stream before running so its output/status events are
-      // received. On Windows the run opens a separate visible console window instead.
-      if (!isWindows) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        await signalrService.joinTask(chatId);
-      }
-
-      const res = await signalrService.runProject(chatId);
-      if (!isCurrentChat(chatId)) return;
-
-      if (res.needsManualConfig) {
-        setDialog({
-          kind: 'prompt',
-          title: t('workspace.runCommandTitle'),
-          message: t('workspace.runCommandMsg'),
-          placeholder: 'dotnet run',
-          onSubmit: (cmd) => {
-            void (async () => {
-              try {
-                const res2 = await signalrService.runProjectWithCommand(chatId, cmd);
-                if (res2.launchedInSeparateWindow) onRunInSeparateWindow?.();
-                else if (res2.error && isCurrentChat(chatId)) setRunError(res2.error);
-              } catch (e) {
-                if (isCurrentChat(chatId)) setRunError(humanError(e, t));
-              }
-            })();
-          },
-        });
-      } else if (res.error) {
-        setRunError(res.error);
-        // RUN_CRASH: the toolbar truncates the error to one short line; the refusal explains what
-        // to do instead, so it is shown in full once.
-        notify(res.error);
-      } else if (res.launchedInSeparateWindow) {
-        onRunInSeparateWindow?.();
-      }
-    } catch (e) {
-      if (isCurrentChat(chatId)) setRunError(humanError(e, t));
-    } finally {
-      setRunBusy(false);
-    }
-  }
-
   // SANDBOX_TERMINAL: добавлено 2026-09-24 (ТЗ-2 §6) — кнопка на панели инструментов открывает
   // терминал во вкладке нижней панели и закрывает его повторным нажатием.
   function toggleTerminal() {
@@ -1363,7 +1293,6 @@ export function WorkspacePanel({
   }
 
   // Keep stable references so the global shortcuts always invoke the latest handlers.
-  const runHandlerRef = useRef<() => void>(() => {});
   const terminalHandlerRef = useRef<() => void>(() => {});
   const saveHandlerRef = useRef<() => void>(() => {});
   // EDITOR_SETTINGS: хоткеи берутся из настроек и могут быть переназначены.
@@ -1371,7 +1300,6 @@ export function WorkspacePanel({
   const editorSettingsRef = useRef(editorSettings);
   editorSettingsRef.current = editorSettings;
   useEffect(() => {
-    runHandlerRef.current = handleRun;
     terminalHandlerRef.current = toggleTerminal;
     saveHandlerRef.current = () => {
       if (activePathRef.current) void saveTab(activePathRef.current);
@@ -1390,11 +1318,6 @@ export function WorkspacePanel({
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
       if (inPlainInput) return;
 
-      if (matchesHotkey(e, hk.run)) {
-        e.preventDefault();
-        runHandlerRef.current();
-        return;
-      }
       if (matchesHotkey(e, hk.terminal)) {
         e.preventDefault();
         e.stopPropagation();
@@ -1597,19 +1520,6 @@ export function WorkspacePanel({
           {sessionId && <span className="workspace__id">{sessionId.slice(0, 8)}…</span>}
         </div>
         <div className="workspace__actions">
-          {!hideRun && (
-            <button
-              className="workspace__run-btn"
-              onClick={() => void handleRun()}
-              disabled={!sessionId || runBusy}
-              title={t('workspace.runTitle')}
-              aria-label={t('workspace.runAria')}
-            >
-              <PlayIcon size={15} />
-              {runBusy ? t('workspace.running') : t('workspace.run')}
-            </button>
-          )}
-          {!hideRun && runError && <span className="workspace__run-error" title={runError}>{runError}</span>}
           {activeTab && (
             <span className={`workspace__save-status workspace__save-status--${activeSaveStatus}`}>
               {activeSaveStatus === 'saving' && t('workspace.saving')}
@@ -1902,9 +1812,6 @@ export function WorkspacePanel({
                   <span>
                     <kbd className="workspace__empty-kbd">Ctrl K</kbd> {t('workspace.commands')}
                   </span>
-                  <span>
-                    <kbd className="workspace__empty-kbd">Ctrl F5</kbd> {t('workspace.launch')}
-                  </span>
                 </div>
               </div>
             ) : (
@@ -2129,7 +2036,6 @@ export function WorkspacePanel({
         files={listing?.files ?? []}
         onClose={() => setPaletteOpen(false)}
         onOpenFile={(p) => void openFile(p)}
-        onRun={() => void handleRun()}
         onToggleTodo={() => setBottomTab('todo')}
         onToggleTerminal={toggleTerminal}
         onSave={() => activePath && void saveTab(activePath)}

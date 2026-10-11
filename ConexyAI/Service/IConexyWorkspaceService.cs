@@ -127,10 +127,4 @@ public interface IConexyWorkspaceService
     /// losing the failure silently.
     /// </summary>
     Task<IReadOnlyList<string>> SaveAttachmentsAsync(Guid chatId, IReadOnlyList<TaskAttachment>? attachments, CancellationToken ct = default);
-
-    /// <summary>Returns the persisted run command for a chat, or <c>null</c> if none is stored.</summary>
-    Task<string?> GetRunCommandAsync(Guid chatId, CancellationToken ct = default);
-
-    /// <summary>Persists the run command for a chat so it does not need to be re-detected on every run.</summary>
-    Task SetRunCommandAsync(Guid chatId, string command, CancellationToken ct = default);
 }

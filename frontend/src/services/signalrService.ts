@@ -1,6 +1,6 @@
 import * as signalR from '@microsoft/signalr';
 import { recoverFromUnauthorized } from '../api/client';
-import type { AgentStatusPayload, BuildProblemsPayload, FileCreatedPayload, PendingActionPayload, RunProjectErrorPayload, RunProjectResult, SearchStatusPayload, SignalrCallbacks, StopGenerationResult, SupportMessagePayload, TaskCompletedPayload, TerminalOutputPayload, TodoUpdatePayload, ToolActionEvent } from '../types/signalr';
+import type { AgentStatusPayload, BuildProblemsPayload, FileCreatedPayload, PendingActionPayload, SearchStatusPayload, SignalrCallbacks, StopGenerationResult, SupportMessagePayload, TaskCompletedPayload, TerminalOutputPayload, TodoUpdatePayload, ToolActionEvent } from '../types/signalr';
 
 // MULTI_TERMINAL: добавлено 2026-10-05 — вывод терминала адресуется конкретному терминалу чата.
 const MAIN_TERMINAL = 'main';
@@ -320,23 +320,6 @@ class SignalrService {
     return () => this.supportHandlers.delete(cb);
   }
 
-  // ---- Run project (Ctrl+F5) ----
-
-  async runProject(sessionId: string): Promise<RunProjectResult> {
-    await this.ensureConnected();
-    return await this.connection!.invoke<RunProjectResult>('RunProject', sessionId);
-  }
-
-  async runProjectWithCommand(sessionId: string, command: string): Promise<RunProjectResult> {
-    await this.ensureConnected();
-    return await this.connection!.invoke<RunProjectResult>('RunProjectWithCommand', sessionId, command);
-  }
-
-  async getPlatform(): Promise<string> {
-    await this.ensureConnected();
-    return await this.connection!.invoke<string>('GetPlatform');
-  }
-
   private build(): signalR.HubConnection {
     const connection = new signalR.HubConnectionBuilder()
       .withUrl('/hubs/conexy', {
@@ -485,7 +468,6 @@ class SignalrService {
     this.connection.on('OnCompleted', (payload: TaskCompletedPayload, scopeId?: string) => this.callbacks.onCompleted?.(payload, scopeId));
     this.connection.on('OnError', (error: string, scopeId?: string) => this.callbacks.onError?.(error, scopeId));
     this.connection.on('OnStopped', (taskId: string, scopeId?: string) => this.callbacks.onStopped?.(taskId, scopeId));
-    this.connection.on('RunProjectError', (payload: RunProjectErrorPayload) => this.callbacks.onRunProjectError?.(payload));
     this.connection.on('SearchStatus', (payload: SearchStatusPayload, scopeId?: string) => this.callbacks.onSearchStatus?.(payload, scopeId));
     this.connection.on('BuildProblems', (payload: BuildProblemsPayload, scopeId?: string) => this.callbacks.onProblems?.(payload, scopeId));
     // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
@@ -512,7 +494,7 @@ class SignalrService {
     // во время переподключения отваливалась вся работа через хаб — включая кнопку «Запустить»:
     // start() на соединении в состоянии Reconnecting бросает
     //   "Cannot start a HubConnection that is not in the 'Disconnected' state."
-    // Поэтому и RunProject, и StopGeneration, и JoinTask падали ровно тогда, когда связь как раз
+    // Поэтому и StopGeneration, и JoinTask падали ровно тогда, когда связь как раз
     // восстанавливалась. Теперь: дожидаемся, что идущий процесс сам разрешится, и только по-настоящему
     // разорванное соединение поднимаем вручную.
     const settled = await this.waitForSettled(conn, CONNECT_SETTLE_WAIT_MS);

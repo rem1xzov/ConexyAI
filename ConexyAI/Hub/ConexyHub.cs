@@ -12,7 +12,6 @@ namespace ConexyAI.Hub;
 public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
 {
     private readonly IIdeTerminalService _terminalService;
-    private readonly IConexyRunService _runService;
     private readonly IConexyCancellationRegistry _cancellations;
     private readonly IPendingActionService _pendingActions;
     // CHAT_OWNERSHIP: добавлено 2026-09-24 — ревью C1: каждый метод хаба проверяет владельца.
@@ -24,7 +23,6 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
 
     public ConexyHub(
         IIdeTerminalService terminalService,
-        IConexyRunService runService,
         IConexyCancellationRegistry cancellations,
         IPendingActionService pendingActions,
         IChatAccessService chatAccess,
@@ -34,7 +32,6 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
         ILogger<ConexyHub> logger)
     {
         _terminalService = terminalService;
-        _runService = runService;
         _cancellations = cancellations;
         _pendingActions = pendingActions;
         _chatAccess = chatAccess;
@@ -193,9 +190,6 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
         await _terminalService.StopAsync(sessionId, terminalId);
     }
 
-    /// <summary>Returns the backend host OS so the UI can adapt (e.g. Run behavior on Windows).</summary>
-    public string GetPlatform() => OperatingSystem.IsWindows() ? "windows" : "linux";
-
     // ---- Sandbox terminal (line mode) ----
     // SANDBOX_TERMINAL: добавлено 2026-09-24 — ТЗ 2, §6.
 
@@ -214,51 +208,6 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     {
         await EnsureChatOwnerAsync(chatId);
         return _sandboxTerminal.Cancel(chatId, terminalId);
-    }
-
-    // ---- Run project (Ctrl+F5) ----
-
-    /// <summary>Runs the chat's detected/persisted run command in the interactive pty.</summary>
-    public async Task<RunProjectResult> RunProject(Guid chatId)
-    {
-        _logger.LogInformation("RunProject invoked for chat {ChatId}", chatId);
-        await EnsureChatOwnerAsync(chatId);
-        try
-        {
-            return await _runService.RunAsync(chatId, ct: Context.ConnectionAborted);
-        }
-        catch (OperationCanceledException) when (Context.ConnectionAborted.IsCancellationRequested)
-        {
-            // Client disconnected mid-invoke — nothing to report, just stop cleanly.
-            return new RunProjectResult { NeedsManualConfig = false };
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "RunProject failed for chat {ChatId}", chatId);
-            await Clients.Caller.SendAsync("RunProjectError", new { chatId, message = ex.Message });
-            return new RunProjectResult { NeedsManualConfig = false, Error = ex.Message };
-        }
-    }
-
-    /// <summary>Persists a manually-entered run command and runs it in the interactive pty.</summary>
-    public async Task<RunProjectResult> RunProjectWithCommand(Guid chatId, string command)
-    {
-        _logger.LogInformation("RunProjectWithCommand invoked for chat {ChatId}", chatId);
-        await EnsureChatOwnerAsync(chatId);
-        try
-        {
-            return await _runService.RunAsync(chatId, command, Context.ConnectionAborted);
-        }
-        catch (OperationCanceledException) when (Context.ConnectionAborted.IsCancellationRequested)
-        {
-            return new RunProjectResult { NeedsManualConfig = false };
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "RunProjectWithCommand failed for chat {ChatId}", chatId);
-            await Clients.Caller.SendAsync("RunProjectError", new { chatId, message = ex.Message });
-            return new RunProjectResult { NeedsManualConfig = false, Error = ex.Message };
-        }
     }
 
     private Guid CallerId() =>

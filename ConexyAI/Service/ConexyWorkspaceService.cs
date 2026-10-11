@@ -363,55 +363,7 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             Directory.Delete(path, recursive: true);
         }
 
-        var runConfig = GetRunConfigPath(chatId);
-        if (File.Exists(runConfig))
-        {
-            File.Delete(runConfig);
-        }
         return Task.CompletedTask;
-    }
-
-    public Task<string?> GetRunCommandAsync(Guid chatId, CancellationToken ct = default)
-    {
-        var path = GetRunConfigPath(chatId);
-        if (!File.Exists(path))
-            return Task.FromResult<string?>(null);
-
-        try
-        {
-            var config = JsonSerializer.Deserialize<RunConfigFile>(File.ReadAllText(path));
-            return Task.FromResult(string.IsNullOrWhiteSpace(config?.Command) ? null : config.Command);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to read run config for chat {ChatId}.", chatId);
-            return Task.FromResult<string?>(null);
-        }
-    }
-
-    public async Task SetRunCommandAsync(Guid chatId, string command, CancellationToken ct = default)
-    {
-        try
-        {
-            var path = GetRunConfigPath(chatId);
-            await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new RunConfigFile { Command = command.Trim() }), ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to persist run command for chat {ChatId}", chatId);
-            throw;
-        }
-    }
-
-    // The run config is a sibling of the workspace directory (not inside it) so it never
-    // appears in the file explorer or the downloaded ZIP, while still being keyed by ChatId
-    // exactly like the workspace itself.
-    private string GetRunConfigPath(Guid chatId) =>
-        Path.Combine(_baseWorkspacesDir, chatId.ToString("N") + ".run.json");
-
-    private sealed class RunConfigFile
-    {
-        public string Command { get; set; } = string.Empty;
     }
 
     public async Task<IReadOnlyList<string>> SaveAttachmentsAsync(Guid chatId, IReadOnlyList<TaskAttachment>? attachments, CancellationToken ct = default)

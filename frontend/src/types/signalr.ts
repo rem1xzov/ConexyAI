@@ -62,19 +62,6 @@ export interface TerminalOutputPayload {
   source?: string;
 }
 
-export interface RunProjectResult {
-  needsManualConfig: boolean;
-  command?: string | null;
-  error?: string | null;
-  /** True when the run was launched in a separate visible console window (Windows dev). */
-  launchedInSeparateWindow?: boolean;
-}
-
-export interface RunProjectErrorPayload {
-  chatId: string;
-  message: string;
-}
-
 export interface SearchStatusPayload {
   /** "searching" | "completed" */
   status: string;
@@ -125,7 +112,6 @@ export interface SignalrCallbacks {
   onCompleted?: (payload: TaskCompletedPayload, scopeId?: string) => void;
   onError?: (error: string, scopeId?: string) => void;
   onStopped?: (taskId: string, scopeId?: string) => void;
-  onRunProjectError?: (payload: RunProjectErrorPayload) => void;
   onSearchStatus?: (payload: SearchStatusPayload, scopeId?: string) => void;
   onProblems?: (payload: BuildProblemsPayload, scopeId?: string) => void;
   // SIGNALR_RESILIENCE: добавлено 2026-09-22 — вызывается после успешного автоматического

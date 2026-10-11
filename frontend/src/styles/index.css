@@ -2014,39 +2014,6 @@ body {
   transition: background 0.15s;
 }
 
-.workspace__run-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  background: var(--accent);
-  border: 1px solid transparent;
-  color: #fff;
-  padding: 7px 14px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: filter 0.15s;
-}
-
-.workspace__run-btn:hover:not(:disabled) {
-  filter: brightness(1.1);
-}
-
-.workspace__run-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.workspace__run-error {
-  font-size: 12px;
-  color: var(--danger, #ef4444);
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .workspace__zip-btn:hover:not(:disabled) {
   background: rgba(198, 139, 212, 0.24);
 }

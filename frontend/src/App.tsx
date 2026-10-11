@@ -1293,9 +1293,6 @@ export default function App() {
     onStopped: (taskId, scopeId) => {
       finishFromServer(taskId || scopeId, 'stopped', {});
     },
-    onRunProjectError: (payload) => {
-      showToast(liveRef.current.t('toast.runError', { message: payload.message }));
-    },
     onSearchStatus: (payload, scopeId) => {
       const ctx = resolveTurn(scopeId);
       if (!ctx) return dropEvent('SearchStatus', scopeId);
@@ -1354,7 +1351,6 @@ export default function App() {
       onCompleted: (payload, scopeId) => ev().onCompleted?.(payload, scopeId),
       onError: (error, scopeId) => ev().onError?.(error, scopeId),
       onStopped: (taskId, scopeId) => ev().onStopped?.(taskId, scopeId),
-      onRunProjectError: (payload) => ev().onRunProjectError?.(payload),
       onSearchStatus: (payload, scopeId) => ev().onSearchStatus?.(payload, scopeId),
       onProblems: (payload, scopeId) => ev().onProblems?.(payload, scopeId),
       onPendingActionCreated: (payload, scopeId) => ev().onPendingActionCreated?.(payload, scopeId),
@@ -3059,8 +3055,6 @@ export default function App() {
                 agentFileChange={agentFileChange}
                 todos={latestTodos}
                 onCursorChange={setCursorInfo}
-                onRunInSeparateWindow={() => showToast(t('toast.runProject'))}
-                hideRun={model === 'conexy-cowork'}
                 style={{ flex: `0 0 ${workspaceWidth}%` }}
                 onDirtyChange={setWorkspaceDirty}
                 gitAuthorName={user?.displayName}

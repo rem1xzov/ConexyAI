@@ -2,14 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { FileTypeIcon } from './FileTypeIcon';
-import { PlayIcon, TerminalIcon, CheckIcon, CodeIcon } from './Icons';
+import { TerminalIcon, CheckIcon, CodeIcon } from './Icons';
 
 interface CommandPaletteProps {
   open: boolean;
   files: string[];
   onClose: () => void;
   onOpenFile: (path: string) => void;
-  onRun: () => void;
   onToggleTodo: () => void;
   /** SANDBOX_TERMINAL: добавлено 2026-09-24 — shows the command only when provided. */
   onToggleTerminal?: () => void;
@@ -68,7 +67,6 @@ export function CommandPalette({
   files,
   onClose,
   onOpenFile,
-  onRun,
   onToggleTodo,
   onToggleTerminal,
   onSave,
@@ -89,12 +87,11 @@ export function CommandPalette({
 
   const items = useMemo<Item[]>(() => {
     const commands: Item[] = [
-      { key: 'cmd:run', kind: 'command', label: t('palette.runProject'), action: onRun },
       { key: 'cmd:todo', kind: 'command', label: t('palette.toggleTodo'), action: onToggleTodo },
       { key: 'cmd:save', kind: 'command', label: t('palette.saveFile'), action: onSave },
     ];
     if (onToggleTerminal) {
-      commands.splice(1, 0, { key: 'cmd:terminal', kind: 'command', label: t('palette.openTerminal'), action: onToggleTerminal });
+      commands.splice(0, 0, { key: 'cmd:terminal', kind: 'command', label: t('palette.openTerminal'), action: onToggleTerminal });
     }
 
     const q = query.trim();
@@ -122,7 +119,7 @@ export function CommandPalette({
     }));
 
     return [...matchedCommands, ...fileItems];
-  }, [query, files, onRun, onToggleTodo, onToggleTerminal, onSave, onOpenFile, t]);
+  }, [query, files, onToggleTodo, onToggleTerminal, onSave, onOpenFile, t]);
 
   useEffect(() => {
     setSelected(0);
@@ -177,8 +174,6 @@ export function CommandPalette({
                 <span className="palette__icon">
                   {item.kind === 'file' ? (
                     <FileTypeIcon path={item.path ?? ''} size={15} />
-                  ) : item.key === 'cmd:run' ? (
-                    <PlayIcon size={15} />
                   ) : item.key === 'cmd:terminal' ? (
                     <TerminalIcon size={15} />
                   ) : item.key === 'cmd:todo' ? (

@@ -63,29 +63,9 @@ public class TerminalOutputEvent
     /// <summary>
     /// Origin of this chunk, so the UI can colour the source label differently:
     /// <c>"pty"</c> (interactive shell echo), <c>"agent"</c> (the agent's <c>bash</c> tool),
-    /// <c>"user"</c> (the Run button / user-initiated command).
+    /// <c>"user"</c> (a user-initiated command).
     /// </summary>
     public string Source { get; set; } = "pty";
-}
-
-/// <summary>Result of a Run-project request, returned to the client over SignalR.</summary>
-public class RunProjectResult
-{
-    /// <summary>True when no run command could be auto-detected and the user must provide one.</summary>
-    public required bool NeedsManualConfig { get; set; }
-
-    /// <summary>The command that was (or will be) executed, when known.</summary>
-    public string? Command { get; set; }
-
-    /// <summary>Optional error detail for the UI.</summary>
-    public string? Error { get; set; }
-
-    /// <summary>
-    /// True when the run was launched in a separate visible console window (Windows dev
-    /// workaround) instead of the interactive pty. The UI uses this to show a toast rather
-    /// than switching to the terminal panel.
-    /// </summary>
-    public bool LaunchedInSeparateWindow { get; set; }
 }
 
 /// <summary>
