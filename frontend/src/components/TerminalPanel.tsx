@@ -109,19 +109,26 @@ function attachClipboard(term: Terminal): void {
       if (!navigator.clipboard?.readText) return true; // native paste event still works
       e.preventDefault();
       e.stopPropagation();
-      void navigator.clipboard
-        .readText()
-        .then((text) => {
-          if (text) term.paste(text);
-        })
-        .catch(() => {
-          // Clipboard read denied: nothing to paste.
-        });
+      void pasteFromClipboard(term);
       return false;
     }
 
     return true;
   });
+}
+
+/** Pastes the clipboard into the terminal. No-op when the Clipboard API is unavailable. */
+async function pasteFromClipboard(term: Terminal | null): Promise<void> {
+  if (!term) return;
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) {
+      term.focus();
+      term.paste(text);
+    }
+  } catch {
+    // Clipboard read is unavailable (insecure context or the user denied the permission).
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -543,6 +550,9 @@ export function TerminalPanel({ sessionId, terminalId = 'main', autoFocus }: Ter
   const effectiveTheme = useEffectiveTheme();
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
   const [attempt, setAttempt] = useState(0);
+  // CLIPBOARD: right-click menu — a mouse path to copy/paste that does not depend on xterm's key
+  // handling (Ctrl+C is SIGINT there). Coordinates are viewport-relative (position: fixed).
+  const [clipMenu, setClipMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   // Long-lived terminal callbacks read the latest translator (the language can change meanwhile).
@@ -632,6 +642,18 @@ export function TerminalPanel({ sessionId, terminalId = 'main', autoFocus }: Ter
     if (term) term.options.theme = effectiveTheme === 'light' ? LIGHT_THEME : DARK_THEME;
   }, [effectiveTheme]);
 
+  // Close the clipboard menu on any click outside or on Escape.
+  useEffect(() => {
+    if (!clipMenu) return;
+    const close = () => setClipMenu(null);
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', close);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', close);
+    };
+  }, [clipMenu]);
+
   return (
     <div className="terminal-dock__content">
       {phase.kind === 'loading' && <div className="terminal-notice">{t('terminal.connecting')}</div>}
@@ -649,7 +671,49 @@ export function TerminalPanel({ sessionId, terminalId = 'main', autoFocus }: Ter
           </button>
         </div>
       )}
-      <div ref={containerRef} className="terminal-panel" hidden={phase.kind !== 'ready'} />
+      <div
+        ref={containerRef}
+        className="terminal-panel"
+        hidden={phase.kind !== 'ready'}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setClipMenu({ x: e.clientX, y: e.clientY, hasSelection: termRef.current?.hasSelection() ?? false });
+        }}
+      />
+      {clipMenu && (
+        <div
+          className="terminal-menu"
+          style={{ top: clipMenu.y, left: clipMenu.x }}
+          role="menu"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="terminal-menu__item"
+            disabled={!clipMenu.hasSelection}
+            onClick={() => {
+              const term = termRef.current;
+              if (term?.hasSelection()) void copyText(term.getSelection());
+              setClipMenu(null);
+              termRef.current?.focus();
+            }}
+          >
+            {t('terminal.copy')}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="terminal-menu__item"
+            onClick={() => {
+              setClipMenu(null);
+              void pasteFromClipboard(termRef.current);
+            }}
+          >
+            {t('terminal.paste')}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

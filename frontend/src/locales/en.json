@@ -252,6 +252,8 @@
   "terminal": {
     "toggle": "Terminal (Ctrl+`)",
     "menuToggle": "Toggle Terminal",
+    "copy": "Copy",
+    "paste": "Paste",
     "close": "Close terminal",
     "new": "New terminal",
     "closeTab": "Close this terminal",
@@ -262,7 +264,7 @@
     "unavailable": "The server cannot start a sandbox right now (Docker is not available), so there is no terminal for this workspace.",
     "modeError": "Could not connect to the terminal: {{message}}",
     "retry": "Retry",
-    "sandboxBanner": "Sandbox terminal: commands run in this chat's isolated container, in /workspace (the same files the agent sees). Ctrl+C stops a command, ↑/↓ browse history.",
+    "sandboxBanner": "Sandbox terminal: commands run in this chat's isolated container, in /workspace (the same files the agent sees). Ctrl+C stops a command, ↑/↓ browse history. Copy: Ctrl+Shift+C (or Ctrl+C with a selection), paste: Ctrl+V.",
     "busy": "Another command is still running in this chat's sandbox — wait for it to finish or press Ctrl+C.",
     "commandError": "Command failed: {{message}}",
     "timedOut": "The command took longer than 120 s and was stopped.",
