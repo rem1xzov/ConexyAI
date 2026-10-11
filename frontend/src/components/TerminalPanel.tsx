@@ -12,6 +12,7 @@ import {
   runSandboxCommand,
 } from '../services/terminalHub';
 import { useEffectiveTheme } from '../theme';
+import { copyText } from '../utils/clipboard';
 
 interface TerminalPanelProps {
   sessionId: string;
@@ -72,6 +73,56 @@ const LIGHT_THEME: ITheme = {
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
+
+// CLIPBOARD: xterm treats Ctrl+C as SIGINT and Ctrl+V as a literal \x16, so copying and pasting
+// need explicit bindings. Copy: Ctrl+Shift+C (Cmd+C on macOS), or plain Ctrl+C when text is
+// selected. Paste: Ctrl+Shift+V (Cmd+V), or plain Ctrl+V when the async clipboard is readable —
+// otherwise we leave the key alone and the browser's native paste event still reaches xterm.
+function attachClipboard(term: Terminal): void {
+  const isMac = /mac/i.test(navigator.platform || navigator.userAgent);
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown') return true;
+    const withModifier = isMac ? e.metaKey : e.ctrlKey;
+    if (!withModifier) return true;
+    const key = e.key.toLowerCase();
+
+    if (key === 'c') {
+      const selection = term.getSelection();
+      const wantsCopy = e.shiftKey || isMac;
+      // Plain Ctrl+C copies only when something is selected (like VS Code); otherwise it is SIGINT.
+      if (selection) {
+        e.preventDefault();
+        e.stopPropagation();
+        void copyText(selection);
+        term.clearSelection();
+        return false;
+      }
+      if (wantsCopy) {
+        // Ctrl+Shift+C / Cmd+C with nothing selected: swallow so it does not act as SIGINT.
+        e.preventDefault();
+        return false;
+      }
+      return true;
+    }
+
+    if (key === 'v') {
+      if (!navigator.clipboard?.readText) return true; // native paste event still works
+      e.preventDefault();
+      e.stopPropagation();
+      void navigator.clipboard
+        .readText()
+        .then((text) => {
+          if (text) term.paste(text);
+        })
+        .catch(() => {
+          // Clipboard read denied: nothing to paste.
+        });
+      return false;
+    }
+
+    return true;
+  });
+}
 
 // ---------------------------------------------------------------------------------------------
 // PTY mode (dev only): the server runs a real shell, xterm is a dumb pipe in both directions.
@@ -534,6 +585,7 @@ export function TerminalPanel({ sessionId, terminalId = 'main', autoFocus }: Ter
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(container);
+    attachClipboard(term);
     termRef.current = term;
 
     const fit = () => {
