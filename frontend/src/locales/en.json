@@ -237,6 +237,8 @@
     "responseStyle": "How ConexyAI should respond",
     "responseStyleHint": "Short or detailed, language, tone, formatting.",
     "responseStylePlaceholder": "e.g. Short answers, code examples in C#, no pleasantries, comparisons as tables.",
+    "plainCode": "Plain code highlighting",
+    "plainCodeHint": "Render inline code and key terms as ordinary bold text, with no colored chips or outlines.",
     "counter": "{{count}} / {{max}}",
     "save": "Save",
     "saving": "Saving…",

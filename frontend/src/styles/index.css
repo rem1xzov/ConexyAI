@@ -3793,6 +3793,28 @@ body {
 .chat-danger { color: var(--danger); }
 .chat-warn { color: var(--warn); }
 .chat-code { background: var(--badge-bg); border: 1px solid var(--badge-border); color: var(--badge-text); }
+/* PLAIN_CODE: настройка «Персонализация» — инлайн-код и термины без цветных плашек и обводки, просто жирный белый текст. */
+html[data-plain-code='true'] .chat-code,
+html[data-plain-code='true'] .markdown code.chat-code {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
+  font-weight: 600;
+}
+html[data-plain-code='true'] .markdown code.chat-code {
+  padding: 0 1px;
+  border-radius: 0;
+}
+html[data-plain-code='true'] .markdown strong {
+  color: var(--text);
+}
+html[data-plain-code='true'] .markdown strong.chat-term {
+  display: inline;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
 .chat-btn { background: var(--bg-input); color: var(--text); }
 .chat-btn:hover { background: var(--bg-hover); }
 .chat-btn-accent { background: var(--accent); color: #fff; }

@@ -19,6 +19,7 @@ import {
   type UserPreferences,
 } from '../api/userApi';
 import { humanError } from '../utils/humanError';
+import { setPlainCode, usePlainCode } from '../utils/displayPrefs';
 import { ConfirmDialog } from './Dialog';
 import { CloseIcon, TrashIcon } from './Icons';
 // USAGE_LIMITS_SECTION: добавлено 2026-10-01 — лимиты Flash/Pro переехали из кольца в настройки.
@@ -90,6 +91,8 @@ interface PersonalizationSectionProps {
 
 function PersonalizationSection({ active, onDirtyChange, onSaved }: PersonalizationSectionProps) {
   const { t } = useTranslation();
+  // PLAIN_CODE: локальная настройка оформления — цветные «чипы» или обычный жирный белый текст.
+  const plainCode = usePlainCode();
   const [loaded, setLoaded] = useState<UserPreferences | null>(null);
   // USER_NAME: имя — короткое однострочное поле, отдельно от свободных текстов.
   const [name, setName] = useState('');
@@ -274,6 +277,29 @@ function PersonalizationSection({ active, onDirtyChange, onSaved }: Personalizat
           {saveError}
         </div>
       )}
+
+      {/* PLAIN_CODE: оформление инлайн-кода и терминов — цветная обводка или просто жирный белый. */}
+      <div className="memory-toggle settings-plain-code">
+        <div className="memory-toggle__text">
+          <div className="settings-field__label" id="prefs-plain-code-label">
+            {t('prefs.plainCode')}
+          </div>
+          <div className="settings-field__hint" id="prefs-plain-code-hint">
+            {t('prefs.plainCodeHint')}
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={plainCode}
+          aria-labelledby="prefs-plain-code-label"
+          aria-describedby="prefs-plain-code-hint"
+          className={`settings-switch ${plainCode ? 'settings-switch--on' : ''}`}
+          onClick={() => setPlainCode(!plainCode)}
+        >
+          <span className="settings-switch__thumb" />
+        </button>
+      </div>
 
       <div className="settings-panel__footer">
         {savedAt && !dirty && <span className="settings-panel__saved">{t('prefs.saved')}</span>}
