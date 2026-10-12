@@ -1796,6 +1796,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         };
 
         var answer = new StringBuilder();
+        var group = _hubContext.Clients.Group($"task_{taskId}");
         for (var step = 1; step <= WorkerMaxIterations; step++)
         {
             ct.ThrowIfCancellationRequested();
@@ -1811,17 +1812,45 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 break;
             }
 
+            // L9: картинки накапливаются и прикладываются ПОСЛЕ всех tool-результатов хода: сообщение
+            // user(image) между assistant(tool_calls) и его tool-результатами ломает формат запроса.
+            var batchImages = new List<ChatMessage>();
             foreach (var call in turn.Message.ToolCalls)
             {
-                var result = IsToolAllowed(call.Function.Name)
-                    ? await DispatchToolAsync(taskId, chatId, call, ct)
-                    : new ConexyToolResult(
-                        call.Id,
-                        $"Tool '{call.Function.Name}' is not available to this agent.",
-                        true);
+                var toolName = call.Function.Name;
+                ConexyToolResult result;
+                if (!IsToolAllowed(toolName))
+                {
+                    result = new ConexyToolResult(call.Id, $"Tool '{toolName}' is not available to this agent.", true);
+                }
+                else
+                {
+                    // ORCHESTRA: у помощника те же мультимодальные инструменты, что у ведущего, и
+                    // обрабатываются они тем же способом — иначе вывод попадёт в "Unknown tool".
+                    try
+                    {
+                        result = toolName == "take_screenshot"
+                            ? await HandleScreenshotAsync(chatId, call, batchImages, group, ct)
+                            : toolName == "view_image"
+                                ? await HandleViewImageAsync(taskId, chatId, call, batchImages, ct)
+                                : toolName == "browser_screenshot"
+                                    ? await HandleBrowserScreenshotAsync(chatId, call, batchImages, group, ct)
+                                    : await DispatchToolAsync(taskId, chatId, call, ct);
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Worker tool {Tool} failed task={TaskId}", toolName, taskId);
+                        result = new ConexyToolResult(call.Id, $"Tool '{toolName}' failed: {ex.Message}", true);
+                    }
+                }
 
                 messages.Add(new ChatMessage(Role: "tool", Content: result.Output, ToolCallId: call.Id));
             }
+            messages.AddRange(batchImages);
         }
 
         return answer.ToString();
