@@ -7,6 +7,22 @@ export interface AgentStatusPayload {
   stage: string;
   label: string;
   file?: string | null;
+  // ORCHESTRA: чей это статус ("lead" или роль помощника).
+  agentId?: string | null;
+  agentRole?: string | null;
+}
+
+// ORCHESTRA: состав команды агентов на один ход (событие AgentTeam).
+export interface AgentTeamMember {
+  id: string;
+  role: string;
+  brief: string;
+  scope: string[];
+}
+
+export interface AgentTeamPayload {
+  taskId: string;
+  agents: AgentTeamMember[];
 }
 
 export interface FileCreatedPayload {
@@ -27,6 +43,9 @@ export interface ToolActionEvent {
   // COMMAND_CONFIRM: добавлено 2026-09-20
   /** Flagged by the backend classifier — styled with an accent, still confirmed like any command. */
   isDangerous?: boolean;
+  // ORCHESTRA: чей это шаг ("lead" или роль помощника).
+  agentId?: string;
+  agentRole?: string;
 }
 
 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
@@ -40,6 +59,9 @@ export interface PendingActionPayload {
   createdAt: string;
   // COMMAND_CONFIRM: добавлено 2026-09-20
   isDangerous?: boolean;
+  // ORCHESTRA: чей агент просит подтверждение (решается по каждому агенту отдельно).
+  agentId?: string;
+  agentRole?: string;
 }
 
 export interface TodoItem {
@@ -106,6 +128,8 @@ export interface SignalrCallbacks {
   onLog?: (message: string, scopeId?: string) => void;
   onScreenshot?: (base64: string, scopeId?: string) => void;
   onAgentStatus?: (payload: AgentStatusPayload, scopeId?: string) => void;
+  // ORCHESTRA: состав команды агентов (пришёл один раз в начале работы оркестра).
+  onAgentTeam?: (payload: AgentTeamPayload, scopeId?: string) => void;
   onFileCreated?: (payload: FileCreatedPayload, scopeId?: string) => void;
   onToolAction?: (event: ToolActionEvent, scopeId?: string) => void;
   onTodoUpdate?: (payload: TodoUpdatePayload, scopeId?: string) => void;

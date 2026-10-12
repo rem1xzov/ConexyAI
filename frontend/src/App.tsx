@@ -1193,6 +1193,15 @@ export default function App() {
     onAgentStatus: (payload, scopeId) => {
       const ctx = resolveTurn(scopeId);
       if (!ctx) return dropEvent('OnAgentStatus', scopeId);
+      // ORCHESTRA: статус помощника обновляет его карточку и не добавляет шаг ведущему.
+      if (payload.agentId && payload.agentId !== 'lead') {
+        const agentId = payload.agentId;
+        patchTurn(ctx, (m) => ({
+          ...m,
+          agents: m.agents?.map((a) => (a.id === agentId ? { ...a, status: payload.label } : a)),
+        }));
+        return;
+      }
       patchTurn(ctx, (m) => {
         // AGENT_TIMELINE: добавлено 2026-09-22 — каждая фаза «размышления» становится
         // отдельным шагом со своим startedAt, поэтому таймер каждого шага честно идёт
@@ -1308,6 +1317,15 @@ export default function App() {
       if (!ctx) return dropEvent('BuildProblems', scopeId);
       patchTurn(ctx, (m) => ({ ...m, problems: payload.problems ?? [] }));
     },
+    // ORCHESTRA: состав команды агентов — сохраняем на сообщении, лента рисует карточки.
+    onAgentTeam: (payload, scopeId) => {
+      const ctx = resolveTurn(scopeId);
+      if (!ctx) return dropEvent('AgentTeam', scopeId);
+      patchTurn(ctx, (m) => ({
+        ...m,
+        agents: payload.agents.map((a) => ({ id: a.id, role: a.role, brief: a.brief, scope: a.scope })),
+      }));
+    },
     // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
     onPendingActionCreated: (payload, scopeId) => {
       if (!resolveTurn(scopeId) && !registry.byTask(payload.taskId)) return dropEvent('OnPendingActionCreated', scopeId);
@@ -1345,6 +1363,7 @@ export default function App() {
       onLog: (message, scopeId) => ev().onLog?.(message, scopeId),
       onScreenshot: (base64, scopeId) => ev().onScreenshot?.(base64, scopeId),
       onAgentStatus: (payload, scopeId) => ev().onAgentStatus?.(payload, scopeId),
+      onAgentTeam: (payload, scopeId) => ev().onAgentTeam?.(payload, scopeId),
       onFileCreated: (payload, scopeId) => ev().onFileCreated?.(payload, scopeId),
       onToolAction: (event, scopeId) => ev().onToolAction?.(event, scopeId),
       onTodoUpdate: (payload, scopeId) => ev().onTodoUpdate?.(payload, scopeId),

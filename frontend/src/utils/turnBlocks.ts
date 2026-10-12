@@ -58,6 +58,8 @@ function toolBlockFrom(event: ToolActionEvent): TurnToolBlock {
     workingDirectory: event.workingDirectory ?? undefined,
     actionId: event.pendingActionId ?? undefined,
     isDangerous: event.isDangerous ?? undefined,
+    agentId: event.agentId ?? undefined,
+    agentRole: event.agentRole ?? undefined,
   };
 }
 
@@ -85,6 +87,8 @@ export function toolEventFromBlock(block: TurnToolBlock): ToolActionEvent {
     workingDirectory: block.workingDirectory,
     pendingActionId: block.actionId,
     isDangerous: block.isDangerous,
+    agentId: block.agentId,
+    agentRole: block.agentRole,
   };
 }
 
@@ -157,6 +161,8 @@ export function applyToolEvent(blocks: readonly TurnBlock[], event: ToolActionEv
       summary: event.summary ?? block.summary,
       actionId: event.pendingActionId ?? block.actionId,
       isDangerous: event.isDangerous ?? block.isDangerous,
+      agentId: event.agentId ?? block.agentId,
+      agentRole: event.agentRole ?? block.agentRole,
     };
     return next;
   }

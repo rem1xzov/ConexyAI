@@ -274,6 +274,11 @@
     "joinFailed": "Not connected to the chat's live output yet ({{message}}). It will be retried with the next command.",
     "startFailed": "Could not start the terminal: {{message}}"
   },
+  "orchestra": {
+    "lead": "Lead agent",
+    "scope": "Scope:",
+    "idle": "Working…"
+  },
   "admin": {
     "title": "Admin panel",
     "usersTab": "Users",

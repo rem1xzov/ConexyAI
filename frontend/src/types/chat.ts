@@ -35,11 +35,12 @@ export interface ChatMessage {
   taskId?: string;
   // INTERLEAVED_STREAM: добавлено 2026-09-24
   /**
-   * Chronological feed of an agent turn (see `TurnBlock`). Only agent turns have it: the plain chat and students paths keep rendering from `content` alone. Absent on messages
-   * restored from a cache written before this existed — they are replayed with
-   * `blocksFromLegacy` instead of being lost.
+   * Chronological feed of an agent turn (see `TurnBlock`). ...
    */
   blocks?: TurnBlock[];
+  // ORCHESTRA: команда агентов, работающая над этим ходом (событие AgentTeam). Пусто — обычный
+  // одиночный агент; тогда лента рисуется как раньше.
+  agents?: TeamAgent[];
   /** Set while `POST /run` for this answer has not returned yet (the turn has no task id). A message
    *  still carrying it after a reload was never confirmed by the server. */
   awaitingTaskId?: boolean;
@@ -86,6 +87,16 @@ export interface AgentAction {
   stage: string;
   label: string;
   file?: string | null;
+}
+
+// ORCHESTRA: один агент команды, работающей над ходом.
+export interface TeamAgent {
+  id: string;
+  role: string;
+  brief: string;
+  scope: string[];
+  /** Последний статус агента (из OnAgentStatus), пока ход идёт. */
+  status?: string;
 }
 
 // INTERLEAVED_STREAM: добавлено 2026-09-24
@@ -140,6 +151,9 @@ export interface TurnToolBlock {
   /** Set for a command that needs the user's decision: the buttons render inside this block. */
   actionId?: string;
   isDangerous?: boolean;
+  // ORCHESTRA: чей агент выполнил шаг ("lead" или роль помощника).
+  agentId?: string;
+  agentRole?: string;
 }
 
 export interface TurnPlanBlock {

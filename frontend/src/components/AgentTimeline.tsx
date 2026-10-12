@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import type { TurnBlock } from '../types/chat';
+import type { TeamAgent, TurnBlock } from '../types/chat';
 import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
 import { ActionStepLine, type ActionKind, type ActionState } from './ActionStepLine';
 import { CommandConfirmCard } from './CommandConfirmCard';
@@ -36,6 +36,8 @@ interface AgentTimelineProps {
   statusPill?: { label: string } | null;
   /** Opens a path from an action row in the workspace editor. */
   onOpenPath?: (path: string) => void;
+  // ORCHESTRA: состав команды — когда задан, лента рисуется карточками по агентам.
+  agents?: TeamAgent[];
 }
 
 function stateFrom(event: ToolActionEvent): ActionState {
@@ -119,6 +121,7 @@ export function AgentTimeline({
   onCommandDecision,
   statusPill,
   onOpenPath,
+  agents,
 }: AgentTimelineProps) {
   const { t } = useTranslation();
 
@@ -126,7 +129,6 @@ export function AgentTimeline({
   if (feed.length === 0 && !statusPill) return null;
 
   const lastIndex = feed.length - 1;
-  const lastBlock = feed[lastIndex];
   // One "working" indicator at a time: the live status row waits until nothing else is running.
   const somethingRunning = feed.some((block, index) => {
     if (block.type === 'tool') return !isTerminalToolStatus(block.status);
@@ -137,83 +139,133 @@ export function AgentTimeline({
   });
   const showStatusRow = Boolean(statusPill) && !somethingRunning;
 
+  const renderBlock = (block: TurnBlock, index: number) => {
+    switch (block.type) {
+      case 'thought':
+        return (
+          <ThinkingStep
+            key={block.id}
+            text={block.content}
+            // Only the very last block of a running turn is still being written in.
+            running={index === lastIndex && streaming && block.durationMs === undefined}
+          />
+        );
+
+      case 'text':
+        return (
+          // ARTIFACTS: text goes through the artifact-aware renderer, so a `<conexy_artifact>` tag
+          // in an agent's own line becomes a card instead of leaking into the feed as raw markup.
+          // The block id scopes this block's artifacts, so two text blocks of one message do not
+          // overwrite each other in the panel.
+          <div key={block.id} className="agent-feed__text chat-text">
+            <AssistantContent
+              messageId={`${messageId}#${block.id}`}
+              createdAt={createdAt}
+              content={block.content}
+              // Only the newest text block of a running turn is still being written into.
+              streaming={index === lastIndex && streaming}
+            />
+          </div>
+        );
+
+      case 'plan':
+        return <TodoPanel key={block.id} todos={block.items} />;
+
+      case 'tool': {
+        // A command that went through approval keeps the full terminal card for its whole life —
+        // request, decision and output all belong together, and switching it to a compact row the
+        // moment it finishes would both lose the card's output panel and jump the feed.
+        if (block.actionId) {
+          return (
+            <CommandConfirmCard
+              key={block.id}
+              events={[toolEventFromBlock(block)]}
+              onDecision={onCommandDecision}
+            />
+          );
+        }
+
+        const event = toolEventFromBlock(block);
+        const { action, label, path } = describeAction(event, t);
+        const state = stateFrom(event);
+        return (
+          <ActionStepLine
+            key={block.id}
+            kind={action}
+            label={label}
+            path={path}
+            onOpenPath={onOpenPath}
+            state={state}
+            meta={state === 'completed' ? block.summary : undefined}
+            errorLine={state === 'failed' ? block.summary : undefined}
+            detail={block.output}
+          />
+        );
+      }
+
+      default:
+        return null;
+    }
+  };
+
+  const statusRow = showStatusRow && statusPill ? (
+    <div className="tl-step tl-step--running" role="status">
+      <span className="tl-step__pulse" aria-hidden="true" />
+      <span className="tl-step__label">{statusPill.label}</span>
+    </div>
+  ) : null;
+
+  // ORCHESTRA: с командой лента перестаёт быть одним потоком — на каждого агента своя карточка
+  // со своими шагами (и своими подтверждениями команд). Без команды — прежняя единая лента.
+  const team = agents && agents.length > 0 ? agents : null;
+  if (team) {
+    const isLeadBlock = (block: TurnBlock) => block.type !== 'tool' || !block.agentId || block.agentId === 'lead';
+    const leadBlocks = feed.filter(isLeadBlock);
+    return (
+      <div className="agent-timeline agent-timeline--team">
+        <section className="agent-card agent-card--lead">
+          <header className="agent-card__head">
+            <span className="agent-card__role">{t('orchestra.lead')}</span>
+            {statusPill && <span className="agent-card__status">{statusPill.label}</span>}
+          </header>
+          <div className="agent-card__feed">{leadBlocks.map(renderBlock)}</div>
+        </section>
+
+        {team.map((agent) => {
+          const agentBlocks = feed.filter((block) => block.type === 'tool' && block.agentId === agent.id);
+          return (
+            <section key={agent.id} className="agent-card">
+              <header className="agent-card__head">
+                <span className="agent-card__role">{agent.role}</span>
+                {agent.status && <span className="agent-card__status">{agent.status}</span>}
+              </header>
+              {agent.scope.length > 0 && (
+                <div className="agent-card__scope">
+                  <span className="agent-card__scope-label">{t('orchestra.scope')}</span>
+                  {agent.scope.join(', ')}
+                </div>
+              )}
+              {agent.brief && <div className="agent-card__brief">{agent.brief}</div>}
+              <div className="agent-card__feed">
+                {agentBlocks.length === 0 ? (
+                  <div className="agent-card__idle">{t('orchestra.idle')}</div>
+                ) : (
+                  agentBlocks.map(renderBlock)
+                )}
+              </div>
+            </section>
+          );
+        })}
+
+        {statusRow}
+      </div>
+    );
+  }
+
   return (
     <div className="agent-timeline">
-      {feed.map((block, index) => {
-        switch (block.type) {
-          case 'thought':
-            return (
-              <ThinkingStep
-                key={block.id}
-                text={block.content}
-                // Only the very last block of a running turn is still being written in.
-                running={index === lastIndex && streaming && block.durationMs === undefined}
-              />
-            );
-
-          case 'text':
-            return (
-              // ARTIFACTS: text goes through the artifact-aware renderer, so a `<conexy_artifact>` tag
-              // in an agent's own line becomes a card instead of leaking into the feed as raw markup.
-              // The block id scopes this block's artifacts, so two text blocks of one message do not
-              // overwrite each other in the panel.
-              <div key={block.id} className="agent-feed__text chat-text">
-                <AssistantContent
-                  messageId={`${messageId}#${block.id}`}
-                  createdAt={createdAt}
-                  content={block.content}
-                  // Only the newest text block of a running turn is still being written into.
-                  streaming={index === lastIndex && streaming}
-                />
-              </div>
-            );
-
-          case 'plan':
-            return <TodoPanel key={block.id} todos={block.items} />;
-
-          case 'tool': {
-            // A command that went through approval keeps the full terminal card for its whole life —
-            // request, decision and output all belong together, and switching it to a compact row the
-            // moment it finishes would both lose the card's output panel and jump the feed.
-            if (block.actionId) {
-              return (
-                <CommandConfirmCard
-                  key={block.id}
-                  events={[toolEventFromBlock(block)]}
-                  onDecision={onCommandDecision}
-                />
-              );
-            }
-
-            const event = toolEventFromBlock(block);
-            const { action, label, path } = describeAction(event, t);
-            const state = stateFrom(event);
-            return (
-              <ActionStepLine
-                key={block.id}
-                kind={action}
-                label={label}
-                path={path}
-                onOpenPath={onOpenPath}
-                state={state}
-                meta={state === 'completed' ? block.summary : undefined}
-                errorLine={state === 'failed' ? block.summary : undefined}
-                detail={block.output}
-              />
-            );
-          }
-
-          default:
-            return null;
-        }
-      })}
-
-      {showStatusRow && statusPill && (
-        <div className="tl-step tl-step--running" role="status">
-          <span className="tl-step__pulse" aria-hidden="true" />
-          <span className="tl-step__label">{statusPill.label}</span>
-        </div>
-      )}
+      {feed.map(renderBlock)}
+      {statusRow}
     </div>
   );
 }

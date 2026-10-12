@@ -1,6 +1,6 @@
 import * as signalR from '@microsoft/signalr';
 import { recoverFromUnauthorized } from '../api/client';
-import type { AgentStatusPayload, BuildProblemsPayload, FileCreatedPayload, PendingActionPayload, SearchStatusPayload, SignalrCallbacks, StopGenerationResult, SupportMessagePayload, TaskCompletedPayload, TerminalOutputPayload, TodoUpdatePayload, ToolActionEvent } from '../types/signalr';
+import type { AgentStatusPayload, AgentTeamPayload, BuildProblemsPayload, FileCreatedPayload, PendingActionPayload, SearchStatusPayload, SignalrCallbacks, StopGenerationResult, SupportMessagePayload, TaskCompletedPayload, TerminalOutputPayload, TodoUpdatePayload, ToolActionEvent } from '../types/signalr';
 
 // MULTI_TERMINAL: добавлено 2026-10-05 — вывод терминала адресуется конкретному терминалу чата.
 const MAIN_TERMINAL = 'main';
@@ -462,6 +462,7 @@ class SignalrService {
     this.connection.on('OnLog', (message: string, scopeId?: string) => this.callbacks.onLog?.(message, scopeId));
     this.connection.on('OnScreenshot', (base64: string, scopeId?: string) => this.callbacks.onScreenshot?.(base64, scopeId));
     this.connection.on('OnAgentStatus', (payload: AgentStatusPayload, scopeId?: string) => this.callbacks.onAgentStatus?.(payload, scopeId));
+    this.connection.on('AgentTeam', (payload: AgentTeamPayload, scopeId?: string) => this.callbacks.onAgentTeam?.(payload, scopeId));
     this.connection.on('OnFileCreated', (payload: FileCreatedPayload, scopeId?: string) => this.callbacks.onFileCreated?.(payload, scopeId));
     this.connection.on('ToolAction', (event: ToolActionEvent, scopeId?: string) => this.callbacks.onToolAction?.(event, scopeId));
     this.connection.on('TodoUpdate', (payload: TodoUpdatePayload, scopeId?: string) => this.callbacks.onTodoUpdate?.(payload, scopeId));

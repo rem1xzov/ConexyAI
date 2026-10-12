@@ -4811,6 +4811,80 @@ body {
   min-width: 0;
 }
 
+/* ORCHESTRA: в командном режиме лента превращается в набор карточек — по одной на агента. */
+.agent-timeline--team {
+  gap: 12px;
+}
+
+.agent-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  min-width: 0;
+}
+
+.agent-card--lead {
+  border-color: var(--accent-soft);
+  background: var(--accent-soft);
+}
+
+.agent-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-card__role {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: capitalize;
+}
+
+.agent-card__status {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-card__scope {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: 'Consolas', 'Cascadia Mono', Menlo, monospace;
+  word-break: break-word;
+}
+
+.agent-card__scope-label {
+  color: var(--accent);
+  margin-right: 6px;
+}
+
+.agent-card__brief {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.agent-card__feed {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.agent-card__idle {
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* The model's own text between tools, inside the feed: no frame, just the answer type. */
 .agent-feed__text {
   min-width: 0;
