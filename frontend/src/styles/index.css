@@ -2938,6 +2938,22 @@ body {
   vertical-align: top;
 }
 
+/* TABLES_NO_WORD_BREAK: слова в ячейках не рвутся посередине. Раньше inline-код
+   (white-space: break-spaces) и длинные токены вроде путей ломались по любому месту. Теперь
+   длинная ячейка расширяет колонку, а таблица прокручивается по горизонтали. */
+.markdown__table th,
+.markdown__table td {
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+.markdown__table code.chat-code,
+.markdown__table .chat-code {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
 .markdown__table tbody tr:last-child td {
   border-bottom: none;
 }

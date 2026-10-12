@@ -90,17 +90,20 @@ export function claimAxis(dx: number, dy: number): 'horizontal' | 'vertical' | n
 }
 
 /**
- * True when the gesture belongs to a horizontally scrollable element under the finger rather than
- * to the drawer — otherwise swiping a wide code block or a scrolled row would close the sidebar.
+ * True when the gesture lands on (or inside) an element that scrolls horizontally — a wide table or a
+ * code block. Such a swipe belongs to that element, never to the drawer.
+ *
+ * DRAWER_TABLE: раньше проверка зависела от направления и позиции прокрутки и была инвертирована для
+ * свайпа влево: широкая таблица в самом начале (scrollLeft = 0), которую тянули влево, чтобы увидеть
+ * право, считалась жестом ЯЩИКА — панель выезжала поверх прокручиваемой таблицы и застревала в
+ * полуоткрытом виде. Теперь правило простое и предсказуемое: палец на горизонтальном скроллере —
+ * жест ему, ящик не трогаем.
  */
-export function belongsToHorizontalScroller(target: EventTarget | null, dx: number): boolean {
+export function belongsToHorizontalScroller(target: EventTarget | null): boolean {
   let el = target instanceof HTMLElement ? target : null;
   while (el && el !== document.body) {
     const overflowX = window.getComputedStyle(el).overflowX;
-    if (/(auto|scroll)/.test(overflowX) && el.scrollWidth > el.clientWidth + 1) {
-      if (dx < 0) return el.scrollLeft > 0;
-      return el.scrollLeft + el.clientWidth < el.scrollWidth;
-    }
+    if (/(auto|scroll)/.test(overflowX) && el.scrollWidth > el.clientWidth + 1) return true;
     el = el.parentElement;
   }
   return false;
@@ -230,6 +233,11 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
     const onTouchStart = (e: TouchEvent) => {
       if (!latest.current.enabled || e.touches.length !== 1) return;
 
+      // DRAWER_STUCK: если предыдущий жест не получил своего touchend/touchcancel (системный жест,
+      // палец ушёл за край), доводим его до конца ДО начала нового — иначе панель останется в
+      // промежуточном положении, а новый жест уже не будет знать о ней.
+      if (dragRef.current) finishDrag();
+
       // DRAWER_STUCK: не обрываем идущую анимацию возврата — доводим её сразу до конечного
       // положения. Раньше таймер просто отменялся, и если новый жест оказывался вертикальным,
       // панель замирала там, где её застали, и её приходилось убирать вручную.
@@ -273,7 +281,7 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
         // stops working and the panel would never follow the finger.
         const axis = claimAxis(dx, dy);
         if (axis === 'horizontal') {
-          drag.axis = belongsToHorizontalScroller(e.target, dx) ? 'ignored' : 'horizontal';
+          drag.axis = belongsToHorizontalScroller(e.target) ? 'ignored' : 'horizontal';
         } else if (axis === 'vertical') {
           drag.axis = 'ignored'; // a vertical scroll: leave it to the browser
         }
