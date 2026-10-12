@@ -389,7 +389,9 @@ public class ConexyEditorService : IConexyEditorService
             Command = command,
             Path = path,
             Status = status,
-            Summary = summary
+            Summary = summary,
+            AgentId = AgentExecutionContext.AgentId,
+            AgentRole = AgentExecutionContext.AgentRole
         };
         await _hubContext.Clients.Group($"task_{taskId}").SendAsync("ToolAction", evt, ct);
     }

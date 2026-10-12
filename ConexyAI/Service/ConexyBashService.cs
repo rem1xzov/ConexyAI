@@ -230,7 +230,9 @@ public class ConexyBashService : IConexyBashService
             WorkingDirectory = workspacePath,
             Output = output,
             PendingActionId = request.PendingActionId,
-            IsDangerous = request.IsDangerous
+            IsDangerous = request.IsDangerous,
+            AgentId = AgentExecutionContext.AgentId,
+            AgentRole = AgentExecutionContext.AgentRole
         };
         await _hubContext.Clients.Group($"task_{sessionId}").SendAsync("ToolAction", evt, ct);
     }

@@ -130,6 +130,11 @@ public class PendingActionEvent
 
     /// <summary>True when the command matched the dangerous-command classifier (accent styling).</summary>
     public bool IsDangerous { get; set; }
+
+    // ORCHESTRA: добавлено 2026-10-12 — чей агент просит подтверждение. Решение принимается по
+    // каждому агенту ОТДЕЛЬНО: авто-аппрув одного помощника не должен одобрять команды остальных.
+    public string? AgentId { get; set; }
+    public string? AgentRole { get; set; }
 }
 
 // OFFICE_FORMATS: добавлено 2026-09-23 — "download the answer as .docx/.xlsx/.pptx".

@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using ConexyAI.Configuration;
@@ -165,45 +166,48 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // Profile of the current run (set in RunLoopAsync).
     private AgentProfile _profile = CoderProfile;
 
-    // ORCHESTRA: добавлено 2026-09-28 — «Оркестр агентов» для режима Coder.
+    // ORCHESTRA: личность текущего агента (ведущий или помощник) — проставляется в события,
+    // чтобы UI знал, чей это шаг и чья команда ждёт подтверждения.
+    private AgentIdentity _agent = AgentIdentity.Lead;
+    // ORCHESTRA: собрал ли ведущий команду за этот прогон (см. OrchestraRequiredPrompt).
+    private bool _teamSpawned;
+
+    // ORCHESTRA: добавлено 2026-09-28, расширено 2026-10-12 — «Оркестр агентов» для режима Coder.
     //
-    // Ведущий агент получает инструмент spawn_agents и сам разбивает задачу на подзадачи. Помощники
-    // запускаются ПАРАЛЛЕЛЬНО, но только читают и ищут: писать в рабочую область и запускать команды
-    // им нельзя, иначе два агента затрут друг другу файлы. Всё, что нужно изменить, делает ведущий.
+    // Ведущий агент получает инструмент spawn_agents и сам собирает команду помощников с ролями
+    // (backend / frontend / design / qa / browser и т. п.). Помощники запускаются ПАРАЛЛЕЛЬНО и
+    // имеют ПОЛНЫЙ набор инструментов Coder — читают, пишут, удаляют, запускают команды и браузер.
+    // Чтобы два агента не затёрли файлы друг друга, ведущий ОБЯЗАН задать каждому помощнику
+    // непустой scope (префиксы путей), и эти scope проверяются на непересечение: агенты физически
+    // не могут писать в один и тот же файл.
     /// <summary>Инструмент, которым ведущий агент запускает помощников.</summary>
     private const string SpawnAgentsTool = "spawn_agents";
-    /// <summary>Сколько шагов даётся одному помощнику: он только читает и ищет, без сборок.</summary>
-    private const int SubAgentMaxIterations = 8;
-    /// <summary>Верхняя граница числа помощников за один вызов.</summary>
+    /// <summary>Инструмент: сообщение другому агенту команды (передача задачи/артефакта).</summary>
+    private const string TeamMessageTool = "team_message";
+    /// <summary>Сколько шагов даётся одному помощнику.</summary>
+    private const int WorkerMaxIterations = 20;
+    /// <summary>Верхняя граница числа помощников за один вызов (ведущий — отдельно, итого 5).</summary>
     private const int MaxOrchestraAgents = 4;
 
-    /// <summary>Устав помощника: исследовать заданное, вернуть сжатую выжимку с источниками.</summary>
-    private const string ResearchSystemPrompt =
+    /// <summary>Устав помощника: он полноправный исполнитель своей роли, а не только исследователь.</summary>
+    private const string TeamWorkerCharter =
         """
-        Ты — агент-исследователь в оркестре ConexyAI. Ведущий агент выделил тебе один вопрос, и только на него ты отвечаешь.
+        Ты — агент-исполнитель в оркестре ConexyAI. Ведущий агент назначил тебе роль и область работы; ты доводишь эту часть задачи до конца сам, всеми доступными инструментами.
 
         Правила:
-        - Ты можешь только читать: просматривать файлы рабочей области, искать в загруженных документах и в интернете, читать страницы и прошлые чаты. Писать файлы, запускать команды и менять проект тебе нельзя.
-        - Работай целенаправленно: 2–6 вызовов инструментов обычно достаточно. Не сканируй весь проект, если вопрос этого не требует.
-        - В ответе — только выжимка по существу: конкретные факты, пути к файлам с номерами строк, ссылки, имена функций. Без воды и без пересказа процесса.
-        - Если чего-то не нашёл — так и напиши прямо, коротко перечислив, что проверил.
+        - У тебя ПОЛНЫЙ набор инструментов: читать и править файлы, запускать команды в песочнице, работать с браузером, искать в интернете и прошлых чатах.
+        - РАБОТАЙ ТОЛЬКО В СВОЕЙ ОБЛАСТИ (scope). Менять файлы вне неё запрещено — это чужая зона другого агента; попытка вернёт ошибку.
+        - Не запускай команды, которые меняют весь проект целиком (например установку зависимостей в корне), если это не входит в твою часть.
+        - Проверяй свою часть работы: собери либо запусти то, что к ней относится, прежде чем отчитываться.
+        - Если нужен результат другого агента или ты передаёшь свой — напиши через `team_message` (укажи роль получателя) и продолжай.
+        - Отчёт ведущему — коротко и по делу: что сделал, какие файлы изменил, что проверил, что осталось.
         """;
 
-    /// <summary>Профиль помощника: только инструменты чтения и поиска.</summary>
-    private static readonly AgentProfile ResearchProfile = new(
-        "research",
-        ResearchSystemPrompt,
-        AllowedTools: new HashSet<string>(StringComparer.Ordinal)
-        {
-            "file_read",
-            "workspace_list_files",
-            "search_documents",
-            "read_document_chunk",
-            "read_document_file",
-            WebSearchTool.Name,
-            FetchWebPageTool.Name,
-            SearchUserChatsTool,
-        },
+    /// <summary>Профиль помощника: как Coder, но без инструмента запуска помощников (нет рекурсии).</summary>
+    private static readonly AgentProfile WorkerProfile = new(
+        "worker",
+        TeamWorkerCharter,
+        AllowedTools: null,
         AuditsCode: false,
         EnforcesPlan: false);
 
@@ -332,6 +336,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "or\n" +
         "{\"verdict\":\"REJECT\",\"issues\":[\"issue one\",\"issue two\"]}\n\n" +
         "Return APPROVED only if the code is correct, safe, and complete. Otherwise return REJECT with a concise, actionable list.";
+
+    // ORCHESTRA: при включённом оркестре ведущий обязан собрать команду из 2+ агентов с ролями и
+    // непересекающимися scope, а не делать всю работу сам. Одно напоминание за прогон.
+    private const string OrchestraRequiredPrompt =
+        "[Orchestra] Оркестр агентов включён: работай командой. Прежде чем править файлы, вызови " +
+        "`spawn_agents` и собери 2–4 агентов с ролями (backend, frontend, design, qa, browser и т. п.), " +
+        "каждому — самодостаточное задание и непересекающуюся область scope. Сам ведущий правит только " +
+        "то, что не отдано помощникам. Это обязательно, пока оркестр включён.";
 
     // PLAN_REQUIRED: добавлено 2026-09-24 — одно напоминание, если многошаговая работа идёт без плана.
     private const string PlanRequiredPrompt =
@@ -488,6 +500,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
     {
         _job = job;
         _profile = ProfileFor(job.ModelType);
+        // ORCHESTRA: ведущий агент — единственный, кому разрешён инструмент spawn_agents.
+        _agent = AgentIdentity.Lead;
+        AgentExecutionContext.Current = AgentIdentity.Lead;
+        _teamSpawned = false;
         // taskId = per-run id (SignalR group, logging, todo, dedup).
         // chatId = stable per-conversation id (workspace files, editor undo, bash).
         var taskId = job.TaskId;
@@ -546,6 +562,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // PLAN_REQUIRED: добавлено 2026-09-24
         var planWritten = false;
         var planNudged = false;
+        // ORCHESTRA: одно напоминание собрать команду, если оркестр включён, а ведущий правит сам.
+        var teamNudged = false;
         // P2_DEFINITION_OF_DONE: сколько раз мы просили проверить изменения перед завершением.
         var verificationNudged = 0;
         // ANTI_LIE: сколько раз мы ловили ложный отчёт о GitHub-работе.
@@ -855,6 +873,21 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
             }
 
+            // ORCHESTRA: при включённом оркестре ведущий обязан сначала собрать команду, а не делать
+            // всю работу сам. Одно напоминание, затем не мешаем (защита от зацикливания).
+            string? teamRefusal = null;
+            if (_job.Orchestra && _profile.Mode == "coder" && !_teamSpawned && !teamNudged)
+            {
+                var batchFiles = FilesTouchedByBatch(responseMessage.ToolCalls);
+                if (batchFiles.Count > 0)
+                {
+                    teamNudged = true;
+                    teamRefusal = OrchestraRequiredPrompt;
+                    _logger.LogInformation("Agent orchestra: edits without a team; asking for spawn_agents first. task={TaskId}", taskId);
+                    await group.SendAsync("OnLog", "[Orchestra] Edits before forming a team — asking for spawn_agents (2+ agents) first.", ct);
+                }
+            }
+
             foreach (var toolCall in responseMessage.ToolCalls)
             {
                 var toolName = toolCall.Function.Name;
@@ -866,7 +899,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // вызова инструмента. Проверка после запуска была бы бесполезной: команда уже
                 // выполнилась в четвёртый раз (и снова сожгла время), а отказ пришёл бы к её результату.
                 // P2_PLAN_FIRST: отказ-план имеет приоритет над прочими (правки не выполняются вовсе).
-                var refusal = planRefusal ?? (toolAllowed ? loopGuard.Refuse(toolName, toolCall.Function.Arguments) : null);
+                var refusal = planRefusal ?? teamRefusal ?? (toolAllowed ? loopGuard.Refuse(toolName, toolCall.Function.Arguments) : null);
 
                 if (toolAllowed && refusal is null)
                 {
@@ -879,7 +912,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         ? $"[Tool Call] Executing {toolName}..."
                         : planRefusal is not null
                             ? $"[Plan] {toolName} не выполняется: сначала нужен план."
-                            : $"[Loop Guard] {toolName} не выполняется: {refusal}",
+                            : teamRefusal is not null
+                                ? $"[Orchestra] {toolName} не выполняется: сначала собери команду."
+                                : $"[Loop Guard] {toolName} не выполняется: {refusal}",
                     ct);
 
                 ConexyToolResult result;
@@ -1124,12 +1159,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private bool IsToolAllowed(string tool) =>
         // MCP: dynamic tools are allowed for the agent modes once an operator configured the servers.
         (tool.StartsWith("mcp__", StringComparison.Ordinal)
-            ? _profile.Mode is "coder" or "cowork"
+            ? _profile.Mode is "coder" or "cowork" or "worker"
             // ORCHESTRA: помощников запускает только ведущий агент и только с включённым оркестром.
-            // У профиля помощника этого инструмента нет — так исключён бесконечный рекурсивный запуск.
-            : (tool == SpawnAgentsTool
-                ? _job.Orchestra && _profile.Allows(tool)
-                : _profile.Allows(tool))) &&
+            // У профиля помощника этот инструмент не разрешён — так исключён бесконечный рекурсивный запуск.
+            : tool == SpawnAgentsTool
+                ? _job.Orchestra && _profile.Mode == "coder" && _profile.Allows(tool)
+                // ORCHESTRA: передача задач внутри команды — только ведущему и помощникам.
+                : tool == TeamMessageTool
+                    ? _job.Orchestra && _profile.Mode is "coder" or "worker"
+                    : _profile.Allows(tool)) &&
         // INCOGNITO_CHAT: an incognito turn must not read the user's other conversations, the same
         // rule the conversation service applies to memory and the cross-chat digest.
         !(tool == SearchUserChatsTool && _job.Incognito);
@@ -1256,7 +1294,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         // MCP: подключённые удалённые серверы добавляют свои инструменты как mcp__<server>__<tool>.
         // Только для агентских режимов (Coder/Cowork) и только пока список не раздут.
-        if (_mcpRegistry is not null && _profile.Mode is "coder" or "cowork" && tools.Count < 60)
+        if (_mcpRegistry is not null && _profile.Mode is "coder" or "cowork" or "worker" && tools.Count < 60)
         {
             try
             {
@@ -1571,12 +1609,21 @@ public class ConexyAgentRunner : IConexyAgentRunner
         string toolCallId,
         CancellationToken ct)
     {
-        var briefs = ParseAgentBriefs(root);
-        if (briefs.Count < 2)
+        var specs = ParseWorkerSpecs(root);
+        if (specs.Count < 2)
         {
             return new ConexyToolResult(
                 toolCallId,
-                "spawn_agents requires 'briefs' with at least 2 self-contained research tasks.",
+                "spawn_agents требует 'agents' — минимум 2 роли, у каждой самодостаточное задание и непустой scope (префиксы путей).",
+                true);
+        }
+
+        var overlap = FindScopeOverlap(specs);
+        if (overlap is not null)
+        {
+            return new ConexyToolResult(
+                toolCallId,
+                $"Области агентов пересекаются ({overlap}). Каждому помощнику нужна своя непересекающаяся область, иначе два агента затрят один файл.",
                 true);
         }
 
@@ -1585,21 +1632,39 @@ public class ConexyAgentRunner : IConexyAgentRunner
             return new ConexyToolResult(toolCallId, "spawn_agents is unavailable in this environment.", true);
         }
 
+        _teamSpawned = true;
+
         var group = _hubContext.Clients.Group($"task_{taskId}");
-        await group.SendAsync("OnLog", $"[Orchestra] Запускаю {briefs.Count} агентов-помощников параллельно…", ct);
-        await SendAgentStatusAsync(taskId, "thinking", $"Оркестр: {briefs.Count} агента исследуют задачу…", ct: ct);
+        var board = TeamBoards.GetOrAdd(taskId, _ => new ConcurrentQueue<TeamMessage>());
+        while (board.TryDequeue(out _)) { } // свежая доска на каждую команду
+
+        // ORCHESTRA: состав команды одним событием — UI рисует карточку на каждого агента.
+        await group.SendAsync("AgentTeam", new
+        {
+            taskId,
+            agents = specs.Select((s, i) => new
+            {
+                id = $"worker-{i + 1}",
+                role = s.Role,
+                brief = s.Brief,
+                scope = s.Scope
+            }).ToArray()
+        }, ct);
+        await group.SendAsync("OnLog", $"[Orchestra] Команда: {string.Join(", ", specs.Select(s => s.Role))}", ct);
+        await SendAgentStatusAsync(taskId, "thinking", $"Оркестр: {specs.Count} агентов работают над задачей…", ct: ct);
 
         var subJob = _job;
 
-        async Task<(int Index, string Brief, string Text)> RunOneAsync(int index, string brief)
+        async Task<(int Index, WorkerSpec Spec, string Text)> RunOneAsync(int index, WorkerSpec spec)
         {
             using var scope = _scopeFactory.CreateScope();
             var runner = scope.ServiceProvider.GetRequiredService<IConexyAgentRunner>();
+            var identity = new AgentIdentity($"worker-{index + 1}", spec.Role, spec.Scope);
             try
             {
-                await group.SendAsync("OnLog", $"[Orchestra] Агент {index + 1}: {brief}", ct);
-                var text = await runner.RunSubAgentAsync(subJob, brief, ct);
-                return (index, brief, string.IsNullOrWhiteSpace(text) ? "(ничего не найдено)" : text.Trim());
+                await group.SendAsync("OnLog", $"[Orchestra] [{spec.Role}] {spec.Brief}", ct);
+                var text = await runner.RunWorkerAsync(subJob, identity, spec.Brief, ct);
+                return (index, spec, string.IsNullOrWhiteSpace(text) ? "(готово)" : text.Trim());
             }
             catch (OperationCanceledException)
             {
@@ -1607,70 +1672,136 @@ public class ConexyAgentRunner : IConexyAgentRunner
             }
             catch (Exception ex)
             {
-                // Один упавший помощник не должен ронять весь оркестр: ведущему сообщаем об этом
+                // Один упавший агент не должен ронять всю команду: ведущему сообщаем об этом
                 // как об обычном результате инструмента.
-                _logger.LogWarning(ex, "Orchestra: agent {Index} failed task={TaskId}", index + 1, taskId);
-                return (index, brief, $"(агент {index + 1} завершился с ошибкой: {ex.Message})");
+                _logger.LogWarning(ex, "Orchestra: agent {Role} failed task={TaskId}", spec.Role, taskId);
+                return (index, spec, $"(агент {spec.Role} завершился с ошибкой: {ex.Message})");
             }
         }
 
-        var results = await Task.WhenAll(briefs.Select((brief, index) => RunOneAsync(index, brief)));
+        var results = await Task.WhenAll(specs.Select((spec, index) => RunOneAsync(index, spec)));
 
         var builder = new StringBuilder();
-        builder.Append("Помощники завершили работу. Их выжимки:\n");
-        foreach (var (index, brief, text) in results.OrderBy(r => r.Index))
+        builder.Append("Команда завершила работу. Отчёты агентов:\n");
+        foreach (var (_, spec, text) in results.OrderBy(r => r.Index))
         {
-            builder.Append("\n## Агент ").Append(index + 1).Append(": ").Append(brief).Append('\n');
+            builder.Append("\n## ").Append(spec.Role).Append(" (scope: ").Append(string.Join(", ", spec.Scope)).Append(")\n");
             builder.Append(text).Append('\n');
         }
 
-        await group.SendAsync("OnLog", "[Orchestra] Помощники закончили — собираю результат.", ct);
+        var messages = board.ToArray();
+        if (messages.Length > 0)
+        {
+            builder.Append("\n## Сообщения между агентами\n");
+            foreach (var message in messages)
+                builder.Append('[').Append(message.From).Append(" → ").Append(message.To).Append("] ").Append(message.Text).Append('\n');
+        }
+
+        await group.SendAsync("OnLog", "[Orchestra] Команда закончила — собираю отчёты.", ct);
         return new ConexyToolResult(toolCallId, builder.ToString(), false);
     }
 
-    /// <summary>Разбирает список подзадач помощников: пустые отбрасываются, длина ограничена.</summary>
-    private static List<string> ParseAgentBriefs(JsonElement root)
-    {
-        if (!root.TryGetProperty("briefs", out var briefsEl) || briefsEl.ValueKind != JsonValueKind.Array)
-            return new List<string>();
+    // ORCHESTRA: доска сообщений команды на один прогон (taskId -> очередь). Живёт в памяти процесса;
+    // очищается при сборке новой команды и не переживает прогон.
+    private static readonly ConcurrentDictionary<Guid, ConcurrentQueue<TeamMessage>> TeamBoards = new();
 
-        return briefsEl
-            .EnumerateArray()
-            .Where(item => item.ValueKind == JsonValueKind.String)
-            .Select(item => item.GetString()?.Trim() ?? string.Empty)
-            .Where(text => text.Length > 0)
-            .Take(MaxOrchestraAgents)
-            .ToList();
+    private sealed record TeamMessage(string From, string To, string Text);
+
+    private sealed record WorkerSpec(string Role, string Brief, IReadOnlyList<string> Scope);
+
+    /// <summary>Разбирает состав команды: роль, задание и область работы каждого агента.</summary>
+    private static List<WorkerSpec> ParseWorkerSpecs(JsonElement root)
+    {
+        var specs = new List<WorkerSpec>();
+        if (!root.TryGetProperty("agents", out var agentsEl) || agentsEl.ValueKind != JsonValueKind.Array)
+            return specs;
+
+        foreach (var item in agentsEl.EnumerateArray().Take(MaxOrchestraAgents))
+        {
+            if (item.ValueKind != JsonValueKind.Object) continue;
+
+            var role = item.TryGetProperty("role", out var roleEl) && roleEl.ValueKind == JsonValueKind.String
+                ? roleEl.GetString()?.Trim() ?? string.Empty
+                : string.Empty;
+            var brief = item.TryGetProperty("brief", out var briefEl) && briefEl.ValueKind == JsonValueKind.String
+                ? briefEl.GetString()?.Trim() ?? string.Empty
+                : string.Empty;
+
+            var scope = new List<string>();
+            if (item.TryGetProperty("scope", out var scopeEl) && scopeEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var entry in scopeEl.EnumerateArray())
+                {
+                    if (entry.ValueKind != JsonValueKind.String) continue;
+                    var value = entry.GetString()?.Replace('\\', '/').Trim().Trim('/') ?? string.Empty;
+                    if (value.Length > 0) scope.Add(value);
+                }
+            }
+
+            // Без задания или без области помощник бесполезен и опасен: пропускаем.
+            if (brief.Length == 0 || scope.Count == 0) continue;
+            if (role.Length == 0) role = $"agent{specs.Count + 1}";
+            specs.Add(new WorkerSpec(role, brief, scope));
+        }
+
+        return specs;
+    }
+
+    /// <summary>Возвращает описание пересечения областей или <c>null</c>, если они не пересекаются.</summary>
+    private static string? FindScopeOverlap(List<WorkerSpec> specs)
+    {
+        static bool Overlaps(string a, string b) =>
+            a.Equals(b, StringComparison.Ordinal)
+            || a.StartsWith(b + "/", StringComparison.Ordinal)
+            || b.StartsWith(a + "/", StringComparison.Ordinal);
+
+        for (var i = 0; i < specs.Count; i++)
+        for (var j = i + 1; j < specs.Count; j++)
+        foreach (var a in specs[i].Scope)
+        foreach (var b in specs[j].Scope)
+        {
+            if (Overlaps(a, b)) return $"{specs[i].Role}:{a} ↔ {specs[j].Role}:{b}";
+        }
+
+        return null;
     }
 
     /// <inheritdoc />
-    public async Task<string> RunSubAgentAsync(ConexyJob job, string brief, CancellationToken ct = default)
+    public async Task<string> RunWorkerAsync(ConexyJob job, AgentIdentity identity, string brief, CancellationToken ct = default)
     {
-        // Помощник — отдельный прогон в этом экземпляре: свой профиль (только чтение), свой набор
-        // инструментов и своя короткая история. В основной ответ он ничего не стримит.
+        // Помощник — отдельный прогон в этом экземпляре: своя личность (роль и scope), полный набор
+        // инструментов и своя короткая история. Текст в основной ответ он не стримит, но его
+        // действия/статусы уходят с его agentId — UI рисует их в отдельной карточке.
         _job = job;
-        _profile = ResearchProfile;
-        // MCP: у помощника-исследователя MCP-инструментов нет (профиль research), реестр не нужен.
-        _mcpRegistry = null;
+        _profile = WorkerProfile;
+        _agent = identity;
+        AgentExecutionContext.Current = identity;
+        _mcpRegistry = _mcpRegistryFactory?.Create(_job.McpServers);
         _tools = await ResolveToolsAsync(ct);
 
         var taskId = job.TaskId;
         var chatId = job.ChatId;
+
+        var board = TeamBoards.TryGetValue(taskId, out var queue) ? queue.ToArray() : Array.Empty<TeamMessage>();
+        var boardText = board.Length == 0
+            ? string.Empty
+            : "\n\nСообщения команды:\n" + string.Join("\n", board.Select(m => $"[{m.From} → {m.To}] {m.Text}"));
+        var system = $"{TeamWorkerCharter}\n\nТвоя роль: {identity.Role}.\n" +
+            $"Твоя область (scope) — менять можно только эти пути: {string.Join(", ", identity.Scope)}.{boardText}";
+
         var messages = new List<ChatMessage>
         {
-            new("system", ResearchSystemPrompt),
+            new("system", system),
             new("user", brief),
         };
 
         var answer = new StringBuilder();
-        for (var step = 1; step <= SubAgentMaxIterations; step++)
+        for (var step = 1; step <= WorkerMaxIterations; step++)
         {
             ct.ThrowIfCancellationRequested();
 
             var turn = await StreamAgentTurnAsync(taskId, messages, ct, streamToClient: false);
-            // TOKEN_BREAKER: расход помощников идёт в тот же агентский пул тарифа — оркестр
-            // «расходует больше токенов» именно здесь, и это видно в учёте, а не только на словах.
-            // PRICED_BILLING: начисляется той же формулой, что и у ведущего агента (кэш дешёв, выход дорог).
+            // TOKEN_BREAKER: расход помощников идёт в тот же агентский пул тарифа.
             await _subscriptionService.RecordAgentTokensAsync(job.UserId, job.ModelType, turn.Usage, ct);
             messages.Add(turn.Message);
 
@@ -1686,7 +1817,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     ? await DispatchToolAsync(taskId, chatId, call, ct)
                     : new ConexyToolResult(
                         call.Id,
-                        $"Tool '{call.Function.Name}' is not available to a research agent — it only reads and searches.",
+                        $"Tool '{call.Function.Name}' is not available to this agent.",
                         true);
 
                 messages.Add(new ChatMessage(Role: "tool", Content: result.Output, ToolCallId: call.Id));
@@ -1695,6 +1826,40 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         return answer.ToString();
     }
+
+    // ORCHESTRA: помощник меняет файлы только внутри своей области. Это и есть защита от того, что
+    // два параллельных агента затрут один файл: ведущий обязан выдать непересекающиеся scope.
+    private string? CheckWorkerScope(string tool, JsonElement root)
+    {
+        if (_agent.Scope.Count == 0) return null; // ведущий владеет всей рабочей областью
+
+        if (tool == "apply_patch")
+        {
+            // Многофайловый патч несёт пути в заголовках '+++ b/...'.
+            var patch = Optional(root, "patch") ?? string.Empty;
+            foreach (Match match in Regex.Matches(patch, @"^\+\+\+\s+(?:[ab]/)?(?<p>\S+)", RegexOptions.Multiline))
+            {
+                var target = match.Groups["p"].Value.Trim();
+                if (target.Length == 0 || target == "/dev/null") continue;
+                if (!_agent.Owns(target)) return ScopeRefusal(target);
+            }
+        }
+
+        string? path = tool switch
+        {
+            "str_replace_editor" => Optional(root, "command") is "view" or "undo" ? null : Optional(root, "path"),
+            "file_write" or "file_patch" or "create_document" => Optional(root, "path"),
+            "apply_patch" => Optional(root, "path"),
+            _ => null,
+        };
+
+        if (!string.IsNullOrWhiteSpace(path) && !_agent.Owns(path)) return ScopeRefusal(path);
+        return null;
+    }
+
+    private string ScopeRefusal(string path) =>
+        $"Файл '{path}' вне твоей области ({string.Join(", ", _agent.Scope)}): он закреплён за другим агентом. " +
+        "Работай только в своей области или передай задачу через team_message.";
 
     private async Task<ConexyToolResult> DispatchToolAsync(Guid taskId, Guid chatId, LlmToolCall toolCall, CancellationToken ct)
     {
@@ -1709,6 +1874,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 return await DispatchMcpToolAsync(taskId, toolCall, root, ct);
             }
 
+            // ORCHESTRA: помощник правит только свою область — читать можно везде.
+            var scopeError = CheckWorkerScope(toolCall.Function.Name, root);
+            if (scopeError is not null)
+            {
+                return new ConexyToolResult(toolCall.Id, scopeError, true);
+            }
+
             switch (toolCall.Function.Name)
             {
                 // ORCHESTRA: ведущий агент раздаёт подзадачи помощникам и получает их выжимки
@@ -1716,6 +1888,24 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 case SpawnAgentsTool:
                 {
                     return await SpawnAgentsAsync(taskId, chatId, root, toolCall.Id, ct);
+                }
+
+                // ORCHESTRA: передача сообщения/артефакта другому агенту команды.
+                case TeamMessageTool:
+                {
+                    var to = GetString(root, "to");
+                    var text = GetString(root, "text");
+                    if (string.IsNullOrWhiteSpace(text))
+                    {
+                        return new ConexyToolResult(toolCall.Id, "team_message requires 'text'.", true);
+                    }
+                    var teamBoard = TeamBoards.GetOrAdd(taskId, _ => new ConcurrentQueue<TeamMessage>());
+                    teamBoard.Enqueue(new TeamMessage(
+                        _agent.Role,
+                        string.IsNullOrWhiteSpace(to) ? "lead" : to.Trim(),
+                        text.Trim()));
+                    await LogAsync(taskId, $"[team] {_agent.Role} → {(string.IsNullOrWhiteSpace(to) ? "lead" : to.Trim())}", ct);
+                    return new ConexyToolResult(toolCall.Id, "Сообщение доставлено команде.", false);
                 }
 
                 // BROWSER_AUTOMATION: DOM-автоматизация во встроенном браузере (только Coder и только
@@ -2694,7 +2884,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
             Path = "",
             Status = status,
             Summary = summary,
-            Output = TruncateToolOutput(output)
+            Output = TruncateToolOutput(output),
+            AgentId = _agent.Id,
+            AgentRole = _agent.Role
         }, ct);
     }
 
@@ -3321,7 +3513,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     private async Task SendAgentStatusAsync(Guid taskId, string stage, string label, string? file = null, CancellationToken ct = default)
     {
-        await _hubContext.Clients.Group($"task_{taskId}").SendAsync("OnAgentStatus", new { stage, label, file }, ct);
+        await _hubContext.Clients.Group($"task_{taskId}").SendAsync("OnAgentStatus", new { stage, label, file, agentId = _agent.Id, agentRole = _agent.Role }, ct);
     }
 
     private async Task SendFileCreatedAsync(Guid taskId, string path, CancellationToken ct)
@@ -3623,12 +3815,24 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var tools = new List<object>
         {
         // ORCHESTRA: инструмент предлагается только при включённом оркестре и только режиму Coder
-        // (см. IsToolAllowed и ResolveToolsAsync).
+        // (см. IsToolAllowed и ResolveToolsAsync). Помощники — полноправные исполнители с ролями
+        // и непересекающимися областями работы.
         Function(SpawnAgentsTool,
-            "Запустить 2–4 агента-помощников ПАРАЛЛЕЛЬНО для исследования разных частей задачи. Помощники умеют только читать и искать — файлы, документы, интернет, прошлые чаты — и возвращают краткие выжимки. Используй, когда задача разбивается на независимые вопросы (найти, где объявлено X; проверить, как Y используется; найти регламент Z) и когда важнее сэкономить время и шаги, чем токены. Каждая тема должна быть самодостаточной и не пересекаться с другими: помощники не пишут код — изменения вносишь ты сам после их ответов.",
+            "Собрать команду из 2–4 агентов-исполнителей с ролями и запустить их ПАРАЛЛЕЛЬНО. Каждый помощник получает роль, самодостаточное задание и НЕПЕРЕСЕКАЮЩУЮСЯ область работы scope — префиксы путей, которые ему можно менять (например ['ConexyAI/Service'] или ['frontend/src']). У помощников ПОЛНЫЙ набор инструментов: они сами правят файлы, запускают команды и браузер. scope всех помощников обязаны не пересекаться — два агента не могут владеть одним и тем же файлом. Роли выбирай по задаче: backend, frontend, design, qa, browser и т. п. Файлы вне выданных помощникам областей правишь ты сам после их отчётов.",
             new { type = "object", properties = new {
-                briefs = new { type = "array", items = new { type = "string" }, description = "От 2 до 4 подзадач для помощников. Формулируй конкретно: что найти, где искать и что вернуть." }
-            }, required = new[] { "briefs" } }),
+                agents = new { type = "array", minItems = 2, maxItems = 4, items = new { type = "object", properties = new {
+                    role = new { type = "string", description = "Роль агента: backend, frontend, design, qa, browser или своё короткое имя." },
+                    brief = new { type = "string", description = "Самодостаточное задание: что сделать и что вернуть." },
+                    scope = new { type = "array", items = new { type = "string" }, description = "Префиксы путей, которые агенту можно менять. Не пустой и не пересекается с другими агентами." }
+                }, required = new[] { "role", "brief", "scope" } } }
+            }, required = new[] { "agents" } }),
+        // ORCHESTRA: передача задач и артефактов между агентами команды (ведущий и помощники).
+        Function(TeamMessageTool,
+            "Передать сообщение или артефакт другому агенту команды (или ведущему). Используй для передачи зависимого результата, задачи или уточнения. Продолжай работу, не дожидаясь ответа.",
+            new { type = "object", properties = new {
+                to = new { type = "string", description = "Роль получателя (или 'lead')." },
+                text = new { type = "string", description = "Текст сообщения или результат." }
+            }, required = new[] { "to", "text" } }),
         // BROWSER_AUTOMATION: DOM-автоматизация во встроенном браузере. Только Coder и только когда
         // Chromium доступен (см. ResolveToolsAsync). Модель работает селекторами и текстом,
         // а не координатами.

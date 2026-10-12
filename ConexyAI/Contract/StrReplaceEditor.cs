@@ -75,4 +75,9 @@ public class ToolActionEvent
     /// styling — both dangerous and ordinary commands now require confirmation.
     /// </summary>
     public bool IsDangerous { get; set; }
+
+    // ORCHESTRA: добавлено 2026-10-12 — чей это шаг. "lead" — ведущий агент, иначе роль помощника
+    // ("backend", "frontend", …). UI рисует отдельную карточку/строку на каждого агента.
+    public string? AgentId { get; set; }
+    public string? AgentRole { get; set; }
 }

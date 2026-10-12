@@ -163,7 +163,9 @@ public class PendingActionService : IPendingActionService
                 WorkingDirectory = workingDirectory,
                 Status = "Pending",
                 CreatedAt = DateTime.UtcNow,
-                IsDangerous = isDangerous
+                IsDangerous = isDangerous,
+                AgentId = AgentExecutionContext.AgentId,
+                AgentRole = AgentExecutionContext.AgentRole
             }, waitToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
