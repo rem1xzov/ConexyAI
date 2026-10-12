@@ -59,7 +59,7 @@ import { ConfirmDialog } from './components/Dialog';
 import { getStoredTheme, setTheme, type Theme } from './theme';
 import { setLanguage } from './i18n';
 import type { ChatSummary, ConexyModel, LimitExceededInfo, ReasoningEffort, SendOutcome, SubscriptionUsage, TaskAttachment } from './types/api';
-import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep, TurnBlock, AgentAction } from './types/chat';
+import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep, TurnBlock, AgentAction, TeamAgent } from './types/chat';
 import type { PendingActionPayload, SignalrCallbacks } from './types/signalr';
 // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
 import { toMessageAttachment } from './utils/attachments';
@@ -244,6 +244,19 @@ function replacesLastTurn(messages: ChatMessage[], userIndex: number): boolean {
   if (userIndex < 0 || messages.slice(userIndex + 1).some((m) => m.role === 'user')) return false;
   const last = messages[messages.length - 1];
   return messages.length - 1 > userIndex && turnPersisted(last);
+}
+
+// ORCHESTRA: гарантирует, что карточка помощника есть на сообщении, получив его id/роль из события.
+// Так лента не зависит от разового события AgentTeam (оно могло не дойти при переподключении).
+function withWorkerAgent(
+  agents: TeamAgent[] | undefined,
+  agentId?: string,
+  agentRole?: string,
+): TeamAgent[] | undefined {
+  if (!agentId || agentId === 'lead') return agents;
+  const list = agents ?? [];
+  if (list.some((a) => a.id === agentId)) return list;
+  return [...list, { id: agentId, role: agentRole || agentId, brief: '', scope: [] }];
 }
 
 export default function App() {
@@ -1196,10 +1209,14 @@ export default function App() {
       // ORCHESTRA: статус помощника обновляет его карточку и не добавляет шаг ведущему.
       if (payload.agentId && payload.agentId !== 'lead') {
         const agentId = payload.agentId;
-        patchTurn(ctx, (m) => ({
-          ...m,
-          agents: m.agents?.map((a) => (a.id === agentId ? { ...a, status: payload.label } : a)),
-        }));
+        const role = payload.agentRole || agentId;
+        patchTurn(ctx, (m) => {
+          const list = withWorkerAgent(m.agents, agentId, role) ?? [];
+          return {
+            ...m,
+            agents: list.map((a) => (a.id === agentId ? { ...a, status: payload.label } : a)),
+          };
+        });
         return;
       }
       patchTurn(ctx, (m) => {
@@ -1265,6 +1282,7 @@ export default function App() {
         patchTurn(ctx, (m) => ({
           ...m,
           toolActions: [...(m.toolActions ?? []), event],
+          agents: withWorkerAgent(m.agents, event.agentId, event.agentRole),
           blocks: isAgentSession(ctx.sessionId) ? applyToolEvent(m.blocks ?? [], event) : m.blocks,
         }));
       }

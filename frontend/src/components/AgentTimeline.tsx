@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TeamAgent, TurnBlock } from '../types/chat';
 import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
@@ -208,6 +209,26 @@ export function AgentTimeline({
     }
   };
 
+  // ORCHESTRA: состав берём из события AgentTeam, но НЕ зависим от него: если оно не дошло
+  // (мобильное переподключение, поздний JoinTask, обрыв сокета), помощников выводим из их же
+  // шагов — у каждого tool-блока есть agentId/agentRole. Иначе действия субагентов пропадали бы.
+  const team = useMemo<TeamAgent[]>(() => {
+    const byId = new Map<string, TeamAgent>();
+    for (const agent of agents ?? []) byId.set(agent.id, agent);
+    for (const block of feed) {
+      if (block.type !== 'tool' || !block.agentId || block.agentId === 'lead') continue;
+      if (!byId.has(block.agentId)) {
+        byId.set(block.agentId, {
+          id: block.agentId,
+          role: block.agentRole || block.agentId,
+          brief: '',
+          scope: [],
+        });
+      }
+    }
+    return [...byId.values()];
+  }, [agents, feed]);
+
   const statusRow = showStatusRow && statusPill ? (
     <div className="tl-step tl-step--running" role="status">
       <span className="tl-step__pulse" aria-hidden="true" />
@@ -217,8 +238,7 @@ export function AgentTimeline({
 
   // ORCHESTRA: с командой лента перестаёт быть одним потоком — на каждого агента своя карточка
   // со своими шагами (и своими подтверждениями команд). Без команды — прежняя единая лента.
-  const team = agents && agents.length > 0 ? agents : null;
-  if (team) {
+  if (team.length > 0) {
     const isLeadBlock = (block: TurnBlock) => block.type !== 'tool' || !block.agentId || block.agentId === 'lead';
     const leadBlocks = feed.filter(isLeadBlock);
     return (
