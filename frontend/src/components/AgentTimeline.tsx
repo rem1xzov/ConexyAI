@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TeamAgent, TurnBlock } from '../types/chat';
 import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
@@ -212,7 +211,8 @@ export function AgentTimeline({
   // ORCHESTRA: состав берём из события AgentTeam, но НЕ зависим от него: если оно не дошло
   // (мобильное переподключение, поздний JoinTask, обрыв сокета), помощников выводим из их же
   // шагов — у каждого tool-блока есть agentId/agentRole. Иначе действия субагентов пропадали бы.
-  const team = useMemo<TeamAgent[]>(() => {
+  // ВАЖНО: это НЕ хук — компонент имеет ранний return, и хуки после него ломали бы React (#310).
+  const team: TeamAgent[] = (() => {
     const byId = new Map<string, TeamAgent>();
     for (const agent of agents ?? []) byId.set(agent.id, agent);
     for (const block of feed) {
@@ -227,7 +227,7 @@ export function AgentTimeline({
       }
     }
     return [...byId.values()];
-  }, [agents, feed]);
+  })();
 
   const statusRow = showStatusRow && statusPill ? (
     <div className="tl-step tl-step--running" role="status">
