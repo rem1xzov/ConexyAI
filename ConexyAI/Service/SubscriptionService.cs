@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Threading;
 using ConexyAI.Configuration;
 using ConexyAI.Contract;
 using ConexyAI.Entity;
@@ -40,6 +42,30 @@ public class SubscriptionService : ISubscriptionService
     // ADMIN_UNLIMITED: добавлено 2026-09-19
     private readonly IUserRepository _userRepository;
     private readonly IOptions<SubscriptionLimitsOptions> _options;
+
+    // LIMIT_RACE: счётчик лимитов — это read-modify-write по строке UserUsageCounter. Воркер запускает
+    // ходы ПАРАЛЛЕЛЬНО (ConexyBackgroundWorker: SemaphoreSlim + Task.Run), поэтому два одновременных
+    // хода ОДНОГО пользователя читали одну и ту же строку и затирали апдейт друг друга: счётчик Pro
+    // «переливался» за лимит (20 → 40), а токены агента недосчитывались и казались бесконечными.
+    // Бэкенд — один процесс, поэтому достаточно сериализовать изменения счётчика по пользователю.
+    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> _userLocks = new();
+
+    private sealed class Releaser(SemaphoreSlim gate) : IDisposable
+    {
+        private int _released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0) gate.Release();
+        }
+    }
+
+    private static async Task<IDisposable> LockUserAsync(Guid userId, CancellationToken ct)
+    {
+        var gate = _userLocks.GetOrAdd(userId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        return new Releaser(gate);
+    }
 
     public SubscriptionService(IUsageRepository repository, IUserRepository userRepository, IOptions<SubscriptionLimitsOptions> options)
     {
@@ -90,6 +116,8 @@ public class SubscriptionService : ISubscriptionService
     // LIMIT_RESET: добавлено 2026-10-07 — сброс всех лимитов за текущий период.
     public async Task<SubscriptionUsageDto> ResetLimitsAsync(Guid userId, CancellationToken ct = default)
     {
+        // LIMIT_RACE: сериализуем с записями расхода, чтобы сброс и параллельный ход не гоняли одну строку.
+        using var gate = await LockUserAsync(userId, ct);
         var user = await _userRepository.GetByIdAsync(userId, ct);
         if (user is null)
             throw new AuthException("user_not_found", "Пользователь не найден.", 404);
@@ -186,6 +214,8 @@ public class SubscriptionService : ISubscriptionService
 
     public async Task RecordRequestAsync(Guid userId, ConexyModelType modelType, CancellationToken ct = default)
     {
+        // LIMIT_RACE: изменения счётчика сериализуем по пользователю, иначе параллельные ходы теряют апдейты.
+        using var gate = await LockUserAsync(userId, ct);
         // ADMIN_UNLIMITED: изменено 2026-10-01 — расход админа теперь учитывается (для кружка),
         // но ни на что не влияет: CheckBeforeRunAsync для админа всегда разрешает запуск.
         var user = await _userRepository.GetByIdAsync(userId, ct);
@@ -199,6 +229,8 @@ public class SubscriptionService : ISubscriptionService
 
     public async Task<long> RecordAgentTokensAsync(Guid userId, ConexyModelType modelType, LlmTokenUsage usage, CancellationToken ct = default)
     {
+        // LIMIT_RACE: то же — параллельные прогоны (в т.ч. помощники оркестра) не должны терять расход.
+        using var gate = await LockUserAsync(userId, ct);
         // PRICED_BILLING: в бюджет идёт взвешенная сумма, а не сырой total_tokens: у DeepSeek кэш-хит
         // стоит ~2% от обычного входа, а выход ~4× — без веса пользователь платил бы за кэшированное
         // как за новое (85% его «расхода» — именно кэш-хиты).
