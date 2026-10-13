@@ -1746,6 +1746,13 @@ export default function App() {
   // TURN_SCOPE (H6/L8): «идёт генерация» — это состояние ОТКРЫТОГО чата, а не глобальный флаг.
   const activeStreaming = isSessionStreaming(activeSession);
   const agentRunning = activeStreaming || activeSession?.status === 'Running';
+  // COMMAND_CONFIRM: автоподтверждение привязано к КОНКРЕТНОМУ запуску (задаче) активного чата.
+  // Раньше плашка жила по глобальному allowAllTaskId и висела при переходе в другой чат.
+  const activeAllowAll = Boolean(
+    allowAllTaskId &&
+      activeSession?.taskId &&
+      allowAllTaskId.toLowerCase() === activeSession.taskId.toLowerCase(),
+  );
   const activeLoading = Boolean(activeSession?.needsTranscript) && !(transcriptLoad?.id === activeSession?.id && transcriptLoad?.failed);
   const activeLoadFailed = Boolean(activeSession?.needsTranscript) && transcriptLoad?.id === activeSession?.id && Boolean(transcriptLoad?.failed);
 
@@ -3023,7 +3030,7 @@ export default function App() {
                 <>
                   {/* COMMAND_CONFIRM: добавлено 2026-09-20 — while auto-approve is on, agent
                       commands run without asking; this is the single switch-off point. */}
-                  {allowAllTaskId && (
+                  {activeAllowAll && (
                     <div className="agent-autoapprove">
                       <span className="agent-autoapprove__text">{t('cmdConfirm.allowAllActive')}</span>
                       <button
