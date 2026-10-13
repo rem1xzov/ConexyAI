@@ -241,8 +241,17 @@ export function AgentTimeline({
   if (team.length > 0) {
     const isLeadBlock = (block: TurnBlock) => block.type !== 'tool' || !block.agentId || block.agentId === 'lead';
     const leadBlocks = feed.filter(isLeadBlock);
+    const anyStarted = team.some((a) => a.status);
     return (
       <div className="agent-timeline agent-timeline--team">
+        {/* ORCHESTRA: явная плашка, пока команда реально работает — иначе первый десяток секунд
+            (модель ещё не вернула ни одного шага) выглядит как зависание. */}
+        {streaming && (
+          <div className="orchestra-banner" role="status">
+            <span className="orchestra-banner__spinner" aria-hidden="true" />
+            <span>{anyStarted ? t('orchestra.running', { count: team.length }) : t('orchestra.starting')}</span>
+          </div>
+        )}
         <section className="agent-card agent-card--lead">
           <header className="agent-card__head">
             <span className="agent-card__role">{t('orchestra.lead')}</span>

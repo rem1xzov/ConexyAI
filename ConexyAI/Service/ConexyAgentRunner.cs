@@ -1659,7 +1659,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             }).ToArray()
         }, ct);
         await group.SendAsync("OnLog", $"[Orchestra] Команда: {string.Join(", ", specs.Select(s => s.Role))}", ct);
-        await SendAgentStatusAsync(taskId, "thinking", $"Оркестр: {specs.Count} агентов работают над задачей…", ct: ct);
+        await SendAgentStatusAsync(taskId, "thinking", "Вызываю субагентов: настраиваю роли и задания…", ct: ct);
 
         var subJob = _job;
 
@@ -1671,7 +1671,25 @@ public class ConexyAgentRunner : IConexyAgentRunner
             try
             {
                 await group.SendAsync("OnLog", $"[Orchestra] [{spec.Role}] {spec.Brief}", ct);
+                // ORCHESTRA: сразу сообщаем статус помощника, чтобы его карточка не выглядела пустой,
+                // пока идёт первый (медленный) вызов модели.
+                await group.SendAsync("OnAgentStatus", new
+                {
+                    stage = "thinking",
+                    label = "Настраиваюсь и начинаю…",
+                    file = (string?)null,
+                    agentId = identity.Id,
+                    agentRole = spec.Role
+                }, ct);
                 var text = await runner.RunWorkerAsync(subJob, identity, spec.Brief, ct);
+                await group.SendAsync("OnAgentStatus", new
+                {
+                    stage = "idle",
+                    label = "Готово",
+                    file = (string?)null,
+                    agentId = identity.Id,
+                    agentRole = spec.Role
+                }, ct);
                 return (index, spec, string.IsNullOrWhiteSpace(text) ? "(готово)" : text.Trim());
             }
             catch (OperationCanceledException)

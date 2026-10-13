@@ -279,7 +279,9 @@
   "orchestra": {
     "lead": "Lead agent",
     "scope": "Scope:",
-    "idle": "Working…"
+    "idle": "Working…",
+    "starting": "Spawning sub-agents: setting up roles and tasks…",
+    "running": "Orchestra: {{count}} agents working on the task…"
   },
   "admin": {
     "title": "Admin panel",
