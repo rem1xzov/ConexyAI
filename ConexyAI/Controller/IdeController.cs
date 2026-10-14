@@ -174,13 +174,19 @@ public class IdeController : ControllerBase
     public async Task<IActionResult> UploadFiles(
         Guid sessionId,
         [FromForm] string? path,
-        [FromForm] List<IFormFile>? files,
         CancellationToken ct = default)
     {
         if (!TryGetUserId(out _))
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
-        if (files is null || files.Count == 0)
+        // AXIOS_FORM: читаем файлы прямо из формы — самый надёжный путь биндинга (не зависит от имени
+        // параметра). Не-multipart запрос (например, ушедший с Content-Type: application/json)
+        // отсекаем с понятным сообщением, а не молчаливым «нет файлов».
+        if (!Request.HasFormContentType)
+            return BadRequest(new { error = "Expected a multipart/form-data upload." });
+
+        var files = Request.Form.Files;
+        if (files.Count == 0)
             return BadRequest(new { error = "No files were uploaded." });
 
         var denied = await AuthorizeWriteAsync(sessionId, ct);

@@ -464,7 +464,13 @@ export async function uploadIdeFiles(sessionId: string, dirPath: string, files: 
   const form = new FormData();
   form.append('path', dirPath ?? '');
   for (const file of files) form.append('files', file, file.name);
-  await http.post(`/sessions/${sessionId}/files/upload`, form);
+  await http.post(`/sessions/${sessionId}/files/upload`, form, {
+    // AXIOS_FORM: у общего клиента глобально стоит Content-Type: application/json, и он уехал бы
+    // вместе с FormData — браузер не проставил бы multipart-boundary, и сервер ответил бы
+    // «No files were uploaded». undefined снимает заголовок: axios/браузер сами поставят
+    // multipart/form-data с boundary.
+    headers: { 'Content-Type': undefined },
+  });
 }
 
 // IDE_GIT: добавлено 2026-10-04 — Source Control через IDE API.
