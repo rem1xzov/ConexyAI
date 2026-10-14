@@ -583,6 +583,32 @@ export async function checkoutGitBranch(
 
 // PROBLEMS_PANEL: добавлено 2026-10-04 — анализ ошибок/предупреждений всего проекта.
 /** Analyzes the workspace (compiler/linter/types) and returns structured problems. */
+// PREVIEW: сервис агента (start_service) — адрес с поддоменом и токен доступа.
+export interface PreviewState {
+  running: boolean;
+  url?: string | null;
+  openUrl?: string | null;
+  token?: string | null;
+  subdomain?: string | null;
+  port?: number | null;
+  command?: string | null;
+  startedAt?: string | null;
+}
+
+export async function getPreview(sessionId: string): Promise<PreviewState> {
+  const { data } = await http.get<PreviewState>(`/sessions/${sessionId}/preview`);
+  return data;
+}
+
+export async function getPreviewLogs(sessionId: string): Promise<string> {
+  const { data } = await http.get<{ logs?: string }>(`/sessions/${sessionId}/preview/logs`);
+  return data?.logs ?? '';
+}
+
+export async function stopPreview(sessionId: string): Promise<void> {
+  await http.delete(`/sessions/${sessionId}/preview`);
+}
+
 export async function analyzeProblems(
   sessionId: string,
   tool?: string,

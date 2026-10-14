@@ -57,6 +57,21 @@ public sealed class BrowserRouteHandler
                     await FetchPublicAsync(chatId, route, url, verdicts, ct);
                     return;
 
+                case BrowserRequestAction.FetchPreview:
+                {
+                    var internalUri = _policy.MapPreview(chatId, new Uri(url));
+                    if (internalUri is null)
+                    {
+                        await route.AbortAsync("connectionrefused");
+                        return;
+                    }
+
+                    // Редиректы не следуем: браузер сам пройдёт по Location, и каждый шаг снова пойдёт через политику.
+                    var response = await route.FetchAsync(new RouteFetchOptions { Url = internalUri.AbsoluteUri, MaxRedirects = 0, Timeout = 15000 });
+                    await route.FulfillAsync(new RouteFulfillOptions { Response = response });
+                    return;
+                }
+
                 default:
                     _logger.LogInformation("browser: blocked a request ({Reason}).", decision.Reason);
                     await route.AbortAsync("blockedbyclient");

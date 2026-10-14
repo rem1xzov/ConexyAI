@@ -161,6 +161,10 @@ services:
       # Sandbox__User is intentionally left unset: the runner then runs the sandbox as the backend's
       # own uid, which is what makes the bind-mounted workspace writable inside the sandbox.
       Sandbox__IdleTimeoutMinutes: ${SANDBOX_IDLE_TIMEOUT_MINUTES:-10}
+      # PREVIEW: start_service-контейнеры живут в внешней сети conexy-preview-net (docker network create conexy-preview-net);
+      # бэкенд в ней резолвит их по имени. Адрес для пользователя: https://{id}.${PREVIEW_DOMAIN}.
+      Preview__Domain: ${PREVIEW_DOMAIN:-preview.conexyai.ru}
+      Preview__Network: ${PREVIEW_NETWORK:-conexy-preview-net}
       # The backend talks to the host Docker daemon ONLY through the socket proxy.
       DOCKER_HOST: tcp://docker-socket-proxy:2375
     volumes:
@@ -175,6 +179,7 @@ services:
     networks:
       - frontend
       - backend
+      - preview
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/api/health || exit 1"]
       interval: 15s
@@ -209,6 +214,10 @@ services:
 networks:
   frontend:
   backend:
+  # PREVIEW: создаётся вручную один раз: docker network create conexy-preview-net
+  preview:
+    external: true
+    name: ${PREVIEW_NETWORK:-conexy-preview-net}
 
 volumes:
   conexy_pgdata:

@@ -138,6 +138,7 @@ builder.Services.Configure<ConversationOptions>(builder.Configuration.GetSection
 builder.Services.Configure<RagOptions>(builder.Configuration.GetSection(RagOptions.SectionName));
 // SANDBOX: добавлено 2026-09-17
 builder.Services.Configure<SandboxOptions>(builder.Configuration.GetSection(SandboxOptions.SectionName));
+builder.Services.Configure<PreviewOptions>(builder.Configuration.GetSection(PreviewOptions.SectionName));
 // EMAIL_VERIFICATION: добавлено 2026-09-24 — SMTP для писем с кодом подтверждения. Пароль
 // приложения приходит ТОЛЬКО из окружения (SMTP_PASSWORD), в appsettings.json его нет и не должно
 // быть: конфиг лежит в репозитории и в образе.
@@ -289,7 +290,13 @@ builder.Services.AddScoped<IUserDataCleanupService, UserDataCleanupService>();
 builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 // SANDBOX: добавлено 2026-09-17
-builder.Services.AddSingleton<IDockerSandboxRunner, DockerSandboxRunner>();
+builder.Services.AddSingleton<DockerSandboxRunner>();
+builder.Services.AddSingleton<IDockerSandboxRunner>(sp => sp.GetRequiredService<DockerSandboxRunner>());
+builder.Services.AddSingleton<IDockerServiceRunner>(sp => sp.GetRequiredService<DockerSandboxRunner>());
+// PREVIEW: долгоживущие сервисы агента (start_service) + шлюз превью.
+builder.Services.AddSingleton<IPreviewService, PreviewService>();
+builder.Services.AddHttpClient("preview", c => c.Timeout = TimeSpan.FromSeconds(60))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 // SANDBOX_SESSIONS: добавлено 2026-09-23 — состояние песочницы на сессию + автоочистка по простою.
 builder.Services.AddSingleton<ISandboxSessionStore, SandboxSessionStore>();
 builder.Services.AddHostedService<SandboxIdleCleanupService>();
@@ -403,6 +410,9 @@ _ = app.Services.GetRequiredService<IConexyWorkspaceService>();
 LogEnvironmentPrerequisites(app);
 
 app.UseConexyForwardedHeaders();
+
+// PREVIEW: запросы на {id}.{Preview:Domain} проксируются в контейнер сервиса до остального конвейера.
+app.UseMiddleware<ConexyAI.Service.PreviewGatewayMiddleware>();
 
 // ATTACHMENT_SIZE_LIMIT: Kestrel обрывает чтение тела на лимите и бросает BadHttpRequestException
 // со статусом 413. Без этого клиент видит только пустое "413 Request Entity Too Large", поэтому

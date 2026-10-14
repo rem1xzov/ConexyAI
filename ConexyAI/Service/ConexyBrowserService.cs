@@ -30,6 +30,8 @@ public interface IConexyBrowserService
     Task<BrowserStepResult> ScrollAsync(Guid chatId, string direction, int amount, CancellationToken ct = default);
     Task<BrowserStepResult> ExtractAsync(Guid chatId, int maxChars, CancellationToken ct = default);
     Task<BrowserStepResult> ScreenshotAsync(Guid chatId, CancellationToken ct = default);
+    Task<BrowserStepResult> ConsoleAsync(Guid chatId, bool clear, CancellationToken ct = default);
+    Task<BrowserStepResult> WaitForAsync(Guid chatId, string? selector, string? text, string? state, int timeoutMs, CancellationToken ct = default);
     Task CloseAsync(Guid chatId, CancellationToken ct = default);
 }
 
@@ -69,17 +71,23 @@ public sealed class ConexyBrowserService : IConexyBrowserService
     private readonly IChromiumHost _chromium;
     private readonly BrowserRequestPolicy _policy;
     private readonly BrowserRouteHandler _routes;
-    private readonly ConcurrentDictionary<Guid, Session> _sessions = new();
+    private const int MaxLogEntries = 200;
+
+    // Сессия — на (чат, агент): параллельные помощники одного чата не делят страницу.
+    private static string Key(Guid chatId) => $"{chatId:N}:{AgentExecutionContext.AgentId ?? "lead"}";
+
+    private readonly ConcurrentDictionary<string, Session> _sessions = new();
 
     public ConexyBrowserService(
         ILogger<ConexyBrowserService> logger,
         IChromiumHost chromium,
         IWorkspacePathValidator pathValidator,
-        PublicUrlGuard urlGuard)
+        PublicUrlGuard urlGuard,
+        IPreviewService? preview = null)
     {
         _logger = logger;
         _chromium = chromium;
-        _policy = new BrowserRequestPolicy(urlGuard, pathValidator);
+        _policy = new BrowserRequestPolicy(urlGuard, pathValidator, preview);
         _routes = new BrowserRouteHandler(_policy, logger);
     }
 
@@ -90,6 +98,16 @@ public sealed class ConexyBrowserService : IConexyBrowserService
         public required ConcurrentDictionary<string, Task<BrowserRequestDecision>> Verdicts { get; init; }
         public required SemaphoreSlim Gate { get; init; }
         public DateTime LastUsedAt { get; set; }
+        public List<string> Log { get; } = new();
+
+        public void AddLog(string line)
+        {
+            lock (Log)
+            {
+                if (Log.Count >= MaxLogEntries) Log.RemoveAt(0);
+                Log.Add(line);
+            }
+        }
     }
 
     public async Task<BrowserStepResult> OpenAsync(Guid chatId, string target, CancellationToken ct = default)
@@ -252,9 +270,59 @@ public sealed class ConexyBrowserService : IConexyBrowserService
 
     public async Task CloseAsync(Guid chatId, CancellationToken ct = default)
     {
-        if (_sessions.TryRemove(chatId, out var session))
+        if (_sessions.TryRemove(Key(chatId), out var session))
             await SafeCloseAsync(session);
     }
+
+    public Task<BrowserStepResult> ConsoleAsync(Guid chatId, bool clear, CancellationToken ct = default) =>
+        WithSessionAsync(chatId, session =>
+        {
+            string[] lines;
+            lock (session.Log)
+            {
+                lines = session.Log.ToArray();
+                if (clear) session.Log.Clear();
+            }
+
+            var text = lines.Length == 0
+                ? "Ошибок консоли и сети нет."
+                : $"События консоли/сети ({lines.Length}):\n{string.Join('\n', lines)}";
+            return Task.FromResult(new BrowserStepResult(true, text));
+        }, ct);
+
+    public Task<BrowserStepResult> WaitForAsync(Guid chatId, string? selector, string? text, string? state, int timeoutMs, CancellationToken ct = default) =>
+        WithSessionAsync(chatId, async session =>
+        {
+            var timeout = Math.Clamp(timeoutMs <= 0 ? 10_000 : timeoutMs, 500, 30_000);
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(selector))
+                {
+                    var wanted = (state ?? "visible").ToLowerInvariant() switch
+                    {
+                        "hidden" => WaitForSelectorState.Hidden,
+                        "attached" => WaitForSelectorState.Attached,
+                        "detached" => WaitForSelectorState.Detached,
+                        _ => WaitForSelectorState.Visible,
+                    };
+                    await session.Page.Locator(selector).First.WaitForAsync(new LocatorWaitForOptions { Timeout = timeout, State = wanted });
+                }
+                else if (!string.IsNullOrWhiteSpace(text))
+                {
+                    await session.Page.GetByText(text).First.WaitForAsync(new LocatorWaitForOptions { Timeout = timeout, State = WaitForSelectorState.Visible });
+                }
+                else
+                {
+                    await session.Page.WaitForLoadStateAsync(LoadState.NetworkIdle, new PageWaitForLoadStateOptions { Timeout = timeout });
+                }
+            }
+            catch (PlaywrightException ex)
+            {
+                return new BrowserStepResult(false, $"Не дождался за {timeout} мс: {ex.Message}");
+            }
+
+            return await DescribeAsync(session.Page, "Дождался.", ct);
+        }, ct);
 
     private async Task<BrowserStepResult> WithSessionAsync(
         Guid chatId,
@@ -263,7 +331,7 @@ public sealed class ConexyBrowserService : IConexyBrowserService
     {
         EvictExpired();
 
-        if (!_sessions.TryGetValue(chatId, out var session) || session.Page.IsClosed)
+        if (!_sessions.TryGetValue(Key(chatId), out var session) || session.Page.IsClosed)
             return new BrowserStepResult(false, "Страница не открыта. Сначала вызови browser_open с адресом страницы.");
 
         await session.Gate.WaitAsync(ct);
@@ -282,6 +350,8 @@ public sealed class ConexyBrowserService : IConexyBrowserService
             session.Gate.Release();
         }
     }
+
+    private static string Clip(string s) => s.Length <= 400 ? s : s[..400] + "…";
 
     private async Task<BrowserStepResult> DescribeAsync(IPage page, string prefix, CancellationToken ct)
     {
@@ -326,7 +396,8 @@ public sealed class ConexyBrowserService : IConexyBrowserService
 
     private async Task<Session> GetOrCreateSessionAsync(Guid chatId, CancellationToken ct)
     {
-        if (_sessions.TryGetValue(chatId, out var existing) && !existing.Page.IsClosed)
+        var key = Key(chatId);
+        if (_sessions.TryGetValue(key, out var existing) && !existing.Page.IsClosed)
             return existing;
 
         var browser = await _chromium.GetBrowserAsync(ct);
@@ -351,10 +422,23 @@ public sealed class ConexyBrowserService : IConexyBrowserService
             LastUsedAt = DateTime.UtcNow,
         };
 
-        if (_sessions.TryRemove(chatId, out var stale))
+        page.Console += (_, m) =>
+        {
+            if (m.Type is "error" or "warning")
+                session.AddLog($"[console.{m.Type}] {Clip(m.Text)}");
+        };
+        page.PageError += (_, e) => session.AddLog($"[pageerror] {Clip(e)}");
+        page.RequestFailed += (_, r) => session.AddLog($"[network] {r.Method} {Clip(r.Url)} — {r.Failure}");
+        page.Response += (_, r) =>
+        {
+            if (r.Status >= 400)
+                session.AddLog($"[network] {r.Request.Method} {Clip(r.Url)} → HTTP {r.Status}");
+        };
+
+        if (_sessions.TryRemove(key, out var stale))
             await SafeCloseAsync(stale);
 
-        _sessions[chatId] = session;
+        _sessions[key] = session;
         _logger.LogInformation("Browser session opened for chat {ChatId}.", chatId);
         return session;
     }

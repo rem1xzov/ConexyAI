@@ -36,6 +36,7 @@ import { ProblemsPanel } from './ProblemsPanel';
 import { SourceControlPanel } from './SourceControlPanel';
 import { OutlinePanel } from './OutlinePanel';
 import { DebugPanel } from './DebugPanel';
+import { PreviewPanel } from './PreviewPanel';
 import { DiffView } from './DiffView';
 import { SearchPanel } from './SearchPanel';
 import { EditorSettingsDialog } from './EditorSettingsDialog';
@@ -95,7 +96,7 @@ type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 // STATUS_TAB_REMOVED: добавлено 2026-09-22 — вкладка «Статус» удалена целиком: она дублировала
 // ленту чата (те же команды и карточки подтверждения).
 // SANDBOX_TERMINAL: добавлено 2026-09-24 — вторая вкладка нижней панели: терминал.
-type BottomTab = 'todo' | 'terminal' | 'problems' | 'debug';
+type BottomTab = 'todo' | 'terminal' | 'problems' | 'debug' | 'preview';
 
 type DialogState =
   | { kind: 'confirm'; title: string; message?: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void }
@@ -2037,6 +2038,17 @@ export function WorkspacePanel({
           >
             {t('debug.tab')}
           </button>
+          <button
+            role="tab"
+            aria-selected={bottomTab === 'preview'}
+            className={`workspace__bottom-tab ${bottomTab === 'preview' ? 'workspace__bottom-tab--active' : ''}`}
+            onClick={() => setBottomTab('preview')}
+          >
+            {t('workspace.preview')}
+          </button>
+        </div>
+        <div className="workspace__bottom-body" hidden={bottomTab !== 'preview'}>
+          <PreviewPanel key={sessionId ?? 'none'} sessionId={sessionId} active={bottomTab === 'preview'} />
         </div>
         <div className="workspace__bottom-body" hidden={bottomTab !== 'todo'}>
           {todos.length > 0 ? (

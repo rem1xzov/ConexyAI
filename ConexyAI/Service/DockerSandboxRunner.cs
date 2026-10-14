@@ -35,8 +35,79 @@ public interface IDockerSandboxRunner
 /// passed into the container, so secrets (API keys, connection strings, tokens) never leak
 /// into it. If Docker is unavailable, execution is refused.
 /// </summary>
-public class DockerSandboxRunner : IDockerSandboxRunner
+/// <summary>PREVIEW: long-running (detached) containers for <c>start_service</c>; same hardening as the sandbox.</summary>
+public interface IDockerServiceRunner
 {
+    Task<(bool Ok, string Output)> StartServiceAsync(
+        string command, string workspaceHostPath, string? stateHostPath, string containerName, string network, CancellationToken ct);
+
+    Task<string> TailLogsAsync(string containerName, int lines, CancellationToken ct);
+    Task<bool> IsRunningAsync(string containerName, CancellationToken ct);
+    Task StopServiceAsync(string containerName);
+}
+
+public class DockerSandboxRunner : IDockerSandboxRunner, IDockerServiceRunner
+{
+    public async Task<(bool Ok, string Output)> StartServiceAsync(
+        string command, string workspaceHostPath, string? stateHostPath, string containerName, string network, CancellationToken ct)
+    {
+        if (!await IsDockerAvailableAsync(ct))
+            return (false, "Sandbox unavailable: Docker daemon is required.");
+
+        var psi = BuildDockerRunStartInfo(command, workspaceHostPath, containerName, stateHostPath, network);
+        var result = await RunDockerCommandAsync(psi, TimeSpan.FromSeconds(30), ct);
+        if (result.ExitCode != 0)
+        {
+            await TryRemoveContainerAsync(containerName);
+            return (false, result.Output.Trim());
+        }
+
+        return (true, string.Empty);
+    }
+
+    public async Task<string> TailLogsAsync(string containerName, int lines, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "docker",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+        };
+        psi.ArgumentList.Add("logs");
+        psi.ArgumentList.Add("--tail");
+        psi.ArgumentList.Add(lines.ToString());
+        psi.ArgumentList.Add(containerName);
+        var result = await RunDockerCommandAsync(psi, TimeSpan.FromSeconds(15), ct);
+        return result.Output.TrimEnd('\n');
+    }
+
+    public async Task<bool> IsRunningAsync(string containerName, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "docker",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("inspect");
+        psi.ArgumentList.Add("-f");
+        psi.ArgumentList.Add("{{.State.Running}}");
+        psi.ArgumentList.Add(containerName);
+        var result = await RunDockerCommandAsync(psi, TimeSpan.FromSeconds(10), ct);
+        return result.ExitCode == 0 && result.Output.Trim() == "true";
+    }
+
+    public async Task StopServiceAsync(string containerName)
+    {
+        await KillContainerAsync(containerName, CancellationToken.None);
+        await TryRemoveContainerAsync(containerName);
+    }
     private readonly IOptions<SandboxOptions> _options;
     private readonly ILogger<DockerSandboxRunner> _logger;
 
@@ -175,7 +246,8 @@ public class DockerSandboxRunner : IDockerSandboxRunner
         string command,
         string workspaceHostPath,
         string containerName,
-        string? sessionStateHostPath)
+        string? sessionStateHostPath,
+        string? networkOverride = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -208,7 +280,7 @@ public class DockerSandboxRunner : IDockerSandboxRunner
         // `bridge` (дефолтная docker-сеть) тоже изолирован от compose-сетей, но её разделяют все
         // неуправляемые контейнеры хоста, поэтому выделенная сеть предпочтительнее.
         psi.ArgumentList.Add("--network");
-        psi.ArgumentList.Add(ResolveNetwork());
+        psi.ArgumentList.Add(networkOverride ?? ResolveNetwork());
         // Read-only root filesystem: the container may only write to /tmp (tmpfs) and the mounted
         // /workspace and /state. Any other write fails with EROFS.
         psi.ArgumentList.Add("--read-only");

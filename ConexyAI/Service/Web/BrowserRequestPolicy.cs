@@ -6,6 +6,9 @@ public enum BrowserRequestAction
     /// <summary>Abort the request.</summary>
     Block,
 
+    /// <summary>PREVIEW: fetch the chat's own start_service container (<c>localhost:{port}</c> in the page).</summary>
+    FetchPreview,
+
     /// <summary>Serve <see cref="BrowserRequestDecision.FilePath"/> from the chat workspace.</summary>
     ServeWorkspaceFile,
 
@@ -49,11 +52,17 @@ public sealed class BrowserRequestPolicy
     private readonly PublicUrlGuard _guard;
     private readonly IWorkspacePathValidator _paths;
 
-    public BrowserRequestPolicy(PublicUrlGuard guard, IWorkspacePathValidator paths)
+    private readonly IPreviewService? _preview;
+
+    public BrowserRequestPolicy(PublicUrlGuard guard, IWorkspacePathValidator paths, IPreviewService? preview = null)
     {
         _guard = guard;
         _paths = paths;
+        _preview = preview;
     }
+
+    /// <summary>PREVIEW: <c>http://localhost:{port}</c> of the chat's own start_service container, else null.</summary>
+    public Uri? MapPreview(Guid chatId, Uri uri) => _preview?.MapLoopback(chatId, uri);
 
     /// <summary>
     /// Turns the model's target into the URL the browser navigates to. http(s) must be public; any other
@@ -72,6 +81,10 @@ public sealed class BrowserRequestPolicy
         {
             if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var web))
                 throw new ScreenshotTargetException($"Некорректный URL: '{trimmed}'.");
+
+            // PREVIEW: свой localhost агента (start_service) — единственный разрешённый внутренний хост.
+            if (MapPreview(chatId, web) is not null)
+                return web;
 
             var check = await _guard.CheckAsync(web, ct);
             if (!check.Allowed)
@@ -122,6 +135,9 @@ public sealed class BrowserRequestPolicy
                     ? new BrowserRequestDecision(BrowserRequestAction.Block, Reason: "outside the chat workspace")
                     : new BrowserRequestDecision(BrowserRequestAction.ServeWorkspaceFile, FilePath: fullPath);
             }
+
+            case "http" when MapPreview(chatId, uri) is not null:
+                return new BrowserRequestDecision(BrowserRequestAction.FetchPreview);
 
             case "http" or "https":
             {

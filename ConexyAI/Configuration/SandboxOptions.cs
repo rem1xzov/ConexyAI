@@ -28,14 +28,14 @@ public class SandboxOptions
 
     /// <summary>Container memory limit (Docker <c>--memory</c>).</summary>
     /// <remarks>Per-tier (Free/Pro/ProMax) limits are a future enhancement; keep a shared value for now.</remarks>
-    public string MemoryLimit { get; set; } = "512m";
+    public string MemoryLimit { get; set; } = "1536m";
 
     /// <summary>Container CPU limit (Docker <c>--cpus</c>).</summary>
     public string CpuLimit { get; set; } = "1.0";
 
     /// <summary>Container PID limit (Docker <c>--pids-limit</c>).</summary>
     /// <remarks>Per-tier (Free/Pro/ProMax) limits are a future enhancement; keep a shared value for now.</remarks>
-    public int PidsLimit { get; set; } = 64;
+    public int PidsLimit { get; set; } = 512;
 
     /// <summary>Size of the writable <c>/tmp</c> tmpfs (Docker <c>--tmpfs /tmp:rw,size=...</c>).</summary>
     public string TmpfsSize { get; set; } = "64m";
