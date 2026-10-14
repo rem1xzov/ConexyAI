@@ -940,16 +940,17 @@ export function WorkspacePanel({
     persistBreakpoints(map);
   }
 
-  async function doCreateFile(path: string) {
-    // Materialize the draft chat on first file creation so the workspace (and its chatId)
+  async function doCreateEntry(path: string, isDirectory: boolean) {
+    // Materialize the draft chat on first creation so the workspace (and its chatId)
     // exists on disk and in the sidebar list before the agent ever runs.
     const id = onEnsureWorkspace?.() ?? chatIdRef.current;
     if (!id) return;
     try {
-      await createIdeFile(id, path, false);
+      await createIdeFile(id, path, isDirectory);
       if (!isCurrentChat(id)) return;
       await loadFiles(id);
-      await openFile(path);
+      // A folder has nothing to open; a file is opened for editing right away.
+      if (!isDirectory) await openFile(path);
     } catch (e) {
       if (isCurrentChat(id)) setError(humanError(e, t));
     }
@@ -960,7 +961,16 @@ export function WorkspacePanel({
       kind: 'prompt',
       title: t('workspace.newFile'),
       placeholder: 'src/app.cs',
-      onSubmit: (value) => void doCreateFile(value),
+      onSubmit: (value) => void doCreateEntry(value, false),
+    });
+  }
+
+  function promptCreateFolder() {
+    setDialog({
+      kind: 'prompt',
+      title: t('workspace.newFolder'),
+      placeholder: 'src/components',
+      onSubmit: (value) => void doCreateEntry(value, true),
     });
   }
 
@@ -1177,7 +1187,18 @@ export function WorkspacePanel({
       title: t('workspace.newFile'),
       placeholder: 'src/app.cs',
       initialValue: dir ? `${dir}/` : '',
-      onSubmit: (value) => void doCreateFile(value),
+      onSubmit: (value) => void doCreateEntry(value, false),
+    });
+  }
+
+  function promptCreateFolderIn(dir: string) {
+    setFileMenu(null);
+    setDialog({
+      kind: 'prompt',
+      title: t('workspace.newFolder'),
+      placeholder: 'src/components',
+      initialValue: dir ? `${dir}/` : '',
+      onSubmit: (value) => void doCreateEntry(value, true),
     });
   }
 
@@ -1487,6 +1508,10 @@ export function WorkspacePanel({
         {
           label: t('workspace.menuNewFile'),
           action: () => promptCreateFile(),
+        },
+        {
+          label: t('workspace.menuNewFolder'),
+          action: () => promptCreateFolder(),
         },
         {
           label: t('workspace.menuOpenZip'),
@@ -2133,6 +2158,11 @@ export function WorkspacePanel({
           {fileMenu.isDirectory && (
             <button className="file-menu__item" onClick={() => promptCreateFileIn(fileMenu.path)} type="button">
               {t('workspace.newFile')}
+            </button>
+          )}
+          {fileMenu.isDirectory && (
+            <button className="file-menu__item" onClick={() => promptCreateFolderIn(fileMenu.path)} type="button">
+              {t('workspace.newFolder')}
             </button>
           )}
           {fileMenu.isDirectory && (
