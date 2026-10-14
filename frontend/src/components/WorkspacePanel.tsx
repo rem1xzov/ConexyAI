@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { CSSProperties, DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
+import type { CSSProperties, DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
   createIdeFile,
@@ -14,6 +15,7 @@ import {
   renameIdeFile,
   saveIdeFileContent,
   setDebugBreakpoints,
+  uploadIdeFiles,
   uploadWorkspaceZip,
 } from '../api/conexyApi';
 import type { WorkspaceFileEntry, WorkspaceListing } from '../types/api';
@@ -379,6 +381,46 @@ function TreeNode({ node, depth, api }: { node: WorkspaceFileEntry; depth: numbe
   );
 }
 
+// FILE_MENU_PORTAL: контекстное меню дерева рендерим в body. У панели есть backdrop-filter/transform,
+// а он делает её containing block для position: fixed — из-за этого меню «уезжало» от файла. Плюс
+// прижимаем его к краю экрана, чтобы у границы окна оно не ушло за пределы.
+function FileMenu({
+  x,
+  y,
+  onMouseDown,
+  children,
+}: {
+  x: number;
+  y: number;
+  onMouseDown: (e: ReactMouseEvent) => void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const left = Math.max(4, Math.min(x, window.innerWidth - rect.width - 4));
+    const top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 4));
+    setPos({ left, top });
+  }, [x, y]);
+
+  return createPortal(
+    <div
+      ref={ref}
+      className="file-menu"
+      style={pos}
+      onMouseDown={onMouseDown}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
 export function WorkspacePanel({
   sessionId,
   onEnsureWorkspace,
@@ -458,6 +500,9 @@ export function WorkspacePanel({
 
   const toastTimer = useRef<number | null>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
+  // IDE_UPLOAD: загрузка своих файлов (любого формата) в папку — цель берём из контекстного меню.
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const uploadDirRef = useRef<string>('');
   const rootRef = useRef<HTMLDivElement>(null);
 
   // WORKSPACE_RACES: добавлено 2026-09-24 (M14).
@@ -1216,6 +1261,32 @@ export function WorkspacePanel({
     }
   }
 
+  // IDE_UPLOAD: загрузка своих файлов (любого формата) в выбранную папку рабочей области.
+  async function handleUploadFiles(files: FileList) {
+    const id = onEnsureWorkspace?.() ?? chatIdRef.current;
+    if (!id) return;
+    const list = Array.from(files);
+    if (list.length === 0) return;
+    notify(t('workspace.uploading'));
+    try {
+      await uploadIdeFiles(id, uploadDirRef.current ?? '', list);
+      if (!isCurrentChat(id)) return;
+      notify(t('workspace.uploaded'));
+      await loadFiles(id);
+    } catch (e) {
+      if (!isCurrentChat(id)) return;
+      const message = humanError(e, t);
+      notify(t('workspace.uploadError', { message }));
+      setError(message);
+    }
+  }
+
+  function promptUploadIn(dir: string) {
+    setFileMenu(null);
+    uploadDirRef.current = dir;
+    uploadInputRef.current?.click();
+  }
+
   // SANDBOX_TERMINAL: добавлено 2026-09-24 (ТЗ-2 §6) — кнопка на панели инструментов открывает
   // терминал во вкладке нижней панели и закрывает его повторным нажатием.
   function toggleTerminal() {
@@ -1511,6 +1582,17 @@ export function WorkspacePanel({
         onChange={(e) => {
           const file = e.target.files?.[0];
           if (file) void handleZipUpload(file);
+          e.target.value = '';
+        }}
+      />
+      {/* IDE_UPLOAD: свои файлы любого формата (фото, архивы, код) — цель (папка) задана контекстным меню. */}
+      <input
+        ref={uploadInputRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) void handleUploadFiles(e.target.files);
           e.target.value = '';
         }}
       />
@@ -2042,12 +2124,7 @@ export function WorkspacePanel({
       />
 
       {fileMenu && (
-        <div
-          className="file-menu"
-          style={{ left: fileMenu.x, top: fileMenu.y }}
-          onMouseDown={(e) => e.stopPropagation()}
-          onContextMenu={(e) => e.preventDefault()}
-        >
+        <FileMenu x={fileMenu.x} y={fileMenu.y} onMouseDown={(e) => e.stopPropagation()}>
           {fileMenu.path && (
             <button className="file-menu__item" onClick={() => startRename(fileMenu.path)} type="button">
               {t('workspace.rename')}
@@ -2056,6 +2133,11 @@ export function WorkspacePanel({
           {fileMenu.isDirectory && (
             <button className="file-menu__item" onClick={() => promptCreateFileIn(fileMenu.path)} type="button">
               {t('workspace.newFile')}
+            </button>
+          )}
+          {fileMenu.isDirectory && (
+            <button className="file-menu__item" onClick={() => promptUploadIn(fileMenu.path)} type="button">
+              {t('workspace.uploadFiles')}
             </button>
           )}
           {fileMenu.path && (
@@ -2083,7 +2165,7 @@ export function WorkspacePanel({
               {t('workspace.delete')}
             </button>
           )}
-        </div>
+        </FileMenu>
       )}
 
       <EditorSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />

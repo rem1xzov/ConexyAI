@@ -166,6 +166,57 @@ public class IdeController : ControllerBase
         }
     }
 
+    // IDE_UPLOAD: добавлено 2026-10-12 — загрузить СВОИ файлы (любого формата: фото, архивы, код)
+    // в рабочую область, в выбранную папку. Пишем байты как есть — расширение и содержимое не важны.
+    /// <summary>Uploads one or more files (any type) into a workspace directory.</summary>
+    [HttpPost("{sessionId:guid}/files/upload")]
+    [RequestSizeLimit(60_000_000)]
+    public async Task<IActionResult> UploadFiles(
+        Guid sessionId,
+        [FromForm] string? path,
+        [FromForm] List<IFormFile>? files,
+        CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out _))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        if (files is null || files.Count == 0)
+            return BadRequest(new { error = "No files were uploaded." });
+
+        var denied = await AuthorizeWriteAsync(sessionId, ct);
+        if (denied is not null)
+            return denied;
+
+        var uploaded = new List<string>();
+        try
+        {
+            var dir = path?.Trim('/', '\\');
+            foreach (var file in files)
+            {
+                if (file.Length == 0) continue;
+                var name = Path.GetFileName(file.FileName);
+                if (string.IsNullOrWhiteSpace(name)) continue;
+
+                var relativePath = string.IsNullOrEmpty(dir) ? name : $"{dir}/{name}";
+                using var buffer = new MemoryStream();
+                await file.CopyToAsync(buffer, ct);
+
+                var written = await _workspace.WriteBytesAsync(sessionId, relativePath, buffer.ToArray(), ct);
+                if (!written.Success)
+                    return BadRequest(new { error = written.Error ?? $"Could not write {name}." });
+
+                uploaded.Add(relativePath);
+                _logger.LogInformation("IDE upload: wrote {Count} bytes to {Path} (chat {ChatId}).", file.Length, relativePath, sessionId);
+            }
+        }
+        catch (Exception ex)
+        {
+            return MapError(ex);
+        }
+
+        return Ok(new { success = true, files = uploaded });
+    }
+
     /// <summary>Deletes a file or directory.</summary>
     [HttpDelete("{sessionId:guid}/files")]
     public async Task<IActionResult> Delete(

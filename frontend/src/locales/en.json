@@ -710,6 +710,7 @@
     "todoEmpty": "The plan will appear when the agent starts a multi-step task.",
     "noProblems": "No problems have been detected in the workspace.",
     "newFile": "New file",
+    "uploadFiles": "Upload file(s)",
     "rename": "Rename",
     "copyPath": "Copy path",
     "invalidName": "That name is not valid.",

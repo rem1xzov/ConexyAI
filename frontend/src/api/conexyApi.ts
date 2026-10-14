@@ -458,6 +458,15 @@ export async function renameIdeFile(sessionId: string, oldPath: string, newPath:
   await http.post(`/sessions/${sessionId}/files/rename`, { oldPath, newPath });
 }
 
+// IDE_UPLOAD: добавлено 2026-10-12 — загрузка СВОИХ файлов любого формата (фото, архивы, код) в папку.
+/** Uploads files of any type into a workspace directory (`dirPath` empty = workspace root). */
+export async function uploadIdeFiles(sessionId: string, dirPath: string, files: File[]): Promise<void> {
+  const form = new FormData();
+  form.append('path', dirPath ?? '');
+  for (const file of files) form.append('files', file, file.name);
+  await http.post(`/sessions/${sessionId}/files/upload`, form);
+}
+
 // IDE_GIT: добавлено 2026-10-04 — Source Control через IDE API.
 /** Working-tree status of the workspace repository. */
 export async function getGitStatus(sessionId: string, repoFolder?: string): Promise<GitStatusResult> {
