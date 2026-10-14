@@ -9,6 +9,9 @@ namespace ConexyAI.Service;
 public interface IConexyTodoService
 {
     Task<TodoWriteResult> WriteAsync(Guid sessionId, TodoWriteRequest request, CancellationToken ct = default);
+    // PLAN_FINISH_GATE: текущий план задачи (пустой — если план не писали). Нужен циклу агента, чтобы
+    // не дать завершить ход, пока в собственном плане остались незавершённые пункты.
+    IReadOnlyList<TodoItem> Get(Guid sessionId);
     void Clear(Guid sessionId);
 }
 
@@ -55,6 +58,10 @@ public class ConexyTodoService : IConexyTodoService
     {
         _state.TryRemove(sessionId, out _);
     }
+
+    // PLAN_FINISH_GATE: чтение плана для гейта завершения (см. ConexyAgentRunner).
+    public IReadOnlyList<TodoItem> Get(Guid sessionId) =>
+        _state.TryGetValue(sessionId, out var todos) ? todos : Array.Empty<TodoItem>();
 
     private static TodoWriteResult? Validate(List<TodoItem> todos)
     {

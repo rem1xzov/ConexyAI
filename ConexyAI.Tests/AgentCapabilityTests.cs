@@ -45,6 +45,8 @@ internal static class AgentCapabilityTests
         // P2_DEFINITION_OF_DONE / P2_PLAN_FIRST: добавлено 2026-10-10.
         TestRegistry.Add("agent definition-of-done: changes without a verification are sent back then noted", DefinitionOfDoneAsync);
         TestRegistry.Add("agent plan: a multi-file batch without a plan is refused until todo_write", PlanFirstAsync);
+        // PLAN_FINISH_GATE: незавершённый план не даёт закончить ход.
+        TestRegistry.Add("agent plan: an unfinished plan is sent back, a completed one finishes", PlanFinishGateAsync);
         // ANTI_LIE: добавлено 2026-10-10.
         TestRegistry.Add("agent integrity: a claimed GitHub action that never ran is sent back", AntiLieAsync);
         TestRegistry.Add("agent rules: CONEXY.md / .conexy/rules.md are injected right after the system prompt", ProjectRulesInjectedAsync);
@@ -620,6 +622,35 @@ internal static class AgentCapabilityTests
                 $"finishing without a verification must be sent back, got '{pushBack.Text}'");
             Assert(result.Contains("Изменения не проверены"),
                 $"the answer carries the system 'not verified' note, got '{result}'");
+        }
+        finally
+        {
+            DeleteDir(root);
+        }
+    }
+
+    // PLAN_FINISH_GATE: агент не может завершить ход, пока в его же плане есть незавершённые пункты —
+    // иначе он заканчивал ответом «могу, но не сделал». После выполнения плана ход завершается.
+    private static async Task PlanFinishGateAsync()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var todo = new FakeTodoService();
+            var llm = new ScriptLlm(
+                Turn(Call("p1", "todo_write", "{\"todos\":[{\"id\":\"1\",\"content\":\"Сделать X\",\"status\":\"in_progress\"}]}")),
+                Text("Готово."),
+                Turn(Call("p2", "todo_write", "{\"todos\":[{\"id\":\"1\",\"content\":\"Сделать X\",\"status\":\"completed\"}]}")),
+                Text("Сделано."));
+            var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(), todo: todo);
+
+            var result = await runner.RunLoopAsync(job, context, Guard());
+
+            Assert(llm.Requests.Count == 4,
+                $"an unfinished plan must be sent back before finishing, requests={llm.Requests.Count}");
+            Assert(llm.Requests[2].Any(m => (m.Text ?? "").Contains("[Plan Incomplete]")),
+                "the gate must ask the model to finish its plan");
+            Assert(!result.Contains("не доведена"), "a completed plan finishes without the incomplete note");
         }
         finally
         {
@@ -1235,14 +1266,19 @@ internal static class AgentCapabilityTests
     private sealed class FakeTodoService : IConexyTodoService
     {
         public List<TodoWriteRequest> Writes { get; } = new();
+        private readonly Dictionary<Guid, List<TodoItem>> _state = new();
 
         public Task<TodoWriteResult> WriteAsync(Guid sessionId, TodoWriteRequest request, CancellationToken ct = default)
         {
             Writes.Add(request);
+            _state[sessionId] = request.Todos;
             return Task.FromResult(new TodoWriteResult { Success = true });
         }
 
-        public void Clear(Guid sessionId) { }
+        public IReadOnlyList<TodoItem> Get(Guid sessionId) =>
+            _state.TryGetValue(sessionId, out var todos) ? todos : Array.Empty<TodoItem>();
+
+        public void Clear(Guid sessionId) => _state.Remove(sessionId);
     }
 
     /// <summary>Заглушка лимитов: крошечный бюджет и большой расход на каждый ход — лимит рвётся сразу.</summary>

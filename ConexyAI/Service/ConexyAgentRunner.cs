@@ -312,6 +312,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         - **НЕ ВЫДУМЫВАЙ ФАКТЫ.** Не придумывай цифры, даты, версии, API, флаги, цитаты, источники. Не знаешь — скажи «не уверен» и проверь через `web_search`/документы/файлы. Не утверждай, что чего-то не существует, не проверив поиском.
         - **Не ври о действиях.** Нельзя говорить, что вызвал инструмент, проверил, собрал, прогнал тест или запушил, если этого не было. Ошибку инструмента приводи текстом как есть и не выдумывай причину. Не проверял — так и скажи.
         - **Не сдавай красную сборку и не завершай без проверки.** Если изменил код — сначала прогони сборку/тесты/линтер и доведи до зелёного; либо прямо назови, что и почему всё ещё падает или почему проверка неприменима. Система сама припишет к ответу результат проверки.
+        - **Не заканчивай ответом «могу, но не сделал».** Если ты сам пишешь, что что-то не подключено/не создано/осталось сделать — это НЕ финал: доделай это сейчас тем же ходом. Завершать можно только когда всё запрошенное сделано либо есть внешняя блокировка (нет доступа, шаг должен сделать сам пользователь в другом интерфейсе) — и тогда назови её прямо. Пользователь не должен просить ещё раз то, о чём уже попросил.
 
         ## Формат ответа
         Короткое резюме после задачи: что изменено, что показали финальная сборка/тесты, известные ограничения и следующие шаги. Live Action Status не пересказывай.
@@ -354,6 +355,16 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "[Plan Required] Задача затрагивает несколько файлов или требует цикла «сборка → исправление», а плана нет. " +
         "Прежде чем продолжать, вызови `todo_write`: перечисли все шаги (уже сделанные — `completed`, текущий — `in_progress`, " +
         "остальные — `pending`) и дальше обновляй статусы после каждого ключевого этапа.";
+
+    // PLAN_FINISH_GATE: агент писал план, но пытается завершить ход, когда в нём ещё есть pending/
+    // in_progress — это не финал, а «могу, но не сделал». Возвращаем продолжить (ограниченно), иначе
+    // агент заканчивал ответом-отпиской, а пользователю приходилось просить ещё раз.
+    private const int MaxPlanFinishNudges = 3;
+    private const string PlanIncompletePrompt =
+        "[Plan Incomplete] Не заканчивай ход, пока твой же план (`todo_write`) не выполнен. " +
+        "Продолжай и доведи каждый пункт до конца; завершить можно только когда все пункты `completed`, " +
+        "либо `skipped` с причиной (внешняя блокировка: нет доступа, пользователь должен сделать шаг сам в UI и т. п.). " +
+        "Ответ «могу, но не сделал» финалом не считается.";
 
     // P2_DEFINITION_OF_DONE: добавлено 2026-10-10 — отказ завершить прогон, если файлы изменены,
     // но ни одной проверки (сборка/тесты/линтер) не запускалось. Одно напоминание, затем результат
@@ -570,6 +581,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var teamNudged = false;
         // P2_DEFINITION_OF_DONE: сколько раз мы просили проверить изменения перед завершением.
         var verificationNudged = 0;
+        // PLAN_FINISH_GATE: сколько раз возвращали модель доработать незавершённый план.
+        var planFinishNudged = 0;
         // ANTI_LIE: сколько раз мы ловили ложный отчёт о GitHub-работе.
         var claimPushbacks = 0;
 
@@ -731,6 +744,30 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     continue;
                 }
 
+                // PLAN_FINISH_GATE: собственный план агента — это контракт. Пока в нём есть pending/
+                // in_progress, ход не завершается: модель продолжает (ограниченно, чтобы не зациклиться).
+                // В тестах todo-сервис может быть не задан — тогда гейт не работает.
+                var unfinishedPlan = new List<string>();
+                if (_profile.EnforcesPlan && _todoService is not null)
+                {
+                    unfinishedPlan = _todoService.Get(taskId)
+                        .Where(item => item.Status is "pending" or "in_progress")
+                        .Select(item => item.Content)
+                        .ToList();
+                }
+                if (unfinishedPlan.Count > 0 && planFinishNudged < MaxPlanFinishNudges)
+                {
+                    planFinishNudged++;
+                    _logger.LogInformation(
+                        "Agent plan gate: finishing with {Count} unfinished plan item(s); sending back {Attempt}/{Max}. task={TaskId}",
+                        unfinishedPlan.Count, planFinishNudged, MaxPlanFinishNudges, taskId);
+                    await group.SendAsync("OnLog", $"[Plan] {unfinishedPlan.Count} шаг(ов) плана не выполнены — продолжаю.", ct);
+                    await SendAgentStatusAsync(taskId, "thinking", "Довожу план до конца…", ct: ct);
+                    messages.Add(new ChatMessage("system",
+                        PlanIncompletePrompt + "\nНезавершённые пункты:\n- " + string.Join("\n- ", unfinishedPlan)));
+                    continue;
+                }
+
                 var finalText = ExtractTextContent(responseMessage);
 
                 // ANTI_LIE: модель заявляет о GitHub-операции, которой не было — это не финал, а отказ:
@@ -805,6 +842,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // TOKEN_SOFT_LIMIT: если по ходу прогона лимит был превышен, сообщаем об этом припиской —
                 // но задача уже доведена до конца (прогон не обрывался).
                 var naturalTokenNote = tokenBudgetExceeded ? TokenLimitNote(remainingTokens, runTokens, poolResetsAt) : null;
+                // PLAN_FINISH_GATE: бюджет доработок исчерпан, а план всё ещё не выполнен — говорим об этом
+                // пользователю прямо, а не выдаём незавершённую работу за готовую.
+                var planIncompleteNote = unfinishedPlan.Count > 0
+                    ? "Проверено системой: часть плана осталась невыполненной (" + string.Join("; ", unfinishedPlan) + ") — задача не доведена до конца."
+                    : null;
                 await SendAgentStatusAsync(taskId, "idle", "Готово", ct: ct);
                 if (string.IsNullOrWhiteSpace(finalText) && answer.Length > 0)
                 {
@@ -824,6 +866,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 if (naturalTokenNote is not null)
                 {
                     await StreamNoteAsync(group, answer, naturalTokenNote, ct);
+                }
+
+                if (planIncompleteNote is not null)
+                {
+                    await StreamNoteAsync(group, answer, planIncompleteNote, ct);
                 }
 
                 await group.SendAsync("OnLog", "[Agent Completed] Solution finalized.", ct);
