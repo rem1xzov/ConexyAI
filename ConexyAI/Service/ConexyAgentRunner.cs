@@ -279,6 +279,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         - Минимальные изменения (diff first): не переписывай файл целиком ради локального фикса и не удаляй чужую логику/комментарии без прямой просьбы.
         - Весь код — с валидацией входа и обработкой граничных случаев и ошибок.
         - На простую реплику (приветствие, короткий вопрос) отвечай сразу коротко, без `todo_write` и инструментов.
+        - **Работу доводи до конца за один ход.** Финала «могу, но не сделал», «не реализовано», «осталось сделать» не существует: если задачу можно выполнить твоими инструментами — выполни её сейчас и только потом завершай. Незавершённый отчёт система вернёт тебе на доработку, а пользователю придётся просить заново.
 
         ## Цикл работы
         1. Разберись в задаче; факты не выдумывай (см. «Критерий готово»).
@@ -286,6 +287,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         3. Правь файлы инструментами, а не текстом ответа. Перед правкой существующего файла сначала посмотри его актуальное содержимое — не заменяй фрагмент, которого не видел в этой сессии.
         4. После каждой значимой правки проверяй как можно ближе к изменению; не накапливай непроверенные правки.
         5. **Цикл самоисправления.** Упавшая сборка/тесты/линтер — не конец работы: прочитай вывод, открой файл и строку с ошибкой, исправь и запусти ту же проверку снова (без `| tail`, `| head`, `; echo`, `|| true` — иначе теряется код завершения). Повторяй, пока не пройдёт. Если причина вне кода (нет зависимости/сети) — назови это прямо, не выдавая работу за готовую.
+                6. **Ход завершается только готовым результатом.** Если что-то из задачи осталось невыполненным и это в твоих силах — ты ещё не закончил: продолжай, а не подводи итог со списком несделанного.
 
         ## Выбор инструмента
         Прежде чем звать `bash`, проверь таблицу: для большинства задач есть профильный инструмент.
@@ -386,6 +388,48 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "Либо сделай операцию РЕАЛЬНО через `github_action` (например `pull`/`fetch` с `repo_folder`), либо честно напиши, что не смог и почему. " +
         "Никогда не сообщай о выполнении того, чего не было.";
     private const int MaxClaimPushbacks = 2;
+
+    // INCOMPLETE_WORK: добавлено 2026-10-14 — агент завершал ход отчётом «могу, но не сделал»:
+    // перечислял, что осталось несделанным, хотя всё это выполнимо его же инструментами, и ждал
+    // второй просьбы. План-гейт такое не ловит (он работает только когда план писался), поэтому
+    // появился отдельный гейт по САМОМУ тексту ответа. Возвращаем довести работу до конца
+    // (ограниченно), а если упёрся в РЕАЛЬНУЮ внешнюю блокировку — он обязан назвать её прямо,
+    // и тогда ответ проходит. Маркеры узкие и отрицательные (урок ANTI_LIE: широкие слова вроде
+    // «могу» давали ложные срабатывания на нормальном тексте).
+    private const int MaxIncompleteNudges = 2;
+    private static readonly string[] IncompleteWorkMarkers =
+    {
+        "не сделал", "не сделано", "не сделана", "не сделаны",
+        "не выполнен",
+        "не реализова", "не подключ", "не создан",
+        "не изменен", "не изменён", "не обновл", "не заверш", "не довед",
+        "осталось сделать", "осталось незаверш", "осталось подключ", "осталось реализовать",
+        "не стал делать", "не принялся",
+        "но не сделал", "но не подключил", "но не создал", "но не реализовал",
+        "did not implement", "not implemented", "not wired up", "not connected",
+    };
+
+    // INCOMPLETE_WORK: честно названная ВНЕШНЯЯ блокировка — ответ проходит без возврата. Так мы
+    // не наказываем за правду (как вышло бы с ANTI_LIE), а требуем сформулировать причину явно.
+    private static readonly string[] ExternalBlockerMarkers =
+    {
+        "нет доступа", "не имею доступа", "нет прав", "нет разрешен", "недоступ",
+        "api key", "api-ключ", "токен доступа", "access token", "credentials", "учётные данные", "учетные данные",
+        "пароль", "password",
+        "нет файлов", "файл отсутству", "файлы отсутству", "не приложен", "не загружен",
+        "не установлен", "отсутствует в окружении", "нет в окружении",
+        "нет сети", "нет интернета", "network",
+        "внешн", "за пределами", "не зависит от меня", "блокир", "blocked",
+        "должен сделать сам", "нужно от вас", "требуется от вас", "ваши действия",
+        "невозмож",
+    };
+
+    private const string IncompleteWorkPrompt =
+        "[Incomplete Work] В твоём ответе сказано, что часть работы не сделана. Так заканчивать ход нельзя, " +
+        "если эту работу можно выполнить твоими инструментами. Продолжай и доведи её до конца прямо сейчас — " +
+        "правь файлы, запускай сборку и тесты. Если довести действительно нельзя, назови КОНКРЕТНУЮ внешнюю " +
+        "причину (нет нужного файла/доступа/ключа, шаг должен сделать пользователь в UI) — общая фраза " +
+        "«не получилось» причиной не считается.";
 
     // PROJECT_RULES: добавлено 2026-09-24 — файлы правил проекта в корне рабочей области чата, в порядке
     // приоритета, и их бюджет в промпте (каждый файл и все вместе).
@@ -585,6 +629,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var planFinishNudged = 0;
         // ANTI_LIE: сколько раз мы ловили ложный отчёт о GitHub-работе.
         var claimPushbacks = 0;
+        // INCOMPLETE_WORK: сколько раз мы возвращали ответ, где агент сам признал работу незавершённой.
+        var incompleteNudges = 0;
 
         // ITERATION_WRAPUP: добавлено 2026-10-06 — на последнем шаге просим модель подвести итог,
         // и только один раз (иначе на перезапуске этого же шага подсказка добавилась бы дважды).
@@ -786,6 +832,24 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     continue;
                 }
 
+                // INCOMPLETE_WORK: агент подвёл итог со списком несделанного, хотя это выполнимо его
+                // инструментами. Отправляем на доработку (ограниченно), чтобы пользователю не приходилось
+                // просить второй раз. Внешняя блокировка (нет файлов/доступа/ключей, шаг за пользователем)
+                // — белый список, такой ответ завершается нормально. На последнем шаге не бьём: бюджета
+                // на доработку уже нет, там сработает финальная приписка.
+                var incompleteWork = step < _maxIterations ? DetectIncompleteWork(finalText) : null;
+                if (incompleteWork is not null && incompleteNudges < MaxIncompleteNudges)
+                {
+                    incompleteNudges++;
+                    _logger.LogInformation(
+                        "Agent incomplete-work gate: answer admits unfinished work ({Marker}); sending back {Attempt}/{Max}. task={TaskId}",
+                        incompleteWork, incompleteNudges, MaxIncompleteNudges, taskId);
+                    await group.SendAsync("OnLog", $"[Incomplete] В ответе заявлена незавершённая работа ({incompleteWork}) — довожу до конца.", ct);
+                    await SendAgentStatusAsync(taskId, "thinking", "Довожу работу до конца…", ct: ct);
+                    messages.Add(new ChatMessage("system", IncompleteWorkPrompt));
+                    continue;
+                }
+
                 // Maker-Checker only applies to real code changes. A pure dialog reply
                 // must be returned verbatim instead of being swallowed by the auditor.
                 if (_auditEnabled && _profile.AuditsCode && changedFiles.Count > 0 && auditReworks < MaxAuditReworks)
@@ -847,6 +911,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 var planIncompleteNote = unfinishedPlan.Count > 0
                     ? "Проверено системой: часть плана осталась невыполненной (" + string.Join("; ", unfinishedPlan) + ") — задача не доведена до конца."
                     : null;
+                // INCOMPLETE_WORK: бюджет доработок исчерпан, а ответ всё ещё признаёт работу незавершённой
+                // без явной внешней блокировки — говорим об этом прямо, а не выдаём отписку за готовое.
+                var incompleteWorkNote = unfinishedPlan.Count == 0 && DetectIncompleteWork(finalText) is not null
+                    ? "Проверено системой: в ответе заявлена незавершённая работа — задача не доведена до конца."
+                    : null;
                 await SendAgentStatusAsync(taskId, "idle", "Готово", ct: ct);
                 if (string.IsNullOrWhiteSpace(finalText) && answer.Length > 0)
                 {
@@ -871,6 +940,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 if (planIncompleteNote is not null)
                 {
                     await StreamNoteAsync(group, answer, planIncompleteNote, ct);
+                }
+
+                if (incompleteWorkNote is not null)
+                {
+                    await StreamNoteAsync(group, answer, incompleteWorkNote, ct);
                 }
 
                 await group.SendAsync("OnLog", "[Agent Completed] Solution finalized.", ct);
@@ -1479,6 +1553,30 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "введи", "введите", "нажми", "нажмите", "тебе нужно", "вам нужно", "если хочешь", "если хотите",
         "в браузере", "веб-интерфейс", "web-интерфейс", "нет доступа", "не имею доступа", "только сам",
     };
+
+    // INCOMPLETE_WORK: возвращает первый найденный маркер незавершённой работы, если ответ перечисляет
+    // несделанное. null — нормальный финал (или есть честно названная внешняя блокировка).
+    // Гейт только для профилей, которые сами требуют плана (Coder): в нетехнических режимах и у
+    // помощников такую формулировку гейтить нельзя.
+    private string? DetectIncompleteWork(string? finalText)
+    {
+        if (!_profile.EnforcesPlan)
+            return null;
+        if (string.IsNullOrWhiteSpace(finalText))
+            return null;
+
+        // Явно названная внешняя блокировка — это честный финал, а не отписка.
+        if (ExternalBlockerMarkers.Any(m => finalText.Contains(m, StringComparison.OrdinalIgnoreCase)))
+            return null;
+
+        foreach (var marker in IncompleteWorkMarkers)
+        {
+            if (finalText.Contains(marker, StringComparison.OrdinalIgnoreCase))
+                return marker;
+        }
+
+        return null;
+    }
 
     private string? BuildToolIntegrityNote(
         IReadOnlyDictionary<string, int> executedTools,

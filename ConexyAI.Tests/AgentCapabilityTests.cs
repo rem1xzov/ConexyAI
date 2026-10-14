@@ -49,6 +49,8 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent plan: an unfinished plan is sent back, a completed one finishes", PlanFinishGateAsync);
         // ANTI_LIE: добавлено 2026-10-10.
         TestRegistry.Add("agent integrity: a claimed GitHub action that never ran is sent back", AntiLieAsync);
+        // INCOMPLETE_WORK: добавлено 2026-10-14 — ответ с признанием несделанной работы не завершает ход.
+        TestRegistry.Add("agent incomplete-work: 'could but did not' is sent back, an external blocker finishes", IncompleteWorkGateAsync);
         TestRegistry.Add("agent rules: CONEXY.md / .conexy/rules.md are injected right after the system prompt", ProjectRulesInjectedAsync);
         TestRegistry.Add("agent vision: screenshot targets stay in the chat workspace or on public hosts (H9)", ScreenshotPolicyAsync);
         TestRegistry.Add("agent vision: the screenshot image follows all tool results of the turn (L9)", ScreenshotImageAfterToolResultsAsync);
@@ -721,6 +723,47 @@ internal static class AgentCapabilityTests
         finally
         {
             DeleteDir(root);
+        }
+    }
+
+    // INCOMPLETE_WORK: ответ «не подключил / не создал» без внешней блокировки — не финал; система
+    // возвращает довести работу до конца. Честно названная внешняя причина (нет доступа) — проходит сразу.
+    private static async Task IncompleteWorkGateAsync()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var llm = new ScriptLlm(
+                Text("Что осталось незавершённым: mp3 к мосту не подключил, VoiceService не создан."),
+                Text("Готово: всё подключил и создал, сборка зелёная."));
+            var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(), todo: new FakeTodoService());
+
+            var result = await runner.RunLoopAsync(job, context, Guard());
+
+            Assert(llm.Requests.Count == 2, $"an incomplete answer must be sent back once, requests={llm.Requests.Count}");
+            Assert((llm.Requests[1].Last().Text ?? "").Contains("[Incomplete Work]"),
+                "the gate must ask the model to finish the work");
+            Assert(result.Contains("всё подключил"), $"the finished answer stands, got '{result}'");
+        }
+        finally
+        {
+            DeleteDir(root);
+        }
+
+        var blockerRoot = CreateTempRoot();
+        try
+        {
+            // Внешняя блокировка названа явно — ответ завершается без возврата.
+            var llm = new ScriptLlm(Text("Не подключил mp3: нет доступа к файлам и к хранилищу."));
+            var (runner, job, context) = CreateRunner(blockerRoot, llm, new RecordingHubContext(), todo: new FakeTodoService());
+
+            await runner.RunLoopAsync(job, context, Guard());
+
+            Assert(llm.Requests.Count == 1, $"an explicit external blocker finishes immediately, requests={llm.Requests.Count}");
+        }
+        finally
+        {
+            DeleteDir(blockerRoot);
         }
     }
 
