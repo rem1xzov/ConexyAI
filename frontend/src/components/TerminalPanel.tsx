@@ -106,10 +106,9 @@ function attachClipboard(term: Terminal): void {
     }
 
     if (key === 'v') {
-      if (!navigator.clipboard?.readText) return true; // native paste event still works
-      e.preventDefault();
-      e.stopPropagation();
-      void pasteFromClipboard(term);
+      // Let the browser's native paste event do the work: xterm ignores the key (no literal \x16)
+      // and receives the text through its textarea's paste handler. The async Clipboard API is not
+      // used here — it needs a permission and failed silently, which swallowed Ctrl+V entirely.
       return false;
     }
 
