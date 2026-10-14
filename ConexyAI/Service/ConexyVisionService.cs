@@ -14,10 +14,11 @@ public class ConexyVisionService : IConexyVisionService
         ILogger<ConexyVisionService> logger,
         IChromiumHost chromium,
         IWorkspacePathValidator pathValidator,
-        PublicUrlGuard urlGuard)
+        PublicUrlGuard urlGuard,
+        IPreviewService? preview = null)
     {
         _chromium = chromium;
-        _policy = new BrowserRequestPolicy(urlGuard, pathValidator);
+        _policy = new BrowserRequestPolicy(urlGuard, pathValidator, preview);
         _routes = new BrowserRouteHandler(_policy, logger);
     }
 

@@ -301,7 +301,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         | Ошибки типов/линтера без сборки | `get_diagnostics` (dotnet build/tsc/eslint/cargo check/go vet/mypy/ruff). Чистые проверки через `bash` система ОТКЛОНЯЕТ |
         | Актуальные факты | `web_search`, при необходимости открыть страницу `fetch_web_page` |
         | Проверить веб-приложение/UI | `browser_open` → `browser_extract`/`browser_click`/`browser_type` → `browser_screenshot`, затем `browser_close` (публичные http(s), файлы рабочей области и `http://localhost:<port>` сервиса, запущенного через `start_service`) |
-                | Запустить dev-сервер/статику/API и посмотреть его | `start_service` (command + port, слушать 0.0.0.0) → `browser_open('http://localhost:<port>/')`. В `bash` сервер не живёт; пользователь видит то же во вкладке «Превью» |
+                | Запустить dev-сервер/статику/API и посмотреть его | `start_service` (command + port, слушать 0.0.0.0) → `browser_open('http://localhost:<port>/')`. Сервер, поднятый в `bash` (`python -m http.server`, `npm run dev` и т.п.), браузеру НЕДОСТУПЕН и умирает с командой — запускай только через `start_service` (подходит и для `take_screenshot`); пользователь видит то же во вкладке «Превью» |
         | Картинка от пользователя/в рабочей области | `view_image` — только так ты её «видишь» |
         | Прошлый разговор («сделай как тогда») | `search_user_chats` |
         | GitHub: клон/обновить/ветки/commit+push/PR/issues/CI | `github_action` (clone_repo — свежая копия; fetch/pull — ОБНОВИТЬ существующую; commit_and_push и т.д.), `github_api` (без клона) |
