@@ -80,6 +80,18 @@ const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 // otherwise we leave the key alone and the browser's native paste event still reaches xterm.
 function attachClipboard(term: Terminal): void {
   const isMac = /mac/i.test(navigator.platform || navigator.userAgent);
+  // Paste is taken from the paste event itself (clipboardData needs no permission) in the capture
+  // phase, so it works regardless of xterm's own textarea handling and is never delivered twice.
+  term.element?.addEventListener(
+    'paste',
+    (e) => {
+      const text = e.clipboardData?.getData('text/plain');
+      e.preventDefault();
+      e.stopPropagation();
+      if (text) term.paste(text);
+    },
+    true,
+  );
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
     const withModifier = isMac ? e.metaKey : e.ctrlKey;

@@ -821,6 +821,19 @@ internal static class AgentCapabilityTests
 
     // ---------------------------------------------------------------- vision
 
+    private sealed class FakePreview(Guid chat, int port) : IPreviewService
+    {
+        public Task<PreviewStartResult> StartAsync(Guid chatId, string command, int p, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<bool> StopAsync(Guid chatId) => Task.FromResult(true);
+        public Task<string> LogsAsync(Guid chatId, int lines, CancellationToken ct = default) => Task.FromResult(string.Empty);
+        public PreviewInfo? GetForChat(Guid chatId) => null;
+        public PreviewInfo? GetBySubdomain(string id) => null;
+        public string PublicUrl(PreviewInfo info) => string.Empty;
+        public string? ParseHost(string host) => null;
+        public Uri? MapLoopback(Guid chatId, Uri uri) =>
+            chatId == chat && uri.Port == port && uri.Host is "localhost" or "127.0.0.1" ? new Uri($"http://svc:{port}{uri.PathAndQuery}") : null;
+    }
+
     private static async Task ScreenshotPolicyAsync()
     {
         var root = CreateTempRoot();
@@ -873,6 +886,14 @@ internal static class AgentCapabilityTests
             Assert(await Decide("http://postgres:5432/") == BrowserRequestAction.Block, "internal names are blocked");
             Assert(await Decide("file:///etc/passwd") == BrowserRequestAction.Block, "file:// is never loaded by the browser");
             Assert(await Decide("data:text/plain,hi") == BrowserRequestAction.Continue, "in-memory schemes pass");
+
+            // PREVIEW: own localhost of the chat's start_service is the only internal host allowed.
+            var withPreview = new BrowserRequestPolicy(
+                new PublicUrlGuard(new MapResolver(new())), validator, new FakePreview(chatId, 5173));
+            Assert((await withPreview.ResolveTargetAsync(chatId, "http://localhost:5173/")).Port == 5173, "own localhost resolves");
+            Assert((await withPreview.DecideAsync(chatId, "http://127.0.0.1:5173/app.js")).Action == BrowserRequestAction.FetchPreview, "own localhost sub-resources go to the container");
+            Assert((await withPreview.DecideAsync(Guid.NewGuid(), "http://localhost:5173/")).Action == BrowserRequestAction.Block, "another chat cannot reach it");
+            Assert((await withPreview.DecideAsync(chatId, "http://localhost:5000/")).Action == BrowserRequestAction.Block, "other ports stay blocked");
         }
         finally
         {

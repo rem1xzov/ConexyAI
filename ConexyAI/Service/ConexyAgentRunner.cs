@@ -300,7 +300,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         | Прогнать тесты | `run_tests` — сам определит фреймворк и вернёт pass/fail. Тесты через `bash` (`npm test`/`pytest`/`dotnet test`) система ОТКЛОНЯЕТ |
         | Ошибки типов/линтера без сборки | `get_diagnostics` (dotnet build/tsc/eslint/cargo check/go vet/mypy/ruff). Чистые проверки через `bash` система ОТКЛОНЯЕТ |
         | Актуальные факты | `web_search`, при необходимости открыть страницу `fetch_web_page` |
-        | Проверить веб-приложение/UI | `browser_open` → `browser_extract`/`browser_click`/`browser_type` → `browser_screenshot`, затем `browser_close` (только публичные http(s)) |
+        | Проверить веб-приложение/UI | `browser_open` → `browser_extract`/`browser_click`/`browser_type` → `browser_screenshot`, затем `browser_close` (публичные http(s), файлы рабочей области и `http://localhost:<port>` сервиса, запущенного через `start_service`) |
+                | Запустить dev-сервер/статику/API и посмотреть его | `start_service` (command + port, слушать 0.0.0.0) → `browser_open('http://localhost:<port>/')`. В `bash` сервер не живёт; пользователь видит то же во вкладке «Превью» |
         | Картинка от пользователя/в рабочей области | `view_image` — только так ты её «видишь» |
         | Прошлый разговор («сделай как тогда») | `search_user_chats` |
         | GitHub: клон/обновить/ветки/commit+push/PR/issues/CI | `github_action` (clone_repo — свежая копия; fetch/pull — ОБНОВИТЬ существующую; commit_and_push и т.д.), `github_api` (без клона) |
@@ -4100,9 +4101,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // BROWSER_AUTOMATION: DOM-автоматизация во встроенном браузере. Только Coder и только когда
         // Chromium доступен (см. ResolveToolsAsync). Модель работает селекторами и текстом,
         // а не координатами.
-        Function("browser_open", "Открывает страницу во встроенном браузере агента и начинает браузерную сессию этого чата. Цель — публичный http(s) URL или файл рабочей области (например 'index.html' — так открывают приложение, которое ты только что собрал). После открытия вызови browser_extract, чтобы увидеть текст и интерактивные элементы, затем browser_click / browser_type.",
+        Function("browser_open", "Открывает страницу во встроенном браузере агента и начинает браузерную сессию этого чата. Цель — публичный http(s) URL, файл рабочей области (например 'index.html') или 'http://localhost:<port>/' сервиса, запущенного тобой через start_service (другие localhost запрещены). После открытия вызови browser_extract, чтобы увидеть текст и интерактивные элементы, затем browser_click / browser_type.",
             new { type = "object", properties = new {
-                url = new { type = "string", description = "Публичный http(s) URL или путь к файлу рабочей области" }
+                url = new { type = "string", description = "Публичный http(s) URL, путь к файлу рабочей области или http://localhost:<port> сервиса из start_service" }
             }, required = new[] { "url" } }),
         Function("browser_extract", "Возвращает текст открытой страницы и список интерактивных элементов с их селекторами — основной способ «прочитать», что на странице, и выбрать, по чему кликать.",
             new { type = "object", properties = new {
