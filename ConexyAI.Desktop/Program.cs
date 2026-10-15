@@ -68,6 +68,12 @@ try
         case "login":
             return await LoginAsync(args);
 
+        case "mdtest":
+            Ui.AssistantStart();
+            Ui.Md.Feed("# Итог\n\n**1. Ассеты** не копируются в `wwwroot`. Это довольно длинный текст, который должен переноситься по ширине окна консоли, а не вылезать за рамки `pony.ini` и `app.js`.\n\n- пункт списка с `кодом` и **жирным** текстом и очень длинным продолжением для проверки переноса строки в списке\n2. нумерованный ✅ пункт\n\n```csharp\nvar x = 1;\n```\n\n> цитата\n\n| a | b |\n|---|---|\n| 1 | 2 |\n");
+            Ui.FlushText();
+            return 0;
+
         case "update":
             return await UpdateCommandAsync();
 
@@ -298,7 +304,7 @@ static async Task<(string Root, Guid ChatId)?> PickChatAsync(ServerClient server
         var folder = store.FolderOf(c.Id);
         var where = folder is null ? Ui.Muted("папка не выбрана") : Ui.Muted(folder);
         var mark = c.Id == current ? Ui.Green_("●") : " ";
-        var pin = c.IsPinned ? "📌" : string.Empty;
+        var pin = c.IsPinned ? "* " : string.Empty;
         Console.WriteLine($"  {i + 1,3}. {mark} {pin}{title}  {Ui.Muted($"{c.MessageCount} сообщ. · {Ago(c.LastActivityAt)}")}");
         Console.WriteLine($"         {where}");
     }

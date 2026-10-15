@@ -8,7 +8,13 @@
         <AssemblyName>conexy</AssemblyName>
         <RootNamespace>ConexyAI.Desktop</RootNamespace>
         <InvariantGlobalization>true</InvariantGlobalization>
-        <Version>0.3.1</Version>
+        <Version>0.3.2</Version>
+        <ApplicationIcon>conexy.ico</ApplicationIcon>
+        <Company>ConexyAI</Company>
+        <Product>ConexyAI Desktop</Product>
+        <Description>ConexyAI Desktop — AI-агент для кода в терминале</Description>
+        <Copyright>ConexyAI</Copyright>
+        <FileVersion>$(Version).0</FileVersion>
     </PropertyGroup>
 
     <ItemGroup>

@@ -60,7 +60,42 @@ public static class Ui
     public static string Muted(string text) => C(Dim, text);
     public static string Bold(string text) => Ansi ? $"\x1b[1m{text}\x1b[0m" : text;
 
-    private static int Width()
+    /// <summary>Ответ агента в виде оформленного markdown.</summary>
+    public static readonly MarkdownWriter Md = new();
+
+    public static void FlushText() => Md.Flush();
+
+    /// <summary>
+    /// Убирает символы, которых нет в шрифте старой консоли Windows (эмодзи и символы из блока Dingbats рисуются
+    /// квадратиками). В Windows Terminal всё отображается, поэтому там текст не трогаем.
+    /// </summary>
+    public static string Sanitize(string text)
+    {
+        if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("WT_SESSION") is { Length: > 0 })
+            return text;
+
+        var sb = new StringBuilder(text.Length);
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (char.IsHighSurrogate(c))
+            {
+                i++; // вторая половина пары: эмодзи — пропускаем целиком
+                continue;
+            }
+            switch (c)
+            {
+                case '\u2713' or '\u2714': sb.Append('√'); break;
+                case '\u2717' or '\u2718' or '\u274c': sb.Append('×'); break;
+                case '\uFE0F' or '\u200D': break;
+                case >= '\u2600' and <= '\u27BF': break;
+                default: sb.Append(c); break;
+            }
+        }
+        return sb.ToString();
+    }
+
+    public static int Width()
     {
         try { return Math.Clamp(Console.WindowWidth - 1, 30, 110); }
         catch (IOException) { return 80; }
@@ -164,6 +199,7 @@ public static class Ui
     public static void TeamRoster(IReadOnlyList<(string Id, string Role, string Brief, string Scope)> agents)
     {
         Idle();
+        FlushText();
         AgentIndex.Clear();
         AgentLast.Clear();
         var width = Width();
@@ -195,19 +231,20 @@ public static class Ui
         }
 
         Idle();
-        var mark = stage == "idle" ? C(Green, "✓") : C(Dim, "•");
+        var mark = stage == "idle" ? C(Green, "√") : C(Dim, "•");
         Console.WriteLine($"  {AgentTag(id, role)} {mark} {(stage == "idle" ? C(Green, label) : label)}");
         Busy("Команда работает");
     }
 
     public static void HistoryLine(string role, string content)
     {
+        content = Sanitize(content);
         var flat = string.Join(' ', content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
         var max = role == "user" ? 160 : 260;
         if (flat.Length > max)
             flat = flat[..max] + "…";
         Console.WriteLine(role == "user"
-            ? "  " + C(Orange, "❯ ") + C(Dim, flat)
+            ? "  " + C(Orange, "› ") + C(Dim, flat)
             : "  " + C("1;37", "● ") + C(Dim, flat));
     }
 
@@ -220,7 +257,7 @@ public static class Ui
     public static void Error(string text)
     {
         Idle();
-        Console.Error.WriteLine(C(Red, "✗ " + text));
+        Console.Error.WriteLine(C(Red, "× " + text));
     }
 
     // ── Ввод ────────────────────────────────────────────────────────────────
@@ -234,25 +271,25 @@ public static class Ui
             return Console.ReadLine();
         }
 
-        var modes = (autoMode ? C(Yellow, "⏵⏵ авто") + " " : string.Empty)
-                    + (TeamMode ? C("38;5;213", "✦ команда") + " " : string.Empty);
+        var modes = (autoMode ? C(Yellow, ">> авто") + " " : string.Empty)
+                    + (TeamMode ? C("38;5;213", "* команда") + " " : string.Empty);
         var footer = "  " + modes + (_status.Length > 0 ? C(Cyan, _status) + Muted(" · ") : string.Empty) + Muted("/help");
 
         Console.WriteLine();
         Console.WriteLine(Rule());
-        Console.WriteLine(C(Orange, "❯ "));
+        Console.WriteLine(C(Orange, "› "));
         Console.WriteLine(Rule());
         Console.Write(footer);
-        Console.Write("\x1b[2A\r\x1b[2C"); // на строку ввода, после «❯ »
+        Console.Write("\x1b[2A\r\x1b[2C"); // на строку ввода, после «› »
 
         var line = Console.ReadLine();
 
         // Курсор теперь на нижней линии: затираем её и подсказку, выделяем введённое.
         Console.Write("\x1b[1A\r\x1b[2K");
         if (line is { Length: > 0 } && line.Length + 3 < Width())
-            Console.Write($"\x1b[{PromptBg}m\x1b[38;5;255m❯ {line}\x1b[K\x1b[0m");
+            Console.Write($"\x1b[{PromptBg}m\x1b[38;5;255m› {line}\x1b[K\x1b[0m");
         else
-            Console.Write(C(Orange, "❯ ") + line);
+            Console.Write(C(Orange, "› ") + line);
         Console.WriteLine();
         Console.Write("\x1b[2K\x1b[1B\x1b[2K\x1b[1A\r");
         return line;
@@ -276,7 +313,7 @@ public static class Ui
         var watch = Stopwatch.StartNew();
         _ = Task.Run(async () =>
         {
-            var frames = new[] { "✻", "✽", "✶", "✳", "✢", "·" };
+            var frames = new[] { "·", "•", "●", "•" };
             var i = 0;
             while (!cts.IsCancellationRequested)
             {
@@ -310,11 +347,13 @@ public static class Ui
     {
         Idle();
         Console.Write("\n" + C("1;37", "● "));
+        Md.Begin();
     }
 
     public static void ToolCall(string described)
     {
         Idle();
+        FlushText();
         var space = described.IndexOf(' ');
         var tool = space < 0 ? described : described[..space];
         var arg = space < 0 ? string.Empty : described[(space + 1)..];
@@ -344,7 +383,7 @@ public static class Ui
         var color = result.IsError ? Red : Dim;
         if (lines.Length == 0)
         {
-            Console.WriteLine(C(color, "  ⎿  " + (result.IsError ? "ошибка" : "готово")));
+            Console.WriteLine(C(color, "  └  " + (result.IsError ? "ошибка" : "готово")));
             return;
         }
 
@@ -352,7 +391,7 @@ public static class Ui
         for (var i = 0; i < Math.Min(show, lines.Length); i++)
         {
             var text = lines[i].Length > 110 ? lines[i][..110] + "…" : lines[i];
-            Console.WriteLine(C(color, (i == 0 ? "  ⎿  " : "     ") + text));
+            Console.WriteLine(C(color, (i == 0 ? "  └  " : "     ") + text));
         }
         if (lines.Length > show)
             Console.WriteLine(C(Dim, $"     … ещё {lines.Length - show} строк"));
@@ -364,6 +403,7 @@ public static class Ui
     public static async Task<int> ConfirmAsync(string command, string folder, CancellationToken ct)
     {
         Idle();
+        FlushText();
         var width = Width();
         Console.WriteLine();
         Console.WriteLine(C(Yellow, "╭─ Bash ") + C(Yellow, new string('─', Math.Max(0, width - 9))));
@@ -382,7 +422,7 @@ public static class Ui
             for (var i = 0; i < options.Length; i++)
             {
                 var text = $"{i + 1}. {options[i]}";
-                Console.WriteLine("\x1b[2K" + (i == index ? C(Orange, "  ❯ " + text) : "    " + text));
+                Console.WriteLine("\x1b[2K" + (i == index ? C(Orange, "  › " + text) : "    " + text));
             }
         }
 
@@ -423,5 +463,5 @@ public static class Ui
     }
 
     public static void Decision(bool allowed) =>
-        Console.WriteLine(allowed ? C(Green, "  ✓ разрешено") : C(Red, "  ✗ отклонено"));
+        Console.WriteLine(allowed ? C(Green, "  √ разрешено") : C(Red, "  × отклонено"));
 }

@@ -45,7 +45,7 @@ public sealed class AgentSession : IAsyncDisposable
                 _needBullet = false;
                 Ui.AssistantStart();
             }
-            Console.Write(delta);
+            Ui.Md.Feed(delta);
         });
         _hub.On<JsonElement, string?>("ToolAction", (payload, _) => OnServerToolAction(payload));
         _hub.On<JsonElement, string?>("AgentTeam", (payload, _) => OnTeam(payload));
@@ -98,6 +98,7 @@ public sealed class AgentSession : IAsyncDisposable
         {
             _turnCts.Cancel();
             Ui.Idle();
+            Ui.FlushText();
             Console.WriteLine();
         }
     }
@@ -116,7 +117,8 @@ public sealed class AgentSession : IAsyncDisposable
                 if (!_streamedAnything && !string.IsNullOrEmpty(run.Result))
                 {
                     Ui.AssistantStart();
-                    Console.Write(run.Result);
+                    Ui.Md.Feed(run.Result);
+                    Ui.FlushText();
                 }
                 _turn?.TrySetResult(run.Status == "Completed" ? null : $"Задача завершилась со статусом {run.Status}.");
                 return;
