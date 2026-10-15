@@ -1,0 +1,126 @@
+using System.Text.Json;
+using ConexyAI.Desktop.Tools;
+using Microsoft.AspNetCore.SignalR.Client;
+
+namespace ConexyAI.Desktop;
+
+/// <summary>
+/// Живое соединение с сервером: регистрирует этот ПК как устройство, выполняет присланные
+/// инструменты локально и стримит ответ агента в консоль.
+/// </summary>
+public sealed class AgentSession : IAsyncDisposable
+{
+    private readonly ServerClient _server;
+    private readonly ToolRunner _tools;
+    private readonly Guid _chatId;
+    private readonly HubConnection _hub;
+
+    private TaskCompletionSource<string?>? _turn;
+    private CancellationTokenSource? _turnCts;
+    private bool _streamedAnything;
+
+    public AgentSession(ServerClient server, ToolRunner tools, Guid chatId)
+    {
+        _server = server;
+        _tools = tools;
+        _chatId = chatId;
+
+        _hub = new HubConnectionBuilder()
+            .WithUrl($"{server.BaseUrl}/hubs/conexy", options => options.AccessTokenProvider = async () => await server.GetTokenAsync())
+            .WithAutomaticReconnect()
+            .Build();
+
+        _hub.On<Guid, Guid, string, string>("ExecuteTool", OnExecuteToolAsync);
+        // Последний аргумент событий группы — id группы (scopeId); он нам не нужен.
+        _hub.On<string, string?>("OnContentToken", (delta, _) =>
+        {
+            _streamedAnything = true;
+            Console.Write(delta);
+        });
+        _hub.On<JsonElement, string?>("OnCompleted", (_, _) => _turn?.TrySetResult(null));
+        _hub.On<string, string?>("OnError", (message, _) => _turn?.TrySetResult(message));
+        _hub.On<Guid, string?>("OnStopped", (_, _) => _turn?.TrySetResult("Остановлено."));
+
+        _hub.Reconnected += async _ => await RegisterAsync();
+    }
+
+    public async Task ConnectAsync(CancellationToken ct)
+    {
+        await _hub.StartAsync(ct);
+        await RegisterAsync();
+        await _hub.InvokeAsync("JoinTask", _chatId, ct);
+    }
+
+    private Task RegisterAsync() => _hub.InvokeAsync("RegisterDevice", Environment.MachineName);
+
+    /// <summary>Один ход агента. Возвращает текст ошибки или null при успехе.</summary>
+    public async Task<string?> AskAsync(string prompt, CancellationToken ct)
+    {
+        _turn = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _turnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _streamedAnything = false;
+
+        var taskId = await _server.StartRunAsync(prompt, _chatId, ct);
+        await _hub.InvokeAsync("JoinTask", taskId, ct);
+
+        // Страховка: событие завершения могло прийти до подписки на группу задачи.
+        _ = Task.Run(() => WatchdogAsync(taskId, _turnCts.Token));
+
+        try
+        {
+            await using var registration = ct.Register(() =>
+            {
+                _ = _hub.InvokeAsync("StopGeneration", taskId);
+                _turn.TrySetResult("Остановлено.");
+            });
+            return await _turn.Task;
+        }
+        finally
+        {
+            _turnCts.Cancel();
+            Console.WriteLine();
+        }
+    }
+
+    private async Task WatchdogAsync(Guid taskId, CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(4), ct);
+                var run = await _server.GetRunAsync(taskId, ct);
+                if (run is null || run.Status is not ("Completed" or "Failed" or "Cancelled"))
+                    continue;
+
+                if (!_streamedAnything && !string.IsNullOrEmpty(run.Result))
+                    Console.Write(run.Result);
+                _turn?.TrySetResult(run.Status == "Completed" ? null : $"Задача завершилась со статусом {run.Status}.");
+                return;
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (HttpRequestException) { }
+    }
+
+    private async Task OnExecuteToolAsync(Guid callId, Guid taskId, string tool, string argumentsJson)
+    {
+        ToolResult result;
+        try
+        {
+            result = await _tools.RunAsync(tool, argumentsJson, _turnCts?.Token ?? CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            result = ToolResult.Fail("Внутренняя ошибка клиента: " + ex.Message);
+        }
+
+        await _hub.InvokeAsync("ToolResult", callId, result.Output, result.IsError);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _turnCts?.Dispose();
+        await _hub.DisposeAsync();
+    }
+}
