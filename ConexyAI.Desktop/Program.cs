@@ -15,6 +15,20 @@ const string Usage = """
     кроме чтения, выполняется после вашего подтверждения.
     """;
 
+const string DefaultServerUrl = "https://conexyai.ru";
+
+static string? NormalizeUrl(string? url)
+{
+    url = url?.Trim().Trim('"');
+    if (string.IsNullOrEmpty(url))
+        return null;
+    if (!url.Contains("://"))
+        url = "https://" + url;
+    return Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
+        ? url.TrimEnd('/')
+        : null;
+}
+
 static string? Option(string[] args, string name)
 {
     var index = Array.IndexOf(args, name);
@@ -74,23 +88,46 @@ catch (HttpRequestException ex)
     Console.Error.WriteLine("Не удалось связаться с сервером: " + ex.Message);
     return 3;
 }
+catch (Exception ex) when (ex is not OperationCanceledException)
+{
+    Console.Error.WriteLine("Ошибка: " + ex.Message);
+    return 4;
+}
 }
 
 static async Task<int> LoginAsync(string[] args)
 {
     var config = ClientConfig.Load();
     var url = Option(args, "--url") ?? config.ServerUrl;
+    var key = Option(args, "--key");
     if (string.IsNullOrWhiteSpace(url))
     {
-        Console.Write("Адрес сервера (например https://conexy.example.com): ");
-        url = Console.ReadLine()?.Trim();
+        Console.Write($"Адрес сервера [Enter = {DefaultServerUrl}]: ");
+        var line = Console.ReadLine()?.Trim();
+        // Пользователь мог вставить целую команду «conexy login --url ... --key ...» — разбираем её.
+        if (!string.IsNullOrEmpty(line) && line.Contains("--"))
+        {
+            var tokens = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            url = Option(tokens, "--url");
+            key ??= Option(tokens, "--key");
+        }
+        else
+        {
+            url = string.IsNullOrEmpty(line) ? DefaultServerUrl : line;
+        }
     }
 
-    var key = Option(args, "--key");
     if (string.IsNullOrWhiteSpace(key))
     {
         Console.Write("Ключ (cnx_...): ");
         key = ReadSecret();
+    }
+
+    url = NormalizeUrl(url);
+    if (url is null)
+    {
+        Console.Error.WriteLine("Неверный адрес сервера. Пример: https://conexyai.ru");
+        return 1;
     }
 
     if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(key))
