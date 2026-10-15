@@ -84,10 +84,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
     /// <inheritdoc />
     public string PartialOutput => _streamedOutput.ToString();
 
-    private int _maxIterations;
-
-    // DESKTOP_AGENT: на проектах на ПК задачи крупнее (десятки файлов), и 15 шагов уходили на чтение.
-    private const int DesktopMinIterations = 50;
+    private readonly int _maxIterations;
 
     // Сколько раз аудитор может вернуть работу на доработку.
     // AUDIT_HANG: снижено с 3 до 1 (2026-10-10): каждый круг — ещё один молчаливый вызов модели после
@@ -613,7 +610,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var configured = agentOptions.Value.MaxIterations;
         // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
         // настройки не давало молча другой предел.
-        _maxIterations = configured <= 0 ? 25 : configured;
+        _maxIterations = configured <= 0 ? 50 : configured;
 
         var auditSeconds = agentOptions.Value.AuditTimeoutSeconds;
         _auditTimeout = TimeSpan.FromSeconds(auditSeconds <= 0 ? 45 : auditSeconds);
@@ -750,8 +747,6 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var runTokens = 0L;
         var tokenBudgetExceeded = false;
 
-        if (_job.UseDevice)
-            _maxIterations = Math.Max(_maxIterations, DesktopMinIterations);
 
         for (var step = 1; step <= _maxIterations; step++)
         {

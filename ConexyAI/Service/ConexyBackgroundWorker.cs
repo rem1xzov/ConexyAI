@@ -270,6 +270,7 @@ public class ConexyBackgroundWorker : BackgroundService
                 SystemPrompt: (isAgent
                     ? (smallTalk ? PromptEconomy.SmallTalkAgentPrompt : runner.GetSystemPrompt(job.ModelType))
                         + "\n\n" + Prompts.PromptFragments.AgentSafetyLine
+                        + (smallTalk ? string.Empty : "\n\n" + Prompts.PromptFragments.AgentWorkStyle)
                         + "\n\n" + Prompts.PromptFragments.AudienceLine(job.IsAdmin, job.Tier)
                         + DesktopEnvironmentBlock(scope.ServiceProvider, job)
                     : BuildChatSystemPrompt(job)
