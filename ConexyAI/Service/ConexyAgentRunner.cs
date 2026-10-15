@@ -282,6 +282,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
         - На простую реплику (приветствие, короткий вопрос) отвечай сразу коротко, без `todo_write` и инструментов.
         - **Работу доводи до конца за один ход.** Финала «могу, но не сделал», «не реализовано», «осталось сделать» не существует: если задачу можно выполнить твоими инструментами — выполни её сейчас и только потом завершай. Незавершённый отчёт система вернёт тебе на доработку, а пользователю придётся просить заново.
 
+        ## Действия, а не слова
+        - Просьба «сделай/исправь/доделай» = немедленный вызов `apply_patch`/`str_replace_editor`. Не пиши «Понял», «Делаю», диагнозы, планы действий и извинения вместо правки.
+        - Чтение файлов и диагностика — это не результат. Ход без единой успешной правки на просьбу изменить код система автоматически вернёт тебе.
+        - Сказал «внёс правку» — значит инструмент правки реально вернул успех в этом ходе.
+
         ## Цикл работы
         1. Разберись в задаче; факты не выдумывай (см. «Критерий готово»).
         2. Многошаговая работа (>1 файла или цикл «сборка → правка») начинается с `todo_write`: шаги `pending`, первый `in_progress`, после каждого этапа обнови статусы. Точечная правка одного файла — без плана.
@@ -428,6 +433,38 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "должен сделать сам", "нужно от вас", "требуется от вас", "ваши действия",
         "невозмож",
     };
+
+    // NO_EDIT_GATE: агент «делал» работу только словами — читал файлы, ставил диагноз, писал «правки внесены»,
+    // но ни один файл не изменился. Это самый злой вид вранья для пользователя, который уже просил несколько
+    // раз. Если ход завершается с нулём реальных правок, а пользователь просил изменить код (или сам ответ
+    // заявляет о правках) — ответ возвращается с жёстким требованием вызвать инструмент правки.
+    private const int MaxNoEditNudges = 3;
+    private static readonly string[] EditDemandMarkers =
+    {
+        "сделай", "доделай", "исправь", "поправь", "почини", "измени", "добавь", "убери", "удали", "перепиши",
+        "реализуй", "внеси", "правь", "запушь", "fix", "implement", "change", "add ", "remove", "refactor", "rewrite",
+    };
+    private static readonly string[] EditClaimMarkers =
+    {
+        "правки внес", "правки внёс", "внёс правки", "внес правки", "я исправил", "исправил", "изменил", "переписал",
+        "добавил", "реально сделано", "подтверждено патч", "готово", "сделано", "i fixed", "i changed", "i updated",
+        "i have made", "changes applied",
+    };
+
+    private const string NoEditPrompt =
+        "[No Edit] Ты завершаешь ход, но НИ ОДИН файл не изменён: ни `apply_patch`, ни `str_replace_editor`, ни `file_write` " +
+        "успешно не вызывались. Пользователь просил изменить код, а не описать его. Прямо сейчас вызови инструмент правки " +
+        "(`apply_patch` или `str_replace_editor`) с реальными изменениями, затем собери проект. Никаких планов, " +
+        "диагнозов, извинений и пересказа — только вызов инструмента. Если ты утверждал, что правки внесены — это " +
+        "неправда, исправь это делом.";
+
+    private static bool LooksLikeEditDemand(string? prompt) =>
+        !string.IsNullOrWhiteSpace(prompt) &&
+        EditDemandMarkers.Any(m => prompt.Contains(m, StringComparison.OrdinalIgnoreCase));
+
+    private static bool ClaimsEdits(string? text) =>
+        !string.IsNullOrWhiteSpace(text) &&
+        EditClaimMarkers.Any(m => text.Contains(m, StringComparison.OrdinalIgnoreCase));
 
     private const string IncompleteWorkPrompt =
         "[Incomplete Work] В твоём ответе сказано, что часть работы не сделана. Так заканчивать ход нельзя, " +
@@ -639,6 +676,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var claimPushbacks = 0;
         // INCOMPLETE_WORK: сколько раз мы возвращали ответ, где агент сам признал работу незавершённой.
         var incompleteNudges = 0;
+        // NO_EDIT_GATE: сколько раз вернули ход, завершаемый без единой реальной правки файлов.
+        var noEditNudges = 0;
 
         // ITERATION_WRAPUP: добавлено 2026-10-06 — на последнем шаге просим модель подвести итог,
         // и только один раз (иначе на перезапуске этого же шага подсказка добавилась бы дважды).
@@ -855,6 +894,21 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     await group.SendAsync("OnLog", $"[Incomplete] В ответе заявлена незавершённая работа ({incompleteWork}) — довожу до конца.", ct);
                     await SendAgentStatusAsync(taskId, "thinking", "Довожу работу до конца…", ct: ct);
                     messages.Add(new ChatMessage("system", IncompleteWorkPrompt));
+                    continue;
+                }
+
+                // NO_EDIT_GATE: ход закрывается без единой правки, хотя просили изменить код или ответ хвастается правками.
+                if (_profile.AuditsCode && changedFiles.Count == 0 && step < _maxIterations
+                    && noEditNudges < MaxNoEditNudges
+                    && (LooksLikeEditDemand(job.Prompt) || ClaimsEdits(finalText)))
+                {
+                    noEditNudges++;
+                    _logger.LogWarning(
+                        "Agent no-edit gate: finishing with zero changed files; sending back {Attempt}/{Max}. task={TaskId}",
+                        noEditNudges, MaxNoEditNudges, taskId);
+                    await group.SendAsync("OnLog", $"[No Edit] Ни один файл не изменён — требую реальную правку ({noEditNudges}/{MaxNoEditNudges}).", ct);
+                    await SendAgentStatusAsync(taskId, "thinking", "Файлы не изменены — вношу правки…", ct: ct);
+                    messages.Add(new ChatMessage("system", NoEditPrompt));
                     continue;
                 }
 
