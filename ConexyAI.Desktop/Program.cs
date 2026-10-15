@@ -222,15 +222,108 @@ static async Task<int> ChatAsync(string[] args)
     }
 
     var approver = new ConsoleApprover { AutoMode = args.Contains("--auto") };
+    var store = ChatStore.Load();
+    var chatId = store.ChatFor(root, ChatIdFor(root));
     var firstBanner = true;
     while (true)
     {
-        var next = await ChatInFolderAsync(server, approver, root, firstBanner);
+        var next = await ChatInFolderAsync(server, approver, store, root, chatId, firstBanner);
         if (next is null)
             return 0;
-        root = next;
+        (root, chatId) = next.Value;
         firstBanner = false;
     }
+}
+
+static string Ago(DateTime utc)
+{
+    var span = DateTime.UtcNow - utc;
+    if (span.TotalMinutes < 1) return "только что";
+    if (span.TotalHours < 1) return $"{(int)span.TotalMinutes} мин назад";
+    if (span.TotalDays < 1) return $"{(int)span.TotalHours} ч назад";
+    return $"{(int)span.TotalDays} дн назад";
+}
+
+static async Task ShowHistoryAsync(ServerClient server, Guid chatId)
+{
+    try
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var messages = await server.GetTranscriptAsync(chatId, cts.Token);
+        if (messages.Count == 0)
+            return;
+        var tail = messages.TakeLast(4).ToList();
+        Ui.Info($"  История чата (последние {tail.Count} из {messages.Count}):");
+        foreach (var m in tail)
+            Ui.HistoryLine(m.Role, m.Content);
+        Console.WriteLine();
+    }
+    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or AuthRejectedException)
+    {
+        // История — бонус: без неё работать можно.
+    }
+}
+
+// /chats: список чатов с сервера (те же, что на сайте) + локальная привязка к папкам.
+static async Task<(string Root, Guid ChatId)?> PickChatAsync(ServerClient server, ChatStore store, string root, Guid current)
+{
+    List<ChatItem> chats;
+    try
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        chats = await server.GetChatsAsync(cts.Token);
+    }
+    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or AuthRejectedException)
+    {
+        Ui.Error("Не удалось загрузить чаты: " + ex.Message);
+        return null;
+    }
+
+    var items = chats
+        .Where(c => c.Kind != "students" && (c.Model is null or "conexy-coder" || store.Folders.ContainsKey(c.Id)))
+        .OrderByDescending(c => c.LastActivityAt)
+        .Take(30)
+        .ToList();
+
+    Console.WriteLine();
+    Console.WriteLine(Ui.Bold("Чаты") + Ui.Muted(" (синхронизированы с сайтом)"));
+    Console.WriteLine($"  {0,3}. {Ui.Highlight("+ Новый чат")}");
+    for (var i = 0; i < items.Count; i++)
+    {
+        var c = items[i];
+        var title = c.Title ?? c.LastMessage ?? "Без названия";
+        title = string.Join(' ', title.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+        if (title.Length > 42)
+            title = title[..42] + "…";
+        var folder = store.FolderOf(c.Id);
+        var where = folder is null ? Ui.Muted("папка не выбрана") : Ui.Muted(folder);
+        var mark = c.Id == current ? Ui.Green_("●") : " ";
+        var pin = c.IsPinned ? "📌" : string.Empty;
+        Console.WriteLine($"  {i + 1,3}. {mark} {pin}{title}  {Ui.Muted($"{c.MessageCount} сообщ. · {Ago(c.LastActivityAt)}")}");
+        Console.WriteLine($"         {where}");
+    }
+
+    Console.Write("\nНомер чата (Enter — отмена): ");
+    var answer = Console.ReadLine()?.Trim();
+    if (!int.TryParse(answer, out var n) || n < 0 || n > items.Count)
+        return null;
+
+    var chatId = n == 0 ? Guid.NewGuid() : items[n - 1].Id;
+    var target = n == 0 ? null : store.FolderOf(chatId);
+    if (target is null)
+    {
+        Console.Write($"Папка проекта для этого чата [Enter = {root}]: ");
+        var line = Console.ReadLine()?.Trim().Trim('"');
+        target = string.IsNullOrEmpty(line) ? root : Path.GetFullPath(Path.Combine(root, line));
+        if (!Directory.Exists(target))
+        {
+            Ui.Error($"Папка не найдена: {target}");
+            return null;
+        }
+    }
+
+    store.Bind(chatId, target);
+    return (target, chatId);
 }
 
 
@@ -268,6 +361,8 @@ static void PrintHelp() => Console.WriteLine("""
       /ls [путь]      показать содержимое папки (папки пронумерованы)
       /cd <путь|N|..> сменить рабочую папку (N — номер из /ls)
       /pwd            текущая папка
+      /chats          список всех чатов (синхронизирован с сайтом): переключиться или создать новый,
+                      у каждого чата своя папка проекта
       /team           вкл/выкл оркестр агентов: ведущий собирает команду субагентов (ProMax, Ultra, Admin)
       /usage          тариф и расход токенов агента
       /update         проверить обновления (или команда conexy update)
@@ -278,16 +373,20 @@ static void PrintHelp() => Console.WriteLine("""
     Токен GitHub и MCP-серверы берутся из настроек на сайте автоматически.
     """);
 
-// Возвращает новую папку, если пользователь её сменил, или null для выхода.
-static async Task<string?> ChatInFolderAsync(ServerClient server, ConsoleApprover approver, string root, bool firstBanner)
+// Возвращает новую пару (папка, чат), если пользователь переключился, или null для выхода.
+static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
+    ServerClient server, ConsoleApprover approver, ChatStore store, string root, Guid chatId, bool firstBanner)
 {
+    store.Bind(chatId, root);
     var tools = new ToolRunner(root, approver, Ui.ToolCall, server.GetGitHubTokenAsync);
-    await using var session = new AgentSession(server, tools, ChatIdFor(root));
+    await using var session = new AgentSession(server, tools, chatId);
     await session.ConnectAsync(CancellationToken.None);
 
     Ui.Banner(root, server.BaseUrl.Replace("https://", string.Empty));
     if (firstBanner && approver.AutoMode)
         Ui.Info("  Авто-режим включён: команды выполняются без подтверждения.");
+    Ui.Info($"  Чат {chatId.ToString()[..8]} · /chats — список чатов, /cd — сменить проект");
+    await ShowHistoryAsync(server, chatId);
     var listed = new List<string>();
     var usage = await TryUsageAsync(server);
     Ui.SetUsage(usage);
@@ -314,6 +413,10 @@ static async Task<string?> ChatInFolderAsync(ServerClient server, ConsoleApprove
                     break;
                 case "/pwd":
                     Console.WriteLine(root);
+                    break;
+                case "/chats":
+                    if (await PickChatAsync(server, store, root, chatId) is { } picked)
+                        return picked;
                     break;
                 case "/usage":
                     usage = await TryUsageAsync(server);
@@ -357,7 +460,10 @@ static async Task<string?> ChatInFolderAsync(ServerClient server, ConsoleApprove
                 case "/cd":
                     var target = ResolveFolder(root, arg, listed);
                     if (Directory.Exists(target))
-                        return Path.GetFullPath(target);
+                    {
+                        var full = Path.GetFullPath(target);
+                        return (full, store.ChatFor(full, ChatIdFor(full)));
+                    }
                     Console.Error.WriteLine($"Папка не найдена: {target}");
                     break;
                 default:

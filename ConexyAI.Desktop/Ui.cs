@@ -208,6 +208,21 @@ public static class Ui
         Busy("Команда работает");
     }
 
+    public static void HistoryLine(string role, string content)
+    {
+        var flat = string.Join(' ', content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        var max = role == "user" ? 160 : 260;
+        if (flat.Length > max)
+            flat = flat[..max] + "…";
+        Console.WriteLine(role == "user"
+            ? "  " + C(Orange, "❯ ") + C(Dim, flat)
+            : "  " + C("1;37", "● ") + C(Dim, flat));
+    }
+
+    public static string Highlight(string text) => C(Orange, text);
+
+    public static string Green_(string text) => C(Green, text);
+
     public static void Info(string text) => Console.WriteLine(Muted(text));
 
     public static void Error(string text)

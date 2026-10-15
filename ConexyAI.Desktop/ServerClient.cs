@@ -8,6 +8,11 @@ public sealed class AuthRejectedException(string message) : Exception(message);
 
 public sealed record RunResult(Guid TaskId, string Status, string? Result);
 
+public sealed record ChatItem(
+    Guid Id, string? Title, string Kind, DateTime LastActivityAt, int MessageCount, string? LastMessage, bool IsPinned, string? Model);
+
+public sealed record TranscriptMessage(string Role, string Content, DateTime CreatedAt);
+
 public sealed record ClientInfo(string? DownloadUrl, string? Version);
 
 /// <summary>Тариф и расход токенов агента: тот же счётчик, что и на сайте.</summary>
@@ -76,6 +81,7 @@ public sealed class ServerClient : IDisposable
                 model = "conexy-coder",
                 prompt = prompt.Replace("\0", string.Empty),
                 chatId = chatId.ToString(),
+                chatKind = "projects",
                 useDevice = true,
                 reasoningEffort = "high",
                 orchestra = orchestra ? true : (bool?)null,
@@ -106,6 +112,28 @@ public sealed class ServerClient : IDisposable
 
         var body = await response.Content.ReadFromJsonAsync<RunBody>(Json, ct);
         return body is null ? null : new RunResult(body.Id, body.Status ?? string.Empty, body.Result);
+    }
+
+    /// <summary>Все чаты аккаунта — тот же список, что в сайте (сервер — единый источник).</summary>
+    public async Task<List<ChatItem>> GetChatsAsync(CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "api/conexy/chats?limit=200");
+        request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));
+        using var response = await _http.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<ChatListBody>(Json, ct);
+        return body?.Chats ?? [];
+    }
+
+    public async Task<List<TranscriptMessage>> GetTranscriptAsync(Guid chatId, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"api/conexy/chats/{chatId}/messages");
+        request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));
+        using var response = await _http.SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode)
+            return [];
+        var body = await response.Content.ReadFromJsonAsync<TranscriptBody>(Json, ct);
+        return body?.Messages ?? [];
     }
 
     public async Task<ClientInfo?> GetClientInfoAsync(CancellationToken ct)
@@ -162,6 +190,10 @@ public sealed class ServerClient : IDisposable
     private sealed record TokenBody(string Token, DateTime ExpiresAtUtc);
 
     private sealed record GitHubBody(string? Token);
+
+    private sealed record ChatListBody(List<ChatItem> Chats);
+
+    private sealed record TranscriptBody(List<TranscriptMessage> Messages);
 
     private sealed record ClientBody(string? DownloadUrl, string? Version);
 
