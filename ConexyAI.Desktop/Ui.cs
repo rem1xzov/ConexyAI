@@ -265,7 +265,7 @@ public static class Ui
     /// <summary>Рисует рамку ввода с подсказкой под ней и возвращает введённую строку.</summary>
     public static string? ReadPrompt(bool autoMode)
     {
-        if (!Ansi)
+        if (!Ansi || Console.IsInputRedirected)
         {
             Console.Write("> ");
             return Console.ReadLine();
@@ -275,23 +275,92 @@ public static class Ui
                     + (TeamMode ? C("38;5;213", "* команда") + " " : string.Empty);
         var footer = "  " + modes + (_status.Length > 0 ? C(Cyan, _status) + Muted(" · ") : string.Empty) + Muted("/help");
 
+        // Ввод возможен ТОЛЬКО в строке внутри рамки: набранное пока агент работал отбрасываем, а саму строку
+        // редактируем сами (ReadKey), чтобы текст никогда не попадал на рамку или в подсказку.
+        while (Console.KeyAvailable)
+            Console.ReadKey(intercept: true);
+
         Console.WriteLine();
         Console.WriteLine(Rule());
         Console.WriteLine(C(Orange, "› "));
         Console.WriteLine(Rule());
         Console.Write(footer);
-        Console.Write("\x1b[2A\r\x1b[2C"); // на строку ввода, после «› »
+        var row = Console.CursorTop - 2; // строка ввода (абсолютный номер, не зависит от прокрутки)
 
-        var line = Console.ReadLine();
+        var text = new StringBuilder();
+        var pos = 0;
+        var start = 0;
 
-        // Курсор теперь на нижней линии: затираем её и подсказку, выделяем введённое.
-        Console.Write("\x1b[1A\r\x1b[2K");
-        if (line is { Length: > 0 } && line.Length + 3 < Width())
+        void Redraw()
+        {
+            var avail = Math.Max(10, Width() - 3);
+            if (pos < start) start = pos;
+            if (pos > start + avail) start = pos - avail;
+            var shown = text.ToString(start, Math.Min(avail, text.Length - start));
+            Console.SetCursorPosition(0, row);
+            Console.Write(C(Orange, "› ") + shown + "\x1b[K");
+            Console.SetCursorPosition(2 + pos - start, row);
+        }
+
+        Redraw();
+        while (true)
+        {
+            var key = Console.ReadKey(intercept: true);
+            if (key.Key == ConsoleKey.Enter)
+                break;
+
+            switch (key.Key)
+            {
+                case ConsoleKey.Backspace:
+                    if (pos > 0) text.Remove(--pos, 1);
+                    break;
+                case ConsoleKey.Delete:
+                    if (pos < text.Length) text.Remove(pos, 1);
+                    break;
+                case ConsoleKey.LeftArrow:
+                    if (pos > 0) pos--;
+                    break;
+                case ConsoleKey.RightArrow:
+                    if (pos < text.Length) pos++;
+                    break;
+                case ConsoleKey.Home:
+                    pos = 0;
+                    break;
+                case ConsoleKey.End:
+                    pos = text.Length;
+                    break;
+                case ConsoleKey.Escape:
+                    text.Clear();
+                    pos = 0;
+                    break;
+                default:
+                    if (key.Key == ConsoleKey.U && key.Modifiers.HasFlag(ConsoleModifiers.Control))
+                    {
+                        text.Remove(0, pos);
+                        pos = 0;
+                    }
+                    else if (!char.IsControl(key.KeyChar))
+                    {
+                        text.Insert(pos++, key.KeyChar);
+                    }
+                    break;
+            }
+            Redraw();
+        }
+
+        var line = text.ToString();
+
+        // Заменяем рамку на выделенную строку ввода и чистим нижнюю линию с подсказкой.
+        Console.SetCursorPosition(0, row);
+        if (line.Length > 0 && line.Length + 3 < Width())
             Console.Write($"\x1b[{PromptBg}m\x1b[38;5;255m› {line}\x1b[K\x1b[0m");
         else
-            Console.Write(C(Orange, "› ") + line);
-        Console.WriteLine();
-        Console.Write("\x1b[2K\x1b[1B\x1b[2K\x1b[1A\r");
+            Console.Write(C(Orange, "› ") + line + "\x1b[K");
+        Console.SetCursorPosition(0, row + 1);
+        Console.Write("\x1b[2K");
+        Console.SetCursorPosition(0, row + 2);
+        Console.Write("\x1b[2K");
+        Console.SetCursorPosition(0, row + 1);
         return line;
     }
 
