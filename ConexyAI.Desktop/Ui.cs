@@ -21,6 +21,9 @@ public static class Ui
 
     public static bool Ansi { get; private set; }
 
+    /// <summary>Включён ли оркестр агентов (для подсказки под вводом).</summary>
+    public static bool TeamMode { get; set; }
+
     public static string Version =>
         typeof(Ui).Assembly.GetName().Version is { } v ? $"{v.Major}.{v.Minor}.{v.Build}" : "0";
 
@@ -65,19 +68,144 @@ public static class Ui
 
     private static string Rule() => C(Dim, new string('─', Width()));
 
+    // Маскот — ворона, пиксель-арт 16×10, каждые две строки пикселей = одна строка терминала («▀» с цветом фона).
+    // k — тёмно-фиолетовый, b — сине-фиолетовый, o — клюв, p — глаз.
+    private static readonly string[] Crow =
+    [
+        "......kk........",
+        ".....kkkpoo.....",
+        ".....kkkkkoooo..",
+        "...bbbkkkk...o..",
+        "..bbbbbbkk......",
+        ".bbbbbbbbbk.....",
+        "bbbbbbbbbbbkk...",
+        ".kbbbbbbbbbbkk..",
+        "....kk.kk.......",
+        "...kkk.kkk......",
+    ];
+
+    private static int CrowColor(char c) => c switch
+    {
+        'k' => 54,
+        'b' => 62,
+        'o' => 33,
+        'p' => 201,
+        _ => -1,
+    };
+
+    private static string CrowRow(int row)
+    {
+        var sb = new StringBuilder();
+        for (var x = 0; x < Crow[0].Length; x++)
+        {
+            var top = CrowColor(Crow[row * 2][x]);
+            var bottom = CrowColor(Crow[row * 2 + 1][x]);
+            if (top < 0 && bottom < 0)
+                sb.Append(' ');
+            else if (bottom < 0)
+                sb.Append($"\x1b[38;5;{top}m▀\x1b[0m");
+            else if (top < 0)
+                sb.Append($"\x1b[38;5;{bottom}m▄\x1b[0m");
+            else
+                sb.Append($"\x1b[38;5;{top};48;5;{bottom}m▀\x1b[0m");
+        }
+        return sb.ToString();
+    }
+
     public static void Banner(string root, string server)
     {
         Console.WriteLine();
-        var art = new[] { " ╭─────╮ ", " │ ◉ ◉ │ ", " ╰─┬─┬─╯ " };
         var info = new[]
         {
+            string.Empty,
             Bold("ConexyAI") + " " + Muted("v" + Version),
             Muted("Conexy Coder · " + server),
             Muted(root),
+            string.Empty,
         };
-        for (var i = 0; i < 3; i++)
-            Console.WriteLine("  " + C(Orange, art[i]) + "  " + info[i]);
+        for (var i = 0; i < 5; i++)
+            Console.WriteLine("  " + (Ansi ? CrowRow(i) : new string(' ', 16)) + "  " + info[i]);
         Console.WriteLine();
+    }
+
+    // ── Тариф и токены (строка состояния под вводом) ───────────────────────────────────────
+
+    private static string _status = string.Empty;
+
+    public static string FormatTokens(long n) => n switch
+    {
+        >= 1_000_000 => (n / 1_000_000d).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + "M",
+        >= 1_000 => (n / 1_000d).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + "K",
+        _ => n.ToString(),
+    };
+
+    public static void SetUsage(UsageInfo? usage)
+    {
+        if (usage is null)
+            return;
+        var tokens = usage.Unlimited
+            ? $"{FormatTokens(usage.AgentUsed)} / ∞"
+            : $"{FormatTokens(usage.AgentUsed)} / {FormatTokens(usage.AgentLimit)}";
+        var reset = usage.AgentResetsAt.Year > 2000 ? $" · сброс {usage.AgentResetsAt.ToLocalTime():dd.MM}" : string.Empty;
+        _status = $"{usage.Tier} · агент: {tokens} токенов{reset}";
+    }
+
+    public static void PrintStatus()
+    {
+        if (_status.Length > 0)
+            Console.WriteLine("  " + C(Cyan, _status));
+    }
+
+    // ── Оркестр агентов ──────────────────────────────────────────────────────────
+
+    private static readonly string[] AgentColors = ["38;5;80", "38;5;213", "38;5;114", "38;5;215", "38;5;147"];
+    private static readonly Dictionary<string, int> AgentIndex = new();
+    private static readonly Dictionary<string, string> AgentLast = new();
+
+    private static string AgentTag(string id, string role)
+    {
+        if (!AgentIndex.TryGetValue(id, out var index))
+            AgentIndex[id] = index = AgentIndex.Count;
+        return C(AgentColors[index % AgentColors.Length], ">_ " + role);
+    }
+
+    public static void TeamRoster(IReadOnlyList<(string Id, string Role, string Brief, string Scope)> agents)
+    {
+        Idle();
+        AgentIndex.Clear();
+        AgentLast.Clear();
+        var width = Width();
+        Console.WriteLine();
+        Console.WriteLine(C(Orange, "● ") + Bold($"Команда из {agents.Count} агентов"));
+        foreach (var a in agents)
+        {
+            var tag = AgentTag(a.Id, a.Role);
+            var brief = a.Brief.Replace('\n', ' ');
+            if (brief.Length > width - 20)
+                brief = brief[..Math.Max(0, width - 21)] + "…";
+            Console.WriteLine("  " + tag + (a.Scope.Length > 0 ? Muted("  [" + a.Scope + "]") : string.Empty));
+            Console.WriteLine("     " + Muted(brief));
+        }
+        Console.WriteLine();
+    }
+
+    public static void AgentStatus(string id, string role, string stage, string label)
+    {
+        // «Думает» — шум: показываем только реальные действия и завершение.
+        if (stage == "thinking" || label.Length == 0)
+            return;
+        lock (AgentLast)
+        {
+            var key = stage + label;
+            if (AgentLast.TryGetValue(id, out var last) && last == key)
+                return;
+            AgentLast[id] = key;
+        }
+
+        Idle();
+        var mark = stage == "idle" ? C(Green, "✓") : C(Dim, "•");
+        Console.WriteLine($"  {AgentTag(id, role)} {mark} {(stage == "idle" ? C(Green, label) : label)}");
+        Busy("Команда работает");
     }
 
     public static void Info(string text) => Console.WriteLine(Muted(text));
@@ -99,9 +227,9 @@ public static class Ui
             return Console.ReadLine();
         }
 
-        var footer = autoMode
-            ? C(Yellow, "  ⏵⏵ авто-режим: команды выполняются без вопросов") + Muted("  (/auto — выключить)")
-            : Muted("  /help — команды · /auto — без подтверждений · Ctrl+C — остановить");
+        var modes = (autoMode ? C(Yellow, "⏵⏵ авто") + " " : string.Empty)
+                    + (TeamMode ? C("38;5;213", "✦ команда") + " " : string.Empty);
+        var footer = "  " + modes + (_status.Length > 0 ? C(Cyan, _status) + Muted(" · ") : string.Empty) + Muted("/help");
 
         Console.WriteLine();
         Console.WriteLine(Rule());

@@ -197,6 +197,8 @@
     "desktopNeverUsed": "never used",
     "desktopLimit": "Active key limit reached. Revoke an unused one.",
     "desktopError": "Action failed. Try again later.",
+    "desktopVersion": "Latest client version",
+    "desktopTier": "Your plan",
     "mcpTitle": "Personal MCP servers",
     "mcpHint": "Connect external services (Notion, Jira, Linear, …) that expose a remote MCP over HTTP. URLs and tokens are stored on the server, encrypted: they work from background tasks and any of your devices. The agent reaches the service as your account.",
     "mcpNamePlaceholder": "Name (e.g. Notion)",

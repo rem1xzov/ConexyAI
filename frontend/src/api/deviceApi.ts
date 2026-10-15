@@ -21,6 +21,8 @@ export interface IssuedDeviceKey {
 export interface DesktopClientInfo {
   downloadUrl: string;
   platform: string;
+  /** Актуальная версия клиента (последний релиз), null — неизвестна. */
+  version: string | null;
 }
 
 export async function getDesktopClientInfo(): Promise<DesktopClientInfo> {

@@ -8,6 +8,17 @@ public sealed class AuthRejectedException(string message) : Exception(message);
 
 public sealed record RunResult(Guid TaskId, string Status, string? Result);
 
+public sealed record ClientInfo(string? DownloadUrl, string? Version);
+
+/// <summary>Тариф и расход токенов агента: тот же счётчик, что и на сайте.</summary>
+public sealed record UsageInfo(string Tier, long AgentUsed, long AgentLimit, DateTime AgentResetsAt)
+{
+    public bool Unlimited => AgentLimit >= long.MaxValue / 2;
+
+    /// <summary>Оркестр агентов доступен только ProMax, Ultra и админам (так же, как на сервере).</summary>
+    public bool TeamAllowed => Tier is "ProMax" or "Ultra" or "Admin";
+}
+
 /// <summary>HTTP-часть: обмен ключа на JWT (с кэшем до истечения) и запуск задач агента.</summary>
 public sealed class ServerClient : IDisposable
 {
@@ -56,7 +67,7 @@ public sealed class ServerClient : IDisposable
     }
 
     /// <summary>Ставит задачу в очередь. Сообщение об ошибке сервера (лимиты, занятость) — в исключении.</summary>
-    public async Task<Guid> StartRunAsync(string prompt, Guid chatId, CancellationToken ct)
+    public async Task<Guid> StartRunAsync(string prompt, Guid chatId, bool orchestra, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "api/conexy/run")
         {
@@ -67,6 +78,7 @@ public sealed class ServerClient : IDisposable
                 chatId = chatId.ToString(),
                 useDevice = true,
                 reasoningEffort = "high",
+                orchestra = orchestra ? true : (bool?)null,
             }, options: Json),
         };
         request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));
@@ -94,6 +106,26 @@ public sealed class ServerClient : IDisposable
 
         var body = await response.Content.ReadFromJsonAsync<RunBody>(Json, ct);
         return body is null ? null : new RunResult(body.Id, body.Status ?? string.Empty, body.Result);
+    }
+
+    public async Task<ClientInfo?> GetClientInfoAsync(CancellationToken ct)
+    {
+        using var response = await _http.GetAsync("api/device/client", ct);
+        if (!response.IsSuccessStatusCode)
+            return null;
+        var body = await response.Content.ReadFromJsonAsync<ClientBody>(Json, ct);
+        return body is null ? null : new ClientInfo(body.DownloadUrl, body.Version);
+    }
+
+    public async Task<UsageInfo?> GetUsageAsync(CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "api/subscription/usage");
+        request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));
+        using var response = await _http.SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode)
+            return null;
+        var body = await response.Content.ReadFromJsonAsync<UsageBody>(Json, ct);
+        return body is null ? null : new UsageInfo(body.Tier ?? "Free", body.AgentUsed, body.AgentLimit, body.AgentResetsAt);
     }
 
     private string? _gitHubToken;
@@ -130,6 +162,10 @@ public sealed class ServerClient : IDisposable
     private sealed record TokenBody(string Token, DateTime ExpiresAtUtc);
 
     private sealed record GitHubBody(string? Token);
+
+    private sealed record ClientBody(string? DownloadUrl, string? Version);
+
+    private sealed record UsageBody(string? Tier, long AgentUsed, long AgentLimit, DateTime AgentResetsAt);
 
     private sealed record RunBody(Guid Id, string? Status, string? Result);
 }

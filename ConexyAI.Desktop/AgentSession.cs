@@ -20,6 +20,9 @@ public sealed class AgentSession : IAsyncDisposable
     private bool _streamedAnything;
     private volatile bool _needBullet;
 
+    /// <summary>Оркестр агентов (субагенты): сервер сам решает, разрешён ли он на тарифе.</summary>
+    public bool Orchestra { get; set; }
+
     public AgentSession(ServerClient server, ToolRunner tools, Guid chatId)
     {
         _server = server;
@@ -44,6 +47,8 @@ public sealed class AgentSession : IAsyncDisposable
             }
             Console.Write(delta);
         });
+        _hub.On<JsonElement, string?>("AgentTeam", (payload, _) => OnTeam(payload));
+        _hub.On<JsonElement, string?>("OnAgentStatus", (payload, _) => OnAgentStatus(payload));
         _hub.On<JsonElement, string?>("OnCompleted", (_, _) => _turn?.TrySetResult(null));
         _hub.On<string, string?>("OnError", (message, _) => _turn?.TrySetResult(message));
         _hub.On<Guid, string?>("OnStopped", (_, _) => _turn?.TrySetResult("Остановлено."));
@@ -73,7 +78,7 @@ public sealed class AgentSession : IAsyncDisposable
         _needBullet = true;
         Ui.Busy();
 
-        var taskId = await _server.StartRunAsync(prompt, _chatId, ct);
+        var taskId = await _server.StartRunAsync(prompt, _chatId, Orchestra, ct);
         await _hub.InvokeAsync("JoinTask", taskId, ct);
 
         // Страховка: событие завершения могло прийти до подписки на группу задачи.
@@ -118,6 +123,47 @@ public sealed class AgentSession : IAsyncDisposable
         }
         catch (OperationCanceledException) { }
         catch (HttpRequestException) { }
+    }
+
+    private static string? Prop(JsonElement el, string name)
+    {
+        if (el.ValueKind != JsonValueKind.Object)
+            return null;
+        foreach (var p in el.EnumerateObject())
+            if (p.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.String)
+                return p.Value.GetString();
+        return null;
+    }
+
+    private void OnTeam(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object)
+            return;
+        var agents = new List<(string Id, string Role, string Brief, string Scope)>();
+        foreach (var p in payload.EnumerateObject())
+        {
+            if (!p.Name.Equals("agents", StringComparison.OrdinalIgnoreCase) || p.Value.ValueKind != JsonValueKind.Array)
+                continue;
+            foreach (var a in p.Value.EnumerateArray())
+            {
+                var scope = new List<string>();
+                foreach (var sp in a.EnumerateObject())
+                    if (sp.Name.Equals("scope", StringComparison.OrdinalIgnoreCase) && sp.Value.ValueKind == JsonValueKind.Array)
+                        scope.AddRange(sp.Value.EnumerateArray().Select(s => s.GetString() ?? string.Empty));
+                agents.Add((Prop(a, "id") ?? "?", Prop(a, "role") ?? "agent", Prop(a, "brief") ?? string.Empty, string.Join(", ", scope)));
+            }
+        }
+
+        Ui.TeamRoster(agents);
+        Ui.Busy("Команда работает");
+    }
+
+    private void OnAgentStatus(JsonElement payload)
+    {
+        var agentId = Prop(payload, "agentId");
+        if (agentId is null or "lead")
+            return;
+        Ui.AgentStatus(agentId, Prop(payload, "agentRole") ?? agentId, Prop(payload, "stage") ?? string.Empty, Prop(payload, "label") ?? string.Empty);
     }
 
     private async Task OnExecuteToolAsync(Guid callId, Guid taskId, string tool, string argumentsJson)

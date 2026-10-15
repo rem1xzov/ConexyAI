@@ -25,6 +25,7 @@ import {
   revokeDeviceKey,
   type DeviceKey,
 } from '../api/deviceApi';
+import { getSubscriptionUsage } from '../api/conexyApi';
 import { humanError } from '../utils/humanError';
 import { setPlainCode, usePlainCode } from '../utils/displayPrefs';
 import { ConfirmDialog } from './Dialog';
@@ -652,6 +653,8 @@ function DesktopSection({ active }: { active: boolean }) {
   const { t } = useTranslation();
   const [keys, setKeys] = useState<DeviceKey[]>([]);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [version, setVersion] = useState<string | null>(null);
+  const [tier, setTier] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -672,7 +675,13 @@ function DesktopSection({ active }: { active: boolean }) {
     requestedRef.current = true;
     void reload();
     getDesktopClientInfo()
-      .then((info) => setDownloadUrl(info.downloadUrl))
+      .then((info) => {
+        setDownloadUrl(info.downloadUrl);
+        setVersion(info.version);
+      })
+      .catch(() => undefined);
+    getSubscriptionUsage()
+      .then((usage) => setTier(usage.tier))
       .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
@@ -727,7 +736,18 @@ function DesktopSection({ active }: { active: boolean }) {
         {downloadUrl && (
           <a className="dialog-btn dialog-btn--primary" href={downloadUrl} download rel="noopener noreferrer">
             {t('settings.desktopDownload')}
+            {version ? ` · v${version}` : ''}
           </a>
+        )}
+        {version && (
+          <p className="settings-github__hint">
+            {t('settings.desktopVersion')}: <strong>v{version}</strong>
+          </p>
+        )}
+        {tier && (
+          <p className="settings-github__hint">
+            {t('settings.desktopTier')}: <strong>{tier}</strong>
+          </p>
         )}
       </div>
 

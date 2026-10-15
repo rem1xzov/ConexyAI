@@ -21,6 +21,12 @@ public class DeviceController : ControllerBase
     private readonly IUserIntegrationsService _integrations;
     private readonly ILogger<DeviceController> _logger;
     private readonly IConfiguration _configuration;
+    private readonly IHttpClientFactory _httpFactory;
+
+    // Кэш номера последнего релиза: GitHub API не дёргаем на каждый запрос.
+    private static string? _cachedVersion;
+    private static DateTime _cachedAtUtc;
+    private static readonly SemaphoreSlim VersionLock = new(1, 1);
 
     // Адрес по умолчанию — последний релиз на GitHub (образ собирается workflow desktop-release). Переопределяется
     // настройкой Desktop:DownloadUrl, если exe лежит в другом месте.
@@ -31,8 +37,10 @@ public class DeviceController : ControllerBase
         IDeviceKeyService keys,
         IUserIntegrationsService integrations,
         ILogger<DeviceController> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IHttpClientFactory httpFactory)
     {
+        _httpFactory = httpFactory;
         _keys = keys;
         _integrations = integrations;
         _logger = logger;
@@ -42,14 +50,59 @@ public class DeviceController : ControllerBase
     /// <summary>Ссылка на скачивание десктопного клиента (публичная информация).</summary>
     [HttpGet("client")]
     [AllowAnonymous]
-    public IActionResult ClientInfo()
+    public async Task<IActionResult> ClientInfo(CancellationToken ct)
     {
         var url = _configuration["Desktop:DownloadUrl"];
         return Ok(new
         {
             downloadUrl = string.IsNullOrWhiteSpace(url) ? DefaultDownloadUrl : url,
             platform = "windows-x64",
+            version = await LatestVersionAsync(ct),
         });
+    }
+
+    /// <summary>Тег последнего релиза клиента без «v» (например 0.1.5) или null, если GitHub недоступен.</summary>
+    private async Task<string?> LatestVersionAsync(CancellationToken ct)
+    {
+        if (DateTime.UtcNow - _cachedAtUtc < TimeSpan.FromMinutes(10))
+            return _cachedVersion;
+
+        await VersionLock.WaitAsync(ct);
+        try
+        {
+            if (DateTime.UtcNow - _cachedAtUtc < TimeSpan.FromMinutes(10))
+                return _cachedVersion;
+
+            try
+            {
+                var http = _httpFactory.CreateClient();
+                http.Timeout = TimeSpan.FromSeconds(5);
+                using var request = new HttpRequestMessage(HttpMethod.Get,
+                    "https://api.github.com/repos/rem1xzov/ConexyAI/releases/latest");
+                request.Headers.UserAgent.ParseAdd("ConexyAI-Server");
+                using var response = await http.SendAsync(request, ct);
+                if (response.IsSuccessStatusCode)
+                {
+                    using var doc = await System.Text.Json.JsonDocument.ParseAsync(
+                        await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+                    _cachedVersion = doc.RootElement.TryGetProperty("tag_name", out var tag)
+                        ? tag.GetString()?.TrimStart('v', 'V')
+                        : null;
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
+            {
+                _logger.LogWarning("Could not read the latest desktop release: {Message}", ex.Message);
+            }
+
+            // При ошибке тоже запоминаем момент, чтобы не бить по GitHub каждый запрос.
+            _cachedAtUtc = DateTime.UtcNow;
+            return _cachedVersion;
+        }
+        finally
+        {
+            VersionLock.Release();
+        }
     }
 
     /// <summary>Выпускает ключ для десктопа. Открытый ключ в ответе показывается один раз.</summary>

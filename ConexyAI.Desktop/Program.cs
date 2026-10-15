@@ -68,6 +68,9 @@ try
         case "login":
             return await LoginAsync(args);
 
+        case "update":
+            return await UpdateCommandAsync();
+
         default:
             if (args.Any(a => a is "-h" or "--help"))
             {
@@ -205,6 +208,19 @@ static async Task<int> ChatAsync(string[] args)
     }
     using var server = verified;
 
+    Updater.CleanupOld();
+    if (!args.Contains(Updater.SkipFlag) && !Console.IsInputRedirected && await Updater.CheckAsync(server) is { } update)
+    {
+        Console.Write($"Доступна новая версия v{update.Version} (у вас v{Ui.Version}). Обновить сейчас? [Y/n] ");
+        var answer = Console.ReadLine()?.Trim().ToLowerInvariant();
+        if (answer is not ("n" or "н" or "no" or "нет"))
+        {
+            var code = await Updater.ApplyAsync(update, args);
+            if (code is not null)
+                return code.Value;
+        }
+    }
+
     var approver = new ConsoleApprover { AutoMode = args.Contains("--auto") };
     var firstBanner = true;
     while (true)
@@ -218,11 +234,43 @@ static async Task<int> ChatAsync(string[] args)
 }
 
 
+static async Task<int> UpdateCommandAsync()
+{
+    var config = ClientConfig.Load();
+    var url = config.ServerUrl ?? DefaultServerUrl;
+    using var server = new ServerClient(url, config.GetKey() ?? string.Empty);
+    var info = await Updater.CheckAsync(server);
+    if (info is null)
+    {
+        Console.WriteLine($"У вас последняя версия (v{Ui.Version}).");
+        return 0;
+    }
+
+    var code = await Updater.ApplyAsync(info, [Updater.SkipFlag, "--updated"]);
+    return code ?? 1;
+}
+
+static async Task<UsageInfo?> TryUsageAsync(ServerClient server)
+{
+    try
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        return await server.GetUsageAsync(cts.Token);
+    }
+    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or AuthRejectedException)
+    {
+        return null;
+    }
+}
+
 static void PrintHelp() => Console.WriteLine("""
     Команды:
       /ls [путь]      показать содержимое папки (папки пронумерованы)
       /cd <путь|N|..> сменить рабочую папку (N — номер из /ls)
       /pwd            текущая папка
+      /team           вкл/выкл оркестр агентов: ведущий собирает команду субагентов (ProMax, Ultra, Admin)
+      /usage          тариф и расход токенов агента
+      /update         проверить обновления (или команда conexy update)
       /auto           вкл/выкл выполнение команд без подтверждения (или флаг --auto)
       /help           эта справка
       /exit           выход (также: exit)
@@ -241,6 +289,9 @@ static async Task<string?> ChatInFolderAsync(ServerClient server, ConsoleApprove
     if (firstBanner && approver.AutoMode)
         Ui.Info("  Авто-режим включён: команды выполняются без подтверждения.");
     var listed = new List<string>();
+    var usage = await TryUsageAsync(server);
+    Ui.SetUsage(usage);
+    Ui.TeamMode = session.Orchestra = Ui.TeamMode && usage?.TeamAllowed != false;
 
     while (true)
     {
@@ -263,6 +314,36 @@ static async Task<string?> ChatInFolderAsync(ServerClient server, ConsoleApprove
                     break;
                 case "/pwd":
                     Console.WriteLine(root);
+                    break;
+                case "/usage":
+                    usage = await TryUsageAsync(server);
+                    Ui.SetUsage(usage);
+                    if (usage is null)
+                        Ui.Error("Не удалось получить данные о тарифе.");
+                    else
+                        Ui.PrintStatus();
+                    break;
+                case "/team":
+                    usage ??= await TryUsageAsync(server);
+                    if (usage is { TeamAllowed: false })
+                    {
+                        Ui.Error($"Оркестр агентов доступен на ProMax и Ultra (ваш тариф: {usage.Tier}).");
+                        break;
+                    }
+                    Ui.TeamMode = session.Orchestra = !session.Orchestra;
+                    Ui.Info(session.Orchestra
+                        ? "Оркестр включён: для больших задач агент соберёт команду субагентов."
+                        : "Оркестр выключен: работает один агент.");
+                    break;
+                case "/update":
+                    if (await Updater.CheckAsync(server) is { } found)
+                    {
+                        var code = await Updater.ApplyAsync(found, [Updater.SkipFlag]);
+                        if (code is not null)
+                            Environment.Exit(code.Value);
+                    }
+                    else
+                        Ui.Info($"У вас последняя версия (v{Ui.Version}).");
                     break;
                 case "/auto":
                     approver.AutoMode = !approver.AutoMode;
@@ -307,6 +388,8 @@ static async Task<string?> ChatInFolderAsync(ServerClient server, ConsoleApprove
         {
             Console.CancelKeyPress -= onCancel;
         }
+        usage = await TryUsageAsync(server) ?? usage;
+        Ui.SetUsage(usage);
     }
 }
 
