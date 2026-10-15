@@ -380,7 +380,18 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
     store.Bind(chatId, root);
     var tools = new ToolRunner(root, approver, Ui.ToolCall, server.GetGitHubTokenAsync);
     await using var session = new AgentSession(server, tools, chatId);
-    await session.ConnectAsync(CancellationToken.None);
+    try
+    {
+        await session.ConnectAsync(CancellationToken.None);
+    }
+    catch (Microsoft.AspNetCore.SignalR.HubException ex) when (ex.Message.Contains("forbidden", StringComparison.OrdinalIgnoreCase))
+    {
+        // Чат удалён на сайте или принадлежит другому аккаунту (ключ выпущен на другой аккаунт): забываем привязку, берём новый чат.
+        store.Folders.Remove(chatId);
+        store.Save();
+        Ui.Info("Этот чат недоступен (удалён или чужой). Создаю новый.");
+        return (root, Guid.NewGuid());
+    }
 
     Ui.Banner(root, server.BaseUrl.Replace("https://", string.Empty));
     if (firstBanner && approver.AutoMode)

@@ -68,30 +68,22 @@ public static class Ui
 
     private static string Rule() => C(Dim, new string('─', Width()));
 
-    // Маскот — ворона, пиксель-арт 16×10, каждые две строки пикселей = одна строка терминала («▀» с цветом фона).
-    // k — тёмно-фиолетовый, b — сине-фиолетовый, o — клюв, p — глаз.
+    // Логотип — двойной шеврон, пиксель-арт 16×10; две строки пикселей = одна строка терминала («▀» с цветом фона).
     private static readonly string[] Crow =
     [
-        "......kk........",
-        ".....kkkpoo.....",
-        ".....kkkkkoooo..",
-        "...bbbkkkk...o..",
-        "..bbbbbbkk......",
-        ".bbbbbbbbbk.....",
-        "bbbbbbbbbbbkk...",
-        ".kbbbbbbbbbbkk..",
-        "....kk.kk.......",
-        "...kkk.kkk......",
+        ".......ww.......",
+        ".....wwwwww.....",
+        "...wwww..wwww...",
+        ".wwww......wwww.",
+        "................",
+        ".......ww.......",
+        ".....wwwwww.....",
+        "...wwww..wwww...",
+        ".wwww......wwww.",
+        "................",
     ];
 
-    private static int CrowColor(char c) => c switch
-    {
-        'k' => 54,
-        'b' => 62,
-        'o' => 33,
-        'p' => 201,
-        _ => -1,
-    };
+    private static int CrowColor(char c) => c == 'w' ? 255 : -1;
 
     private static string CrowRow(int row)
     {
@@ -337,6 +329,10 @@ public static class Ui
             "bash" or "terminal_exec" => "Bash",
             "run_tests" => "Tests",
             "get_diagnostics" => "Diagnostics",
+            "web_search" => "Web Search",
+            "fetch_web_page" => "Fetch",
+            "search_user_chats" => "Chats",
+            "search_documents" => "Docs",
             _ => tool,
         };
         Console.WriteLine("\n" + C(Green, "● ") + Bold(name) + (arg.Length > 0 ? Muted("(" + arg + ")") : string.Empty));

@@ -84,7 +84,7 @@ public sealed class ServerClient : IDisposable
                 chatKind = "projects",
                 useDevice = true,
                 reasoningEffort = "high",
-                orchestra = orchestra ? true : (bool?)null,
+                orchestra,
             }, options: Json),
         };
         request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));

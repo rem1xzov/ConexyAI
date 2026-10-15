@@ -47,6 +47,7 @@ public sealed class AgentSession : IAsyncDisposable
             }
             Console.Write(delta);
         });
+        _hub.On<JsonElement, string?>("ToolAction", (payload, _) => OnServerToolAction(payload));
         _hub.On<JsonElement, string?>("AgentTeam", (payload, _) => OnTeam(payload));
         _hub.On<JsonElement, string?>("OnAgentStatus", (payload, _) => OnAgentStatus(payload));
         _hub.On<JsonElement, string?>("OnCompleted", (_, _) => _turn?.TrySetResult(null));
@@ -133,6 +134,34 @@ public sealed class AgentSession : IAsyncDisposable
             if (p.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.String)
                 return p.Value.GetString();
         return null;
+    }
+
+    // Инструменты, которые выполняет сам сервер (поиск в интернете и т.п.): сайт рисует для них карточку по событию
+    // ToolAction, в консоли рисуем то же. Десктопные инструменты (bash, файлы) показывает клиент сам.
+    private static readonly HashSet<string> ServerTools =
+        ["web_search", "fetch_web_page", "search_user_chats", "search_documents"];
+
+    private void OnServerToolAction(JsonElement payload)
+    {
+        var tool = Prop(payload, "toolName");
+        if (tool is null || !ServerTools.Contains(tool))
+            return;
+        var agent = Prop(payload, "agentId");
+        if (agent is not (null or "lead"))
+            return; // действия помощников — в их строках статуса
+
+        switch (Prop(payload, "status"))
+        {
+            case "started":
+                Ui.ToolCall($"{tool} {Prop(payload, "command")}");
+                break;
+            case "completed" or "failed":
+                Ui.Idle();
+                Ui.ShowToolResult(new ToolResult(Prop(payload, "summary") ?? string.Empty, Prop(payload, "status") == "failed"));
+                _needBullet = true;
+                Ui.Busy();
+                break;
+        }
     }
 
     private void OnTeam(JsonElement payload)
