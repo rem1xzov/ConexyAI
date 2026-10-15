@@ -68,6 +68,9 @@ try
         case "login":
             return await LoginAsync(args);
 
+        case "updatetest":
+            return Updater.TestSchedule(args[1], args[2]) ?? 1;
+
         case "cliptest":
             var (clipText, clipMessage) = Attachments.PasteFromClipboard();
             Console.WriteLine($"text={clipText ?? "-"} message={clipMessage ?? "-"} attached={Attachments.Pending.Count}");
