@@ -168,8 +168,42 @@ static async Task<int> ChatAsync(string[] args)
         return 1;
     }
 
-    using var server = new ServerClient(config.ServerUrl!, key!);
-    await server.GetTokenAsync(); // ранняя проверка ключа
+    // Ранняя проверка ключа. Если ключ отозван или заменён — предлагаем ввести новый, а не падаем.
+    ServerClient? verified = null;
+    for (var attempt = 0; verified is null; attempt++)
+    {
+        var candidate = new ServerClient(config.ServerUrl!, key!);
+        try
+        {
+            await candidate.GetTokenAsync();
+            verified = candidate;
+        }
+        catch (AuthRejectedException ex) when (ex.Message.Contains("недействителен") && attempt < 4 && !Console.IsInputRedirected)
+        {
+            candidate.Dispose();
+            Ui.Error("Ключ недействителен или отозван.");
+            if (Environment.GetEnvironmentVariable("CONEXY_KEY") is { Length: > 0 })
+            {
+                Console.Error.WriteLine("Ключ задан переменной окружения CONEXY_KEY — обновите её.");
+                return 2;
+            }
+
+            Console.WriteLine("Введите новый ключ (выпускается на сайте в настройках).\n");
+            try
+            {
+                if (await LoginAsync(["--url", config.ServerUrl!]) != 0)
+                    return 1;
+            }
+            catch (AuthRejectedException loginEx)
+            {
+                Ui.Error(loginEx.Message);
+            }
+
+            config = ClientConfig.Load();
+            key = config.GetKey() ?? string.Empty;
+        }
+    }
+    using var server = verified;
 
     var approver = new ConsoleApprover { AutoMode = args.Contains("--auto") };
     var firstBanner = true;
