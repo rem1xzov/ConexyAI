@@ -219,9 +219,9 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     // DESKTOP_AGENT: добавлено 2026-10-15
 
     /// <summary>The desktop client announces itself; the server then runs the agent's tools on this PC.</summary>
-    public Task RegisterDevice(string deviceName)
+    public Task RegisterDevice(string deviceName, string? os, string? workspace)
     {
-        _devices.Register(CallerId(), Context.ConnectionId, deviceName);
+        _devices.Register(CallerId(), Context.ConnectionId, deviceName, os, workspace);
         return Task.CompletedTask;
     }
 

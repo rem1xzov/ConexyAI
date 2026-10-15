@@ -11,13 +11,17 @@ namespace ConexyAI.Service.Device;
 /// <summary>Результат инструмента, выполненного на устройстве.</summary>
 public sealed record DeviceToolOutcome(string Output, bool IsError);
 
+/// <summary>Сведения о подключённом устройстве — для промпта агента.</summary>
+public sealed record DeviceInfo(string Name, string Os, string Workspace);
+
 public interface IDeviceToolBridge
 {
+    DeviceInfo? GetInfo(Guid userId);
     /// <summary>Подключено ли хотя бы одно устройство пользователя.</summary>
     bool IsOnline(Guid userId);
 
     /// <summary>Регистрирует подключение как устройство пользователя (последнее подключение побеждает).</summary>
-    void Register(Guid userId, string connectionId, string deviceName);
+    void Register(Guid userId, string connectionId, string deviceName, string? os = null, string? workspace = null);
 
     /// <summary>Снимает подключение при разрыве; ждущие вызовы этого устройства завершаются ошибкой.</summary>
     void Unregister(string connectionId);
@@ -36,7 +40,7 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
 
     private const int MaxOutputChars = 200_000;
 
-    private sealed record Device(string ConnectionId, string Name);
+    private sealed record Device(string ConnectionId, string Name, string Os, string Workspace);
 
     private sealed record Pending(string ConnectionId, TaskCompletionSource<DeviceToolOutcome> Completion);
 
@@ -53,10 +57,16 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
 
     public bool IsOnline(Guid userId) => _devices.ContainsKey(userId);
 
-    public void Register(Guid userId, string connectionId, string deviceName)
+    public DeviceInfo? GetInfo(Guid userId) =>
+        _devices.TryGetValue(userId, out var d) ? new DeviceInfo(d.Name, d.Os, d.Workspace) : null;
+
+    public void Register(Guid userId, string connectionId, string deviceName, string? os = null, string? workspace = null)
     {
         var name = string.IsNullOrWhiteSpace(deviceName) ? "device" : deviceName.Trim();
-        _devices[userId] = new Device(connectionId, name.Length > 100 ? name[..100] : name);
+        // ОС и путь попадают в промпт, поэтому чистим: одна строка, без управляющих символов, ограниченная длина.
+        static string Clean(string? v, int max) =>
+            new string((v ?? string.Empty).Where(c => !char.IsControl(c)).Take(max).ToArray()).Trim();
+        _devices[userId] = new Device(connectionId, Clean(name, 100), Clean(os, 40), Clean(workspace, 260));
         _logger.LogInformation("Desktop device registered: user={UserId} connection={ConnectionId} name={Name}", userId, connectionId, name);
     }
 

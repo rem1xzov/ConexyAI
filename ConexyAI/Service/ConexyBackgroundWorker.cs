@@ -37,6 +37,21 @@ public class ConexyBackgroundWorker : BackgroundService
     // IOptions<MemoryOptions> убраны отсюда: и история, и батчинг памяти теперь внутри
     // ConversationService, и держать их здесь означало бы давать воркеру повод снова заняться
     // историей самостоятельно.
+    // DESKTOP_AGENT: добавлено 2026-10-15 — описание ПК пользователя (ОС, папка, оболочка) в промпте агента.
+    private static string DesktopEnvironmentBlock(IServiceProvider services, ConexyJob job)
+    {
+        if (!job.UseDevice)
+            return string.Empty;
+
+        var info = services.GetService<Device.IDeviceToolBridge>()?.GetInfo(job.UserId);
+        return info is null
+            ? string.Empty
+            : "\n\n" + Prompts.PromptFragments.DesktopEnvironment(
+                string.IsNullOrEmpty(info.Os) ? "unknown OS" : info.Os,
+                string.IsNullOrEmpty(info.Workspace) ? "(текущая папка)" : info.Workspace,
+                info.Name);
+    }
+
     public ConexyBackgroundWorker(
         IConexyQueue queue,
         IConexyQueueGuard queueGuard,
@@ -256,6 +271,7 @@ public class ConexyBackgroundWorker : BackgroundService
                     ? (smallTalk ? PromptEconomy.SmallTalkAgentPrompt : runner.GetSystemPrompt(job.ModelType))
                         + "\n\n" + Prompts.PromptFragments.AgentSafetyLine
                         + "\n\n" + Prompts.PromptFragments.AudienceLine(job.IsAdmin, job.Tier)
+                        + DesktopEnvironmentBlock(scope.ServiceProvider, job)
                     : BuildChatSystemPrompt(job)
                         + "\n\n" + Prompts.PromptFragments.ContentPolicy
                         + "\n\n" + Prompts.PromptFragments.ContentPolicyCrisis

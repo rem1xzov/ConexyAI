@@ -51,7 +51,11 @@ public sealed class AgentSession : IAsyncDisposable
         await _hub.InvokeAsync("JoinTask", _chatId, ct);
     }
 
-    private Task RegisterAsync() => _hub.InvokeAsync("RegisterDevice", Environment.MachineName);
+    private Task RegisterAsync() => _hub.InvokeAsync(
+        "RegisterDevice",
+        Environment.MachineName,
+        System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+        _tools.Root);
 
     /// <summary>Один ход агента. Возвращает текст ошибки или null при успехе.</summary>
     public async Task<string?> AskAsync(string prompt, CancellationToken ct)

@@ -35,6 +35,8 @@ public class ConexyService : IConexyService
     private readonly IChatAccessService _chatAccess;
     // USER_INTEGRATIONS: креды агента (GitHub/MCP), сохранённые на сервере.
     private readonly IUserIntegrationsService _integrations;
+    // DESKTOP_AGENT: добавлено 2026-10-15
+    private readonly Device.IDeviceToolBridge? _deviceBridge;
     private const int MaxRequestsPerWindow = 60;
     private static readonly TimeSpan WindowDuration = TimeSpan.FromMinutes(1);
 
@@ -47,8 +49,11 @@ public class ConexyService : IConexyService
         IWebHostEnvironment environment,
         ISubscriptionService subscriptionService,
         IChatAccessService chatAccess,
-        IUserIntegrationsService integrations)
+        IUserIntegrationsService integrations,
+        // DESKTOP_AGENT: опциональный — тесты собирают сервис вручную.
+        Device.IDeviceToolBridge? deviceBridge = null)
     {
+        _deviceBridge = deviceBridge;
         _chatAccess = chatAccess;
         _repository = repository;
         _queueGuard = queueGuard;
@@ -62,6 +67,16 @@ public class ConexyService : IConexyService
         if (!ConexyModelMapper.TryParse(request.Model, out var modelType))
         {
             throw new ArgumentException($"Invalid model: '{request.Model}'. Allowed: ConexyV1-flash, ConexyV1-pro, conexy-coder, conexy-cowork");
+        }
+
+        // DESKTOP_AGENT: десктопный режим — только для Coder и только с подключённым устройством:
+        // иначе задача сгорала бы на первом же инструменте и тратила квоту.
+        if (request.UseDevice)
+        {
+            if (modelType != ConexyModelType.ConexyCoder)
+                throw new ArgumentException("DEVICE_MODE_UNSUPPORTED: десктопный режим доступен только для conexy-coder.");
+            if (_deviceBridge is null || !_deviceBridge.IsOnline(userId))
+                throw new ArgumentException("DEVICE_OFFLINE: десктопное приложение не подключено. Запустите conexy и повторите.");
         }
 
         // SUBSCRIPTION_TIERS: добавлено 2026-09-17
