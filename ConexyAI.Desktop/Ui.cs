@@ -281,6 +281,11 @@ public static class Ui
             Console.ReadKey(intercept: true);
 
         Console.WriteLine();
+        if (Attachments.Pending.Count > 0)
+        {
+            var chips = Attachments.Describe();
+            Console.WriteLine("  " + C(Cyan, chips.Length > Width() - 4 ? chips[..(Width() - 5)] + "…" : chips) + Muted("  /detach"));
+        }
         Console.WriteLine(Rule());
         Console.WriteLine(C(Orange, "› "));
         Console.WriteLine(Rule());
@@ -308,6 +313,26 @@ public static class Ui
             var key = Console.ReadKey(intercept: true);
             if (key.Key == ConsoleKey.Enter)
                 break;
+
+            // Ctrl+V: картинка или файлы из буфера прикрепляются, текст вставляется в строку.
+            // (Когда терминал сам перехватывает Ctrl+V для текста, текст приходит как обычный ввод.)
+            if (key.KeyChar == '\u0016' || (key.Key == ConsoleKey.V && key.Modifiers.HasFlag(ConsoleModifiers.Control)))
+            {
+                var (pasted, message) = Attachments.PasteFromClipboard();
+                if (pasted is not null)
+                {
+                    text.Insert(pos, pasted);
+                    pos += pasted.Length;
+                }
+                else if (message is not null)
+                {
+                    // Сообщение («Прикреплено: …» или ошибка) — в строку подсказки под рамкой.
+                    Console.SetCursorPosition(0, row + 2);
+                    Console.Write("\x1b[2K  " + C(message.StartsWith("Прикреплено") ? Green : Red, message));
+                }
+                Redraw();
+                continue;
+            }
 
             switch (key.Key)
             {
@@ -361,6 +386,8 @@ public static class Ui
         Console.SetCursorPosition(0, row + 2);
         Console.Write("\x1b[2K");
         Console.SetCursorPosition(0, row + 1);
+        if (Attachments.Pending.Count > 0)
+            Console.WriteLine("  " + C(Cyan, "+ " + Attachments.Describe()));
         return line;
     }
 

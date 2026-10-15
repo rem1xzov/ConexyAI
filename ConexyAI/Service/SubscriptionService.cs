@@ -241,13 +241,17 @@ public class SubscriptionService : ISubscriptionService
         var user = await _userRepository.GetByIdAsync(userId, ct);
         var counter = await GetOrCreateAsync(userId, user, ct);
         var limits = GetTierLimits(counter.Tier);
+        // ADMIN_COUNT_FIX: у админа окна берутся у Ultra, и Split переставал начислять расход, как только счётчик
+        // достигал бюджета Ultra (5.5M): «использовано» навсегда застревало. Админу пишем расход целиком,
+        // без потолка: его лимиты всё равно не проверяются (CheckBeforeRunAsync).
+        var unlimited = user?.IsAdmin == true;
 
         // TOKEN_TOPUP: billed сначала закрывает бюджет тарифа (окно), а его перелив — купленные токены
         // (бессрочные). Так купленное действительно расходуется один раз, а не возобновляется каждую неделю.
         // COWORK_BUDGET: Cowork платит из своего пула, Coder — из агентского.
         if (modelType == ConexyModelType.ConexyCowork)
         {
-            var (toTier, toTopUp) = Split(billed, limits.CoworkTokenBudget, counter.CoworkTokensUsed,
+            var (toTier, toTopUp) = unlimited ? (billed, 0L) : Split(billed, limits.CoworkTokenBudget, counter.CoworkTokensUsed,
                 user?.CoworkTokenTopUp ?? 0L, counter.CoworkTopUpUsed);
             counter.CoworkTokensUsed += toTier;
             counter.CoworkTopUpUsed += toTopUp;
@@ -256,7 +260,7 @@ public class SubscriptionService : ISubscriptionService
         }
         else
         {
-            var (toTier, toTopUp) = Split(billed, limits.AgentTokenBudget, counter.AgentTokensUsed,
+            var (toTier, toTopUp) = unlimited ? (billed, 0L) : Split(billed, limits.AgentTokenBudget, counter.AgentTokensUsed,
                 user?.CoderTokenTopUp ?? 0L, counter.CoderTopUpUsed);
             counter.AgentTokensUsed += toTier;
             counter.CoderTopUpUsed += toTopUp;

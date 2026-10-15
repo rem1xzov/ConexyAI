@@ -72,7 +72,8 @@ public sealed class ServerClient : IDisposable
     }
 
     /// <summary>Ставит задачу в очередь. Сообщение об ошибке сервера (лимиты, занятость) — в исключении.</summary>
-    public async Task<Guid> StartRunAsync(string prompt, Guid chatId, bool orchestra, CancellationToken ct)
+    public async Task<Guid> StartRunAsync(
+        string prompt, Guid chatId, bool orchestra, IReadOnlyList<PendingAttachment> attachments, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "api/conexy/run")
         {
@@ -85,6 +86,14 @@ public sealed class ServerClient : IDisposable
                 useDevice = true,
                 reasoningEffort = "high",
                 orchestra,
+                attachments = attachments.Count == 0
+                    ? null
+                    : attachments.Select(a => new
+                    {
+                        fileName = a.FileName,
+                        contentBase64 = Convert.ToBase64String(a.Bytes),
+                        contentType = a.ContentType,
+                    }).ToArray(),
             }, options: Json),
         };
         request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));

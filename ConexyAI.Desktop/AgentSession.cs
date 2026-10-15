@@ -79,7 +79,8 @@ public sealed class AgentSession : IAsyncDisposable
         _needBullet = true;
         Ui.Busy();
 
-        var taskId = await _server.StartRunAsync(prompt, _chatId, Orchestra, ct);
+        var taskId = await _server.StartRunAsync(prompt, _chatId, Orchestra, Attachments.Pending.ToList(), ct);
+        Attachments.Clear(); // ушли с этим ходом — следующему сообщению не нужны
         await _hub.InvokeAsync("JoinTask", taskId, ct);
 
         // Страховка: событие завершения могло прийти до подписки на группу задачи.

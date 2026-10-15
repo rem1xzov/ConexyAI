@@ -68,6 +68,11 @@ try
         case "login":
             return await LoginAsync(args);
 
+        case "cliptest":
+            var (clipText, clipMessage) = Attachments.PasteFromClipboard();
+            Console.WriteLine($"text={clipText ?? "-"} message={clipMessage ?? "-"} attached={Attachments.Pending.Count}");
+            return 0;
+
         case "mdtest":
             Ui.AssistantStart();
             Ui.Md.Feed("# Итог\n\n**1. Ассеты** не копируются в `wwwroot`. Это довольно длинный текст, который должен переноситься по ширине окна консоли, а не вылезать за рамки `pony.ini` и `app.js`.\n\n- пункт списка с `кодом` и **жирным** текстом и очень длинным продолжением для проверки переноса строки в списке\n2. нумерованный ✅ пункт\n\n```csharp\nvar x = 1;\n```\n\n> цитата\n\n| a | b |\n|---|---|\n| 1 | 2 |\n");
@@ -367,6 +372,9 @@ static void PrintHelp() => Console.WriteLine("""
       /ls [путь]      показать содержимое папки (папки пронумерованы)
       /cd <путь|N|..> сменить рабочую папку (N — номер из /ls)
       /pwd            текущая папка
+      /attach <файл>  прикрепить файл/картинку (также: перетащите файл в окно или напишите @путь в сообщении)
+      /paste          прикрепить картинку или файлы из буфера обмена (то же делает Ctrl+V)
+      /detach [N]     убрать вложение по номеру или все
       /chats          список всех чатов (синхронизирован с сайтом): переключиться или создать новый,
                       у каждого чата своя папка проекта
       /team           вкл/выкл оркестр агентов: ведущий собирает команду субагентов (ProMax, Ultra, Admin)
@@ -414,7 +422,7 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
         var prompt = Ui.ReadPrompt(approver.AutoMode);
         if (prompt is null || prompt.Trim().Equals("exit", StringComparison.OrdinalIgnoreCase))
             return null;
-        if (string.IsNullOrWhiteSpace(prompt))
+        if (string.IsNullOrWhiteSpace(prompt) && Attachments.Pending.Count == 0)
             continue;
 
         if (prompt.StartsWith('/'))
@@ -430,6 +438,32 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                     break;
                 case "/pwd":
                     Console.WriteLine(root);
+                    break;
+                case "/attach":
+                    if (arg.Length == 0)
+                        Ui.Info("Укажите файл: /attach путь  (или перетащите файл в окно, или Ctrl+V / /paste для буфера обмена)");
+                    foreach (var file in arg.Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var path = Path.IsPathRooted(file.Trim().Trim('"')) ? file : Path.Combine(root, file.Trim().Trim('"'));
+                        if (Attachments.AddFile(path) is { } attachError)
+                            Ui.Error(attachError);
+                    }
+                    if (Attachments.Pending.Count > 0)
+                        Ui.Info("  Вложения: " + Attachments.Describe());
+                    break;
+                case "/paste":
+                    var (pastedText, pasteMessage) = Attachments.PasteFromClipboard();
+                    if (pastedText is not null)
+                        Ui.Info("  В буфере текст — вставьте его в строку ввода (Ctrl+V).");
+                    else if (pasteMessage is not null)
+                        Ui.Info("  " + pasteMessage);
+                    break;
+                case "/detach":
+                    if (arg.Length == 0)
+                        Attachments.Clear();
+                    else if (!int.TryParse(arg, out var number) || !Attachments.Remove(number))
+                        Ui.Error("Нет вложения с таким номером.");
+                    Ui.Info(Attachments.Pending.Count == 0 ? "  Вложений нет." : "  Вложения: " + Attachments.Describe());
                     break;
                 case "/chats":
                     if (await PickChatAsync(server, store, root, chatId) is { } picked)
@@ -488,6 +522,21 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                     break;
             }
             continue;
+        }
+
+        // Пути файлов в тексте (перетащили в окно / @файл) становятся вложениями.
+        var attachedBefore = Attachments.Pending.Count;
+        var attachErrors = new List<string>();
+        prompt = Attachments.ExtractFiles(prompt, root, attachErrors);
+        foreach (var message in attachErrors)
+            Ui.Error(message);
+        if (Attachments.Pending.Count > attachedBefore)
+            Ui.Info("  + " + string.Join(", ", Attachments.Pending.Skip(attachedBefore).Select(a => a.FileName)));
+        if (prompt.Length == 0)
+        {
+            if (Attachments.Pending.Count == 0)
+                continue;
+            prompt = "Посмотри вложения.";
         }
 
         using var cts = new CancellationTokenSource();
