@@ -108,7 +108,7 @@ public sealed class DeviceKeyService : IDeviceKeyService
         entity.LastUsedAt = _time.GetUtcNow().UtcDateTime;
         await _db.SaveChangesAsync(ct);
 
-        return _tokens.CreateToken(user);
+        return _tokens.CreateDeviceToken(user);
     }
 
     internal static string Hash(string key) =>

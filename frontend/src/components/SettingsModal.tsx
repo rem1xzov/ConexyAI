@@ -18,6 +18,13 @@ import {
   type MemoryFact,
   type UserPreferences,
 } from '../api/userApi';
+import {
+  getDesktopClientInfo,
+  issueDeviceKey,
+  listDeviceKeys,
+  revokeDeviceKey,
+  type DeviceKey,
+} from '../api/deviceApi';
 import { humanError } from '../utils/humanError';
 import { setPlainCode, usePlainCode } from '../utils/displayPrefs';
 import { ConfirmDialog } from './Dialog';
@@ -27,7 +34,7 @@ import type { SubscriptionUsage, McpServerInput } from '../types/api';
 // LEGAL_DOCS: добавлено 2026-09-25 — правовые документы доступны всегда, в том числе из настроек.
 import { LEGAL_PATHS } from './legal/LegalPage';
 
-export type SettingsSection = 'general' | 'limits' | 'personalization' | 'memory' | 'github' | 'mcp';
+export type SettingsSection = 'general' | 'limits' | 'personalization' | 'memory' | 'github' | 'mcp' | 'desktop';
 
 interface SettingsModalProps {
   theme: Theme;
@@ -63,6 +70,7 @@ const SECTIONS: { value: SettingsSection; key: string }[] = [
   { value: 'memory', key: 'memory.tab' },
   { value: 'github', key: 'settings.githubTab' },
   { value: 'mcp', key: 'settings.mcpTab' },
+  { value: 'desktop', key: 'settings.desktopTab' },
 ];
 
 function statusOf(e: unknown): number | undefined {
@@ -639,6 +647,158 @@ function GitHubSection() {
 
 // USER_INTEGRATIONS: личные MCP-серверы хранятся на СЕРВЕРЕ (URL и токен зашифрованы) — переживают
 // смену устройства, а не только браузера.
+// DESKTOP_AGENT: скачивание клиента, выпуск и отзыв ключей десктопа.
+function DesktopSection({ active }: { active: boolean }) {
+  const { t } = useTranslation();
+  const [keys, setKeys] = useState<DeviceKey[]>([]);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [newKey, setNewKey] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const requestedRef = useRef(false);
+
+  async function reload() {
+    try {
+      setKeys(await listDeviceKeys());
+    } catch {
+      setError(t('settings.desktopError'));
+    }
+  }
+
+  useEffect(() => {
+    if (!active || requestedRef.current) return;
+    requestedRef.current = true;
+    void reload();
+    getDesktopClientInfo()
+      .then((info) => setDownloadUrl(info.downloadUrl))
+      .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+
+  async function issue() {
+    setBusy(true);
+    setError(null);
+    try {
+      const issued = await issueDeviceKey(name.trim() || 'Desktop');
+      setNewKey(issued.key);
+      setName('');
+      await reload();
+    } catch (e) {
+      setError(
+        errorCodeOf(e) === 'DEVICE_KEY_LIMIT' ? t('settings.desktopLimit') : t('settings.desktopError'),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke(id: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await revokeDeviceKey(id);
+      await reload();
+    } catch {
+      setError(t('settings.desktopError'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy(text: string, id: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(id);
+      window.setTimeout(() => setCopied(null), 2000);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+
+  const loginCmd = newKey ? `conexy login --url ${window.location.origin} --key ${newKey}` : '';
+
+  return (
+    <div className="settings-panel">
+      <div className="settings-modal__section">
+        <div className="settings-modal__label">{t('settings.desktopTitle')}</div>
+        <p className="settings-github__hint">{t('settings.desktopHint')}</p>
+        {downloadUrl && (
+          <a className="dialog-btn dialog-btn--primary" href={downloadUrl} download rel="noopener noreferrer">
+            {t('settings.desktopDownload')}
+          </a>
+        )}
+      </div>
+
+      <div className="settings-modal__section">
+        <div className="settings-modal__label">{t('settings.desktopKeys')}</div>
+        <input
+          className="dialog-input settings-github__input"
+          type="text"
+          maxLength={64}
+          placeholder={t('settings.desktopKeyName')}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <div className="settings-github__actions">
+          <button className="dialog-btn dialog-btn--primary" type="button" onClick={() => void issue()} disabled={busy}>
+            {t('settings.desktopIssue')}
+          </button>
+          {error && <span className="settings-github__error">{error}</span>}
+        </div>
+
+        {newKey && (
+          <div className="settings-github__hint">
+            <p>{t('settings.desktopNewKey')}</p>
+            <code style={{ wordBreak: 'break-all', userSelect: 'all' }}>{newKey}</code>
+            <p>{t('settings.desktopLoginCmd')}:</p>
+            <code style={{ wordBreak: 'break-all', userSelect: 'all' }}>{loginCmd}</code>
+            <div className="settings-github__actions">
+              <button className="dialog-btn" type="button" onClick={() => void copy(newKey, 'key')}>
+                {copied === 'key' ? t('settings.desktopCopied') : t('settings.desktopCopy')}
+              </button>
+              <button className="dialog-btn" type="button" onClick={() => void copy(loginCmd, 'cmd')}>
+                {copied === 'cmd' ? t('settings.desktopCopied') : t('settings.desktopLoginCmd')}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {keys.length === 0 ? (
+          <p className="settings-github__hint">{t('settings.desktopNoKeys')}</p>
+        ) : (
+          <ul style={{ listStyle: 'none', padding: 0, margin: '8px 0 0' }}>
+            {keys.map((k) => (
+              <li
+                key={k.id}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '6px 0' }}
+              >
+                <span style={{ opacity: k.revoked ? 0.5 : 1 }}>
+                  <strong>{k.name}</strong> <code>{k.keyPrefix}…</code>
+                  <br />
+                  <small>
+                    {k.revoked
+                      ? t('settings.desktopRevoked')
+                      : k.lastUsedAt
+                        ? `${t('settings.desktopLastUsed')}: ${new Date(k.lastUsedAt).toLocaleString()}`
+                        : t('settings.desktopNeverUsed')}
+                  </small>
+                </span>
+                {!k.revoked && (
+                  <button className="dialog-btn" type="button" onClick={() => void revoke(k.id)} disabled={busy}>
+                    {t('settings.desktopRevoke')}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function McpSection() {
   const { t } = useTranslation();
   const [servers, setServers] = useState<McpServerInput[]>([]);
@@ -889,6 +1049,10 @@ export function SettingsModal({
 
             <div hidden={section !== 'mcp'}>
               <McpSection />
+            </div>
+
+            <div hidden={section !== 'desktop'}>
+              <DesktopSection active={section === 'desktop'} />
             </div>
           </div>
         </div>

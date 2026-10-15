@@ -23,14 +23,20 @@ public class JwtTokenService : ITokenService
     // TOKEN_REVOCATION: добавлено 2026-09-24
     public TokenResponse CreateToken(User user) => CreateToken(user.Id, user.IsAdmin, user.TokenVersion);
 
-    public TokenResponse CreateToken(Guid userId, bool isAdmin, int tokenVersion)
+    public TokenResponse CreateDeviceToken(User user) =>
+        CreateToken(user.Id, user.IsAdmin, user.TokenVersion, fromDevice: true);
+
+    public TokenResponse CreateToken(Guid userId, bool isAdmin, int tokenVersion) =>
+        CreateToken(userId, isAdmin, tokenVersion, fromDevice: false);
+
+    private TokenResponse CreateToken(Guid userId, bool isAdmin, int tokenVersion, bool fromDevice)
     {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SigningKey));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
         var expiresAt = DateTime.UtcNow.AddMinutes(_options.AccessTokenLifetimeMinutes);
 
-        var claims = new[]
+        var claims = new List<Claim>
         {
             new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
             new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
@@ -42,6 +48,8 @@ public class JwtTokenService : ITokenService
             new Claim(TokenRevocationValidator.TokenVersionClaim,
                 tokenVersion.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer32)
         };
+        if (fromDevice)
+            claims.Add(new Claim(ITokenService.DeviceSourceClaim, ITokenService.DeviceSourceValue));
 
         var token = new JwtSecurityToken(
             issuer: _options.Issuer,

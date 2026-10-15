@@ -22,6 +22,14 @@ public interface ITokenService
     /// <summary>Issues a JWT for <paramref name="user"/> (its id, admin flag and token version).</summary>
     TokenResponse CreateToken(User user);
 
+    /// <summary>Claim-маркер токена, полученного обменом десктопного ключа: такой токен не может выпускать новые ключи.</summary>
+    public const string DeviceSourceClaim = "src";
+
+    public const string DeviceSourceValue = "device";
+
+    /// <summary>Issues a JWT for <paramref name="user"/> marked as obtained from a desktop key.</summary>
+    TokenResponse CreateDeviceToken(User user);
+
     // GITHUB_OAUTH: добавлено 2026-09-19
     /// <summary>
     /// Validates a JWT (signature, issuer, audience, lifetime) and returns its expiry and claims
