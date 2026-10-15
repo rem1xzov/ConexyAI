@@ -39,6 +39,9 @@ public static class AuthRateLimitPolicies
     /// <summary>GET /api/auth/github/login + /callback — per client IP.</summary>
     public const string GitHubOAuth = "auth-github";
 
+    /// <summary>POST /api/device/token — per client IP (обмен ключа десктопа на JWT).</summary>
+    public const string DeviceToken = "device-token";
+
     /// <summary>POST /api/speech/synthesize — per user (paid upstream).</summary>
     public const string Speech = "speech";
 }
@@ -197,6 +200,9 @@ public static class AuthSecurityExtensions
         options.AddPolicy(AuthRateLimitPolicies.ResetPassword,
             ctx => FixedWindow(ClientPartitionKey(ctx), permits: 20, TimeSpan.FromMinutes(10)));
         options.AddPolicy(AuthRateLimitPolicies.GitHubOAuth,
+            ctx => FixedWindow(ClientPartitionKey(ctx), permits: 20, TimeSpan.FromMinutes(1)));
+        // DESKTOP_AGENT: 20 обменов ключа в минуту с IP — хватает на переподключения, не хватает на перебор.
+        options.AddPolicy(AuthRateLimitPolicies.DeviceToken,
             ctx => FixedWindow(ClientPartitionKey(ctx), permits: 20, TimeSpan.FromMinutes(1)));
         // Синтез речи: платный апстрим — 10 запросов в минуту на пользователя.
         options.AddPolicy(AuthRateLimitPolicies.Speech,

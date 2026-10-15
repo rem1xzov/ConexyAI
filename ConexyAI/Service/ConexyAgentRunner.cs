@@ -7,6 +7,7 @@ using ConexyAI.Contract;
 using ConexyAI.Hub;
 using ConexyAI.Model;
 using ConexyAI.Repository;
+using ConexyAI.Service.Device;
 using ConexyAI.Service.Office;
 using ConexyAI.Service.Prompts;
 using ConexyAI.Service.Web;
@@ -61,6 +62,22 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private AgentHooks? _hooks;
     private int _hookRuns;
     private ConexyJob _job = null!;
+    // DESKTOP_AGENT: добавлено 2026-10-15
+    private readonly IDeviceToolBridge? _deviceBridge;
+
+    // DESKTOP_AGENT: инструменты, которые на десктопе выполняет клиент (файлы и команды на ПК).
+    private static readonly HashSet<string> DeviceTools = new(StringComparer.Ordinal)
+    {
+        "file_read", "file_write", "file_patch", "str_replace_editor", "apply_patch",
+        "workspace_list_files", "grep", "glob", "bash", "terminal_exec", "run_tests", "get_diagnostics",
+    };
+
+    // DESKTOP_AGENT: инструменты, живущие в серверной песочнице: на ПК они бы работали с пустой
+    // серверной папкой и вводили бы модель в заблуждение, поэтому в режиме десктопа они отклоняются.
+    private static bool IsServerSandboxOnlyTool(string name) =>
+        name.StartsWith("browser_", StringComparison.Ordinal)
+        || name is "start_service" or "stop_service" or "take_screenshot" or "view_image"
+            or "create_document" or "read_document_file" or "github_action";
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — накопленный поток ответа на случай остановки.
     private readonly StringBuilder _streamedOutput = new();
 
@@ -557,7 +574,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // MCP: добавлено 2026-10-04.
         IMcpRegistryFactory? mcpRegistryFactory = null,
         // PREVIEW: start_service + localhost агента.
-        IPreviewService? previewService = null)
+        IPreviewService? previewService = null,
+        // DESKTOP_AGENT: добавлено 2026-10-15 — выполнение инструментов на ПК пользователя.
+        IDeviceToolBridge? deviceBridge = null)
     {
         _previewService = previewService;
         _workspaceService = workspaceService;
@@ -586,6 +605,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // MCP: реестр создаётся на прогон (см. RunLoopAsync) — он включает личные серверы пользователя.
         _mcpRegistry = null;
         _mcpRegistryFactory = mcpRegistryFactory;
+        _deviceBridge = deviceBridge;
 
         var configured = agentOptions.Value.MaxIterations;
         // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
@@ -2163,6 +2183,30 @@ public class ConexyAgentRunner : IConexyAgentRunner
             if (scopeError is not null)
             {
                 return new ConexyToolResult(toolCall.Id, scopeError, true);
+            }
+
+            // DESKTOP_AGENT: в режиме десктопа файлы и команды выполняются на ПК пользователя. Владелец
+            // берётся из задачи (не из аргументов модели), поэтому чужое устройство адресовать нельзя.
+            if (_job.UseDevice)
+            {
+                var name = toolCall.Function.Name;
+                if (DeviceTools.Contains(name))
+                {
+                    if (_deviceBridge is null)
+                        return new ConexyToolResult(toolCall.Id, "Десктопный режим не настроен на сервере.", true);
+
+                    var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, name, toolCall.Function.Arguments, ct);
+                    return new ConexyToolResult(toolCall.Id, outcome.Output, outcome.IsError);
+                }
+
+                if (IsServerSandboxOnlyTool(name))
+                {
+                    return new ConexyToolResult(
+                        toolCall.Id,
+                        $"Инструмент '{name}' недоступен в десктопном режиме: работа идёт с файлами на ПК пользователя. " +
+                        "Используй file_read/grep/glob/apply_patch/str_replace_editor/bash.",
+                        true);
+                }
             }
 
             switch (toolCall.Function.Name)

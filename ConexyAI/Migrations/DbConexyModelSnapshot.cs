@@ -152,6 +152,49 @@ namespace ConexyAI.Migrations
                     b.ToTable("conexy", (string)null);
                 });
 
+            modelBuilder.Entity("ConexyAI.Entity.DeviceApiKeyEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("KeyHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("KeyPrefix")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTime?>("LastUsedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("KeyHash")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("device_api_keys", (string)null);
+                });
+
             modelBuilder.Entity("ConexyAI.Entity.Document", b =>
                 {
                     b.Property<Guid>("Id")
@@ -678,6 +721,15 @@ namespace ConexyAI.Migrations
                 });
 
             modelBuilder.Entity("ConexyAI.Entity.ConexyEntity", b =>
+                {
+                    b.HasOne("ConexyAI.Entity.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ConexyAI.Entity.DeviceApiKeyEntity", b =>
                 {
                     b.HasOne("ConexyAI.Entity.User", null)
                         .WithMany()

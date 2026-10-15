@@ -20,6 +20,8 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     private readonly ISupportRepository _support;
     private readonly ISandboxTerminalService _sandboxTerminal;
     private readonly ILogger<ConexyHub> _logger;
+    // DESKTOP_AGENT: добавлено 2026-10-15
+    private readonly ConexyAI.Service.Device.IDeviceToolBridge _devices;
 
     public ConexyHub(
         IIdeTerminalService terminalService,
@@ -29,8 +31,10 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
         IConexyQueueGuard queueGuard,
         ISupportRepository support,
         ISandboxTerminalService sandboxTerminal,
-        ILogger<ConexyHub> logger)
+        ILogger<ConexyHub> logger,
+        ConexyAI.Service.Device.IDeviceToolBridge devices)
     {
+        _devices = devices;
         _terminalService = terminalService;
         _cancellations = cancellations;
         _pendingActions = pendingActions;
@@ -54,6 +58,7 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
+        _devices.Unregister(Context.ConnectionId);
         if (exception is null)
         {
             _logger.LogInformation("SignalR disconnected: {ConnectionId} (graceful).", Context.ConnectionId);
@@ -209,6 +214,20 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
         await EnsureChatOwnerAsync(chatId);
         return _sandboxTerminal.Cancel(chatId, terminalId);
     }
+
+    // ---- Desktop agent (устройство пользователя) ----
+    // DESKTOP_AGENT: добавлено 2026-10-15
+
+    /// <summary>The desktop client announces itself; the server then runs the agent's tools on this PC.</summary>
+    public Task RegisterDevice(string deviceName)
+    {
+        _devices.Register(CallerId(), Context.ConnectionId, deviceName);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>The desktop client returns the result of a tool the server asked it to run.</summary>
+    public Task<bool> ToolResult(Guid callId, string output, bool isError) =>
+        Task.FromResult(_devices.Complete(Context.ConnectionId, callId, output ?? string.Empty, isError));
 
     private Guid CallerId() =>
         Context.User?.TryGetUserId(out var userId) == true

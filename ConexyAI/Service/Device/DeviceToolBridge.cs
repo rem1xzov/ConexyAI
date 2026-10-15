@@ -1,0 +1,118 @@
+using System.Collections.Concurrent;
+using ConexyAI.Hub;
+using Microsoft.AspNetCore.SignalR;
+
+namespace ConexyAI.Service.Device;
+
+// DESKTOP_AGENT: добавлено 2026-10-15 — исполнение инструментов агента на ПК пользователя.
+// Сервер ведёт агентский цикл, а файлы и команды выполняет десктопный клиент: сюда приходит вызов,
+// он уходит на подключённое устройство владельца, а результат возвращается через хаб.
+
+/// <summary>Результат инструмента, выполненного на устройстве.</summary>
+public sealed record DeviceToolOutcome(string Output, bool IsError);
+
+public interface IDeviceToolBridge
+{
+    /// <summary>Подключено ли хотя бы одно устройство пользователя.</summary>
+    bool IsOnline(Guid userId);
+
+    /// <summary>Регистрирует подключение как устройство пользователя (последнее подключение побеждает).</summary>
+    void Register(Guid userId, string connectionId, string deviceName);
+
+    /// <summary>Снимает подключение при разрыве; ждущие вызовы этого устройства завершаются ошибкой.</summary>
+    void Unregister(string connectionId);
+
+    /// <summary>Отправляет инструмент на устройство и ждёт результат.</summary>
+    Task<DeviceToolOutcome> ExecuteAsync(Guid userId, Guid taskId, string tool, string argumentsJson, CancellationToken ct);
+
+    /// <summary>Принимает результат от устройства. Чужое подключение результат принять не может.</summary>
+    bool Complete(string connectionId, Guid callId, string output, bool isError);
+}
+
+public sealed class DeviceToolBridge : IDeviceToolBridge
+{
+    /// <summary>Сколько сервер ждёт ответ устройства (подтверждение команды человеком входит в это время).</summary>
+    public static readonly TimeSpan CallTimeout = TimeSpan.FromMinutes(10);
+
+    private const int MaxOutputChars = 200_000;
+
+    private sealed record Device(string ConnectionId, string Name);
+
+    private sealed record Pending(string ConnectionId, TaskCompletionSource<DeviceToolOutcome> Completion);
+
+    private readonly IHubContext<ConexyHub> _hub;
+    private readonly ILogger<DeviceToolBridge> _logger;
+    private readonly ConcurrentDictionary<Guid, Device> _devices = new();
+    private readonly ConcurrentDictionary<Guid, Pending> _pending = new();
+
+    public DeviceToolBridge(IHubContext<ConexyHub> hub, ILogger<DeviceToolBridge> logger)
+    {
+        _hub = hub;
+        _logger = logger;
+    }
+
+    public bool IsOnline(Guid userId) => _devices.ContainsKey(userId);
+
+    public void Register(Guid userId, string connectionId, string deviceName)
+    {
+        var name = string.IsNullOrWhiteSpace(deviceName) ? "device" : deviceName.Trim();
+        _devices[userId] = new Device(connectionId, name.Length > 100 ? name[..100] : name);
+        _logger.LogInformation("Desktop device registered: user={UserId} connection={ConnectionId} name={Name}", userId, connectionId, name);
+    }
+
+    public void Unregister(string connectionId)
+    {
+        foreach (var (userId, device) in _devices)
+        {
+            if (device.ConnectionId == connectionId)
+                _devices.TryRemove(new KeyValuePair<Guid, Device>(userId, device));
+        }
+
+        foreach (var (callId, pending) in _pending)
+        {
+            if (pending.ConnectionId == connectionId && _pending.TryRemove(callId, out _))
+                pending.Completion.TrySetResult(new DeviceToolOutcome("Устройство отключилось до завершения инструмента.", true));
+        }
+    }
+
+    public async Task<DeviceToolOutcome> ExecuteAsync(
+        Guid userId, Guid taskId, string tool, string argumentsJson, CancellationToken ct)
+    {
+        if (!_devices.TryGetValue(userId, out var device))
+            return new DeviceToolOutcome(
+                "Десктопное приложение не подключено. Запустите ConexyAI Desktop и повторите.", true);
+
+        var callId = Guid.NewGuid();
+        var completion = new TaskCompletionSource<DeviceToolOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pending[callId] = new Pending(device.ConnectionId, completion);
+
+        try
+        {
+            await _hub.Clients.Client(device.ConnectionId).SendAsync("ExecuteTool", callId, taskId, tool, argumentsJson, ct);
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(CallTimeout);
+            await using var registration = timeout.Token.Register(() => completion.TrySetCanceled(timeout.Token));
+            return await completion.Task;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return new DeviceToolOutcome($"Устройство не ответило за {CallTimeout.TotalMinutes:0} мин.", true);
+        }
+        finally
+        {
+            _pending.TryRemove(callId, out _);
+        }
+    }
+
+    public bool Complete(string connectionId, Guid callId, string output, bool isError)
+    {
+        if (!_pending.TryGetValue(callId, out var pending) || pending.ConnectionId != connectionId)
+            return false;
+
+        if (output.Length > MaxOutputChars)
+            output = output[..MaxOutputChars] + "\n[... вывод обрезан сервером ...]";
+
+        return pending.Completion.TrySetResult(new DeviceToolOutcome(output, isError));
+    }
+}

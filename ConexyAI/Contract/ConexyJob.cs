@@ -40,5 +40,8 @@ public record ConexyJob(
     bool Orchestra = false,
     // MCP: добавлено 2026-10-04 — личные MCP-серверы пользователя (URL + токен). В БД не хранятся,
     // едут только в памяти с запросом: агент вызывает внешние сервисы под аккаунтом пользователя.
-    List<McpServerInput>? McpServers = null
+    List<McpServerInput>? McpServers = null,
+    // DESKTOP_AGENT: добавлено 2026-10-15 — файлы и команды выполняет десктопный клиент на ПК
+    // пользователя, а не серверная песочница.
+    bool UseDevice = false
 );

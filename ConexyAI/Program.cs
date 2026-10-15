@@ -243,6 +243,9 @@ builder.Services.AddScoped<IConexyAgentRunner, ConexyAgentRunner>();
 // CONVERSATION_SERVICE: добавлено 2026-09-23 — единая сборка контекста и запись хода.
 builder.Services.AddScoped<IConversationService, ConversationService>();
 builder.Services.AddScoped<IConexyEditorService, ConexyEditorService>();
+// DESKTOP_AGENT: добавлено 2026-10-15 — ключи десктопа и выполнение инструментов на ПК пользователя.
+builder.Services.AddScoped<ConexyAI.Service.Device.IDeviceKeyService, ConexyAI.Service.Device.DeviceKeyService>();
+builder.Services.AddSingleton<ConexyAI.Service.Device.IDeviceToolBridge, ConexyAI.Service.Device.DeviceToolBridge>();
 builder.Services.AddScoped<IConexyBashService, ConexyBashService>();
 // TEST_RUNNER: добавлено 2026-10-04 — структурированный прогон тестов (run_tests).
 builder.Services.AddScoped<ITestRunnerService, ConexyTestRunnerService>();

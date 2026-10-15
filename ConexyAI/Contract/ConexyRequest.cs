@@ -39,7 +39,9 @@ public record ConexyRequest(
     bool Orchestra = false,
     // MCP: добавлено 2026-10-04 — личные MCP-серверы пользователя (URL + токен). Не хранятся на
     // сервере: едут с запросом, чтобы агент работал под аккаунтом пользователя, а не под общим.
-    List<McpServerInput>? McpServers = null
+    List<McpServerInput>? McpServers = null,
+    // DESKTOP_AGENT: добавлено 2026-10-15 — выполнять инструменты на подключённом десктопе.
+    bool UseDevice = false
 );
 
 // MCP: личный MCP-сервер пользователя. Токен живёт только в браузере и в памяти запроса.

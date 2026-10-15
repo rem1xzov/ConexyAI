@@ -47,6 +47,9 @@ public class DbConexy : Microsoft.EntityFrameworkCore.DbContext
     // YOOKASSA: добавлено 2026-09-27 — платежи за тарифы.
     public DbSet<PaymentEntity> Payments => Set<PaymentEntity>();
 
+    // DESKTOP_AGENT: добавлено 2026-10-15 — ключи десктопного клиента.
+    public DbSet<DeviceApiKeyEntity> DeviceApiKeys => Set<DeviceApiKeyEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
