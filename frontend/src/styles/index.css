@@ -7557,6 +7557,11 @@ body.workspace-resizing {
 
 .settings-tabs {
   flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.settings-tabs .settings-seg {
+  flex: 1 1 auto;
+  white-space: nowrap;
 }
 
 .settings-modal__body {
