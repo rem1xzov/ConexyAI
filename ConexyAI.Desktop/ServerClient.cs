@@ -63,7 +63,7 @@ public sealed class ServerClient : IDisposable
             Content = JsonContent.Create(new
             {
                 model = "conexy-coder",
-                prompt,
+                prompt = prompt.Replace("\0", string.Empty),
                 chatId = chatId.ToString(),
                 useDevice = true,
                 reasoningEffort = "high",

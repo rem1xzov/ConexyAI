@@ -26,8 +26,8 @@ public static class Ui
 
     public static void Init()
     {
+        // InputEncoding намеренно не трогаем: UTF-8 на входе в conhost превращает кириллицу в нули (0x00).
         Console.OutputEncoding = Encoding.UTF8;
-        Console.InputEncoding = Encoding.UTF8;
 
         if (Console.IsOutputRedirected || Environment.GetEnvironmentVariable("NO_COLOR") is { Length: > 0 })
             return;

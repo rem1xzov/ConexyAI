@@ -64,6 +64,10 @@ public class ConexyService : IConexyService
 
     public async Task<ConexyResponse> ExecuteAsync(Guid userId, ConexyRequest request, CancellationToken ct = default)
     {
+        // Postgres отвергает 0x00 в text (500 на INSERT): вычищаем из промпта до любой записи.
+        if (request.Prompt is not null && request.Prompt.Contains('\0'))
+            request = request with { Prompt = request.Prompt.Replace("\0", string.Empty) };
+
         if (!ConexyModelMapper.TryParse(request.Model, out var modelType))
         {
             throw new ArgumentException($"Invalid model: '{request.Model}'. Allowed: ConexyV1-flash, ConexyV1-pro, conexy-coder, conexy-cowork");
