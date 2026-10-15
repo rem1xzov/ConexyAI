@@ -2,48 +2,68 @@ using ConexyAI.Desktop.Tools;
 
 namespace ConexyAI.Desktop;
 
-/// <summary>Спрашивает в консоли: y — выполнить, n — отклонить, a — разрешать всё до конца сессии.</summary>
+/// <summary>
+/// Подтверждение команд терминала: «Да» / «Да, и больше не спрашивать» (авто-режим) / «Нет».
+/// Авто-режим можно включить флагом --auto или командой /auto. Запрещённые политикой команды
+/// блокируются в любом режиме.
+/// </summary>
 public sealed class ConsoleApprover : ICommandApprover
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private volatile bool _allowAll;
+    private volatile bool _auto;
+
+    public bool AutoMode
+    {
+        get => _auto;
+        set => _auto = value;
+    }
 
     public async Task<bool> ApproveAsync(string command, string workingDirectory, CancellationToken ct)
     {
-        if (_allowAll)
+        if (_auto)
             return true;
 
         await _gate.WaitAsync(ct);
         try
         {
-            if (_allowAll)
+            if (_auto)
                 return true;
 
-            Console.WriteLine();
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"Агент хочет выполнить команду в {workingDirectory}:");
-            Console.ResetColor();
-            Console.WriteLine("  " + command);
-            Console.Write("Разрешить? [y]да / [n]нет / [a]да, и дальше без вопросов: ");
+            if (!Ui.Ansi)
+                return await AskPlainAsync(command, workingDirectory, ct);
 
-            var answer = await Task.Run(Console.ReadLine, ct);
-            switch (answer?.Trim().ToLowerInvariant())
-            {
-                case "a":
-                    _allowAll = true;
-                    return true;
-                case "y":
-                case "д":
-                case "да":
-                case "yes":
-                    return true;
-                default:
-                    return false;
-            }
+            var choice = await Ui.ConfirmAsync(command, workingDirectory, ct);
+            if (choice == 1)
+                _auto = true;
+            var allowed = choice is 0 or 1;
+            Ui.Decision(allowed);
+            if (allowed)
+                Ui.Busy("Выполняю");
+            return allowed;
         }
         finally
         {
             _gate.Release();
+        }
+    }
+
+    private async Task<bool> AskPlainAsync(string command, string workingDirectory, CancellationToken ct)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"Агент хочет выполнить команду в {workingDirectory}:");
+        Console.WriteLine("  " + command);
+        Console.Write("Разрешить? [y]да / [n]нет / [a]да, и дальше без вопросов: ");
+
+        var answer = await Task.Run(Console.ReadLine, ct);
+        switch (answer?.Trim().ToLowerInvariant())
+        {
+            case "a":
+                _auto = true;
+                return true;
+            case "y" or "д" or "да" or "yes":
+                return true;
+            default:
+                return false;
         }
     }
 }

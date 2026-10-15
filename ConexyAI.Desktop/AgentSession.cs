@@ -18,6 +18,7 @@ public sealed class AgentSession : IAsyncDisposable
     private TaskCompletionSource<string?>? _turn;
     private CancellationTokenSource? _turnCts;
     private bool _streamedAnything;
+    private volatile bool _needBullet;
 
     public AgentSession(ServerClient server, ToolRunner tools, Guid chatId)
     {
@@ -35,6 +36,12 @@ public sealed class AgentSession : IAsyncDisposable
         _hub.On<string, string?>("OnContentToken", (delta, _) =>
         {
             _streamedAnything = true;
+            Ui.Idle();
+            if (_needBullet)
+            {
+                _needBullet = false;
+                Ui.AssistantStart();
+            }
             Console.Write(delta);
         });
         _hub.On<JsonElement, string?>("OnCompleted", (_, _) => _turn?.TrySetResult(null));
@@ -63,6 +70,8 @@ public sealed class AgentSession : IAsyncDisposable
         _turn = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _turnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _streamedAnything = false;
+        _needBullet = true;
+        Ui.Busy();
 
         var taskId = await _server.StartRunAsync(prompt, _chatId, ct);
         await _hub.InvokeAsync("JoinTask", taskId, ct);
@@ -82,6 +91,7 @@ public sealed class AgentSession : IAsyncDisposable
         finally
         {
             _turnCts.Cancel();
+            Ui.Idle();
             Console.WriteLine();
         }
     }
@@ -98,7 +108,10 @@ public sealed class AgentSession : IAsyncDisposable
                     continue;
 
                 if (!_streamedAnything && !string.IsNullOrEmpty(run.Result))
+                {
+                    Ui.AssistantStart();
                     Console.Write(run.Result);
+                }
                 _turn?.TrySetResult(run.Status == "Completed" ? null : $"Задача завершилась со статусом {run.Status}.");
                 return;
             }
@@ -118,6 +131,11 @@ public sealed class AgentSession : IAsyncDisposable
         {
             result = ToolResult.Fail("Внутренняя ошибка клиента: " + ex.Message);
         }
+
+        Ui.Idle();
+        Ui.ShowToolResult(result);
+        _needBullet = true;
+        Ui.Busy();
 
         await _hub.InvokeAsync("ToolResult", callId, result.Output, result.IsError);
     }

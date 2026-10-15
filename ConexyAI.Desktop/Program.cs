@@ -35,8 +35,7 @@ static string? Option(string[] args, string name)
     return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
 }
 
-Console.OutputEncoding = Encoding.UTF8;
-Console.InputEncoding = Encoding.UTF8;
+Ui.Init();
 
 var exitCode = await RunAsync(args);
 // Запуск двойным кликом: не закрываем окно, пока пользователь не прочитает сообщение.
@@ -172,7 +171,7 @@ static async Task<int> ChatAsync(string[] args)
     using var server = new ServerClient(config.ServerUrl!, key!);
     await server.GetTokenAsync(); // ранняя проверка ключа
 
-    var approver = new ConsoleApprover();
+    var approver = new ConsoleApprover { AutoMode = args.Contains("--auto") };
     var firstBanner = true;
     while (true)
     {
@@ -184,30 +183,15 @@ static async Task<int> ChatAsync(string[] args)
     }
 }
 
-static void PrintBanner(string root)
-{
-    var lines = new[]
-    {
-        "  ConexyAI — AI-агент для вашего кода",
-        $"  Папка: {root}",
-        "  /help — команды, /cd — сменить папку, /ls — содержимое",
-    };
-    var width = lines.Max(l => l.Length) + 2;
-    Console.ForegroundColor = ConsoleColor.Cyan;
-    Console.WriteLine("╭" + new string('─', width) + "╮");
-    foreach (var l in lines)
-        Console.WriteLine("│" + l.PadRight(width) + "│");
-    Console.WriteLine("╰" + new string('─', width) + "╯");
-    Console.ResetColor();
-}
 
 static void PrintHelp() => Console.WriteLine("""
     Команды:
       /ls [путь]      показать содержимое папки (папки пронумерованы)
       /cd <путь|N|..> сменить рабочую папку (N — номер из /ls)
       /pwd            текущая папка
+      /auto           вкл/выкл выполнение команд без подтверждения (или флаг --auto)
       /help           эта справка
-      /exit           выход (также: пустая строка или exit)
+      /exit           выход (также: exit)
     Всё остальное — задача для агента. Ctrl+C во время ответа — остановить.
     Токен GitHub и MCP-серверы берутся из настроек на сайте автоматически.
     """);
@@ -215,21 +199,22 @@ static void PrintHelp() => Console.WriteLine("""
 // Возвращает новую папку, если пользователь её сменил, или null для выхода.
 static async Task<string?> ChatInFolderAsync(ServerClient server, ConsoleApprover approver, string root, bool firstBanner)
 {
-    var tools = new ToolRunner(root, approver, line => Console.WriteLine($"\n  ▸ {line}"), server.GetGitHubTokenAsync);
+    var tools = new ToolRunner(root, approver, Ui.ToolCall, server.GetGitHubTokenAsync);
     await using var session = new AgentSession(server, tools, ChatIdFor(root));
     await session.ConnectAsync(CancellationToken.None);
 
-    PrintBanner(root);
-    if (firstBanner)
-        Console.WriteLine("Пишите задачу. Ctrl+C во время ответа — остановить.\n");
+    Ui.Banner(root, server.BaseUrl.Replace("https://", string.Empty));
+    if (firstBanner && approver.AutoMode)
+        Ui.Info("  Авто-режим включён: команды выполняются без подтверждения.");
     var listed = new List<string>();
 
     while (true)
     {
-        Console.Write("> ");
-        var prompt = Console.ReadLine();
-        if (string.IsNullOrWhiteSpace(prompt) || prompt.Trim().Equals("exit", StringComparison.OrdinalIgnoreCase))
+        var prompt = Ui.ReadPrompt(approver.AutoMode);
+        if (prompt is null || prompt.Trim().Equals("exit", StringComparison.OrdinalIgnoreCase))
             return null;
+        if (string.IsNullOrWhiteSpace(prompt))
+            continue;
 
         if (prompt.StartsWith('/'))
         {
@@ -244,6 +229,12 @@ static async Task<string?> ChatInFolderAsync(ServerClient server, ConsoleApprove
                     break;
                 case "/pwd":
                     Console.WriteLine(root);
+                    break;
+                case "/auto":
+                    approver.AutoMode = !approver.AutoMode;
+                    Ui.Info(approver.AutoMode
+                        ? "Авто-режим включён: команды выполняются без подтверждения (опасные по-прежнему блокируются)."
+                        : "Авто-режим выключен: команды требуют подтверждения.");
                     break;
                 case "/ls":
                     ListFolder(arg.Length == 0 ? root : ResolveFolder(root, arg, listed), listed);
@@ -272,11 +263,11 @@ static async Task<string?> ChatInFolderAsync(ServerClient server, ConsoleApprove
         {
             var error = await session.AskAsync(prompt, cts.Token);
             if (error is not null)
-                Console.Error.WriteLine("\n[!] " + error);
+                Ui.Error(error);
         }
         catch (InvalidOperationException ex)
         {
-            Console.Error.WriteLine("[!] " + ex.Message);
+            Ui.Error(ex.Message);
         }
         finally
         {
