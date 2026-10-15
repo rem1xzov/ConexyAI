@@ -96,6 +96,31 @@ public sealed class ServerClient : IDisposable
         return body is null ? null : new RunResult(body.Id, body.Status ?? string.Empty, body.Result);
     }
 
+    private string? _gitHubToken;
+    private bool _gitHubTokenLoaded;
+
+    /// <summary>GitHub-токен, сохранённый на сайте (null — не задан). Кэшируется на время сессии.</summary>
+    public async Task<string?> GetGitHubTokenAsync(CancellationToken ct)
+    {
+        if (_gitHubTokenLoaded)
+            return _gitHubToken;
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "api/device/github-credential");
+        request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));
+        using var response = await _http.SendAsync(request, ct);
+        if (response.StatusCode == HttpStatusCode.NoContent)
+        {
+            _gitHubTokenLoaded = true;
+            return null;
+        }
+        response.EnsureSuccessStatusCode();
+
+        var body = await response.Content.ReadFromJsonAsync<GitHubBody>(Json, ct);
+        _gitHubToken = body?.Token;
+        _gitHubTokenLoaded = true;
+        return _gitHubToken;
+    }
+
     public void Dispose()
     {
         _http.Dispose();
@@ -103,6 +128,8 @@ public sealed class ServerClient : IDisposable
     }
 
     private sealed record TokenBody(string Token, DateTime ExpiresAtUtc);
+
+    private sealed record GitHubBody(string? Token);
 
     private sealed record RunBody(Guid Id, string? Status, string? Result);
 }

@@ -24,6 +24,17 @@ static string? Option(string[] args, string name)
 Console.OutputEncoding = Encoding.UTF8;
 Console.InputEncoding = Encoding.UTF8;
 
+var exitCode = await RunAsync(args);
+// Запуск двойным кликом: не закрываем окно, пока пользователь не прочитает сообщение.
+if (exitCode != 0 && args.Length == 0 && !Console.IsInputRedirected)
+{
+    Console.WriteLine("\nНажмите Enter, чтобы закрыть окно...");
+    Console.ReadLine();
+}
+return exitCode;
+
+static async Task<int> RunAsync(string[] args)
+{
 var command = args.FirstOrDefault(a => !a.StartsWith("--"));
 try
 {
@@ -62,6 +73,7 @@ catch (HttpRequestException ex)
 {
     Console.Error.WriteLine("Не удалось связаться с сервером: " + ex.Message);
     return 3;
+}
 }
 
 static async Task<int> LoginAsync(string[] args)
@@ -104,8 +116,13 @@ static async Task<int> ChatAsync(string[] args)
     var key = config.GetKey();
     if (string.IsNullOrWhiteSpace(config.ServerUrl) || string.IsNullOrWhiteSpace(key))
     {
-        Console.Error.WriteLine("Вы не вошли. Выполните: conexy login");
-        return 1;
+        // Первый запуск (например двойным кликом): спрашиваем данные прямо здесь.
+        Console.WriteLine("Вы ещё не вошли. Ключ выпускается на сайте в настройках.\n");
+        var loginCode = await LoginAsync([]);
+        if (loginCode != 0)
+            return loginCode;
+        config = ClientConfig.Load();
+        key = config.GetKey();
     }
 
     var root = Path.GetFullPath(Option(args, "--dir") ?? Directory.GetCurrentDirectory());
@@ -115,22 +132,97 @@ static async Task<int> ChatAsync(string[] args)
         return 1;
     }
 
-    using var server = new ServerClient(config.ServerUrl, key);
+    using var server = new ServerClient(config.ServerUrl!, key!);
     await server.GetTokenAsync(); // ранняя проверка ключа
 
-    var tools = new ToolRunner(root, new ConsoleApprover(), line => Console.WriteLine($"\n  ▸ {line}"));
+    var approver = new ConsoleApprover();
+    var firstBanner = true;
+    while (true)
+    {
+        var next = await ChatInFolderAsync(server, approver, root, firstBanner);
+        if (next is null)
+            return 0;
+        root = next;
+        firstBanner = false;
+    }
+}
+
+static void PrintBanner(string root)
+{
+    var lines = new[]
+    {
+        "  ConexyAI — AI-агент для вашего кода",
+        $"  Папка: {root}",
+        "  /help — команды, /cd — сменить папку, /ls — содержимое",
+    };
+    var width = lines.Max(l => l.Length) + 2;
+    Console.ForegroundColor = ConsoleColor.Cyan;
+    Console.WriteLine("╭" + new string('─', width) + "╮");
+    foreach (var l in lines)
+        Console.WriteLine("│" + l.PadRight(width) + "│");
+    Console.WriteLine("╰" + new string('─', width) + "╯");
+    Console.ResetColor();
+}
+
+static void PrintHelp() => Console.WriteLine("""
+    Команды:
+      /ls [путь]      показать содержимое папки (папки пронумерованы)
+      /cd <путь|N|..> сменить рабочую папку (N — номер из /ls)
+      /pwd            текущая папка
+      /help           эта справка
+      /exit           выход (также: пустая строка или exit)
+    Всё остальное — задача для агента. Ctrl+C во время ответа — остановить.
+    Токен GitHub и MCP-серверы берутся из настроек на сайте автоматически.
+    """);
+
+// Возвращает новую папку, если пользователь её сменил, или null для выхода.
+static async Task<string?> ChatInFolderAsync(ServerClient server, ConsoleApprover approver, string root, bool firstBanner)
+{
+    var tools = new ToolRunner(root, approver, line => Console.WriteLine($"\n  ▸ {line}"), server.GetGitHubTokenAsync);
     await using var session = new AgentSession(server, tools, ChatIdFor(root));
     await session.ConnectAsync(CancellationToken.None);
 
-    Console.WriteLine($"ConexyAI Desktop. Рабочая папка: {root}");
-    Console.WriteLine("Пишите задачу. Ctrl+C во время ответа — остановить, пустая строка или 'exit' — выйти.\n");
+    PrintBanner(root);
+    if (firstBanner)
+        Console.WriteLine("Пишите задачу. Ctrl+C во время ответа — остановить.\n");
+    var listed = new List<string>();
 
     while (true)
     {
         Console.Write("> ");
         var prompt = Console.ReadLine();
         if (string.IsNullOrWhiteSpace(prompt) || prompt.Trim().Equals("exit", StringComparison.OrdinalIgnoreCase))
-            return 0;
+            return null;
+
+        if (prompt.StartsWith('/'))
+        {
+            var parts = prompt.Trim().Split(' ', 2, StringSplitOptions.TrimEntries);
+            var arg = parts.Length > 1 ? parts[1].Trim('"') : string.Empty;
+            switch (parts[0].ToLowerInvariant())
+            {
+                case "/exit" or "/quit":
+                    return null;
+                case "/help":
+                    PrintHelp();
+                    break;
+                case "/pwd":
+                    Console.WriteLine(root);
+                    break;
+                case "/ls":
+                    ListFolder(arg.Length == 0 ? root : ResolveFolder(root, arg, listed), listed);
+                    break;
+                case "/cd":
+                    var target = ResolveFolder(root, arg, listed);
+                    if (Directory.Exists(target))
+                        return Path.GetFullPath(target);
+                    Console.Error.WriteLine($"Папка не найдена: {target}");
+                    break;
+                default:
+                    Console.Error.WriteLine("Неизвестная команда. /help — список.");
+                    break;
+            }
+            continue;
+        }
 
         using var cts = new CancellationTokenSource();
         ConsoleCancelEventHandler onCancel = (_, e) =>
@@ -153,6 +245,52 @@ static async Task<int> ChatAsync(string[] args)
         {
             Console.CancelKeyPress -= onCancel;
         }
+    }
+}
+
+static string ResolveFolder(string root, string arg, List<string> listed)
+{
+    if (arg.Length == 0)
+        return root;
+    if (int.TryParse(arg, out var n) && n >= 1 && n <= listed.Count)
+        return listed[n - 1];
+    if (arg == "~")
+        return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    return Path.GetFullPath(Path.Combine(root, arg));
+}
+
+static void ListFolder(string dir, List<string> listed)
+{
+    if (!Directory.Exists(dir))
+    {
+        Console.Error.WriteLine($"Папка не найдена: {dir}");
+        return;
+    }
+
+    listed.Clear();
+    Console.WriteLine(dir);
+    try
+    {
+        var parent = Directory.GetParent(dir);
+        if (parent is not null)
+        {
+            listed.Add(parent.FullName);
+            Console.WriteLine($"  {listed.Count,3}. ..");
+        }
+        foreach (var d in Directory.EnumerateDirectories(dir).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+        {
+            var name = Path.GetFileName(d);
+            if (name.StartsWith('.') || name is "node_modules" or "bin" or "obj")
+                continue;
+            listed.Add(d);
+            Console.WriteLine($"  {listed.Count,3}. {name}/");
+        }
+        foreach (var f in Directory.EnumerateFiles(dir).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+            Console.WriteLine($"       {Path.GetFileName(f)}");
+    }
+    catch (UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine("Нет доступа к папке.");
     }
 }
 

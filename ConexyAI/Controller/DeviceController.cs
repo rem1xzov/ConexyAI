@@ -18,6 +18,7 @@ public sealed record ExchangeDeviceKeyRequest(string Key);
 public class DeviceController : ControllerBase
 {
     private readonly IDeviceKeyService _keys;
+    private readonly IUserIntegrationsService _integrations;
     private readonly ILogger<DeviceController> _logger;
     private readonly IConfiguration _configuration;
 
@@ -26,9 +27,14 @@ public class DeviceController : ControllerBase
     private const string DefaultDownloadUrl =
         "https://github.com/rem1xzov/ConexyAI/releases/latest/download/conexy-win-x64.exe";
 
-    public DeviceController(IDeviceKeyService keys, ILogger<DeviceController> logger, IConfiguration configuration)
+    public DeviceController(
+        IDeviceKeyService keys,
+        IUserIntegrationsService integrations,
+        ILogger<DeviceController> logger,
+        IConfiguration configuration)
     {
         _keys = keys;
+        _integrations = integrations;
         _logger = logger;
         _configuration = configuration;
     }
@@ -72,6 +78,24 @@ public class DeviceController : ControllerBase
 
     private ObjectResult Forbid403() => StatusCode(StatusCodes.Status403Forbidden,
         new { error = "DEVICE_SESSION_FORBIDDEN", message = "Ключами нельзя управлять из десктопной сессии." });
+
+    /// <summary>
+    /// GitHub-токен с сайта для git push/pull на ПК. Отдаётся ТОЛЬКО десктопной сессии (токен из обмена ключа):
+    /// браузерная сессия сайта его не получит, как и раньше (сервер отдаёт только статус).
+    /// </summary>
+    [HttpGet("github-credential")]
+    [Authorize]
+    public async Task<IActionResult> GitHubCredential(CancellationToken ct)
+    {
+        if (!IsDeviceSession())
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "DEVICE_SESSION_REQUIRED" });
+
+        var stored = await _integrations.GetForRunAsync(User.GetUserId(), ct);
+        Response.Headers.CacheControl = "no-store";
+        return string.IsNullOrWhiteSpace(stored.GitHubToken)
+            ? NoContent()
+            : Ok(new { token = stored.GitHubToken });
+    }
 
     [HttpGet("keys")]
     [Authorize]

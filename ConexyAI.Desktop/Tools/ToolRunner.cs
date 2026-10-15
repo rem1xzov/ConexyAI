@@ -11,14 +11,15 @@ public sealed class ToolRunner
     private readonly ShellTool _shell;
     private readonly Action<string> _log;
 
-    public ToolRunner(string workspaceRoot, ICommandApprover approver, Action<string> log)
+    public ToolRunner(string workspaceRoot, ICommandApprover approver, Action<string> log,
+            Func<CancellationToken, Task<string?>>? gitHubToken = null)
     {
         _guard = new PathGuard(workspaceRoot);
         _files = new FileTools(_guard);
         _search = new SearchTools(_guard);
         _editor = new EditorTool(_guard, _files);
         _patch = new PatchApplier(_guard);
-        _shell = new ShellTool(_guard, approver);
+        _shell = new ShellTool(_guard, approver, gitHubToken);
         _log = log;
     }
 

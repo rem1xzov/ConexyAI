@@ -64,7 +64,7 @@ public static partial class CommandPolicy
 }
 
 /// <summary>bash / terminal_exec: команда в рабочей папке, с подтверждением, таймаутом и убийством дерева процессов.</summary>
-public sealed class ShellTool
+public sealed partial class ShellTool
 {
     private const int DefaultTimeoutSeconds = 120;
     private const int MaxTimeoutSeconds = 900;
@@ -72,12 +72,17 @@ public sealed class ShellTool
 
     private readonly PathGuard _guard;
     private readonly ICommandApprover _approver;
+    private readonly Func<CancellationToken, Task<string?>>? _gitHubToken;
 
-    public ShellTool(PathGuard guard, ICommandApprover approver)
+    public ShellTool(PathGuard guard, ICommandApprover approver, Func<CancellationToken, Task<string?>>? gitHubToken = null)
     {
         _guard = guard;
         _approver = approver;
+        _gitHubToken = gitHubToken;
     }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"(^|[\s;&|(])git(\.exe)?\s", RegexOptions.IgnoreCase)]
+    private static partial Regex GitCall();
 
     public async Task<ToolResult> RunAsync(ToolArgs args, string tool, CancellationToken ct)
     {
@@ -108,6 +113,24 @@ public sealed class ShellTool
         psi.CreateNoWindow = true;
         psi.StandardOutputEncoding = Encoding.UTF8;
         psi.StandardErrorEncoding = Encoding.UTF8;
+
+        // Токен GitHub с сайта подаётся git'у через окружение процесса (не попадает ни в текст команды,
+        // ни в .git/config). Только для github.com и только если в команде есть вызов git.
+        string? ghToken = null;
+        if (_gitHubToken is not null && GitCall().IsMatch(command))
+        {
+            try { ghToken = await _gitHubToken(ct); }
+            catch (Exception ex) when (ex is HttpRequestException or AuthRejectedException) { }
+        }
+
+        if (!string.IsNullOrEmpty(ghToken))
+        {
+            var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes("x-access-token:" + ghToken));
+            psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+            psi.Environment["GIT_CONFIG_COUNT"] = "1";
+            psi.Environment["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader";
+            psi.Environment["GIT_CONFIG_VALUE_0"] = "AUTHORIZATION: basic " + basic;
+        }
 
         using var process = new Process { StartInfo = psi };
         var output = new StringBuilder();
@@ -152,6 +175,8 @@ public sealed class ShellTool
 
         string text;
         lock (sync) text = output.ToString().TrimEnd();
+        if (!string.IsNullOrEmpty(ghToken))
+            text = text.Replace(ghToken, "***");
         text = Truncate(text);
 
         if (timedOut)
