@@ -54,6 +54,7 @@ import { SupportChat } from './components/SupportChat';
 import { AuthModal } from './components/AuthModal';
 import type { AuthMode } from './components/AuthModal';
 import { SettingsModal } from './components/SettingsModal';
+import type { SettingsSection } from './components/SettingsModal';
 // WORKSPACE_DIRTY: добавлено 2026-09-24
 import { ConfirmDialog } from './components/Dialog';
 import { getStoredTheme, setTheme, type Theme } from './theme';
@@ -339,6 +340,8 @@ export default function App() {
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
   const [language, setLanguageState] = useState<string>(i18n.language);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // GET_APP: раздел, с которого открываются настройки (кнопка «Скачать приложение» ведёт в «Десктоп»).
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('general');
   // LOCAL_STORAGE_BUDGET: добавлено 2026-09-24 — переписка открытого чата догружается с сервера.
   const [transcriptLoad, setTranscriptLoad] = useState<{ id: string; failed: boolean } | null>(null);
   // FILE_DROP: добавлено 2026-09-24 (L11) — файлы, брошенные на колонку чата, уходят в композер.
@@ -2859,7 +2862,10 @@ export default function App() {
         onUpgrade={handleUpgrade}
         onOpenAdmin={handleOpenAdmin}
         onOpenSupport={handleOpenSupport}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => {
+          setSettingsSection('general');
+          setSettingsOpen(true);
+        }}
       />
 
       {/* MOBILE: добавлено 2026-09-19 — floating hamburger + backdrop for the overlay sidebar. */}
@@ -2948,6 +2954,20 @@ export default function App() {
                 >
                   {ideCollapsed ? <PanelRightOpenIcon size={18} /> : <PanelRightCloseIcon size={18} />}
                 </button>
+                {/* GET_APP: только в ПК-версии — ведёт в настройки → Десктоп со скачиванием и ключами. */}
+                {authenticated && (
+                  <button
+                    className="get-app-btn"
+                    type="button"
+                    onClick={() => {
+                      setSettingsSection('desktop');
+                      setSettingsOpen(true);
+                    }}
+                    title={t('settings.getAppTitle')}
+                  >
+                    <span aria-hidden="true">⤓</span> {t('settings.getApp')}
+                  </button>
+                )}
                 {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
                 <UsageIndicator usage={usage} />
                 {chatActions}
@@ -3195,6 +3215,7 @@ export default function App() {
           onThemeChange={handleThemeChange}
           onLanguageChange={handleLanguageChange}
           onClose={() => setSettingsOpen(false)}
+          initialSection={settingsSection}
           usage={usage}
           onLimitsReset={handleLimitsReset}
           onPreferencesSaved={(p: UserPreferences) => setPreferredName(p.name.trim() ? p.name.trim() : null)}

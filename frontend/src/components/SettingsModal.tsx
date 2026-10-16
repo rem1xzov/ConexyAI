@@ -726,13 +726,42 @@ function DesktopSection({ active }: { active: boolean }) {
     }
   }
 
-  const loginCmd = newKey ? `conexy login --url ${window.location.origin} --key ${newKey}` : '';
+  const serverUrl = window.location.origin;
+  const loginCmd = newKey ? `conexy login --url ${serverUrl} --key ${newKey}` : '';
+
+  // GET_APP: одно поле «что копируем» = подпись + значение + своя кнопка. Раньше две кнопки стояли
+  // рядом под обоими значениями, и было непонятно, что именно копирует каждая.
+  function CopyField({ id, label, value }: { id: string; label: string; value: string }) {
+    const done = copied === id;
+    return (
+      <div className="desktop-copy">
+        <div className="desktop-copy__label">{label}</div>
+        <div className="desktop-copy__row">
+          <code className="desktop-copy__value">{value}</code>
+          <button
+            className={`dialog-btn desktop-copy__btn ${done ? 'desktop-copy__btn--done' : ''}`}
+            type="button"
+            onClick={() => void copy(value, id)}
+          >
+            {done ? `✓ ${t('settings.desktopCopied')}` : t('settings.desktopCopy')}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="settings-panel">
       <div className="settings-modal__section">
         <div className="settings-modal__label">{t('settings.desktopTitle')}</div>
         <p className="settings-github__hint">{t('settings.desktopHint')}</p>
+        <ol className="desktop-steps">
+          <li>{t('settings.desktopStep1')}</li>
+          <li>{t('settings.desktopStep2')}</li>
+          <li>{t('settings.desktopStep3')}</li>
+          <li>{t('settings.desktopStep4')}</li>
+          <li>{t('settings.desktopStep5')}</li>
+        </ol>
         {downloadUrl && (
           <a className="dialog-btn dialog-btn--primary" href={downloadUrl} download rel="noopener noreferrer">
             {t('settings.desktopDownload')}
@@ -769,18 +798,21 @@ function DesktopSection({ active }: { active: boolean }) {
         </div>
 
         {newKey && (
-          <div className="settings-github__hint">
-            <p>{t('settings.desktopNewKey')}</p>
-            <code style={{ wordBreak: 'break-all', userSelect: 'all' }}>{newKey}</code>
-            <p>{t('settings.desktopLoginCmd')}:</p>
-            <code style={{ wordBreak: 'break-all', userSelect: 'all' }}>{loginCmd}</code>
-            <div className="settings-github__actions">
-              <button className="dialog-btn" type="button" onClick={() => void copy(newKey, 'key')}>
-                {copied === 'key' ? t('settings.desktopCopied') : t('settings.desktopCopy')}
-              </button>
-              <button className="dialog-btn" type="button" onClick={() => void copy(loginCmd, 'cmd')}>
-                {copied === 'cmd' ? t('settings.desktopCopied') : t('settings.desktopLoginCmd')}
-              </button>
+          <div className="desktop-login">
+            <p className="desktop-login__warn">{t('settings.desktopNewKey')}</p>
+
+            <div className="desktop-login__way">
+              <div className="desktop-login__way-title">{t('settings.desktopWayA')}</div>
+              <p className="settings-github__hint">{t('settings.desktopWayAHint')}</p>
+              <CopyField id="url" label={t('settings.desktopFieldUrl')} value={serverUrl} />
+              <CopyField id="key" label={t('settings.desktopFieldKey')} value={newKey} />
+              <p className="settings-github__hint">{t('settings.desktopWayANote')}</p>
+            </div>
+
+            <div className="desktop-login__way">
+              <div className="desktop-login__way-title">{t('settings.desktopWayB')}</div>
+              <p className="settings-github__hint">{t('settings.desktopWayBHint')}</p>
+              <CopyField id="cmd" label={t('settings.desktopLoginCmd')} value={loginCmd} />
             </div>
           </div>
         )}

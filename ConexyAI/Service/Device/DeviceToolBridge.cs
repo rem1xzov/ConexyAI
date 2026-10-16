@@ -103,6 +103,10 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
 
         try
         {
+            // ORCHESTRA: чей это вызов (помощника) — отдельным событием ДО ExecuteTool (порядок в одном подключении
+            // сохраняется), а не пятым аргументом: старые клиенты с 4-аргументным обработчиком не сломаются.
+            if (AgentExecutionContext.Current is { } agent && agent.Id != AgentIdentity.Lead.Id)
+                await _hub.Clients.Client(device.ConnectionId).SendAsync("ToolAgent", callId, agent.Id, agent.Role, ct);
             await _hub.Clients.Client(device.ConnectionId).SendAsync("ExecuteTool", callId, taskId, tool, argumentsJson, ct);
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);

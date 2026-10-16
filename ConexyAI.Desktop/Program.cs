@@ -82,6 +82,24 @@ try
             Ui.FlushText();
             return 0;
 
+        case "teamtest":
+            // Проверка панели оркестра без сервера.
+            if (args.Contains("--ansi"))
+                Ui.ForceAnsi();
+            Ui.SetProject(Directory.GetCurrentDirectory());
+            Ui.TeamRoster([("worker-1", "backend", "API и база", "src/api"), ("worker-2", "frontend", "интерфейс", "src/ui"), ("worker-3", "qa", "тесты", "tests")]);
+            Ui.Busy("Команда работает");
+            Ui.AgentStatus("worker-1", "backend", "editing", "Правлю api/users.cs");
+            Ui.AgentStatus("worker-2", "frontend", "running", "npm run build");
+            Ui.AgentStatus("worker-3", "qa", "running", "dotnet test");
+            await Task.Delay(1500);
+            Ui.AgentStatus("worker-3", "qa", "idle", "Готово");
+            await Task.Delay(1500);
+            Ui.AgentStatus("worker-1", "backend", "idle", "Готово");
+            Ui.AgentStatus("worker-2", "frontend", "idle", "Готово");
+            Ui.Idle();
+            return 0;
+
         case "update":
             return await UpdateCommandAsync();
 
@@ -376,11 +394,13 @@ static void PrintHelp() => Console.WriteLine("""
       /cd <путь|N|..> сменить рабочую папку (N — номер из /ls)
       /pwd            текущая папка
       /attach <файл>  прикрепить файл/картинку (также: перетащите файл в окно или напишите @путь в сообщении)
-      /paste          прикрепить картинку или файлы из буфера обмена (то же делает Ctrl+V)
+      /paste          прикрепить картинку или файлы из буфера обмена (то же делает Ctrl+V).
+                      Вложения не отправляются сразу: добавьте ещё, допишите текст и нажмите Enter
       /detach [N]     убрать вложение по номеру или все
       /chats          список всех чатов (синхронизирован с сайтом): переключиться или создать новый,
                       у каждого чата своя папка проекта
-      /team           вкл/выкл оркестр агентов: ведущий собирает команду субагентов (ProMax, Ultra, Admin)
+      /team [on|off]  оркестр агентов: ведущий собирает команду субагентов (ProMax, Ultra, Admin).
+                      Включённый оркестр работает в этом чате, пока вы не выключите его: /team off
       /usage          тариф и расход токенов агента
       /update         проверить обновления (или команда conexy update)
       /auto           вкл/выкл выполнение команд без подтверждения (или флаг --auto)
@@ -411,6 +431,7 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
     }
 
     Ui.Banner(root, server.BaseUrl.Replace("https://", string.Empty));
+    Ui.SetProject(root);
     if (firstBanner && approver.AutoMode)
         Ui.Info("  Авто-режим включён: команды выполняются без подтверждения.");
     Ui.Info($"  Чат {chatId.ToString()[..8]} · /chats — список чатов, /cd — сменить проект");
@@ -418,11 +439,17 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
     var listed = new List<string>();
     var usage = await TryUsageAsync(server);
     Ui.SetUsage(usage);
-    Ui.TeamMode = session.Orchestra = Ui.TeamMode && usage?.TeamAllowed != false;
+    // Оркестр — настройка чата: включённый один раз, он работает до /team off (и переживает перезапуск).
+    // Если тариф больше не позволяет — снимаем флаг.
+    if (store.Team.Contains(chatId) && usage is { TeamAllowed: false })
+        store.SetTeam(chatId, false);
+    Ui.TeamMode = session.Orchestra = store.Team.Contains(chatId);
+    if (session.Orchestra)
+        Ui.Info("  Оркестр агентов включён в этом чате · /team off — выключить");
 
     while (true)
     {
-        var prompt = Ui.ReadPrompt(approver.AutoMode);
+        var prompt = Ui.ReadPrompt(approver.AutoMode, root);
         if (prompt is null || prompt.Trim().Equals("exit", StringComparison.OrdinalIgnoreCase))
             return null;
         if (string.IsNullOrWhiteSpace(prompt) && Attachments.Pending.Count == 0)
@@ -459,7 +486,7 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                     if (pastedText is not null)
                         Ui.Info("  В буфере текст — вставьте его в строку ввода (Ctrl+V).");
                     else if (pasteMessage is not null)
-                        Ui.Info("  " + pasteMessage);
+                        Ui.Info("  " + pasteMessage + (Attachments.Pending.Count > 0 ? " · допишите текст и нажмите Enter" : string.Empty));
                     break;
                 case "/detach":
                     if (arg.Length == 0)
@@ -481,16 +508,35 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                         Ui.PrintStatus();
                     break;
                 case "/team":
-                    usage ??= await TryUsageAsync(server);
-                    if (usage is { TeamAllowed: false })
+                    bool wantTeam;
+                    switch (arg.ToLowerInvariant())
                     {
-                        Ui.Error($"Оркестр агентов доступен на ProMax и Ultra (ваш тариф: {usage.Tier}).");
+                        case "": wantTeam = !session.Orchestra; break;
+                        case "on" or "вкл": wantTeam = true; break;
+                        case "off" or "выкл": wantTeam = false; break;
+                        default:
+                            Ui.Error("Используйте: /team, /team on или /team off");
+                            continue;
+                    }
+                    if (wantTeam)
+                    {
+                        usage ??= await TryUsageAsync(server);
+                        if (usage is { TeamAllowed: false })
+                        {
+                            Ui.Error($"Оркестр агентов доступен на ProMax и Ultra (ваш тариф: {usage.Tier}).");
+                            break;
+                        }
+                    }
+                    if (wantTeam == session.Orchestra)
+                    {
+                        Ui.Info(wantTeam ? "Оркестр уже включён в этом чате." : "Оркестр уже выключен.");
                         break;
                     }
-                    Ui.TeamMode = session.Orchestra = !session.Orchestra;
-                    Ui.Info(session.Orchestra
-                        ? "Оркестр включён: для больших задач агент соберёт команду субагентов."
-                        : "Оркестр выключен: работает один агент.");
+                    Ui.TeamMode = session.Orchestra = wantTeam;
+                    store.SetTeam(chatId, wantTeam);
+                    Ui.Info(wantTeam
+                        ? "Оркестр включён: ведущий агент собирает команду субагентов. Работает в этом чате, пока не выключите: /team off"
+                        : "Оркестр выключен: субагенты больше не запускаются, работает один агент.");
                     break;
                 case "/update":
                     if (await Updater.CheckAsync(server) is { } found)

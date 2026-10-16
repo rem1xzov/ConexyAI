@@ -12,6 +12,15 @@ public sealed class ChatStore
 
     public Dictionary<Guid, DateTime> LastUsed { get; set; } = new();
 
+    /// <summary>Чаты, в которых включён оркестр агентов: он работает, пока пользователь не выключит его сам.</summary>
+    public HashSet<Guid> Team { get; set; } = new();
+
+    public void SetTeam(Guid chatId, bool on)
+    {
+        if (on ? Team.Add(chatId) : Team.Remove(chatId))
+            Save();
+    }
+
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI", "chats.json");
 

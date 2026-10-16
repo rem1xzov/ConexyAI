@@ -47,6 +47,9 @@ public static partial class Attachments
             return $"Можно прикрепить не больше {MaxFiles} файлов.";
 
         var info = new FileInfo(path);
+        // Тот же файл мог прийти дважды (наш Ctrl+V и вставка пути самим терминалом) — не дублируем.
+        if (Pending.Any(p => p.FileName == info.Name && p.Bytes.Length == info.Length))
+            return null;
         if (info.Length > MaxFileBytes)
             return $"Файл «{info.Name}» больше {MaxFileBytes / 1024 / 1024} МБ.";
         if (TotalBytes + info.Length > MaxTotalBytes)
@@ -113,6 +116,8 @@ public static partial class Attachments
 
         text = QuotedPath().Replace(text, m => TryAttach(m.Groups[1].Value) ? string.Empty : m.Value);
         text = AtPath().Replace(text, m => TryAttach(m.Groups[1].Value.Trim('"'), anyPath: true) ? string.Empty : m.Value);
+        // Терминал вставляет несколько скопированных файлов через пробел без кавычек.
+        text = BarePath().Replace(text, m => TryAttach(m.Groups[1].Value) ? string.Empty : m.Value);
 
         var whole = text.Trim();
         if (whole.Length > 0 && whole.IndexOfAny(Path.GetInvalidPathChars()) < 0 && TryAttach(whole))
@@ -228,4 +233,7 @@ public static partial class Attachments
 
     [GeneratedRegex("(?:^|\\s)@(\"[^\"]+\"|\\S+)")]
     private static partial Regex AtPath();
+
+    [GeneratedRegex("(?<![\\w\"])([A-Za-z]:\\\\[^\\s\"]+\\.[A-Za-z0-9]{1,8})")]
+    private static partial Regex BarePath();
 }

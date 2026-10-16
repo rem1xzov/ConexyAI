@@ -15,6 +15,9 @@ public sealed class AgentSession : IAsyncDisposable
     private readonly Guid _chatId;
     private readonly HubConnection _hub;
 
+    // ORCHESTRA: сервер сообщает (событием ToolAgent перед ExecuteTool), какому субагенту принадлежит вызов.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, (string Id, string Role)> _callAgents = new();
+
     private TaskCompletionSource<string?>? _turn;
     private CancellationTokenSource? _turnCts;
     private bool _streamedAnything;
@@ -38,6 +41,11 @@ public sealed class AgentSession : IAsyncDisposable
         // Обработчик события исполняется в цикле приёма SignalR: пока он ждёт долгую команду (npm install,
         // сборка, подтверждение человеком), клиент не читает ping сервера и через 30 с рвёт соединение —
         // это и было «bash отваливается». Поэтому инструмент запускаем в фоне и сразу освобождаем цикл.
+        _hub.On<Guid, string, string>("ToolAgent", (callId, agentId, role) =>
+        {
+            _callAgents[callId] = (agentId, role);
+            return Task.CompletedTask;
+        });
         _hub.On<Guid, Guid, string, string>("ExecuteTool", (callId, taskId, tool, args) =>
         {
             _ = Task.Run(() => OnExecuteToolAsync(callId, taskId, tool, args));
@@ -107,6 +115,7 @@ public sealed class AgentSession : IAsyncDisposable
         {
             _turnCts.Cancel();
             Ui.Idle();
+            Ui.TeamEnd();
             Ui.FlushText();
             Console.WriteLine();
         }
@@ -208,6 +217,9 @@ public sealed class AgentSession : IAsyncDisposable
 
     private async Task OnExecuteToolAsync(Guid callId, Guid taskId, string tool, string argumentsJson)
     {
+        (string Id, string Role)? agent = _callAgents.TryRemove(callId, out var a) ? a : null;
+        Ui.CurrentAgent.Value = agent;
+
         ToolResult result;
         try
         {
@@ -218,12 +230,22 @@ public sealed class AgentSession : IAsyncDisposable
             result = ToolResult.Fail("Внутренняя ошибка клиента: " + ex.Message);
         }
 
-        Ui.Idle();
-        Ui.ShowToolResult(result.Output.StartsWith("IMAGE_BASE64:", StringComparison.Ordinal)
+        var shown = result.Output.StartsWith("IMAGE_BASE64:", StringComparison.Ordinal)
             ? ToolResult.Ok($"скриншот снят ({result.Output.Length * 3 / 4 / 1024} КБ), отправлен агенту")
-            : result);
-        _needBullet = true;
-        Ui.Busy();
+            : result;
+        if (agent is { } worker)
+        {
+            // Итог субагента — в его карточку на панели команды.
+            Ui.AgentToolResult(worker.Id, worker.Role, shown);
+            Ui.Busy();
+        }
+        else
+        {
+            Ui.Idle();
+            Ui.ShowToolResult(shown);
+            _needBullet = true;
+            Ui.Busy();
+        }
 
         // Результат не должен теряться при кратком разрыве: ждём переподключения и повторяем.
         for (var attempt = 0; ; attempt++)
