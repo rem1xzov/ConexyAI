@@ -8,6 +8,10 @@ namespace ConexyAI.Desktop.Tools;
 public interface ICommandApprover
 {
     Task<bool> ApproveAsync(string command, string workingDirectory, CancellationToken ct);
+
+    /// <summary>Подтверждение с заголовком («Чтение вне проекта», «Установка» …) для инструментов ПК.</summary>
+    Task<bool> ApproveAsync(string title, string details, string workingDirectory, CancellationToken ct) =>
+        ApproveAsync(details, workingDirectory, ct);
 }
 
 /// <summary>Правила для команд: что запрещено безусловно и что безопасно выполнять без вопроса.</summary>
@@ -88,23 +92,51 @@ public sealed partial class ShellTool
     {
         var command = args.Required("command", tool);
         var timeout = Math.Clamp(args.Int("timeout_seconds") ?? DefaultTimeoutSeconds, 1, MaxTimeoutSeconds);
-        return await ExecuteAsync(command, timeout, requireApproval: true, ct);
+        var result = await ExecuteAsync(command, timeout, requireApproval: true, ct, useCmd: tool == "cmd_exec");
+        // Если сама оболочка не запустилась — подсказываем модели обходной путь.
+        if (result.IsError && result.Output.StartsWith("Не удалось запустить команду") && tool != "cmd_exec")
+            return ToolResult.Fail(result.Output + "\nОбход: выполни ту же команду через cmd_exec, а для файлов используй file_read/grep/glob/apply_patch.");
+        return result;
+    }
+
+    /// <summary>Команда, уже подтверждённая вызывающим инструментом (установка программ).</summary>
+    public Task<ToolResult> RunApprovedAsync(string command, int timeoutSeconds, CancellationToken ct) =>
+        ExecuteAsync(command, timeoutSeconds, requireApproval: false, ct, skipPolicy: false);
+
+    /// <summary>
+    /// Оболочка для команды. PATH берётся из реестра заново, чтобы только что установленные node/python/docker
+    /// были видны без перезапуска клиента.
+    /// </summary>
+    public static ProcessStartInfo CreateShell(string command, bool useCmd, bool wrapExitCode = true)
+    {
+        var psi = BuildStartInfo(command, useCmd, wrapExitCode);
+        if (OperatingSystem.IsWindows())
+        {
+            var machine = Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine) ?? string.Empty;
+            var user = Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User) ?? string.Empty;
+            var current = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            var merged = string.Join(';', $"{machine};{user};{current}".Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase));
+            psi.Environment["PATH"] = merged;
+        }
+        return psi;
     }
 
     /// <summary>Команда, собранная самим клиентом (тесты/диагностика) — без вопроса.</summary>
     public Task<ToolResult> RunTrustedAsync(string command, int timeoutSeconds, CancellationToken ct) =>
         ExecuteAsync(command, timeoutSeconds, requireApproval: false, ct);
 
-    private async Task<ToolResult> ExecuteAsync(string command, int timeoutSeconds, bool requireApproval, CancellationToken ct)
+    private async Task<ToolResult> ExecuteAsync(
+        string command, int timeoutSeconds, bool requireApproval, CancellationToken ct, bool useCmd = false, bool skipPolicy = false)
     {
-        if (CommandPolicy.ForbiddenReason(command) is { } reason)
+        if (!skipPolicy && CommandPolicy.ForbiddenReason(command) is { } reason)
             return ToolResult.Fail(reason);
 
         if (requireApproval && !CommandPolicy.IsReadOnly(command)
-            && !await _approver.ApproveAsync(command, _guard.Root, ct))
+            && !await _approver.ApproveAsync(useCmd ? "cmd" : "Bash", command, _guard.Root, ct))
             return ToolResult.Fail("Пользователь отклонил выполнение команды. Не повторяй её; предложи другой путь или спроси, что делать.");
 
-        var psi = BuildStartInfo(command);
+        var psi = CreateShell(command, useCmd);
         psi.WorkingDirectory = _guard.Root;
         psi.RedirectStandardOutput = true;
         psi.RedirectStandardError = true;
@@ -186,10 +218,27 @@ public sealed partial class ShellTool
         return new ToolResult($"{text}\nExit code: {code}".TrimStart(), code != 0);
     }
 
-    private static ProcessStartInfo BuildStartInfo(string command)
+    private static ProcessStartInfo BuildStartInfo(string command, bool useCmd, bool wrapExitCode)
     {
+        if (OperatingSystem.IsWindows() && useCmd)
+        {
+            var cmd = new ProcessStartInfo("cmd.exe");
+            cmd.ArgumentList.Add("/d");
+            cmd.ArgumentList.Add("/s");
+            cmd.ArgumentList.Add("/c");
+            cmd.ArgumentList.Add("chcp 65001 >nul & " + command);
+            return cmd;
+        }
+
         if (OperatingSystem.IsWindows())
         {
+            if (!wrapExitCode)
+            {
+                var bg = new ProcessStartInfo("powershell.exe");
+                foreach (var a in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command })
+                    bg.ArgumentList.Add(a);
+                return bg;
+            }
             var psi = new ProcessStartInfo("powershell.exe");
             psi.ArgumentList.Add("-NoLogo");
             psi.ArgumentList.Add("-NoProfile");

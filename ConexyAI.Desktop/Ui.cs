@@ -464,6 +464,17 @@ public static class Ui
             "bash" or "terminal_exec" => "Bash",
             "run_tests" => "Tests",
             "get_diagnostics" => "Diagnostics",
+            "cmd_exec" => "Cmd",
+            "bg_start" => "Start",
+            "bg_logs" => "Logs",
+            "bg_stop" => "Stop",
+            "http_request" => "HTTP",
+            "page_screenshot" => "Screenshot",
+            "pc_list_dir" => "PC List",
+            "pc_read_file" => "PC Read",
+            "pc_copy_to_project" => "Copy",
+            "download_file" => "Download",
+            "install_software" => "Install",
             "web_search" => "Web Search",
             "fetch_web_page" => "Fetch",
             "search_user_chats" => "Chats",
@@ -496,13 +507,13 @@ public static class Ui
     // ── Подтверждение команды ───────────────────────────────────────────────
 
     /// <summary>Меню «Да / Да, всегда / Нет» со стрелками. Возвращает 0, 1 или 2; -1 — отмена.</summary>
-    public static async Task<int> ConfirmAsync(string command, string folder, CancellationToken ct)
+    public static async Task<int> ConfirmAsync(string title, string command, string folder, CancellationToken ct)
     {
         Idle();
         FlushText();
         var width = Width();
         Console.WriteLine();
-        Console.WriteLine(C(Yellow, "╭─ Bash ") + C(Yellow, new string('─', Math.Max(0, width - 9))));
+        Console.WriteLine(C(Yellow, $"╭─ {title} ") + C(Yellow, new string('─', Math.Max(0, width - 4 - title.Length))));
         foreach (var line in command.Split('\n'))
             Console.WriteLine(C(Yellow, "│ ") + line.TrimEnd('\r'));
         Console.WriteLine(C(Yellow, "╰" + new string('─', width - 1)));

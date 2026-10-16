@@ -9,6 +9,7 @@ public sealed class ToolRunner
     private readonly EditorTool _editor;
     private readonly PatchApplier _patch;
     private readonly ShellTool _shell;
+    private readonly PcTools _pc;
     private readonly Action<string> _log;
 
     public ToolRunner(string workspaceRoot, ICommandApprover approver, Action<string> log,
@@ -20,6 +21,7 @@ public sealed class ToolRunner
         _editor = new EditorTool(_guard, _files);
         _patch = new PatchApplier(_guard);
         _shell = new ShellTool(_guard, approver, gitHubToken);
+        _pc = new PcTools(_guard, approver, _shell);
         _log = log;
     }
 
@@ -42,7 +44,17 @@ public sealed class ToolRunner
                 "glob" => _search.Glob(args),
                 "str_replace_editor" => _editor.Run(args),
                 "apply_patch" => _patch.Apply(args.Required("patch", "apply_patch"), args.Str("path")),
-                "bash" or "terminal_exec" => await _shell.RunAsync(args, tool, ct),
+                "bash" or "terminal_exec" or "cmd_exec" => await _shell.RunAsync(args, tool, ct),
+                "bg_start" => await _pc.BgStartAsync(args, ct),
+                "bg_logs" => _pc.BgLogs(args),
+                "bg_stop" => _pc.BgStop(args),
+                "http_request" => await _pc.HttpAsync(args, ct),
+                "page_screenshot" => await _pc.ScreenshotAsync(args, ct),
+                "pc_list_dir" => await _pc.ListDirAsync(args, ct),
+                "pc_read_file" => await _pc.ReadFileAsync(args, ct),
+                "pc_copy_to_project" => await _pc.CopyToProjectAsync(args, ct),
+                "download_file" => await _pc.DownloadAsync(args, ct),
+                "install_software" => await _pc.InstallAsync(args, ct),
                 "run_tests" => await ProjectCommands.RunAsync(_guard.Root, _shell, args, test: true, ct),
                 "get_diagnostics" => await ProjectCommands.RunAsync(_guard.Root, _shell, args, test: false, ct),
                 _ => ToolResult.Fail($"Инструмент '{tool}' не поддерживается десктопным клиентом."),
@@ -60,11 +72,16 @@ public sealed class ToolRunner
         {
             return ToolResult.Fail("Ошибка файловой системы: " + ex.Message);
         }
+        catch (HttpRequestException ex)
+        {
+            return ToolResult.Fail("Сетевая ошибка: " + ex.Message);
+        }
     }
 
     private static string Describe(string tool, ToolArgs args)
     {
-        var target = args.Str("path") ?? args.Str("command") ?? args.Str("pattern") ?? string.Empty;
+        var target = args.Str("path") ?? args.Str("command") ?? args.Str("url") ?? args.Str("source")
+                     ?? args.Str("package") ?? args.Str("id") ?? args.Str("pattern") ?? string.Empty;
         if (target.Length > 80)
             target = target[..80] + "…";
         return $"{tool} {target}".TrimEnd();

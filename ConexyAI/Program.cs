@@ -41,6 +41,9 @@ builder.Services.AddSignalR(options =>
     options.KeepAliveInterval = TimeSpan.FromSeconds(15);
     // Must stay >= 2x KeepAliveInterval; 120s tolerates background-tab timer throttling.
     options.ClientTimeoutInterval = TimeSpan.FromSeconds(120);
+    // DESKTOP_AGENT: десктоп возвращает результаты инструментов (вывод bash до 30 тыс. символов, файлы, скриншоты)
+    // через хаб. С дефолтным лимитом 32 КБ любой большой вывод рвал соединение — «bash отваливается».
+    options.MaximumReceiveMessageSize = 16 * 1024 * 1024;
 });
 // STREAM_SCOPE_TAG: добавлено 2026-09-24 — ревью H6: каждое событие группы task_{id} несёт {id}
 // последним аргументом, чтобы клиент раскладывал поток по своим ходам (см. ScopeTaggingHubContext).

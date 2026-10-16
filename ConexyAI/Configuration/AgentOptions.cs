@@ -23,7 +23,8 @@ public class AgentOptions
     /// </summary>
     /// WORK_STYLE: 2026-10-15 — снова поднято до 50 для всех (веб и десктоп): 15 шагов не хватало даже на чтение
     /// проекта с правкой. Расход по-прежнему сторожит токен-брейкер, страж цикла и бюджет ошибок инструментов.
-    public int MaxIterations { get; set; } = 50;
+    /// 2026-10-16 — 100: агент на ПК поднимает сервисы, ходит в браузер и читает логи, 50 шагов не хватало.
+    public int MaxIterations { get; set; } = 100;
 
     /// <summary>
     /// AUDITOR_BUDGET: добавлено 2026-09-23. Hard upper bound, in seconds, for one Maker-Checker

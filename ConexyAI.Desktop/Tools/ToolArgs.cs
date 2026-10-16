@@ -46,6 +46,15 @@ public sealed class ToolArgs
             ? v.GetBoolean()
             : null;
 
+    public Dictionary<string, string> Dict(string name)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (_root.ValueKind == JsonValueKind.Object && _root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Object)
+            foreach (var p in v.EnumerateObject())
+                result[p.Name] = p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() ?? string.Empty : p.Value.GetRawText();
+        return result;
+    }
+
     public int[]? IntArray(string name)
     {
         if (_root.ValueKind != JsonValueKind.Object || !_root.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Array)

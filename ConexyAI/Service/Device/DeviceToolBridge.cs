@@ -40,6 +40,11 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
 
     private const int MaxOutputChars = 200_000;
 
+    /// <summary>Скриншот приходит base64-строкой с этим префиксом — его нельзя обрезать до обычного лимита.</summary>
+    public const string ImagePrefix = "IMAGE_BASE64:";
+
+    private const int MaxImageChars = 12_000_000;
+
     private sealed record Device(string ConnectionId, string Name, string Os, string Workspace);
 
     private sealed record Pending(string ConnectionId, TaskCompletionSource<DeviceToolOutcome> Completion);
@@ -120,7 +125,12 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
         if (!_pending.TryGetValue(callId, out var pending) || pending.ConnectionId != connectionId)
             return false;
 
-        if (output.Length > MaxOutputChars)
+        if (output.StartsWith(ImagePrefix, StringComparison.Ordinal))
+        {
+            if (output.Length > MaxImageChars)
+                output = "Скриншот слишком большой. Уменьши размер окна (width/height).";
+        }
+        else if (output.Length > MaxOutputChars)
             output = output[..MaxOutputChars] + "\n[... вывод обрезан сервером ...]";
 
         return pending.Completion.TrySetResult(new DeviceToolOutcome(output, isError));

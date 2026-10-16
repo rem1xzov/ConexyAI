@@ -61,6 +61,36 @@ public static class SelfTest
             var approved = new ToolRunner(root, new FixedApprover(true), _ => { });
             await Check("shell approved", approved, "bash", System.Text.Json.JsonSerializer.Serialize(new { command = echo }), r => !r.IsError && r.Output.Contains("hi"));
             await Check("shell exit code", approved, "bash", System.Text.Json.JsonSerializer.Serialize(new { command = "exit 3" }), r => r.IsError && r.Output.Contains("Exit code: 3"));
+            await Check("cmd fallback", approved, "cmd_exec", """{"command":"echo hi"}""", r => !r.IsError && r.Output.Contains("hi"));
+
+            var outside = Path.Combine(Path.GetTempPath(), "conexy-outside-" + Guid.NewGuid().ToString("N") + ".log");
+            File.WriteAllText(outside, "line1\nline2\nERROR boom\n");
+            try
+            {
+                var outsideJson = System.Text.Json.JsonSerializer.Serialize(new { path = outside, tail_lines = 2 });
+                await Check("pc read declined", runner, "pc_read_file", outsideJson, r => r.IsError && r.Output.Contains("отклонил"));
+                await Check("pc read approved", approved, "pc_read_file", outsideJson, r => !r.IsError && r.Output.Contains("ERROR boom") && !r.Output.Contains("line1"));
+                await Check("pc copy to project", approved, "pc_copy_to_project",
+                    System.Text.Json.JsonSerializer.Serialize(new { source = outside, destination = "logs/app.log" }),
+                    r => !r.IsError && File.Exists(Path.Combine(root, "logs", "app.log")));
+                await Check("pc write outside denied", approved, "file_write",
+                    System.Text.Json.JsonSerializer.Serialize(new { path = outside, content = "x" }), r => r.IsError);
+            }
+            finally
+            {
+                File.Delete(outside);
+            }
+
+            await Check("http to closed port", approved, "http_request", """{"url":"http://127.0.0.1:9/"}""", r => r.IsError);
+            var sleep = OperatingSystem.IsWindows() ? "Write-Output started; Start-Sleep 30" : "echo started; sleep 30";
+            await Check("bg start", approved, "bg_start", System.Text.Json.JsonSerializer.Serialize(new { command = sleep, wait_seconds = 3 }),
+                r => !r.IsError && r.Output.Contains("bg1") && r.Output.Contains("started"));
+            await Check("bg logs", approved, "bg_logs", """{"id":"bg1"}""", r => !r.IsError && r.Output.Contains("работает"));
+            await Check("bg stop", approved, "bg_stop", """{"id":"bg1"}""", r => !r.IsError && r.Output.Contains("остановлен"));
+
+            File.WriteAllText(Path.Combine(root, "page.html"), "<html><body style='background:#c00'><h1>Hello</h1></body></html>");
+            await Check("page screenshot", approved, "page_screenshot", """{"url":"page.html","width":400,"height":300}""",
+                r => (!r.IsError && r.Output.StartsWith("IMAGE_BASE64:image/png:")) || r.Output.Contains("не найден Edge"));
         }
         finally
         {

@@ -33,8 +33,16 @@ public sealed class AgentSession : IAsyncDisposable
             .WithUrl($"{server.BaseUrl}/hubs/conexy", options => options.AccessTokenProvider = async () => await server.GetTokenAsync())
             .WithAutomaticReconnect()
             .Build();
+        _hub.ServerTimeout = TimeSpan.FromSeconds(120);
 
-        _hub.On<Guid, Guid, string, string>("ExecuteTool", OnExecuteToolAsync);
+        // Обработчик события исполняется в цикле приёма SignalR: пока он ждёт долгую команду (npm install,
+        // сборка, подтверждение человеком), клиент не читает ping сервера и через 30 с рвёт соединение —
+        // это и было «bash отваливается». Поэтому инструмент запускаем в фоне и сразу освобождаем цикл.
+        _hub.On<Guid, Guid, string, string>("ExecuteTool", (callId, taskId, tool, args) =>
+        {
+            _ = Task.Run(() => OnExecuteToolAsync(callId, taskId, tool, args));
+            return Task.CompletedTask;
+        });
         // Последний аргумент событий группы — id группы (scopeId); он нам не нужен.
         _hub.On<string, string?>("OnContentToken", (delta, _) =>
         {
@@ -211,11 +219,30 @@ public sealed class AgentSession : IAsyncDisposable
         }
 
         Ui.Idle();
-        Ui.ShowToolResult(result);
+        Ui.ShowToolResult(result.Output.StartsWith("IMAGE_BASE64:", StringComparison.Ordinal)
+            ? ToolResult.Ok($"скриншот снят ({result.Output.Length * 3 / 4 / 1024} КБ), отправлен агенту")
+            : result);
         _needBullet = true;
         Ui.Busy();
 
-        await _hub.InvokeAsync("ToolResult", callId, result.Output, result.IsError);
+        // Результат не должен теряться при кратком разрыве: ждём переподключения и повторяем.
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                await _hub.InvokeAsync("ToolResult", callId, result.Output, result.IsError);
+                return;
+            }
+            catch (Exception) when (attempt < 10)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2));
+            }
+            catch (Exception ex)
+            {
+                Ui.Error("Не удалось отправить результат инструмента: " + ex.Message);
+                return;
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()

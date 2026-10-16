@@ -70,6 +70,77 @@ public class ConexyAgentRunner : IConexyAgentRunner
     {
         "file_read", "file_write", "file_patch", "str_replace_editor", "apply_patch",
         "workspace_list_files", "grep", "glob", "bash", "terminal_exec", "run_tests", "get_diagnostics",
+        "cmd_exec", "bg_start", "bg_logs", "bg_stop", "http_request", "page_screenshot",
+        "pc_list_dir", "pc_read_file", "pc_copy_to_project", "download_file", "install_software",
+    };
+
+    // DESKTOP_AGENT: инструменты, которые есть ТОЛЬКО на десктопе (в каталоге/профиле сервера их нет).
+    private static readonly HashSet<string> DesktopOnlyTools = new(StringComparer.Ordinal)
+    {
+        "cmd_exec", "bg_start", "bg_logs", "bg_stop", "http_request", "page_screenshot",
+        "pc_list_dir", "pc_read_file", "pc_copy_to_project", "download_file", "install_software",
+    };
+
+    private static readonly IReadOnlyList<object> DesktopToolSchemas = new List<object>
+    {
+        Function("cmd_exec", "Запасная оболочка: выполняет команду через cmd.exe (Windows) или /bin/sh. Используй, если bash (PowerShell) не запускается или ломает команду. Требует подтверждения.",
+            new { type = "object", properties = new {
+                command = new { type = "string" },
+                timeout_seconds = new { type = "integer", description = "По умолчанию 120, макс. 900" }
+            }, required = new[] { "command" } }),
+        Function("bg_start", "Запускает долгоживущий процесс в фоне (dev-сервер, dotnet run, npm run dev, docker compose up, БД). Возвращает id и первые строки вывода. Требует подтверждения.",
+            new { type = "object", properties = new {
+                command = new { type = "string" },
+                cwd = new { type = "string", description = "Папка относительно проекта (необязательно)" },
+                name = new { type = "string", description = "Короткое имя, например 'backend'" },
+                wait_seconds = new { type = "integer", description = "Сколько ждать вывода перед ответом (по умолчанию 8, макс. 60)" }
+            }, required = new[] { "command" } }),
+        Function("bg_logs", "Последние строки вывода фонового процесса и его статус. Без id — список всех фоновых процессов.",
+            new { type = "object", properties = new {
+                id = new { type = "string" },
+                lines = new { type = "integer", description = "Сколько строк (по умолчанию 80)" }
+            } }),
+        Function("bg_stop", "Останавливает фоновый процесс (со всем деревом дочерних).",
+            new { type = "object", properties = new { id = new { type = "string" } }, required = new[] { "id" } }),
+        Function("http_request", "HTTP-запрос с ПК пользователя: localhost-сервисы (проверка API, health-check) или любой сайт. Возвращает статус, заголовки и тело (до 20 тыс. символов).",
+            new { type = "object", properties = new {
+                url = new { type = "string" },
+                method = new { type = "string", description = "GET (по умолчанию), POST, PUT, PATCH, DELETE" },
+                body = new { type = "string" },
+                headers = new { type = "object", description = "Дополнительные заголовки { имя: значение }" }
+            }, required = new[] { "url" } }),
+        Function("page_screenshot", "Открывает страницу в браузере ПК (Edge/Chrome, без окна) и прикладывает скриншот для визуальной проверки: http://localhost:<порт>, любой сайт или html-файл проекта.",
+            new { type = "object", properties = new {
+                url = new { type = "string" },
+                width = new { type = "integer", description = "По умолчанию 1280" },
+                height = new { type = "integer", description = "По умолчанию 800" }
+            }, required = new[] { "url" } }),
+        Function("pc_list_dir", "Содержимое любой папки на ПК (абсолютный путь, например C:\\Users\\me\\Downloads). Только чтение, с подтверждением пользователя.",
+            new { type = "object", properties = new {
+                path = new { type = "string" },
+                pattern = new { type = "string", description = "Фильтр, например *.log" }
+            }, required = new[] { "path" } }),
+        Function("pc_read_file", "Читает текстовый файл в любом месте ПК (логи, конфиги). Только чтение, с подтверждением. Для больших логов используй tail_lines.",
+            new { type = "object", properties = new {
+                path = new { type = "string" },
+                tail_lines = new { type = "integer", description = "Только последние N строк" },
+                offset = new { type = "integer", description = "С какой строки читать (1-based)" },
+                limit = new { type = "integer", description = "Сколько строк (по умолчанию 2000)" }
+            }, required = new[] { "path" } }),
+        Function("pc_copy_to_project", "Копирует файл или папку с ПК внутрь проекта. Оригинал не трогается. С подтверждением.",
+            new { type = "object", properties = new {
+                source = new { type = "string", description = "Абсолютный путь на ПК" },
+                destination = new { type = "string", description = "Путь внутри проекта" }
+            }, required = new[] { "source", "destination" } }),
+        Function("download_file", "Скачивает файл по URL в проект (или в папку Загрузки, если destination не задан). С подтверждением. Запускать скачанное — отдельной командой и только с согласия пользователя.",
+            new { type = "object", properties = new {
+                url = new { type = "string" },
+                destination = new { type = "string", description = "Путь внутри проекта (необязательно)" }
+            }, required = new[] { "url" } }),
+        Function("install_software", "Устанавливает программу на ПК через winget (Windows): Python, Node.js, Docker Desktop, Git, PostgreSQL и т.п. Только с подтверждения пользователя. Перед этим проверь, что программы ещё нет.",
+            new { type = "object", properties = new {
+                package = new { type = "string", description = "Id пакета winget: Python.Python.3.12, OpenJS.NodeJS.LTS, Docker.DockerDesktop, Git.Git, PostgreSQL.PostgreSQL.16" }
+            }, required = new[] { "package" } }),
     };
 
     // DESKTOP_AGENT: инструменты, живущие в серверной песочнице: на ПК они бы работали с пустой
@@ -1146,7 +1217,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                                     ? await HandleViewImageAsync(taskId, chatId, toolCall, batchImages, ct)
                                     : toolName == "browser_screenshot"
                                         ? await HandleBrowserScreenshotAsync(chatId, toolCall, batchImages, group, ct)
-                                        : await DispatchToolAsync(taskId, chatId, toolCall, ct);
+                                        : toolName == "page_screenshot"
+                                            ? await HandleDeviceScreenshotAsync(taskId, toolCall, batchImages, group, ct)
+                                            : await DispatchToolAsync(taskId, chatId, toolCall, ct);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -1369,6 +1442,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     /// <summary>A tool this run may call: the mode's profile, and never the chat search in incognito.</summary>
     private bool IsToolAllowed(string tool) =>
+        // DESKTOP_AGENT: инструменты ПК — только в десктопном режиме и только Coder (и его помощникам).
+        DesktopOnlyTools.Contains(tool)
+            ? _job.UseDevice && _profile.Mode is "coder" or "worker"
+            :
         // MCP: dynamic tools are allowed for the agent modes once an operator configured the servers.
         (tool.StartsWith("mcp__", StringComparison.Ordinal)
             ? _profile.Mode is "coder" or "cowork" or "worker"
@@ -1512,6 +1589,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 && (tool.Name is not ("start_service" or "stop_service") || _previewService is not null))
             .Select(tool => tool.Schema)
             .ToList();
+
+        if (_job.UseDevice && _profile.Mode is "coder" or "worker")
+            tools.AddRange(DesktopToolSchemas);
 
         // MCP: подключённые удалённые серверы добавляют свои инструменты как mcp__<server>__<tool>.
         // Только для агентских режимов (Coder/Cowork) и только пока список не раздут.
@@ -2111,7 +2191,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                                 ? await HandleViewImageAsync(taskId, chatId, call, batchImages, ct)
                                 : toolName == "browser_screenshot"
                                     ? await HandleBrowserScreenshotAsync(chatId, call, batchImages, group, ct)
-                                    : await DispatchToolAsync(taskId, chatId, call, ct);
+                                    : toolName == "page_screenshot"
+                                        ? await HandleDeviceScreenshotAsync(taskId, call, batchImages, group, ct)
+                                        : await DispatchToolAsync(taskId, chatId, call, ct);
                     }
                     catch (OperationCanceledException) when (ct.IsCancellationRequested)
                     {
@@ -3302,6 +3384,31 @@ public class ConexyAgentRunner : IConexyAgentRunner
             new List<TaskAttachment> { new("screenshot.jpg", base64, "image/jpeg") }));
 
         return new ConexyToolResult(toolCall.Id, "Screenshot captured and attached for visual analysis.", false);
+    }
+
+    // DESKTOP_AGENT: скриншот снимает браузер НА ПК (там виден localhost пользователя), а картинка уходит
+    // в контекст модели так же, как серверный take_screenshot.
+    private async Task<ConexyToolResult> HandleDeviceScreenshotAsync(
+        Guid taskId, LlmToolCall toolCall, List<ChatMessage> batchImages, IClientProxy group, CancellationToken ct)
+    {
+        if (!_job.UseDevice || _deviceBridge is null)
+            return new ConexyToolResult(toolCall.Id, "page_screenshot доступен только в десктопном режиме.", true);
+
+        var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, "page_screenshot", toolCall.Function.Arguments, ct);
+        if (outcome.IsError || !outcome.Output.StartsWith(DeviceToolBridge.ImagePrefix, StringComparison.Ordinal))
+            return new ConexyToolResult(toolCall.Id, outcome.Output, true);
+
+        // Формат: IMAGE_BASE64:<mime>:<base64>
+        var payload = outcome.Output[DeviceToolBridge.ImagePrefix.Length..];
+        var colon = payload.IndexOf(':');
+        var mime = colon > 0 ? payload[..colon] : "image/png";
+        var base64 = colon > 0 ? payload[(colon + 1)..] : payload;
+
+        await group.SendAsync("OnScreenshot", base64, ct);
+        batchImages.Add(ChatMessageFactory.User(
+            "Screenshot of the page rendered in the user's browser. Check that it works and visually audit the layout.",
+            new List<TaskAttachment> { new(mime == "image/png" ? "page.png" : "page.jpg", base64, mime) }));
+        return new ConexyToolResult(toolCall.Id, "Скриншот снят и приложен для визуальной проверки.", false);
     }
 
     // BROWSER_AUTOMATION: снимок ТЕКУЩЕЙ открытой страницы (в отличие от take_screenshot, который сам

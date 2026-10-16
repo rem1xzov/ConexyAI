@@ -18,7 +18,10 @@ public sealed class ConsoleApprover : ICommandApprover
         set => _auto = value;
     }
 
-    public async Task<bool> ApproveAsync(string command, string workingDirectory, CancellationToken ct)
+    public Task<bool> ApproveAsync(string command, string workingDirectory, CancellationToken ct) =>
+        ApproveAsync("Bash", command, workingDirectory, ct);
+
+    public async Task<bool> ApproveAsync(string title, string command, string workingDirectory, CancellationToken ct)
     {
         if (_auto)
             return true;
@@ -32,7 +35,7 @@ public sealed class ConsoleApprover : ICommandApprover
             if (!Ui.Ansi)
                 return await AskPlainAsync(command, workingDirectory, ct);
 
-            var choice = await Ui.ConfirmAsync(command, workingDirectory, ct);
+            var choice = await Ui.ConfirmAsync(title, command, workingDirectory, ct);
             if (choice == 1)
                 _auto = true;
             var allowed = choice is 0 or 1;
