@@ -448,7 +448,9 @@ export default function App() {
 
   // ORCHESTRA: добавлено 2026-09-28 — «Оркестр агентов» есть только на ProMax (админ — как ProMax).
   // Признак берём из снимка тарифа, который приходит с сервера, чтобы не дублировать правила тарифов.
-  const orchestraAvailable = usage?.tier === 'ProMax' || usage?.tier === 'Admin';
+  const orchestraAvailable = ['promax', 'ultra', 'admin'].includes(
+    (usage?.tier ?? '').toLowerCase(),
+  );
 
   function handleOpenSupport() {
     setSupportOpen(true);
