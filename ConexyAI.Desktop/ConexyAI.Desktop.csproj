@@ -8,7 +8,7 @@
         <AssemblyName>conexy</AssemblyName>
         <RootNamespace>ConexyAI.Desktop</RootNamespace>
         <InvariantGlobalization>true</InvariantGlobalization>
-        <Version>0.5.1</Version>
+        <Version>0.6.0</Version>
         <ApplicationIcon>conexy.ico</ApplicationIcon>
         <Company>ConexyAI</Company>
         <Product>ConexyAI Desktop</Product>
