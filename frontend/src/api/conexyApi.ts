@@ -241,6 +241,37 @@ export async function sendSupportMessageWithFiles(
   return data;
 }
 
+// AGENT_SKILLS: добавлено 2026-10-18 — скиллы агента (SKILL.md), общие с десктопом.
+export interface AgentSkill {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  chars: number;
+  updatedAt: string;
+}
+
+export async function listSkills(): Promise<AgentSkill[]> {
+  const { data } = await http.get<AgentSkill[]>('/skills');
+  return data;
+}
+
+export async function uploadSkill(file: File): Promise<AgentSkill> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  const { data } = await http.post<AgentSkill>('/skills', form);
+  return data;
+}
+
+export async function deleteSkill(id: string): Promise<void> {
+  await http.delete(`/skills/${id}`);
+}
+
+export async function setSkillEnabled(id: string, enabled: boolean): Promise<AgentSkill> {
+  const { data } = await http.patch<AgentSkill>(`/skills/${id}`, { enabled });
+  return data;
+}
+
 /** Байты вложения с токеном (в <img src> заголовок Authorization не передать). */
 export async function getSupportAttachmentBlob(id: string): Promise<Blob> {
   const { data } = await http.get<Blob>(`/support/attachments/${id}`, { responseType: 'blob' });

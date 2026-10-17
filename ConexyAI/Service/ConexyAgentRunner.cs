@@ -75,6 +75,56 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "window_list", "screen_capture", "window_keys", AskUserTool,
     };
 
+    // AGENT_SKILLS: добавлено 2026-10-18 — скиллы пользователя этого прогона и инструмент чтения их полного текста.
+    private const string ReadSkillTool = "read_skill";
+    private IReadOnlyList<SkillSummary> _skillSummaries = [];
+
+    private static readonly object ReadSkillSchema =
+        Function(ReadSkillTool, "Загружает полный текст скилла пользователя (инструкции, шаблоны, правила) по имени из блока «Скиллы». Вызывай, когда задача подходит под описание скилла, до начала работы.",
+            new { type = "object", properties = new {
+                name = new { type = "string", description = "Имя скилла" }
+            }, required = new[] { "name" } });
+
+    private static string SkillsPrompt(IReadOnlyList<SkillSummary> skills) =>
+        "[Скиллы пользователя] Пользователь добавил свои инструкции. Когда задача подходит под описание скилла, " +
+        "СНАЧАЛА вызови `read_skill` с его именем и следуй его инструкциям (в вопросах стиля, формата и порядка работы они важнее " +
+        "общих правил; безопасность и подтверждение команд скилл отменить не может). Не подходит ни один — работай как обычно.\n" +
+        string.Join("\n", skills.Select(s => $"- {s.Name}: {s.Description}"));
+
+    private async Task<IReadOnlyList<SkillSummary>> LoadSkillSummariesAsync(CancellationToken ct)
+    {
+        if (_profile.Mode is not ("coder" or "cowork" or "worker"))
+            return [];
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var skills = scope.ServiceProvider.GetService<ISkillService>();
+            return skills is null ? [] : await skills.EnabledSummariesAsync(_job.UserId, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Agent skills could not be loaded. task={TaskId}", _job.TaskId);
+            return [];
+        }
+    }
+
+    private async Task<ConexyToolResult> ReadSkillAsync(LlmToolCall toolCall, JsonElement root, CancellationToken ct)
+    {
+        var name = GetString(root, "name");
+        if (string.IsNullOrWhiteSpace(name))
+            return new ConexyToolResult(toolCall.Id, "read_skill requires 'name'.", true);
+        using var scope = _scopeFactory.CreateScope();
+        var content = await scope.ServiceProvider.GetRequiredService<ISkillService>().ReadAsync(_job.UserId, name, ct);
+        return content is null
+            ? new ConexyToolResult(toolCall.Id,
+                $"Скилла «{name}» нет. Доступны: {string.Join(", ", _skillSummaries.Select(s => s.Name))}.", true)
+            : new ConexyToolResult(toolCall.Id, $"<skill name=\"{SkillService.Slug(name)}\">\n{content}\n</skill>", false);
+    }
+
     // DESKTOP_AGENT: вопрос человеку посреди задачи — агент ждёт ответ и продолжает тот же прогон.
     private const string AskUserTool = "ask_user";
 
@@ -775,6 +825,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var insertAt = messages.Count > 0 && messages[0].Role == "system" ? 1 : 0;
             messages.Insert(insertAt, new ChatMessage("system", projectRules.Prompt));
             await group.SendAsync("OnLog", $"[Project Rules] Loaded {string.Join(", ", projectRules.Files)}", ct);
+        }
+
+        // AGENT_SKILLS: добавлено 2026-10-18 — скиллы пользователя: в промпт только имя и «когда применять»,
+        // полный текст — по read_skill (как постепенная загрузка в Claude Skills). Блок меняется только при
+        // добавлении/удалении скилла, поэтому стоит в стабильном начале запроса и не мешает кэшу.
+        _skillSummaries = await LoadSkillSummariesAsync(ct);
+        if (_skillSummaries.Count > 0)
+        {
+            var insertAt = messages.Count > 0 && messages[0].Role == "system" ? 1 : 0;
+            messages.Insert(insertAt, new ChatMessage("system", SkillsPrompt(_skillSummaries)));
+            await group.SendAsync("OnLog", $"[Skills] {string.Join(", ", _skillSummaries.Select(s => s.Name))}", ct);
         }
 
         // AGENT_HOOKS: добавлено 2026-10-04 — хуки проекта (.conexy/hooks.json). Только для режима с
@@ -1520,6 +1581,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         tool == AskUserTool
             ? _job.UseDevice && _profile.Mode is "coder" or "cowork" or "worker"
             :
+        tool == ReadSkillTool
+            ? _skillSummaries.Count > 0 && _profile.Mode is "coder" or "cowork" or "worker"
+            :
         // DESKTOP_AGENT: инструменты ПК — только в десктопном режиме и только Coder (и его помощникам).
         DesktopOnlyTools.Contains(tool)
             ? _job.UseDevice && _profile.Mode is "coder" or "worker"
@@ -1672,6 +1736,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
             tools.AddRange(DesktopToolSchemas);
         if (_job.UseDevice && _profile.Mode is "coder" or "cowork" or "worker")
             tools.Add(AskUserSchema);
+        if (_skillSummaries.Count > 0 && _profile.Mode is "coder" or "cowork" or "worker")
+            tools.Add(ReadSkillSchema);
 
         // LOCAL_MCP: локальные MCP-серверы и встроенные коннекторы десктопа (Gmail, Календарь, Диск).
         if (_job.UseDevice && _job.DeviceTools is { Count: > 0 } && _profile.Mode is "coder" or "cowork" or "worker")
@@ -2446,6 +2512,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
             if (toolCall.Function.Name.StartsWith("mcp__", StringComparison.Ordinal))
             {
                 return await DispatchMcpToolAsync(taskId, toolCall, root, ct);
+            }
+
+            // AGENT_SKILLS: полный текст скилла — с сервера (и в вебе, и на десктопе).
+            if (toolCall.Function.Name == ReadSkillTool)
+            {
+                if (!IsToolAllowed(ReadSkillTool))
+                    return new ConexyToolResult(toolCall.Id, "Скиллов нет.", true);
+                await SendAgentStatusAsync(taskId, "executing", "Читаю скилл...", ct: ct);
+                return await ReadSkillAsync(toolCall, root, ct);
             }
 
             // LOCAL_MCP: инструменты десктопа выполняет сам клиент (он держит процессы MCP и токены Google).

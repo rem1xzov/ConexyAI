@@ -453,6 +453,8 @@ static void PrintHelp() => Console.WriteLine("""
       /mcp            локальные MCP-серверы (программы на ПК): /mcp catalog — готовые (Playwright,
                       Context7, Sentry, Supabase, Postgres, Notion, Figma), /mcp add <id> — установить из каталога,
                       /mcp add <имя> <команда ...> — свой, /mcp remove <имя>, /mcp reload, /mcp config
+      /skill          скиллы агента (SKILL.md, как в Claude): /skill add <файл или папка>, /skill remove <имя>,
+                      /skill on|off <имя>. Общие с сайтом; агент сам берёт нужный по описанию
       /plan [on|off]  режим плана: агент только изучает проект и предлагает план, вы одобряете — и он выполняет
       /rewind [N]     откатить файлы проекта к состоянию до последних ходов агента (правки файлов;
                       изменения от команд терминала не откатываются)
@@ -613,6 +615,9 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                     break;
                 case "/mail":
                     await MailCommandAsync(local, arg);
+                    break;
+                case "/skill" or "/skills":
+                    await SkillCommandAsync(server, root, arg);
                     break;
                 case "/rewind":
                     await RewindCommandAsync(tools, arg);
@@ -932,6 +937,110 @@ static async Task InstallFromCatalogAsync(LocalTools local, CatalogEntry entry)
         Ui.Info("  " + line);
     if (entry.Note is { } note)
         Ui.Info("  " + Ui.Muted(note));
+}
+
+// /skill: скиллы агента (SKILL.md). Хранятся на сервере — те же, что на сайте («+» → «Скиллы»).
+static async Task SkillCommandAsync(ServerClient server, string root, string arg)
+{
+    var parts = arg.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var command = parts.FirstOrDefault()?.ToLowerInvariant();
+    var rest = parts.Length > 1 ? parts[1].Trim().Trim('"', '\'') : string.Empty;
+    try
+    {
+        // «/skill <путь>» без слова add — тоже добавление (удобно перетащить файл в окно).
+        if (command is not (null or "list" or "add" or "remove" or "rm" or "delete" or "on" or "off" or "show"))
+        {
+            rest = arg.Trim().Trim('"', '\'');
+            command = "add";
+        }
+
+        switch (command)
+        {
+            case null or "list":
+            {
+                var skills = await server.GetSkillsAsync(CancellationToken.None);
+                Console.WriteLine(Ui.Bold("Скиллы агента") + Ui.Muted(" · общие с сайтом"));
+                if (skills.Count == 0)
+                    Ui.Info("  Пока нет. Добавить: /skill add <путь к SKILL.md или папке со скиллом> (можно перетащить файл в окно)");
+                foreach (var s in skills)
+                {
+                    var description = s.Description.Length > 90 ? s.Description[..90] + "…" : s.Description;
+                    Console.WriteLine($"  {(s.Enabled ? Ui.Green_("●") : Ui.Muted("○"))} {Ui.Bold(s.Name)} " + Ui.Muted("— " + description));
+                }
+                if (skills.Count > 0)
+                    Ui.Info("  " + Ui.Muted("Агент сам берёт нужный скилл по описанию. /skill off <имя> — выключить, /skill remove <имя> — удалить"));
+                break;
+            }
+            case "add":
+            {
+                if (rest.Length == 0)
+                {
+                    Ui.Error("Укажите файл: /skill add C:\\skills\\review\\SKILL.md (или папку, где лежит SKILL.md)");
+                    break;
+                }
+                var path = Path.IsPathRooted(rest) ? rest : Path.Combine(root, rest);
+                // Папка скилла в формате Claude: внутри SKILL.md.
+                if (Directory.Exists(path))
+                {
+                    var inner = Path.Combine(path, "SKILL.md");
+                    if (!File.Exists(inner))
+                    {
+                        Ui.Error($"В папке нет SKILL.md: {path}");
+                        break;
+                    }
+                    path = inner;
+                }
+                if (!File.Exists(path))
+                {
+                    Ui.Error($"Файл не найден: {path}");
+                    break;
+                }
+                if (new FileInfo(path).Length > 256 * 1024)
+                {
+                    Ui.Error("Файл скилла больше 256 КБ.");
+                    break;
+                }
+                // Для SKILL.md без имени во frontmatter подсказываем серверу имя папки скилла.
+                var uploadName = Path.GetFileName(path).Equals("SKILL.md", StringComparison.OrdinalIgnoreCase)
+                    ? (Path.GetFileName(Path.GetDirectoryName(path)) ?? "skill") + ".md"
+                    : Path.GetFileName(path);
+                var (skill, error) = await server.UploadSkillAsync(uploadName, await File.ReadAllBytesAsync(path), CancellationToken.None);
+                if (skill is null)
+                {
+                    Ui.Error("Скилл не добавлен: " + error);
+                    break;
+                }
+                Ui.Info("  " + Ui.Green_($"Скилл «{skill.Name}» добавлен") + Ui.Muted($" — {skill.Description}"));
+                Ui.Info("  " + Ui.Muted("Агент применит его, когда задача подойдёт под описание. Доступен и на сайте."));
+                break;
+            }
+            case "remove" or "rm" or "delete" or "on" or "off":
+            {
+                var skills = await server.GetSkillsAsync(CancellationToken.None);
+                var skill = skills.FirstOrDefault(s => s.Name.Equals(rest, StringComparison.OrdinalIgnoreCase));
+                if (skill is null)
+                {
+                    Ui.Error($"Нет скилла «{rest}». Список: /skill");
+                    break;
+                }
+                if (command is "on" or "off")
+                {
+                    await server.SetSkillEnabledAsync(skill.Id, command == "on", CancellationToken.None);
+                    Ui.Info($"  «{skill.Name}» {(command == "on" ? "включён" : "выключен — агент его не увидит")}.");
+                }
+                else
+                {
+                    await server.DeleteSkillAsync(skill.Id, CancellationToken.None);
+                    Ui.Info($"  Скилл «{skill.Name}» удалён.");
+                }
+                break;
+            }
+        }
+    }
+    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or AuthRejectedException or IOException)
+    {
+        Ui.Error("Скиллы недоступны: " + ex.Message + " (нужен обновлённый сервер)");
+    }
 }
 
 // /rewind [N]: откат файлов проекта к состоянию до последних ходов агента.

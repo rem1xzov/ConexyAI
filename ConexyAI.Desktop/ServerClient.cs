@@ -168,6 +168,61 @@ public sealed class ServerClient : IDisposable
         return body is null ? null : new ClientInfo(body.DownloadUrl, body.Version, body.GoogleClientId, body.GoogleClientSecret);
     }
 
+    // AGENT_SKILLS: добавлено 2026-10-18 — скиллы хранятся на сервере, одни и те же для сайта и десктопа.
+    public sealed record SkillInfo(Guid Id, string Name, string Description, bool Enabled, int Chars, DateTime UpdatedAt);
+
+    public async Task<List<SkillInfo>> GetSkillsAsync(CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "api/skills");
+        request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));
+        using var response = await _http.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<List<SkillInfo>>(Json, ct) ?? [];
+    }
+
+    /// <summary>Загружает SKILL.md. Возвращает скилл или текст ошибки сервера.</summary>
+    public async Task<(SkillInfo? Skill, string? Error)> UploadSkillAsync(string fileName, byte[] content, CancellationToken ct)
+    {
+        using var form = new MultipartFormDataContent();
+        var file = new ByteArrayContent(content);
+        file.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/markdown");
+        form.Add(file, "file", fileName);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "api/skills") { Content = form };
+        request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));
+        using var response = await _http.SendAsync(request, ct);
+        if (response.IsSuccessStatusCode)
+            return (await response.Content.ReadFromJsonAsync<SkillInfo>(Json, ct), null);
+        return (null, await ErrorMessageAsync(response, ct));
+    }
+
+    public async Task<bool> DeleteSkillAsync(Guid id, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Delete, $"api/skills/{id}");
+        request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));
+        using var response = await _http.SendAsync(request, ct);
+        return response.IsSuccessStatusCode;
+    }
+
+    public async Task<bool> SetSkillEnabledAsync(Guid id, bool enabled, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Patch, $"api/skills/{id}") { Content = JsonContent.Create(new { enabled }) };
+        request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));
+        using var response = await _http.SendAsync(request, ct);
+        return response.IsSuccessStatusCode;
+    }
+
+    private static async Task<string> ErrorMessageAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        try
+        {
+            var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(Json, ct);
+            if (body.ValueKind == System.Text.Json.JsonValueKind.Object && body.TryGetProperty("message", out var m) && m.GetString() is { Length: > 0 } text)
+                return text;
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or NotSupportedException) { }
+        return $"сервер ответил {(int)response.StatusCode}";
+    }
+
     public async Task<UsageInfo?> GetUsageAsync(CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "api/subscription/usage");

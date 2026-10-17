@@ -309,6 +309,8 @@ builder.Services.AddHostedService<SandboxIdleCleanupService>();
 // SUPPORT: добавлено 2026-09-19
 builder.Services.AddScoped<ISupportRepository, SupportRepository>();
 builder.Services.AddScoped<ISupportService, SupportService>();
+// AGENT_SKILLS: добавлено 2026-10-18
+builder.Services.AddScoped<ISkillService, SkillService>();
 
 // WORKSPACE_JAIL: добавлено 2026-09-24 — ревью C2: общий слот команды песочницы на воркспейс.
 builder.Services.AddSingleton<ISandboxActivity, SandboxActivity>();

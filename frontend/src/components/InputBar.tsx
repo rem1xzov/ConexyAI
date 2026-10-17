@@ -15,7 +15,8 @@ import { useIsMobile, useMediaQuery } from '../hooks/useMediaQuery';
 // VOICE_DUP_FIX: склейка распознанного текста по перекрытию (см. utils/voiceTranscript).
 import { mergeTranscript } from '../utils/voiceTranscript';
 import { ModelPicker } from './ModelPicker';
-import { VoiceWaveIcon, MicIcon, PlusIcon, SendIcon, StopIcon, UploadIcon, PhotoIcon, CameraIcon, CodeIcon, CloseIcon } from './Icons';
+import { SkillsDialog } from './SkillsDialog';
+import { VoiceWaveIcon, MicIcon, PlusIcon, SendIcon, StopIcon, UploadIcon, PhotoIcon, CameraIcon, CodeIcon, CloseIcon, LightbulbIcon } from './Icons';
 
 const MAX_ATTACHMENTS = 10;
 
@@ -138,6 +139,8 @@ export function InputBar({
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // AGENT_SKILLS: добавлено 2026-10-18 — «+» → «Скиллы».
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [limitHint, setLimitHint] = useState(false);
   // Visible reason why voice input could not start (permission, no device, unsupported…).
   const [micError, setMicError] = useState<string | null>(null);
@@ -765,6 +768,7 @@ export function InputBar({
 
   return (
     <div className="inputbar-wrap">
+      {skillsOpen && <SkillsDialog onClose={() => setSkillsOpen(false)} />}
       {limitHint && (
         <div className="inputbar-limit">{t('input.maxFiles')}</div>
       )}
@@ -883,6 +887,15 @@ export function InputBar({
               )}
               <button className="attach-menu__item" onClick={() => codeRef.current?.click()}>
                 <CodeIcon size={17} /> {t('input.importCode')}
+              </button>
+              <button
+                className="attach-menu__item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setSkillsOpen(true);
+                }}
+              >
+                <LightbulbIcon size={17} /> {t('skills.menu')}
               </button>
             </div>
           )}

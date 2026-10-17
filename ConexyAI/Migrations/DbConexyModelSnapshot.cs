@@ -694,6 +694,46 @@ namespace ConexyAI.Migrations
                     b.ToTable("user_preferences", (string)null);
                 });
 
+            modelBuilder.Entity("ConexyAI.Entity.UserSkill", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("user_skill", (string)null);
+                });
+
             modelBuilder.Entity("ConexyAI.Entity.UserUsageCounterEntity", b =>
                 {
                     b.Property<Guid>("UserId")
@@ -873,6 +913,17 @@ namespace ConexyAI.Migrations
                         .HasForeignKey("ConexyAI.Entity.UserPreferencesEntity", "UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("ConexyAI.Entity.UserSkill", b =>
+                {
+                    b.HasOne("ConexyAI.Entity.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("ConexyAI.Entity.UserUsageCounterEntity", b =>

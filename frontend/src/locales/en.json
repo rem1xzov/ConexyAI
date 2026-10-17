@@ -511,6 +511,25 @@
     "closeConfirmTitle": "Close this request?",
     "closeConfirm": "The conversation is kept, but you won’t be able to write in it. If the issue isn’t solved, start a new request."
   },
+  "skills": {
+    "menu": "Skills",
+    "title": "Agent skills",
+    "hint": "A skill is a SKILL.md file with your instructions for the agent (like in Claude): a name, a “when to use” description and the text. The agent picks the right skill when a task fits. The same skills work in the desktop app (/skill).",
+    "add": "Add a skill file (.md)",
+    "uploading": "Uploading…",
+    "added": "Added: {{names}}",
+    "empty": "No skills yet. Example file:",
+    "exampleDescription": "Use when asked to review code or a pull request",
+    "exampleBody": "# Code review\n1. Run the tests first.\n2. Check error handling.\n3. Summarize findings by severity.",
+    "enable": "Enable",
+    "disable": "Disable",
+    "delete": "Delete skill",
+    "deleteConfirm": "Delete the skill “{{name}}”?",
+    "wrongType": "“{{name}}” is not a text file. A SKILL.md (.md or .txt) is needed",
+    "loadError": "Failed to load skills",
+    "uploadError": "Failed to add the skill",
+    "actionError": "The action failed"
+  },
   "share": {
     "brand": "ConexyAI",
     "openApp": "Open in ConexyAI",

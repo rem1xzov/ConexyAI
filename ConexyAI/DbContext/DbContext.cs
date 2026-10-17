@@ -43,6 +43,9 @@ public class DbConexy : Microsoft.EntityFrameworkCore.DbContext
     // SUPPORT_ATTACHMENTS: добавлено 2026-10-18
     public DbSet<SupportAttachment> SupportAttachments => Set<SupportAttachment>();
 
+    // AGENT_SKILLS: добавлено 2026-10-18 — скиллы агента пользователя (SKILL.md).
+    public DbSet<UserSkill> UserSkills => Set<UserSkill>();
+
     // EMAIL_VERIFICATION: добавлено 2026-09-24 — неподтверждённые регистрации (код + хэш пароля).
     public DbSet<EmailVerificationCodeEntity> EmailVerificationCodes => Set<EmailVerificationCodeEntity>();
 
