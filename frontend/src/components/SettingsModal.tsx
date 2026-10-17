@@ -660,6 +660,7 @@ function DesktopSection({ active }: { active: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [newKey, setNewKey] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [guideOpen, setGuideOpen] = useState(false);
   const requestedRef = useRef(false);
 
   async function reload() {
@@ -762,6 +763,46 @@ function DesktopSection({ active }: { active: boolean }) {
           <li>{t('settings.desktopStep4')}</li>
           <li>{t('settings.desktopStep5')}</li>
         </ol>
+        {/* Без подписи exe и верификации Google пользователь видит предупреждения — объясняем их заранее. */}
+        <button
+          className="dialog-btn desktop-guide__toggle"
+          type="button"
+          aria-expanded={guideOpen}
+          onClick={() => setGuideOpen((open) => !open)}
+        >
+          {guideOpen ? t('settings.desktopGuideHide') : t('settings.desktopGuide')}
+        </button>
+        {guideOpen && (
+          <div className="desktop-guide">
+            <h4>{t('settings.desktopGuideSmartscreenTitle')}</h4>
+            <p>{t('settings.desktopGuideSmartscreenWhy')}</p>
+            <ol className="desktop-steps">
+              <li>{t('settings.desktopGuideSmartscreen1')}</li>
+              <li>{t('settings.desktopGuideSmartscreen2')}</li>
+              <li>{t('settings.desktopGuideSmartscreen3')}</li>
+            </ol>
+            <h4>{t('settings.desktopGuideAvTitle')}</h4>
+            <ol className="desktop-steps">
+              <li>{t('settings.desktopGuideAv1')}</li>
+              <li>{t('settings.desktopGuideAv2')}</li>
+              <li>{t('settings.desktopGuideAv3')}</li>
+            </ol>
+            <h4>{t('settings.desktopGuideGoogleTitle')}</h4>
+            <p>{t('settings.desktopGuideGoogleWhy')}</p>
+            <ol className="desktop-steps">
+              <li>{t('settings.desktopGuideGoogle1')}</li>
+              <li>{t('settings.desktopGuideGoogle2')}</li>
+              <li>{t('settings.desktopGuideGoogle3')}</li>
+              <li>{t('settings.desktopGuideGoogle4')}</li>
+            </ol>
+            <h4>{t('settings.desktopGuideSafetyTitle')}</h4>
+            <ul className="desktop-steps">
+              <li>{t('settings.desktopGuideSafety1')}</li>
+              <li>{t('settings.desktopGuideSafety2')}</li>
+              <li>{t('settings.desktopGuideSafety3')}</li>
+            </ul>
+          </div>
+        )}
         {downloadUrl && (
           <a className="dialog-btn dialog-btn--primary" href={downloadUrl} download rel="noopener noreferrer">
             {t('settings.desktopDownload')}

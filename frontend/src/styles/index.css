@@ -9240,6 +9240,31 @@ html[data-theme="light"]:not([data-incognito="true"]) .artifact-panel {
   margin-top: 4px;
 }
 
+.desktop-guide__toggle {
+  margin-bottom: 10px;
+}
+.desktop-guide {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-muted, var(--text));
+}
+.desktop-guide h4 {
+  margin: 12px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.desktop-guide h4:first-child {
+  margin-top: 0;
+}
+.desktop-guide p {
+  margin: 0 0 6px;
+}
+
 .desktop-login {
   margin: 12px 0;
   padding: 12px;
