@@ -68,10 +68,12 @@ public static partial class Ui
         var input = GetStdHandle(-10);
         if (!GetConsoleMode(input, out var original))
             return;
-        const uint quickEdit = 0x0040, extendedFlags = 0x0080;
-        if ((original & quickEdit) == 0)
+        // Вместе с QuickEdit снимаем и ENABLE_MOUSE_INPUT: без QuickEdit он отдаёт колесо мыши программе,
+        // и окно перестаёт прокручиваться (мышь нам не нужна — ввод только с клавиатуры).
+        const uint mouseInput = 0x0010, quickEdit = 0x0040, extendedFlags = 0x0080;
+        if ((original & (quickEdit | mouseInput)) == 0)
             return;
-        if (SetConsoleMode(input, (original | extendedFlags) & ~quickEdit))
+        if (SetConsoleMode(input, (original | extendedFlags) & ~quickEdit & ~mouseInput))
             AppDomain.CurrentDomain.ProcessExit += (_, _) => SetConsoleMode(input, original);
     }
 
@@ -772,6 +774,13 @@ public static partial class Ui
             var i = 0;
             while (!cts.IsCancellationRequested)
             {
+                // Пользователь прокрутил окно вверх — не перерисовываем: классическая консоль на любой
+                // вывод возвращает окно к курсору, и спиннер 4–8 раз в секунду сдёргивал его вниз.
+                if (ScrolledAway())
+                {
+                    await Task.Delay(250);
+                    continue;
+                }
                 var teamMode = false;
                 lock (Gate)
                 {
@@ -814,6 +823,23 @@ public static partial class Ui
                 EraseTeam();
             else
                 Console.Write("\r\x1b[2K");
+        }
+    }
+
+    /// <summary>Окно прокручено так, что курсор (низ вывода) не виден.</summary>
+    private static bool ScrolledAway()
+    {
+        if (!OperatingSystem.IsWindows())
+            return false;
+        try
+        {
+            var top = Console.WindowTop;
+            var cursor = Console.CursorTop;
+            return cursor < top || cursor >= top + Console.WindowHeight;
+        }
+        catch (IOException)
+        {
+            return false;
         }
     }
 
