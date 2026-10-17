@@ -1,241 +1,361 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   cancelSupportTicket,
-  createSupportTicket,
+  createNewSupportTicket,
   escalateSupportTicket,
-  getMySupportTicket,
+  getSupportTicket,
+  listSupportTickets,
   returnSupportTicketToBot,
   sendSupportMessage,
+  sendSupportMessageWithFiles,
 } from '../api/conexyApi';
 import { signalrService } from '../services/signalrService';
-import type { SupportMessage, SupportTicket } from '../types/api';
+import type { SupportMessage, SupportTicket, SupportTicketSummary } from '../types/api';
 import { ConfirmDialog } from './Dialog';
-import { CloseIcon, SendIcon } from './Icons';
+import { CloseIcon, PlusIcon } from './Icons';
+import { Composer, formatListTime, MessageList, withMessage } from './support/SupportParts';
 
 interface SupportChatProps {
   onClose: () => void;
   onToast: (message: string) => void;
 }
 
-// I18N_FORMAT: добавлено 2026-09-24 — время по языку интерфейса, а не всегда ru-RU.
-function formatTime(iso: string, lang: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit' });
+const NEW = 'new';
+
+/** Текст ошибки с сервера ({ code, message }) или запасной перевод. */
+function errorText(e: unknown, fallback: string): string {
+  const message = (e as { response?: { data?: { message?: string } } }).response?.data?.message;
+  return typeof message === 'string' && message.length > 0 ? message : fallback;
 }
 
-// SUPPORT_ECHO: добавлено 2026-09-24 (M16) — своё сообщение показывается сразу из HTTP-ответа, а
-// эхо из хаба (или повтор после переподключения) с тем же id не дублирует его.
-function withMessage(ticket: SupportTicket, msg: SupportMessage): SupportTicket {
-  if (ticket.messages.some((m) => m.id === msg.id)) return ticket;
-  return { ...ticket, messages: [...ticket.messages, msg] };
-}
-
-// SUPPORT_BOT: класс зависит от автора — своё справа, бот/оператор/система слева с разными стилями.
-function messageClass(m: SupportMessage): string {
-  switch (m.authorType) {
-    case 'User':
-      return 'support-msg support-msg--own';
-    case 'Bot':
-      return 'support-msg support-msg--other support-msg--bot';
-    case 'Admin':
-      return 'support-msg support-msg--other support-msg--admin';
-    default:
-      return 'support-msg support-msg--system';
-  }
+function toSummary(t: SupportTicket): SupportTicketSummary {
+  const last = t.messages[t.messages.length - 1];
+  return {
+    id: t.id,
+    subject: t.subject ?? null,
+    status: t.status,
+    botActive: t.botActive,
+    createdAt: t.createdAt,
+    lastMessageAt: last?.createdAt ?? t.lastMessageAt,
+    lastMessagePreview: last ? last.content || '📎' : null,
+    lastMessageAuthor: last?.authorType ?? null,
+    unreadCount: 0,
+  };
 }
 
 // SUPPORT: добавлено 2026-09-19
-/** User-facing messenger-style support chat (AI bot first, operator escalation). */
+// SUPPORT_MULTI: переделано 2026-10-18 — мессенджер: список обращений слева (на телефоне — отдельный
+// экран), переписка справа, сколько угодно обращений сразу, картинки и файлы во вложениях.
 export function SupportChat({ onClose, onToast }: SupportChatProps) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? i18n.language;
-  const [ticket, setTicket] = useState<SupportTicket | null>(null);
-  const [draft, setDraft] = useState('');
-  const [sending, setSending] = useState(false);
-  // SUPPORT_BOT: идёт переход состояния (эскалация/возврат/отмена) или подтверждение.
+  const [tickets, setTickets] = useState<SupportTicketSummary[] | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [active, setActive] = useState<SupportTicket | null>(null);
+  const [loadingTicket, setLoadingTicket] = useState(false);
+  const [botTyping, setBotTyping] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [confirmEscalate, setConfirmEscalate] = useState(false);
+  const [confirm, setConfirm] = useState<'escalate' | 'close' | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const activeIdRef = useRef<string | null>(null);
+  const joined = useRef(new Set<string>());
+  activeIdRef.current = activeId;
 
+  function join(id: string) {
+    if (joined.current.has(id)) return;
+    joined.current.add(id);
+    void signalrService.joinSupportTicket(id).catch(() => joined.current.delete(id));
+  }
+
+  async function refreshList(): Promise<SupportTicketSummary[]> {
+    const list = await listSupportTickets();
+    setTickets(list);
+    list.filter((x) => x.status !== 'Closed').forEach((x) => join(x.id));
+    return list;
+  }
+
+  // Открытие: список обращений; на широком экране сразу открываем самое свежее открытое.
   useEffect(() => {
     let cancelled = false;
-    let ticketId: string | null = null;
-
-    const unsubscribe = signalrService.onSupportMessage((msg) => {
-      setTicket((t) => (t && t.id === msg.ticketId ? withMessage(t, msg) : t));
+    const unsubscribe = signalrService.onSupportMessage((msg: SupportMessage) => {
+      const isActive = activeIdRef.current === msg.ticketId;
+      if (isActive) {
+        setActive((a) => (a && a.id === msg.ticketId ? withMessage(a, msg) : a));
+        if (msg.authorType !== 'User') setBotTyping(false);
+      }
+      setTickets((list) => {
+        if (!list) return list;
+        const updated = list.map((x) =>
+          x.id === msg.ticketId
+            ? {
+                ...x,
+                lastMessageAt: msg.createdAt,
+                lastMessagePreview: msg.content || '📎',
+                lastMessageAuthor: msg.authorType,
+                unreadCount: !isActive && (msg.authorType === 'Bot' || msg.authorType === 'Admin') ? x.unreadCount + 1 : x.unreadCount,
+              }
+            : x,
+        );
+        return [...updated].sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt));
+      });
     });
 
-    async function init() {
+    void (async () => {
       try {
-        const t = await createSupportTicket();
+        const list = await refreshList();
         if (cancelled) return;
-        ticketId = t.id;
-        setTicket(t);
-        await signalrService.joinSupportTicket(t.id);
+        const wide = window.matchMedia('(min-width: 721px)').matches;
+        const firstOpen = list.find((x) => x.status !== 'Closed');
+        if (list.length === 0) setActiveId(NEW);
+        else if (wide && firstOpen) void openTicket(firstOpen.id);
       } catch {
         if (!cancelled) onToast(t('support.openError'));
       }
-    }
-    void init();
+    })();
 
+    const joinedSet = joined.current;
     return () => {
       cancelled = true;
       unsubscribe();
-      if (ticketId) void signalrService.leaveSupportTicket(ticketId);
+      joinedSet.forEach((id) => void signalrService.leaveSupportTicket(id));
+      joinedSet.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [ticket?.messages.length]);
+  }, [active?.id, active?.messages.length, botTyping]);
 
-  async function handleSend() {
-    const content = draft.trim();
-    if (!content || !ticket || sending) return;
-    const ticketId = ticket.id;
-    setSending(true);
-    setDraft('');
+  async function openTicket(id: string) {
+    setActiveId(id);
+    setBotTyping(false);
+    if (id === NEW) {
+      setActive(null);
+      return;
+    }
+    setLoadingTicket(true);
+    setActive(null);
     try {
-      const msg = await sendSupportMessage(ticketId, content);
-      // Without this the message only appeared once the hub echoed it back — and never, when the
-      // echo was lost (e.g. the support group was not re-joined after a reconnect).
-      if (msg && msg.id) setTicket((tk) => (tk && tk.id === ticketId ? withMessage(tk, msg) : tk));
-      // SUPPORT_BOT_REPLY: ответ бота пишется синхронно внутри этого же POST, но эхо через хаб
-      // может опередить подписку на группу и потеряться. Перечитываем тикет, чтобы ответ бота
-      // появился сразу, а не только после перезагрузки.
-      const refreshed = await getMySupportTicket();
-      if (refreshed && refreshed.id === ticketId) setTicket(refreshed);
-    } catch {
-      onToast(t('support.sendError'));
-      // Keep what the user typed so a failed send does not lose it.
-      setDraft((d) => d || content);
+      const ticket = await getSupportTicket(id);
+      if (activeIdRef.current !== id) return;
+      setActive(ticket);
+      join(id);
+      setTickets((list) => list?.map((x) => (x.id === id ? { ...x, unreadCount: 0 } : x)) ?? list);
+    } catch (e) {
+      onToast(errorText(e, t('support.openTicketError')));
     } finally {
-      setSending(false);
+      setLoadingTicket(false);
     }
   }
 
-  // SUPPORT_BOT: общий путь для эскалации/возврата/отмены — бэкенд возвращает обновлённый тикет.
+  async function send(text: string, files: File[], onProgress: (p: number) => void): Promise<boolean> {
+    try {
+      let ticket = active;
+      // Новое обращение создаётся только с первым сообщением — пустых обращений не бывает.
+      if (!ticket) {
+        ticket = await createNewSupportTicket();
+        setActiveId(ticket.id);
+        activeIdRef.current = ticket.id;
+        setActive(ticket);
+        join(ticket.id);
+        setTickets((list) => [toSummary(ticket!), ...(list ?? [])]);
+      }
+      const id = ticket.id;
+      if (ticket.botActive) setBotTyping(true);
+      const msg = files.length > 0
+        ? await sendSupportMessageWithFiles(id, text, files, false, onProgress)
+        : await sendSupportMessage(id, text);
+      setActive((a) => (a && a.id === id ? withMessage(a, msg) : a));
+      // Ответ бота пишется в том же запросе, но эхо хаба может опередить подписку — перечитываем.
+      const fresh = await getSupportTicket(id);
+      if (activeIdRef.current === id) setActive(fresh);
+      setTickets((list) => {
+        const rest = (list ?? []).filter((x) => x.id !== id);
+        return [toSummary(fresh), ...rest];
+      });
+      return true;
+    } catch (e) {
+      onToast(errorText(e, t('support.sendError')));
+      return false;
+    } finally {
+      setBotTyping(false);
+    }
+  }
+
   async function transition(fn: (id: string) => Promise<SupportTicket>) {
-    if (!ticket || busy) return;
-    const ticketId = ticket.id;
+    if (!active || busy) return;
     setBusy(true);
     try {
-      const updated = await fn(ticketId);
-      setTicket(updated);
-    } catch {
-      onToast(t('support.actionError'));
+      const updated = await fn(active.id);
+      setActive(updated);
+      setTickets((list) => list?.map((x) => (x.id === updated.id ? { ...toSummary(updated) } : x)) ?? list);
+    } catch (e) {
+      onToast(errorText(e, t('support.actionError')));
     } finally {
       setBusy(false);
     }
   }
 
-  const status = ticket?.status ?? '';
-  const showNotHelpful = !!ticket && ticket.botActive && status !== 'Closed';
-  const showReturnToBot = status === 'Escalated' && !ticket?.botActive;
-  const showCancel = status === 'Escalated';
+  const openTickets = useMemo(() => (tickets ?? []).filter((x) => x.status !== 'Closed'), [tickets]);
+  const closedTickets = useMemo(() => (tickets ?? []).filter((x) => x.status === 'Closed'), [tickets]);
+  const status = active?.status ?? '';
   const readOnly = status === 'Closed';
+  const showThread = activeId !== null;
+
+  function statusLabel(s: string, botActive: boolean) {
+    if (s === 'Closed') return t('support.statusClosed');
+    if (s === 'Escalated' && !botActive) return t('support.statusEscalated');
+    return t('support.statusBot');
+  }
+
+  function authorPrefix(a: string | null) {
+    if (a === 'User') return t('support.you') + ': ';
+    if (a === 'Admin') return t('support.operatorName') + ': ';
+    if (a === 'Bot') return t('support.botName') + ': ';
+    return '';
+  }
+
+  function TicketRow({ x }: { x: SupportTicketSummary }) {
+    return (
+      <button
+        type="button"
+        className={`support-list__item ${x.id === activeId ? 'support-list__item--active' : ''}`}
+        onClick={() => void openTicket(x.id)}
+      >
+        <span className={`support-list__dot support-list__dot--${x.status === 'Closed' ? 'closed' : x.status === 'Escalated' && !x.botActive ? 'operator' : 'bot'}`} />
+        <span className="support-list__body">
+          <span className="support-list__top">
+            <span className="support-list__subject">{x.subject || t('support.newTicket')}</span>
+            <span className="support-list__time">{formatListTime(x.lastMessageAt, lang, t('support.yesterday'))}</span>
+          </span>
+          <span className="support-list__bottom">
+            <span className="support-list__preview">
+              {x.lastMessagePreview ? authorPrefix(x.lastMessageAuthor) + x.lastMessagePreview : t('support.noMessages')}
+            </span>
+            {x.unreadCount > 0 && <span className="support-list__badge">{x.unreadCount}</span>}
+          </span>
+        </span>
+      </button>
+    );
+  }
 
   return (
-    <div className="dialog-overlay" onMouseDown={onClose}>
-      <div className="dialog-card support-chat" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="support-chat__head">
-          <div className="dialog-title">{t('support.title')}</div>
-          <button className="icon-btn" onClick={onClose} aria-label={t('common.close')} type="button">
-            <CloseIcon size={18} />
-          </button>
-        </div>
-
-        <div className="support-chat__messages" ref={scrollRef}>
-          {!ticket ? (
-            <p className="muted">{t('common.loading')}</p>
-          ) : ticket.messages.length === 0 ? (
-            <p className="muted support-chat__hint">{t('support.hint')}</p>
-          ) : (
-            ticket.messages.map((m: SupportMessage) => (
-              <div key={m.id} className={messageClass(m)}>
-                {m.authorType === 'Bot' && <div className="support-msg__author">{t('support.botName')}</div>}
-                {m.authorType === 'Admin' && <div className="support-msg__author">{t('support.operatorName')}</div>}
-                <div className="support-msg__bubble">{m.content}</div>
-                {m.authorType !== 'System' && (
-                  <div className="support-msg__time">{formatTime(m.createdAt, lang)}</div>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-
-        {/* SUPPORT_BOT: кнопки состояния. «Не помогло» — пока бот отвечает; «Вернуться к боту» и
-            «Отменить обращение» — на этапе оператора. */}
-        {ticket && !readOnly && (showNotHelpful || showReturnToBot || showCancel) && (
-          <div className="support-chat__actions">
-            {showNotHelpful && (
-              <button
-                className="support-action"
-                onClick={() => setConfirmEscalate(true)}
-                disabled={busy}
-                type="button"
-              >
-                {t('support.notHelpful')}
+    <div className="dialog-overlay support-overlay" onMouseDown={onClose}>
+      <div
+        className={`dialog-card support-messenger ${showThread ? 'support-messenger--thread' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('support.title')}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <aside className="support-list">
+          <div className="support-list__head">
+            <div className="dialog-title">{t('support.title')}</div>
+            <div className="support-list__head-actions">
+              <button className="support-new" type="button" onClick={() => void openTicket(NEW)}>
+                <PlusIcon size={16} />
+                <span>{t('support.newTicketShort')}</span>
               </button>
-            )}
-            {showReturnToBot && (
-              <button
-                className="support-action"
-                onClick={() => void transition(returnSupportTicketToBot)}
-                disabled={busy}
-                type="button"
-              >
-                {t('support.returnToBot')}
+              <button className="icon-btn support-list__close" onClick={onClose} aria-label={t('common.close')} type="button">
+                <CloseIcon size={18} />
               </button>
-            )}
-            {showCancel && (
-              <button
-                className="support-action support-action--danger"
-                onClick={() => void transition(cancelSupportTicket)}
-                disabled={busy}
-                type="button"
-              >
-                {t('support.cancelRequest')}
-              </button>
+            </div>
+          </div>
+          <div className="support-list__items">
+            {tickets === null ? (
+              <p className="muted support-list__empty">{t('common.loading')}</p>
+            ) : tickets.length === 0 ? (
+              <p className="muted support-list__empty">{t('support.noTicketsYet')}</p>
+            ) : (
+              <>
+                {openTickets.map((x) => (
+                  <TicketRow key={x.id} x={x} />
+                ))}
+                {closedTickets.length > 0 && <div className="support-list__section">{t('support.closedSection')}</div>}
+                {closedTickets.map((x) => (
+                  <TicketRow key={x.id} x={x} />
+                ))}
+              </>
             )}
           </div>
-        )}
+        </aside>
 
-        <div className="support-chat__input">
-          <input
-            className="dialog-input"
-            value={draft}
-            placeholder={readOnly ? t('support.closedPlaceholder') : t('support.messagePlaceholder')}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.nativeEvent.isComposing) void handleSend();
-            }}
-            disabled={readOnly}
-          />
-          <button
-            className="icon-btn"
-            onClick={() => void handleSend()}
-            disabled={!draft.trim() || sending || readOnly}
-            aria-label={t('common.send')}
-            type="button"
-          >
-            <SendIcon size={18} />
-          </button>
-        </div>
+        <section className="support-thread">
+          <div className="support-thread__head">
+            <button className="icon-btn support-thread__back" type="button" onClick={() => setActiveId(null)} aria-label={t('support.back')}>
+              ‹
+            </button>
+            <div className="support-thread__title">
+              <div className="support-thread__subject">
+                {activeId === NEW || !active ? t('support.newTicket') : active.subject || t('support.newTicket')}
+              </div>
+              {active && <div className="support-thread__status">{statusLabel(active.status, active.botActive)}</div>}
+            </div>
+            <button className="icon-btn support-thread__close" onClick={onClose} aria-label={t('common.close')} type="button">
+              <CloseIcon size={18} />
+            </button>
+          </div>
 
-        {confirmEscalate && (
+          {activeId === null ? (
+            <div className="support-thread__placeholder muted">{t('support.selectOrCreate')}</div>
+          ) : loadingTicket ? (
+            <div className="support-thread__placeholder muted">{t('common.loading')}</div>
+          ) : (
+            <MessageList
+              messages={active?.messages ?? []}
+              operatorView={false}
+              lang={lang}
+              scrollRef={scrollRef}
+              typing={botTyping}
+              empty={<p className="muted support-thread__hint">{t('support.hint')}</p>}
+            />
+          )}
+
+          {active && !readOnly && (
+            <div className="support-chat__actions">
+              {active.botActive && (
+                <button className="support-action" onClick={() => setConfirm('escalate')} disabled={busy} type="button">
+                  {t('support.notHelpful')}
+                </button>
+              )}
+              {status === 'Escalated' && !active.botActive && (
+                <button className="support-action" onClick={() => void transition(returnSupportTicketToBot)} disabled={busy} type="button">
+                  {t('support.returnToBot')}
+                </button>
+              )}
+              <button className="support-action support-action--danger" onClick={() => setConfirm('close')} disabled={busy} type="button">
+                {t('support.cancelRequest')}
+              </button>
+            </div>
+          )}
+
+          {readOnly ? (
+            <div className="support-thread__closed">
+              <span className="muted">{t('support.closedPlaceholder')}</span>
+              <button className="support-action" type="button" onClick={() => void openTicket(NEW)}>
+                {t('support.newTicketShort')}
+              </button>
+            </div>
+          ) : (
+            activeId !== null && !loadingTicket && (
+              <Composer placeholder={t('support.messagePlaceholder')} onSend={send} onToast={onToast} />
+            )
+          )}
+        </section>
+
+        {confirm && (
           <ConfirmDialog
-            title={t('support.escalateConfirmTitle')}
-            message={t('support.escalateConfirm')}
-            confirmLabel={t('support.escalateConfirmYes')}
+            title={confirm === 'escalate' ? t('support.escalateConfirmTitle') : t('support.closeConfirmTitle')}
+            message={confirm === 'escalate' ? t('support.escalateConfirm') : t('support.closeConfirm')}
+            confirmLabel={confirm === 'escalate' ? t('support.escalateConfirmYes') : t('support.cancelRequest')}
             onConfirm={() => {
-              setConfirmEscalate(false);
-              void transition(escalateSupportTicket);
+              const what = confirm;
+              setConfirm(null);
+              void transition(what === 'escalate' ? escalateSupportTicket : cancelSupportTicket);
             }}
-            onCancel={() => setConfirmEscalate(false)}
+            onCancel={() => setConfirm(null)}
           />
         )}
       </div>

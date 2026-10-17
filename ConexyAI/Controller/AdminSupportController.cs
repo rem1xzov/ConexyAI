@@ -69,6 +69,28 @@ public class AdminSupportController : ControllerBase
         }
     }
 
+    // SUPPORT_ATTACHMENTS: ответ оператора с картинками/файлами (multipart/form-data: content + files).
+    [HttpPost("tickets/{id:guid}/messages/upload")]
+    [RequestSizeLimit(SupportUploads.MaxRequestBytes)]
+    public async Task<ActionResult<SupportMessageDto>> AddMessageWithFiles(
+        Guid id, [FromForm] string? content, [FromForm] List<IFormFile>? files, CancellationToken ct)
+    {
+        if (!User.IsAdmin())
+            return Forbid();
+        if (!User.TryGetUserId(out var userId))
+            return Unauthorized();
+
+        try
+        {
+            var uploads = await SupportUploads.ReadAsync(files, ct);
+            return Ok(await _supportService.AddMessageAsync(id, userId, content ?? string.Empty, isFromAdmin: true, uploads, ct));
+        }
+        catch (AuthException ex)
+        {
+            return StatusCode(ex.StatusCode, new { code = ex.Code, message = ex.Message });
+        }
+    }
+
     /// <summary>Closes a support ticket.</summary>
     [HttpPost("tickets/{id:guid}/close")]
     public async Task<IActionResult> CloseTicket(Guid id, CancellationToken ct)

@@ -25,6 +25,63 @@ internal static class SupportTests
         TestRegistry.Add("support: returning to the bot resumes it and clears the admin flag", ReturnToBotAsync);
         TestRegistry.Add("support: an admin message mutes the bot until it is returned to", AdminMutesBotAsync);
         TestRegistry.Add("support: cancel closes the ticket and blocks further messages", CancelClosesAsync);
+        TestRegistry.Add("support: a user keeps several tickets with subjects and unread counts", MultipleTicketsAsync);
+        TestRegistry.Add("support: attachments are stored, typed by signature and private to the owner", AttachmentsAsync);
+    }
+
+    private static async Task MultipleTicketsAsync()
+    {
+        var (svc, _, _, userId) = NewService();
+        var first = await svc.CreateTicketAsync(userId, null);
+        await svc.AddMessageAsync(first.Id, userId, "Не работает оплата\nкартой", isFromAdmin: false);
+        var second = await svc.CreateTicketAsync(userId, "Вопрос про десктоп");
+        Assert(first.Id != second.Id, "each create must open a NEW ticket");
+
+        var list = await svc.ListMyTicketsAsync(userId);
+        Assert(list.Count == 2, $"both tickets must be listed, got {list.Count}");
+        var firstRow = list.Single(t => t.Id == first.Id);
+        Assert(firstRow.Subject == "Не работает оплата картой", $"the subject comes from the first message, got '{firstRow.Subject}'");
+        Assert(firstRow.UnreadCount == 0, $"the bot answered while the user was in the chat, got {firstRow.UnreadCount} unread");
+        Assert(list.Single(t => t.Id == second.Id).Subject == "Вопрос про десктоп", "an explicit subject is kept");
+
+        // Оператор ответил, пока пользователь не смотрел — есть непрочитанное; открыл — счётчик сброшен.
+        await Task.Delay(5);
+        await svc.AddMessageAsync(first.Id, Guid.NewGuid(), "Проверим платёж", isFromAdmin: true);
+        Assert((await svc.ListMyTicketsAsync(userId)).Single(t => t.Id == first.Id).UnreadCount == 1, "an operator reply must be unread");
+        await svc.GetMyTicketByIdAsync(first.Id, userId);
+        Assert((await svc.ListMyTicketsAsync(userId)).Single(t => t.Id == first.Id).UnreadCount == 0, "opening the ticket marks it read");
+
+        var stranger = Guid.NewGuid();
+        var refused = false;
+        try { await svc.GetMyTicketByIdAsync(first.Id, stranger); }
+        catch (AuthException) { refused = true; }
+        Assert(refused, "another user must not open someone else's ticket");
+    }
+
+    private static async Task AttachmentsAsync()
+    {
+        var (svc, _, _, userId) = NewService();
+        var ticket = await svc.CreateTicketAsync(userId, null);
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+        var message = await svc.AddMessageAsync(ticket.Id, userId, string.Empty, isFromAdmin: false,
+            [new SupportUpload("screen.png", "image/png", png), new SupportUpload("fake.png", "image/png", "<script>"u8.ToArray())]);
+        Assert(message.Attachments.Count == 2, "both files are attached to an otherwise empty message");
+        Assert(message.Attachments[0].IsImage && message.Attachments[0].ContentType == "image/png", "a real PNG is shown inline");
+        Assert(!message.Attachments[1].IsImage, "a file that only claims to be an image is served as a download");
+
+        var reloaded = await svc.GetMyTicketByIdAsync(ticket.Id, userId);
+        Assert(reloaded.Messages.Single(m => m.AuthorType == "User").Attachments.Count == 2, "attachments come back with the ticket");
+        Assert(reloaded.Subject == "screen.png", $"a files-only first message names the ticket after the file, got '{reloaded.Subject}'");
+
+        var id = message.Attachments[0].Id;
+        Assert((await svc.GetAttachmentAsync(id, userId, isAdmin: false))?.Data.Length == png.Length, "the owner can download");
+        Assert(await svc.GetAttachmentAsync(id, Guid.NewGuid(), isAdmin: false) is null, "a stranger cannot download");
+        Assert(await svc.GetAttachmentAsync(id, Guid.NewGuid(), isAdmin: true) is not null, "an operator can download");
+
+        var blocked = false;
+        try { await svc.AddMessageAsync(ticket.Id, userId, "x", false, [new SupportUpload("setup.exe", "application/x-msdownload", [1])]); }
+        catch (AuthException) { blocked = true; }
+        Assert(blocked, "executables are refused");
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);

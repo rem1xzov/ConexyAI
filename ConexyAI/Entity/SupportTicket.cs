@@ -52,6 +52,13 @@ public class SupportTicket
     // SUPPORT_BOT: оператор писал в этом тикете. Сбрасывается при «Вернуться к боту» (правило 8).
     public bool AdminActive { get; set; }
 
+    // SUPPORT_MULTI: добавлено 2026-10-18 — у пользователя много обращений сразу, как чатов в мессенджере.
+    /// <summary>Тема обращения (из первого сообщения, если не задана).</summary>
+    public string? Subject { get; set; }
+
+    /// <summary>Когда пользователь последний раз открывал обращение — для счётчика непрочитанных.</summary>
+    public DateTime? UserLastReadAt { get; set; }
+
     /// <summary>Owning user navigation (for admin list display).</summary>
     public User User { get; set; } = null!;
 
@@ -80,4 +87,22 @@ public class SupportMessage
     public SupportMessageAuthor AuthorType { get; set; } = SupportMessageAuthor.User;
 
     public SupportTicket Ticket { get; set; } = null!;
+
+    // SUPPORT_ATTACHMENTS: картинки и файлы к сообщению (байты — в отдельной таблице, в список не грузятся).
+    public ICollection<SupportAttachment> Attachments { get; set; } = new List<SupportAttachment>();
+}
+
+// SUPPORT_ATTACHMENTS: добавлено 2026-10-18
+/// <summary>Файл или картинка в сообщении поддержки. Хранится в БД: объём поддержки мал и не нужен отдельный том.</summary>
+public class SupportAttachment
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid MessageId { get; set; }
+    public string FileName { get; set; } = null!;
+    public string ContentType { get; set; } = null!;
+    public long Size { get; set; }
+    public byte[] Data { get; set; } = null!;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    public SupportMessage Message { get; set; } = null!;
 }

@@ -40,6 +40,8 @@ public class DbConexy : Microsoft.EntityFrameworkCore.DbContext
     // SUPPORT: добавлено 2026-09-19
     public DbSet<SupportTicket> SupportTickets => Set<SupportTicket>();
     public DbSet<SupportMessage> SupportMessages => Set<SupportMessage>();
+    // SUPPORT_ATTACHMENTS: добавлено 2026-10-18
+    public DbSet<SupportAttachment> SupportAttachments => Set<SupportAttachment>();
 
     // EMAIL_VERIFICATION: добавлено 2026-09-24 — неподтверждённые регистрации (код + хэш пароля).
     public DbSet<EmailVerificationCodeEntity> EmailVerificationCodes => Set<EmailVerificationCodeEntity>();

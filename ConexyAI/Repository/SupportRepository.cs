@@ -19,7 +19,54 @@ public class SupportRepository : ISupportRepository
         // SUPPORT_BOT: «открытый» = любой, кроме Closed (бот или эскалация).
         return await _context.SupportTickets
             .AsNoTracking()
-            .FirstOrDefaultAsync(t => t.UserId == userId && t.Status != SupportTicketStatus.Closed, ct);
+            .Where(t => t.UserId == userId && t.Status != SupportTicketStatus.Closed)
+            .OrderByDescending(t => t.LastMessageAt)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    // SUPPORT_MULTI: добавлено 2026-10-18
+    public async Task<IReadOnlyList<(SupportTicket Ticket, SupportMessage? Last, int Unread)>> GetUserTicketsAsync(
+        Guid userId, CancellationToken ct = default)
+    {
+        var rows = await _context.SupportTickets
+            .AsNoTracking()
+            .Where(t => t.UserId == userId)
+            .OrderByDescending(t => t.LastMessageAt)
+            .Take(100)
+            .Select(t => new
+            {
+                Ticket = t,
+                Last = t.Messages.OrderByDescending(m => m.CreatedAt).FirstOrDefault(),
+                // Непрочитанные — ответы бота и оператора после последнего просмотра.
+                Unread = t.Messages.Count(m =>
+                    (m.AuthorType == SupportMessageAuthor.Bot || m.AuthorType == SupportMessageAuthor.Admin)
+                    && (t.UserLastReadAt == null || m.CreatedAt > t.UserLastReadAt)),
+            })
+            .ToListAsync(ct);
+        return rows.Select(r => (r.Ticket, (SupportMessage?)r.Last, r.Unread)).ToList();
+    }
+
+    public Task<int> CountOpenTicketsAsync(Guid userId, CancellationToken ct = default) =>
+        _context.SupportTickets.CountAsync(t => t.UserId == userId && t.Status != SupportTicketStatus.Closed, ct);
+
+    public async Task MarkReadAsync(Guid ticketId, DateTime at, CancellationToken ct = default)
+    {
+        var ticket = await _context.SupportTickets.FirstOrDefaultAsync(t => t.Id == ticketId, ct);
+        if (ticket is null || ticket.UserLastReadAt >= at)
+            return;
+        ticket.UserLastReadAt = at;
+        await _context.SaveChangesAsync(ct);
+    }
+
+    // SUPPORT_ATTACHMENTS: добавлено 2026-10-18
+    public async Task<(SupportAttachment Attachment, Guid OwnerId)?> GetAttachmentAsync(Guid attachmentId, CancellationToken ct = default)
+    {
+        var row = await _context.SupportAttachments
+            .AsNoTracking()
+            .Where(a => a.Id == attachmentId)
+            .Select(a => new { Attachment = a, OwnerId = a.Message.Ticket.UserId })
+            .FirstOrDefaultAsync(ct);
+        return row is null ? null : (row.Attachment, row.OwnerId);
     }
 
     public async Task<SupportTicket> AddTicketAsync(SupportTicket ticket, CancellationToken ct = default)
@@ -31,10 +78,27 @@ public class SupportRepository : ISupportRepository
 
     public async Task<SupportTicket?> GetTicketWithMessagesAsync(Guid ticketId, CancellationToken ct = default)
     {
-        return await _context.SupportTickets
+        var ticket = await _context.SupportTickets
             .AsNoTracking()
             .Include(t => t.Messages)
             .FirstOrDefaultAsync(t => t.Id == ticketId, ct);
+        if (ticket is null)
+            return null;
+
+        // SUPPORT_ATTACHMENTS: только метаданные — байты файлов при открытии чата не грузим.
+        var messageIds = ticket.Messages.Select(m => m.Id).ToList();
+        var attachments = await _context.SupportAttachments
+            .AsNoTracking()
+            .Where(a => messageIds.Contains(a.MessageId))
+            .Select(a => new SupportAttachment
+            {
+                Id = a.Id, MessageId = a.MessageId, FileName = a.FileName, ContentType = a.ContentType,
+                Size = a.Size, CreatedAt = a.CreatedAt, Data = Array.Empty<byte>(),
+            })
+            .ToListAsync(ct);
+        foreach (var message in ticket.Messages)
+            message.Attachments = attachments.Where(a => a.MessageId == message.Id).OrderBy(a => a.CreatedAt).ToList();
+        return ticket;
     }
 
     public async Task<SupportTicket?> GetTicketAsync(Guid ticketId, CancellationToken ct = default)

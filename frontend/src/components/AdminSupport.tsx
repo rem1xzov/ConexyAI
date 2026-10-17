@@ -5,48 +5,24 @@ import {
   getAdminSupportTicket,
   getAdminSupportTickets,
   sendAdminSupportMessage,
+  sendSupportMessageWithFiles,
 } from '../api/conexyApi';
 import { signalrService } from '../services/signalrService';
-import type { AdminSupportTicket, SupportMessage, SupportTicket } from '../types/api';
-import { SendIcon } from './Icons';
+import type { AdminSupportTicket, SupportTicket } from '../types/api';
+import { Composer, MessageList, withMessage } from './support/SupportParts';
 
 interface AdminSupportProps {
   onToast: (message: string) => void;
 }
 
-// I18N_FORMAT: добавлено 2026-09-24 — время и дата форматируются по текущему языку интерфейса,
-// а не всегда по ru-RU.
-function formatTime(iso: string, lang: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit' });
-}
-
+// I18N_FORMAT: добавлено 2026-09-24 — дата форматируется по текущему языку интерфейса.
 function formatDateTime(iso: string, lang: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleString(lang, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
-/** Appends a message unless one with the same id is already there (HTTP reply + hub echo). */
-function withMessage(ticket: SupportTicket, msg: SupportMessage): SupportTicket {
-  if (ticket.messages.some((m) => m.id === msg.id)) return ticket;
-  return { ...ticket, messages: [...ticket.messages, msg] };
-}
 
-// SUPPORT_BOT: оператор видит все роли; система — плашкой по центру.
-function adminMessageClass(m: SupportMessage): string {
-  switch (m.authorType) {
-    case 'Admin':
-      return 'support-msg support-msg--own support-msg--admin';
-    case 'Bot':
-      return 'support-msg support-msg--other support-msg--bot';
-    case 'System':
-      return 'support-msg support-msg--system';
-    default:
-      return 'support-msg support-msg--other';
-  }
-}
 
 // SUPPORT: добавлено 2026-09-19
 /** Admin-side support section: ticket list on the left, selected conversation on the right. */
@@ -60,8 +36,6 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
   const [search, setSearch] = useState('');
   // SUPPORT_BOT: по умолчанию показываем эскалированные обращения — по ним нужен оператор.
   const [status, setStatus] = useState<'Escalated' | 'BotHandling' | 'Closed' | ''>('Escalated');
-  const [draft, setDraft] = useState('');
-  const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // SUPPORT_RACES: добавлено 2026-09-24 (M15) — у каждого запроса свой порядковый номер: ответ,
@@ -69,9 +43,6 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
   // вместо того чтобы подменить собой то, что сейчас на экране.
   const listSeqRef = useRef(0);
   const openSeqRef = useRef(0);
-  // Черновик ответа принадлежит конкретному обращению: при переключении он не должен «переехать»
-  // в чужой тикет, но и не теряется — вернётся, когда админ снова откроет это обращение.
-  const draftsRef = useRef(new Map<string, string>());
 
   async function loadTickets() {
     const seq = ++listSeqRef.current;
@@ -108,10 +79,6 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
     if (id === selectedId && selected?.id === id) return;
     const seq = ++openSeqRef.current;
 
-    // Park the draft of the ticket we are leaving and bring back the one of the ticket we open.
-    if (selectedId) draftsRef.current.set(selectedId, draft);
-    setDraft(draftsRef.current.get(id) ?? '');
-
     setSelectedId(id);
     // The previous conversation must disappear right away: while it stayed on screen under the
     // new ticket's header, a reply typed during the load went to the previous ticket.
@@ -133,35 +100,28 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [selected?.id, selected?.messages.length]);
 
-  async function handleSend() {
-    const content = draft.trim();
-    if (!content || !selected || sending) return;
-    // The reply goes to the ticket that is on screen at the moment of sending — captured here, so
-    // switching tickets while the request is in flight cannot redirect it.
+  // Ответ уходит в то обращение, что было на экране в момент отправки (id захвачен до await).
+  // При ошибке Composer не чистит текст и файлы — ничего не теряется.
+  async function handleSend(content: string, files: File[], onProgress: (p: number) => void): Promise<boolean> {
+    if (!selected) return false;
     const ticketId = selected.id;
-    const viewAtSend = openSeqRef.current;
-    setSending(true);
-    setDraft('');
-    draftsRef.current.delete(ticketId);
     try {
-      const msg = await sendAdminSupportMessage(ticketId, content);
-      // Show our own reply at once (the hub echo is de-duplicated by id).
+      const msg = files.length > 0
+        ? await sendSupportMessageWithFiles(ticketId, content, files, true, onProgress)
+        : await sendAdminSupportMessage(ticketId, content);
       if (msg && msg.id) {
         setSelected((s) => (s && s.id === ticketId ? withMessage(s, msg) : s));
         setTickets((list) =>
           list.map((tk) =>
-            tk.id === ticketId ? { ...tk, lastMessageAt: msg.createdAt, lastMessagePreview: msg.content } : tk,
+            tk.id === ticketId ? { ...tk, lastMessageAt: msg.createdAt, lastMessagePreview: msg.content || '📎' } : tk,
           ),
         );
       }
-    } catch {
-      onToast(t('support.sendError'));
-      // Give the text back: into the input if the admin still looks at that ticket, otherwise into
-      // that ticket's parked draft.
-      if (openSeqRef.current === viewAtSend) setDraft((d) => d || content);
-      else draftsRef.current.set(ticketId, content);
-    } finally {
-      setSending(false);
+      return true;
+    } catch (e) {
+      const message = (e as { response?: { data?: { message?: string } } }).response?.data?.message;
+      onToast(message || t('support.sendError'));
+      return false;
     }
   }
 
@@ -218,6 +178,7 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
                 type="button"
               >
                 <div className="admin-support__ticket-name">{ticket.userGitHubUsername ?? ticket.userEmail ?? t('support.user')}</div>
+                {ticket.subject && <div className="admin-support__ticket-subject">{ticket.subject}</div>}
                 <div className="admin-support__ticket-preview">{ticket.lastMessagePreview ?? '—'}</div>
                 <div className="admin-support__ticket-time">{formatDateTime(ticket.lastMessageAt, lang)}</div>
               </button>
@@ -251,40 +212,17 @@ export function AdminSupport({ onToast }: AdminSupportProps) {
               )}
             </div>
 
-            <div className="admin-support__messages" ref={scrollRef}>
-              {selected.messages.map((m) => (
-                <div key={m.id} className={adminMessageClass(m)}>
-                  {m.authorType === 'Bot' && <div className="support-msg__author">{t('support.botName')}</div>}
-                  {m.authorType === 'Admin' && <div className="support-msg__author">{t('support.operatorName')}</div>}
-                  <div className="support-msg__bubble">{m.content}</div>
-                  {m.authorType !== 'System' && (
-                    <div className="support-msg__time">{formatTime(m.createdAt, lang)}</div>
-                  )}
-                </div>
-              ))}
-            </div>
+            {selected.subject && <div className="admin-support__chat-subject">{selected.subject}</div>}
+            <MessageList messages={selected.messages} operatorView lang={lang} scrollRef={scrollRef} />
 
-            <div className="support-chat__input">
-              <input
-                className="dialog-input"
-                value={draft}
-                placeholder={t('support.replyPlaceholder')}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) void handleSend();
-                }}
-                disabled={selected.status === 'Closed'}
-              />
-              <button
-                className="icon-btn"
-                onClick={() => void handleSend()}
-                disabled={!draft.trim() || sending || selected.status === 'Closed'}
-                aria-label={t('common.send')}
-                type="button"
-              >
-                <SendIcon size={18} />
-              </button>
-            </div>
+            {/* key: у каждого обращения свой черновик — при переключении текст не «переезжает» в чужой тикет. */}
+            <Composer
+              key={selected.id}
+              placeholder={t('support.replyPlaceholder')}
+              disabled={selected.status === 'Closed'}
+              onSend={handleSend}
+              onToast={onToast}
+            />
           </>
         )}
       </div>

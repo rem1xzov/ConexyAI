@@ -265,6 +265,15 @@ export interface AdminPaymentSummary {
 // SUPPORT_BOT: добавлен authorType — в переписке теперь не только user/admin, но и bot/system.
 export type SupportAuthorType = 'User' | 'Bot' | 'Admin' | 'System';
 
+// SUPPORT_ATTACHMENTS: добавлено 2026-10-18 — вложение без байтов (байты — /support/attachments/{id}).
+export interface SupportAttachment {
+  id: string;
+  fileName: string;
+  contentType: string;
+  size: number;
+  isImage: boolean;
+}
+
 export interface SupportMessage {
   id: string;
   ticketId: string;
@@ -273,6 +282,20 @@ export interface SupportMessage {
   createdAt: string;
   authorType: SupportAuthorType;
   isFromAdmin: boolean;
+  attachments?: SupportAttachment[];
+}
+
+// SUPPORT_MULTI: добавлено 2026-10-18 — строка в списке обращений пользователя.
+export interface SupportTicketSummary {
+  id: string;
+  subject: string | null;
+  status: string;
+  botActive: boolean;
+  createdAt: string;
+  lastMessageAt: string;
+  lastMessagePreview: string | null;
+  lastMessageAuthor: SupportAuthorType | null;
+  unreadCount: number;
 }
 
 // SUPPORT_BOT: статус — BotHandling | Escalated | Closed; botActive рулит кнопками бота.
@@ -286,6 +309,7 @@ export interface SupportTicket {
   createdAt: string;
   lastMessageAt: string;
   messages: SupportMessage[];
+  subject?: string | null;
 }
 
 // SUPPORT: добавлено 2026-09-19
@@ -299,6 +323,7 @@ export interface AdminSupportTicket {
   createdAt: string;
   lastMessageAt: string;
   lastMessagePreview: string | null;
+  subject?: string | null;
 }
 
 export interface WorkspaceFileEntry {

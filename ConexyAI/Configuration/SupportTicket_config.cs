@@ -25,6 +25,9 @@ public class SupportTicket_config : IEntityTypeConfiguration<SupportTicket>
         builder.Property(x => x.ClosedAt).IsRequired(false);
         builder.Property(x => x.BotActive).IsRequired();
         builder.Property(x => x.AdminActive).IsRequired();
+        // SUPPORT_MULTI: тема и отметка прочтения — для списка обращений в стиле мессенджера.
+        builder.Property(x => x.Subject).HasMaxLength(120).IsRequired(false);
+        builder.Property(x => x.UserLastReadAt).IsRequired(false);
 
         builder.HasOne(x => x.User)
             .WithMany()
@@ -32,6 +35,27 @@ public class SupportTicket_config : IEntityTypeConfiguration<SupportTicket>
             .OnDelete(DeleteBehavior.Cascade);
 
         builder.HasIndex(x => new { x.Status, x.LastMessageAt });
+        builder.HasIndex(x => new { x.UserId, x.LastMessageAt });
+    }
+}
+
+// SUPPORT_ATTACHMENTS: добавлено 2026-10-18
+public class SupportAttachment_config : IEntityTypeConfiguration<SupportAttachment>
+{
+    public void Configure(EntityTypeBuilder<SupportAttachment> builder)
+    {
+        builder.ToTable("support_attachment");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.FileName).HasMaxLength(255).IsRequired();
+        builder.Property(x => x.ContentType).HasMaxLength(127).IsRequired();
+        builder.Property(x => x.Size).IsRequired();
+        builder.Property(x => x.Data).IsRequired();
+        builder.Property(x => x.CreatedAt).IsRequired();
+        builder.HasOne(x => x.Message)
+            .WithMany(m => m.Attachments)
+            .HasForeignKey(x => x.MessageId)
+            .OnDelete(DeleteBehavior.Cascade);
+        builder.HasIndex(x => x.MessageId);
     }
 }
 

@@ -33,6 +33,7 @@ import type {
   SubscriptionUsage,
   SupportMessage,
   SupportTicket,
+  SupportTicketSummary,
   UserProfile,
   WorkspaceFileContent,
   WorkspaceListing,
@@ -201,6 +202,48 @@ export async function getMySupportTicket(): Promise<SupportTicket | null> {
 
 export async function sendSupportMessage(ticketId: string, content: string): Promise<SupportMessage> {
   const { data } = await http.post<SupportMessage>(`/support/tickets/${ticketId}/messages`, { content });
+  return data;
+}
+
+// SUPPORT_MULTI: добавлено 2026-10-18 — список обращений, новое обращение и одно обращение по id.
+export async function listSupportTickets(): Promise<SupportTicketSummary[]> {
+  const { data } = await http.get<SupportTicketSummary[]>('/support/tickets');
+  return data;
+}
+
+export async function createNewSupportTicket(subject?: string): Promise<SupportTicket> {
+  const { data } = await http.post<SupportTicket>('/support/tickets', { subject: subject ?? null });
+  return data;
+}
+
+export async function getSupportTicket(id: string): Promise<SupportTicket> {
+  const { data } = await http.get<SupportTicket>(`/support/tickets/${id}`);
+  return data;
+}
+
+// SUPPORT_ATTACHMENTS: сообщение с файлами — multipart. admin=true — ответ оператора.
+export async function sendSupportMessageWithFiles(
+  ticketId: string,
+  content: string,
+  files: File[],
+  admin = false,
+  onProgress?: (percent: number) => void,
+): Promise<SupportMessage> {
+  const form = new FormData();
+  form.append('content', content);
+  files.forEach((f) => form.append('files', f, f.name));
+  const url = admin ? `/admin/support/tickets/${ticketId}/messages/upload` : `/support/tickets/${ticketId}/messages/upload`;
+  const { data } = await http.post<SupportMessage>(url, form, {
+    onUploadProgress: (e) => {
+      if (onProgress && e.total) onProgress(Math.round((e.loaded * 100) / e.total));
+    },
+  });
+  return data;
+}
+
+/** Байты вложения с токеном (в <img src> заголовок Authorization не передать). */
+export async function getSupportAttachmentBlob(id: string): Promise<Blob> {
+  const { data } = await http.get<Blob>(`/support/attachments/${id}`, { responseType: 'blob' });
   return data;
 }
 

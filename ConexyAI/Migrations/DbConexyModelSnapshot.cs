@@ -420,6 +420,42 @@ namespace ConexyAI.Migrations
                     b.ToTable("conexy_pending_action", (string)null);
                 });
 
+            modelBuilder.Entity("ConexyAI.Entity.SupportAttachment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(127)
+                        .HasColumnType("character varying(127)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<byte[]>("Data")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<Guid>("MessageId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("Size")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MessageId");
+
+                    b.ToTable("support_attachment", (string)null);
+                });
+
             modelBuilder.Entity("ConexyAI.Entity.SupportMessage", b =>
                 {
                     b.Property<Guid>("Id")
@@ -482,14 +518,21 @@ namespace ConexyAI.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
+                    b.Property<string>("Subject")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTime?>("UserLastReadAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.HasKey("Id");
 
-                    b.HasIndex("UserId");
-
                     b.HasIndex("Status", "LastMessageAt");
+
+                    b.HasIndex("UserId", "LastMessageAt");
 
                     b.ToTable("support_ticket", (string)null);
                 });
@@ -767,6 +810,17 @@ namespace ConexyAI.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("ConexyAI.Entity.SupportAttachment", b =>
+                {
+                    b.HasOne("ConexyAI.Entity.SupportMessage", "Message")
+                        .WithMany("Attachments")
+                        .HasForeignKey("MessageId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Message");
+                });
+
             modelBuilder.Entity("ConexyAI.Entity.SupportMessage", b =>
                 {
                     b.HasOne("ConexyAI.Entity.User", null)
@@ -833,6 +887,11 @@ namespace ConexyAI.Migrations
             modelBuilder.Entity("ConexyAI.Entity.Document", b =>
                 {
                     b.Navigation("Chunks");
+                });
+
+            modelBuilder.Entity("ConexyAI.Entity.SupportMessage", b =>
+                {
+                    b.Navigation("Attachments");
                 });
 
             modelBuilder.Entity("ConexyAI.Entity.SupportTicket", b =>
