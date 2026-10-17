@@ -94,8 +94,12 @@ public sealed class SearchTools
         var max = Math.Clamp(args.Int("max_results") is > 0 and var m ? m : DefaultMaxResults, 1, HardMaxResults);
         var matcher = BuildMatcher(pattern)!;
 
-        var result = EnumerateFiles(baseDir, matcher).Take(max).Select(_guard.Relative).Order(StringComparer.Ordinal).ToList();
-        return ToolResult.Ok(result.Count == 0 ? "No files matched." : string.Join("\n", result));
+        // Сначала сортируем, потом режем: иначе при обрезке получался случайный набор файлов.
+        var all = EnumerateFiles(baseDir, matcher).Select(_guard.Relative).Order(StringComparer.Ordinal).ToList();
+        if (all.Count == 0)
+            return ToolResult.Ok("No files matched.");
+        var text = string.Join("\n", all.Take(max));
+        return ToolResult.Ok(all.Count > max ? text + $"\n… ({all.Count - max} more; narrow the pattern or 'path')" : text);
     }
 
     private static Matcher? BuildMatcher(string? glob)

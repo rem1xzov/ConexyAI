@@ -89,7 +89,7 @@ public sealed class AgentSession : IAsyncDisposable
     private Task RegisterAsync() => _hub.InvokeAsync(
         "RegisterDevice",
         Environment.MachineName,
-        System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+        System.Runtime.InteropServices.RuntimeInformation.OSDescription + (Tools.ShellTool.HasPwsh ? " · PowerShell 7" : string.Empty),
         _tools.Root);
 
     /// <summary>Один ход агента. Возвращает текст ошибки или null при успехе.</summary>

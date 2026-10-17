@@ -81,6 +81,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "pc_list_dir", "pc_read_file", "pc_copy_to_project", "download_file", "install_software",
     };
 
+    // DESKTOP_AGENT: bash на ПК — не одноразовая песочница: другие лимиты и подпапка через cwd (cd между вызовами не сохраняется).
+    private static readonly object DesktopBashSchema =
+        Function("bash", "Выполняет команду в оболочке ПК пользователя (на Windows — PowerShell, см. «Режим десктопа»). Для сборки, тестов, пакетных менеджеров и git. Каждый вызов — новая оболочка в корне проекта; для подпапки используй cwd, а не cd. Команды, кроме чтения, подтверждает пользователь. Долгие сервисы — через bg_start.",
+            new { type = "object", properties = new {
+                command = new { type = "string", description = "Команда" },
+                cwd = new { type = "string", description = "Подпапка относительно корня проекта, например 'frontend' (необязательно)" },
+                timeout_seconds = new { type = "integer", description = "По умолчанию 120, макс. 900" }
+            }, required = new[] { "command" } });
+
     private static readonly IReadOnlyList<object> DesktopToolSchemas = new List<object>
     {
         Function("cmd_exec", "Запасная оболочка: выполняет команду через cmd.exe (Windows) или /bin/sh. Используй, если bash (PowerShell) не запускается или ломает команду. Требует подтверждения.",
@@ -1592,7 +1601,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 && (tool.Name != "take_screenshot" || screenshots)
                 && (!IsBrowserTool(tool.Name) || browserTools)
                 && (tool.Name is not ("start_service" or "stop_service") || _previewService is not null))
-            .Select(tool => tool.Schema)
+            .Select(tool => _job.UseDevice && tool.Name == "bash" ? DesktopBashSchema : tool.Schema)
             .ToList();
 
         if (_job.UseDevice && _profile.Mode is "coder" or "worker")

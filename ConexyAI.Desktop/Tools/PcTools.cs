@@ -25,6 +25,8 @@ public sealed class PcTools : IDisposable
 
     // Папки, чтение которых пользователь уже разрешил в этой сессии (вложенные — тоже).
     private readonly HashSet<string> _readableRoots = new(StringComparer.OrdinalIgnoreCase);
+    // Внешние хосты, запросы к которым пользователь уже разрешил в этой сессии.
+    private readonly HashSet<string> _allowedHosts = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Background> _background = new();
     private int _nextId;
 
@@ -102,8 +104,12 @@ public sealed class PcTools : IDisposable
         _background[id] = bg;
 
         var wait = Math.Clamp(args.Int("wait_seconds") ?? 8, 1, 60);
-        try { await process.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromSeconds(wait)).Token); }
-        catch (OperationCanceledException) { }
+        using (var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            waitCts.CancelAfter(TimeSpan.FromSeconds(wait));
+            try { await process.WaitForExitAsync(waitCts.Token); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+        }
 
         var status = process.HasExited ? $"завершился с кодом {process.ExitCode}" : "работает";
         return new ToolResult(
@@ -157,7 +163,21 @@ public sealed class PcTools : IDisposable
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
             return ToolResult.Fail("Нужен абсолютный http(s) URL, например http://localhost:5000/health.");
 
-        using var request = new HttpRequestMessage(new HttpMethod((args.Str("method") ?? "GET").ToUpperInvariant()), uri);
+        var method = (args.Str("method") ?? "GET").ToUpperInvariant();
+        // К localhost — свободно (проверка своих сервисов). Во внешний интернет — с подтверждением хоста:
+        // иначе письмо/документ с внедрённой инструкцией может вывести данные с ПК без ведома пользователя.
+        if (!uri.IsLoopback)
+        {
+            bool known;
+            lock (_allowedHosts) known = _allowedHosts.Contains(uri.Host);
+            if (!known)
+            {
+                await Require("HTTP-запрос в интернет", $"{method} {url}\n(разрешение действует на {uri.Host} до конца сессии)", ct);
+                lock (_allowedHosts) _allowedHosts.Add(uri.Host);
+            }
+        }
+
+        using var request = new HttpRequestMessage(new HttpMethod(method), uri);
         var headers = args.Dict("headers");
         if (args.Str("body") is { } body)
             request.Content = new StringContent(body, Encoding.UTF8,

@@ -8,9 +8,16 @@ namespace ConexyAI.Desktop.Mcp;
 /// </summary>
 public sealed class LocalTools : IAsyncDisposable
 {
-    private readonly Dictionary<string, StdioMcpClient> _servers = new(StringComparer.Ordinal);
+    private const int MaxOutputChars = 60_000;
 
-    public LocalTools(ICommandApprover approver) => Google = new GoogleConnector(approver);
+    private readonly Dictionary<string, StdioMcpClient> _servers = new(StringComparer.Ordinal);
+    private readonly ICommandApprover _approver;
+
+    public LocalTools(ICommandApprover approver)
+    {
+        _approver = approver;
+        Google = new GoogleConnector(approver);
+    }
 
     public GoogleConnector Google { get; }
 
@@ -65,7 +72,7 @@ public sealed class LocalTools : IAsyncDisposable
         return specs.Take(48).ToList();
     }
 
-    public async Task<ToolResult> CallAsync(string name, string argumentsJson, CancellationToken ct)
+    public async Task<ToolResult> CallAsync(string name, string argumentsJson, PathGuard? project, CancellationToken ct)
     {
         var parts = name.Split("__", 3);
         if (parts.Length != 3)
@@ -73,14 +80,23 @@ public sealed class LocalTools : IAsyncDisposable
         var (server, tool) = (parts[1], parts[2]);
 
         if (server == GoogleConnector.ServerSlug)
-            return await Google.CallAsync(tool, ToolArgs.Parse(argumentsJson), ct);
+            return await Google.CallAsync(tool, ToolArgs.Parse(argumentsJson), project, ct);
 
         if (!_servers.TryGetValue(server, out var client) || client.Error is not null)
             return ToolResult.Fail($"MCP-сервер «{server}» не запущен на ПК пользователя (/mcp — статус).");
         var original = client.Tools.FirstOrDefault(t => Sanitize(t.Tool) == tool).Tool ?? tool;
+
+        // Сторонний MCP-сервер может писать файлы, выполнять команды и ходить в сеть — как в Claude Desktop,
+        // спрашиваем (в авто-режиме подтверждение пропускается).
+        var preview = argumentsJson.Length > 400 ? argumentsJson[..400] + "…" : argumentsJson;
+        if (!await _approver.ApproveAsync($"MCP «{server}»", $"{original} {preview}".TrimEnd(), "ПК", ct))
+            return ToolResult.Fail("Пользователь отклонил вызов инструмента. Не повторяй его; спроси, что делать.");
+
         try
         {
             var (text, isError) = await client.CallAsync(original, argumentsJson, ct);
+            if (text.Length > MaxOutputChars)
+                text = text[..MaxOutputChars] + $"\n[… ответ обрезан: всего {text.Length} символов]";
             return new ToolResult(text.Length == 0 ? "(пустой ответ)" : text, isError);
         }
         catch (InvalidOperationException ex)

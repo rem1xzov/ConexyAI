@@ -74,7 +74,7 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
         // ОС и путь попадают в промпт, поэтому чистим: одна строка, без управляющих символов, ограниченная длина.
         static string Clean(string? v, int max) =>
             new string((v ?? string.Empty).Where(c => !char.IsControl(c)).Take(max).ToArray()).Trim();
-        _devices[userId] = new Device(connectionId, Clean(name, 100), Clean(os, 40), Clean(workspace, 260));
+        _devices[userId] = new Device(connectionId, Clean(name, 100), Clean(os, 80), Clean(workspace, 260));
         _logger.LogInformation("Desktop device registered: user={UserId} connection={ConnectionId} name={Name}", userId, connectionId, name);
     }
 

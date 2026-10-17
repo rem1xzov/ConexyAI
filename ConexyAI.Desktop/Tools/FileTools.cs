@@ -44,7 +44,7 @@ public sealed class FileTools
         var path = _guard.ResolveForWrite(args.Required("path", "file_write"));
         var content = args.Str("content") ?? string.Empty;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, content, Utf8NoBom);
+        WriteText(path, content);
         return ToolResult.Ok($"File '{args.Str("path")}' written.");
     }
 
@@ -58,8 +58,28 @@ public sealed class FileTools
 
         var original = File.ReadAllText(path);
         var updated = ReplaceUnique(original, search, replace, args.Str("path")!);
-        File.WriteAllText(path, updated, Utf8NoBom);
+        WriteText(path, updated);
         return ToolResult.Ok($"Patched '{args.Str("path")}'.");
+    }
+
+    /// <summary>Пишет UTF-8, сохраняя BOM, если он был у файла (иначе правка даёт лишний diff в первой строке).</summary>
+    internal static void WriteText(string path, string content) =>
+        File.WriteAllText(path, content, HasUtf8Bom(path) ? new UTF8Encoding(true) : Utf8NoBom);
+
+    private static bool HasUtf8Bom(string path)
+    {
+        if (!File.Exists(path))
+            return false;
+        Span<byte> head = stackalloc byte[3];
+        using var stream = File.OpenRead(path);
+        return stream.Read(head) == 3 && head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF;
+    }
+
+    /// <summary>Приводит переводы строк вставки к стилю файла, чтобы не получить смесь CRLF и LF.</summary>
+    private static string MatchLineEndings(string text, string replace)
+    {
+        var lf = replace.Replace("\r\n", "\n");
+        return text.Contains("\r\n") ? lf.Replace("\n", "\r\n") : lf;
     }
 
     /// <summary>Заменяет ровно одно вхождение; допускает расхождение в окончаниях строк (CRLF/LF).</summary>
@@ -67,7 +87,7 @@ public sealed class FileTools
     {
         var count = CountOccurrences(text, search);
         if (count == 1)
-            return ReplaceFirst(text, search, replace);
+            return ReplaceFirst(text, search, MatchLineEndings(text, replace));
         if (count > 1)
             throw new ToolException($"Блок найден {count} раз в '{label}' — добавь контекста, чтобы он был уникальным.");
 
@@ -77,7 +97,7 @@ public sealed class FileTools
             var crlfSearch = search.Replace("\n", "\r\n");
             var crlfCount = CountOccurrences(text, crlfSearch);
             if (crlfCount == 1)
-                return ReplaceFirst(text, crlfSearch, replace.Replace("\r\n", "\n").Replace("\n", "\r\n"));
+                return ReplaceFirst(text, crlfSearch, MatchLineEndings(text, replace));
             if (crlfCount > 1)
                 throw new ToolException($"Блок найден {crlfCount} раз в '{label}' — добавь контекста, чтобы он был уникальным.");
         }

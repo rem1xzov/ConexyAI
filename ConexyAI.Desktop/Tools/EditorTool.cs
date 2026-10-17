@@ -82,7 +82,7 @@ public sealed class EditorTool
         var original = File.ReadAllText(path);
         var updated = FileTools.ReplaceUnique(original, oldStr, args.Str("new_str") ?? string.Empty, rawPath);
         _undo[path] = original;
-        File.WriteAllText(path, updated, Utf8NoBom);
+        FileTools.WriteText(path, updated);
         return ToolResult.Ok($"Replaced in '{rawPath}'.");
     }
 
@@ -101,7 +101,7 @@ public sealed class EditorTool
 
         lines.InsertRange(line, (args.Str("new_str") ?? string.Empty).Replace("\r\n", "\n").Split('\n'));
         _undo[path] = original;
-        File.WriteAllText(path, string.Join(eol, lines), Utf8NoBom);
+        FileTools.WriteText(path, string.Join(eol, lines));
         return ToolResult.Ok($"Inserted into '{rawPath}' after line {line}.");
     }
 
@@ -114,7 +114,7 @@ public sealed class EditorTool
         if (previous is null)
             File.Delete(path);
         else
-            File.WriteAllText(path, previous, Utf8NoBom);
+            FileTools.WriteText(path, previous);
         _undo.Remove(path);
         return ToolResult.Ok($"Reverted '{rawPath}'.");
     }

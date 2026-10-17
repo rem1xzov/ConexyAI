@@ -63,9 +63,23 @@ public static partial class CommandPolicy
         if (parts.Length == 0)
             return false;
         if (parts[0].Equals("git", StringComparison.OrdinalIgnoreCase))
-            return parts.Length > 1 && ReadOnlyGit.Contains(parts[1]);
+        {
+            if (parts.Length < 2 || !ReadOnlyGit.Contains(parts[1]))
+                return false;
+            // `git diff/log --output=file` пишет файл.
+            if (parts.Any(p => p.StartsWith("--output", StringComparison.OrdinalIgnoreCase)))
+                return false;
+            // `git branch x` создаёт ветку, `git branch -D x` удаляет — без вопроса только просмотр.
+            return !parts[1].Equals("branch", StringComparison.OrdinalIgnoreCase)
+                   || parts.Skip(2).All(p => ReadOnlyBranchFlags.Contains(p));
+        }
         return ReadOnlyHeads.Contains(parts[0]);
     }
+
+    private static readonly HashSet<string> ReadOnlyBranchFlags = new(StringComparer.Ordinal)
+    {
+        "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list", "--show-current",
+    };
 
     [GeneratedRegex(@"[;&|<>`]|\$\(|\r|\n")]
     private static partial Regex ChainChars();
@@ -96,7 +110,11 @@ public sealed partial class ShellTool
     {
         var command = args.Required("command", tool);
         var timeout = Math.Clamp(args.Int("timeout_seconds") ?? DefaultTimeoutSeconds, 1, MaxTimeoutSeconds);
-        var result = await ExecuteAsync(command, timeout, requireApproval: true, ct, useCmd: tool == "cmd_exec");
+        // Оболочка новая на каждый вызов, `cd` не сохраняется — подпапка задаётся явно и не выходит за проект.
+        var cwd = args.Str("cwd") is { Length: > 0 } dir ? _guard.Resolve(dir) : _guard.Root;
+        if (!Directory.Exists(cwd))
+            return ToolResult.Fail($"Папка '{args.Str("cwd")}' не найдена в проекте.");
+        var result = await ExecuteAsync(command, timeout, requireApproval: true, ct, useCmd: tool == "cmd_exec", workingDirectory: cwd);
         // Если сама оболочка не запустилась — подсказываем модели обходной путь.
         if (result.IsError && result.Output.StartsWith("Не удалось запустить команду") && tool != "cmd_exec")
             return ToolResult.Fail(result.Output + "\nОбход: выполни ту же команду через cmd_exec, а для файлов используй file_read/grep/glob/apply_patch.");
@@ -131,17 +149,19 @@ public sealed partial class ShellTool
         ExecuteAsync(command, timeoutSeconds, requireApproval: false, ct);
 
     private async Task<ToolResult> ExecuteAsync(
-        string command, int timeoutSeconds, bool requireApproval, CancellationToken ct, bool useCmd = false, bool skipPolicy = false)
+        string command, int timeoutSeconds, bool requireApproval, CancellationToken ct, bool useCmd = false, bool skipPolicy = false,
+        string? workingDirectory = null)
     {
+        workingDirectory ??= _guard.Root;
         if (!skipPolicy && CommandPolicy.ForbiddenReason(command) is { } reason)
             return ToolResult.Fail(reason);
 
         if (requireApproval && !CommandPolicy.IsReadOnly(command)
-            && !await _approver.ApproveAsync(useCmd ? "cmd" : "Bash", command, _guard.Root, ct))
+            && !await _approver.ApproveAsync(useCmd ? "cmd" : "Bash", command, workingDirectory, ct))
             return ToolResult.Fail("Пользователь отклонил выполнение команды. Не повторяй её; предложи другой путь или спроси, что делать.");
 
         var psi = CreateShell(command, useCmd);
-        psi.WorkingDirectory = _guard.Root;
+        psi.WorkingDirectory = workingDirectory;
         psi.RedirectStandardOutput = true;
         psi.RedirectStandardError = true;
         psi.RedirectStandardInput = true;
@@ -168,7 +188,9 @@ public sealed partial class ShellTool
             psi.Environment["GIT_CONFIG_VALUE_0"] = "AUTHORIZATION: basic " + basic;
         }
 
-        using var process = new Process { StartInfo = psi };
+        using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        process.Exited += (_, _) => exited.TrySetResult();
         var output = new StringBuilder();
         var sync = new object();
         void Append(string? line)
@@ -198,8 +220,10 @@ public sealed partial class ShellTool
         var timedOut = false;
         try
         {
-            await process.WaitForExitAsync(timeoutCts.Token);
-            process.WaitForExit(); // дочитать потоки вывода
+            // Ждём выход самого процесса, а не EOF вывода: запущенные командой фоновые потомки
+            // (Start-Process, dev-серверы) держат pipe открытым, и ожидание EOF висело бы до таймаута.
+            await exited.Task.WaitAsync(timeoutCts.Token);
+            process.WaitForExit(TimeSpan.FromSeconds(3)); // дочитать хвост вывода
         }
         catch (OperationCanceledException)
         {
@@ -238,18 +262,20 @@ public sealed partial class ShellTool
         {
             if (!wrapExitCode)
             {
-                var bg = new ProcessStartInfo("powershell.exe");
+                var bg = new ProcessStartInfo(PowerShellExe);
                 foreach (var a in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command })
                     bg.ArgumentList.Add(a);
                 return bg;
             }
-            var psi = new ProcessStartInfo("powershell.exe");
+            var psi = new ProcessStartInfo(PowerShellExe);
             psi.ArgumentList.Add("-NoLogo");
             psi.ArgumentList.Add("-NoProfile");
             psi.ArgumentList.Add("-NonInteractive");
             psi.ArgumentList.Add("-Command");
-            // Сохраняем код возврата нативных команд и UTF-8 вывод.
-            psi.ArgumentList.Add("[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command + "; if ($LASTEXITCODE) { exit $LASTEXITCODE }");
+            // UTF-8 вывод и честный код возврата: и нативных команд ($LASTEXITCODE), и упавших
+            // cmdlet'ов ($?). Хвост — с новой строки, чтобы `# комментарий` в команде его не съел.
+            psi.ArgumentList.Add("[Console]::OutputEncoding=[Text.Encoding]::UTF8; $global:LASTEXITCODE = 0\n" + command
+                                 + "\n$__ok = $?; if ($LASTEXITCODE) { exit $LASTEXITCODE } elseif (-not $__ok) { exit 1 }");
             return psi;
         }
 
@@ -257,6 +283,34 @@ public sealed partial class ShellTool
         sh.ArgumentList.Add("-c");
         sh.ArgumentList.Add(command);
         return sh;
+    }
+
+    private static readonly Lazy<string?> Pwsh = new(FindPwsh);
+
+    /// <summary>PowerShell 7 (если установлен): в нём работают `&&`/`||`, которые модели пишут по привычке.</summary>
+    public static bool HasPwsh => OperatingSystem.IsWindows() && Pwsh.Value is not null;
+
+    private static string PowerShellExe => Pwsh.Value ?? "powershell.exe";
+
+    private static string? FindPwsh()
+    {
+        if (!OperatingSystem.IsWindows())
+            return null;
+        var program = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var candidates = new[] { Path.Combine(program, "PowerShell", "7", "pwsh.exe") }
+            .Concat((Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                .Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Select(dir => Path.Combine(dir.Trim(), "pwsh.exe")));
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+            catch (ArgumentException) { /* мусор в PATH */ }
+        }
+        return null;
     }
 
     private static string Truncate(string text)

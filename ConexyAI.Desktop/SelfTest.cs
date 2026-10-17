@@ -81,6 +81,9 @@ public static class SelfTest
             await Check("shell approved", approved, "bash", System.Text.Json.JsonSerializer.Serialize(new { command = echo }), r => !r.IsError && r.Output.Contains("hi"));
             await Check("shell exit code", approved, "bash", System.Text.Json.JsonSerializer.Serialize(new { command = "exit 3" }), r => r.IsError && r.Output.Contains("Exit code: 3"));
             await Check("cmd fallback", approved, "cmd_exec", """{"command":"echo hi"}""", r => !r.IsError && r.Output.Contains("hi"));
+            await Check("shell cwd", approved, "bash", """{"command":"pwd","cwd":"src"}""", r => !r.IsError && r.Output.Contains("src"));
+            await Check("shell cwd escape", approved, "bash", """{"command":"pwd","cwd":".."}""", r => r.IsError && r.Output.Contains("вне рабочей папки"));
+            await Check("cmdlet failure exit code", approved, "bash", """{"command":"Get-Item C:\\nope_conexy_xyz"}""", r => !OperatingSystem.IsWindows() || r.IsError);
 
             var outside = Path.Combine(Path.GetTempPath(), "conexy-outside-" + Guid.NewGuid().ToString("N") + ".log");
             File.WriteAllText(outside, "line1\nline2\nERROR boom\n");

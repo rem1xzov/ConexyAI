@@ -151,11 +151,14 @@ public static class PromptFragments
     public static string DesktopEnvironment(string os, string workspace, string deviceName)
     {
         var isWindows = os.Contains("windows", StringComparison.OrdinalIgnoreCase);
+        var pwsh7 = os.Contains("PowerShell 7", StringComparison.OrdinalIgnoreCase);
         var shell = isWindows
-            ? "Команды `bash` выполняются в **Windows PowerShell**, не в bash: нет `grep`/`sed`/`cat`/`&&` в старом PowerShell, пути с `\\`. " +
+            ? (pwsh7
+                  ? "Команды `bash` выполняются в **PowerShell 7** (pwsh), не в bash: `&&`/`||` работают, но нет `grep`/`sed`/`cat -A`, пути с `\\`. "
+                  : "Команды `bash` выполняются в **Windows PowerShell 5.1**, не в bash: нет `grep`/`sed`/`&&`/`||`, пути с `\\`. Несколько команд разделяй `;`. ") +
               "Для поиска/чтения/правки файлов бери `grep`, `glob`, `file_read`, `apply_patch`, а `bash` — только для сборки, тестов и git. " +
-              "Несколько команд в одной строке разделяй `;`."
-            : "Команды `bash` выполняются в `/bin/sh`.";
+              "Каждый вызов — новая оболочка: `cd` не сохраняется, для подпапки передавай параметр `cwd` (например `cwd: \"frontend\"`)."
+            : "Команды `bash` выполняются в `/bin/sh`. Каждый вызов — новая оболочка; для подпапки передавай `cwd`.";
 
         return
             "## Режим десктопа\n" +
@@ -168,6 +171,7 @@ public static class PromptFragments
             "### Инструменты ПК\n" +
             "- Сервисы (бекенд, фронтенд, `docker compose up`, локальная БД) запускай через `bg_start` — не через `bash`: bash ждёт завершения и упадёт по таймауту. Вывод — `bg_logs`, остановка — `bg_stop`.\n" +
             "- Проверка работы: `http_request` (любой адрес, в т.ч. http://localhost:<порт>) и `page_screenshot` — снимок страницы в браузере ПК, картинка приходит тебе. Дождись, пока сервис поднимется (`bg_logs` / `http_request`), прежде чем снимать.\n" +
+            "- Для внешних адресов (не localhost) `http_request` спрашивает разрешение пользователя на хост.\n" +
             "- Файлы вне проекта (логи, конфиги, скачанное): `pc_list_dir`, `pc_read_file` — абсолютные пути, только чтение; `pc_copy_to_project` — скопировать файл в проект. Менять и удалять файлы вне проекта нельзя. Каждое чтение вне проекта подтверждает человек. Не проси пользователя прислать лог, если можешь прочитать его сам.\n" +
             "- Чего-то нет на ПК (Python, Node.js, Docker, Git…): сначала проверь (`bash: Get-Command node`), затем `install_software` (winget) или `download_file` — оба с подтверждением пользователя. После установки новый PATH подхватывается автоматически.\n" +
             "- Если `bash` возвращает ошибку запуска оболочки или странно падает на рабочей команде — используй `cmd_exec` (та же команда через cmd.exe), а для файлов — `file_read`/`grep`/`glob`/`apply_patch`, они не зависят от оболочки.";

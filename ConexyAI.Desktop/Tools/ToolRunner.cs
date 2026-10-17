@@ -40,7 +40,7 @@ public sealed class ToolRunner
             if (tool.StartsWith("local__", StringComparison.Ordinal))
                 return _local is null
                     ? ToolResult.Fail("Локальные инструменты не подключены.")
-                    : await _local.CallAsync(tool, argumentsJson, ct);
+                    : await _local.CallAsync(tool, argumentsJson, _guard, ct);
 
             return tool switch
             {

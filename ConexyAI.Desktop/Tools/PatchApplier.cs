@@ -11,8 +11,6 @@ namespace ConexyAI.Desktop.Tools;
 /// </summary>
 public sealed partial class PatchApplier
 {
-    private static readonly UTF8Encoding Utf8NoBom = new(false);
-
     private sealed class Hunk
     {
         public int OldStart;
@@ -83,7 +81,7 @@ public sealed partial class PatchApplier
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, content, Utf8NoBom);
+            FileTools.WriteText(path, content);
         }
 
         return ToolResult.Ok("Patch applied:\n" + summary.ToString().TrimEnd());
