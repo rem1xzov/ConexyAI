@@ -35,12 +35,14 @@ public sealed class SearchTools
 
         var max = Math.Clamp(args.Int("max_results") is > 0 and var m ? m : DefaultMaxResults, 1, HardMaxResults);
         var matcher = BuildMatcher(args.Str("glob"));
+        var context = Math.Clamp(args.Int("context_lines") ?? 0, 0, 10);
+        var mode = args.Str("output_mode") ?? "content";
 
         var sb = new StringBuilder();
-        int found = 0, searched = 0;
+        int found = 0, searched = 0, files = 0;
         var truncated = false;
 
-        foreach (var file in EnumerateFiles(baseDir, matcher))
+        foreach (var file in EnumerateFiles(baseDir, matcher, args.Bool("include_ignored") == true))
         {
             if (new FileInfo(file).Length > MaxFileBytes)
                 continue;
@@ -57,6 +59,9 @@ public sealed class SearchTools
             catch (UnauthorizedAccessException) { continue; }
 
             searched++;
+            var relative = _guard.Relative(file);
+            var fileHits = 0;
+            var lastPrinted = -1;
             for (var i = 0; i < lines.Length; i++)
             {
                 var line = lines[i].TrimEnd('\r');
@@ -67,13 +72,36 @@ public sealed class SearchTools
                 if (!hit)
                     continue;
 
-                sb.Append(_guard.Relative(file)).Append(':').Append(i + 1).Append(": ")
-                  .AppendLine(line.Length > 300 ? line[..300] + "…" : line);
+                fileHits++;
+                if (mode == "files")
+                    break; // достаточно знать, что файл подходит
+                if (mode == "count")
+                    continue;
+
+                // Как grep -C: строки вокруг совпадения, без повторов; контекст помечен «-», совпадение «:».
+                var from = Math.Max(lastPrinted + 1, i - context);
+                if (context > 0 && lastPrinted >= 0 && from > lastPrinted + 1)
+                    sb.AppendLine("--");
+                for (var j = from; j <= Math.Min(lines.Length - 1, i + context); j++)
+                {
+                    var text = lines[j].TrimEnd('\r');
+                    sb.Append(relative).Append(j == i ? ':' : '-').Append(j + 1).Append(j == i ? ": " : "- ")
+                      .AppendLine(text.Length > 300 ? text[..300] + "…" : text);
+                    lastPrinted = j;
+                }
                 if (++found >= max)
                 {
                     truncated = true;
                     break;
                 }
+            }
+
+            if (fileHits > 0 && mode is "files" or "count")
+            {
+                sb.AppendLine(mode == "files" ? relative : $"{relative}: {fileHits}");
+                found += fileHits;
+                if (++files >= max)
+                    truncated = true;
             }
 
             if (truncated)
@@ -95,7 +123,7 @@ public sealed class SearchTools
         var matcher = BuildMatcher(pattern)!;
 
         // Сначала сортируем, потом режем: иначе при обрезке получался случайный набор файлов.
-        var all = EnumerateFiles(baseDir, matcher).Select(_guard.Relative).Order(StringComparer.Ordinal).ToList();
+        var all = EnumerateFiles(baseDir, matcher, args.Bool("include_ignored") == true).Select(_guard.Relative).Order(StringComparer.Ordinal).ToList();
         if (all.Count == 0)
             return ToolResult.Ok("No files matched.");
         var text = string.Join("\n", all.Take(max));
@@ -111,8 +139,44 @@ public sealed class SearchTools
         return matcher;
     }
 
-    private IEnumerable<string> EnumerateFiles(string dir, Matcher? matcher)
+    /// <summary>
+    /// Правила корневого .gitignore как glob-исключения (упрощённо: без «!» и вложенных .gitignore).
+    /// Чтобы поиск не тонул в сборочных артефактах, кэшах и сгенерированном коде — как ripgrep.
+    /// </summary>
+    private Matcher? GitIgnore()
     {
+        var path = Path.Combine(_guard.Root, ".gitignore");
+        if (!File.Exists(path))
+            return null;
+        var matcher = new Matcher(StringComparison.OrdinalIgnoreCase);
+        var any = false;
+        string[] lines;
+        try { lines = File.ReadAllLines(path); }
+        catch (IOException) { return null; }
+        foreach (var raw in lines)
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line[0] is '#' or '!')
+                continue;
+            var anchored = line.StartsWith('/') || line.TrimEnd('/').Contains('/');
+            var pattern = line.Trim('/');
+            if (pattern.Length == 0)
+                continue;
+            var prefix = anchored ? string.Empty : "**/";
+            matcher.AddInclude(prefix + pattern + "/**");
+            if (!line.EndsWith('/'))
+                matcher.AddInclude(prefix + pattern);
+            any = true;
+        }
+        return any ? matcher : null;
+    }
+
+    private IEnumerable<string> EnumerateFiles(string dir, Matcher? matcher, bool includeIgnored = false)
+    {
+        var ignore = includeIgnored ? null : GitIgnore();
+        bool Ignored(string full, bool isDir) =>
+            ignore is not null && ignore.Match(Path.GetRelativePath(_guard.Root, full).Replace('\\', '/') + (isDir ? "/.x" : string.Empty)).HasMatches;
+
         var stack = new Stack<string>();
         stack.Push(dir);
         while (stack.Count > 0)
@@ -128,10 +192,10 @@ public sealed class SearchTools
                 var name = Path.GetFileName(entry);
                 if (Directory.Exists(entry))
                 {
-                    if (!FileTools.IgnoredDirs.Contains(name) && new DirectoryInfo(entry).LinkTarget is null)
+                    if (!FileTools.IgnoredDirs.Contains(name) && new DirectoryInfo(entry).LinkTarget is null && !Ignored(entry, isDir: true))
                         stack.Push(entry);
                 }
-                else if (matcher is null || matcher.Match(Path.GetRelativePath(dir, entry).Replace('\\', '/')).HasMatches)
+                else if ((matcher is null || matcher.Match(Path.GetRelativePath(dir, entry).Replace('\\', '/')).HasMatches) && !Ignored(entry, isDir: false))
                 {
                     yield return entry;
                 }

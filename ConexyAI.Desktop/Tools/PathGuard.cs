@@ -15,6 +15,9 @@ public sealed class PathGuard
 
     public string Root { get; }
 
+    /// <summary>Снимок файла перед записью (для /rewind). Вызывается для каждого пути записи.</summary>
+    public Action<string>? BeforeWrite { get; set; }
+
     public PathGuard(string root)
     {
         Root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
@@ -43,6 +46,7 @@ public sealed class PathGuard
             .Any(part => part.Equals(".git", Cmp)))
             throw new ToolException("Запись внутрь .git запрещена.");
 
+        BeforeWrite?.Invoke(full);
         return full;
     }
 

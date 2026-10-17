@@ -16,6 +16,9 @@ public interface ICommandApprover
     /// <summary>Действие от имени пользователя во внешнем сервисе (отправка письма): спрашиваем всегда, даже в авто-режиме.</summary>
     Task<bool> ApproveSensitiveAsync(string title, string details, string where, CancellationToken ct) =>
         ApproveAsync(title, details, where, ct);
+
+    /// <summary>Вопрос агента пользователю (ask_user). null — ответить некому.</summary>
+    Task<string?> AskUserAsync(string question, string[] options, CancellationToken ct) => Task.FromResult<string?>(null);
 }
 
 /// <summary>Правила для команд: что запрещено безусловно и что безопасно выполнять без вопроса.</summary>
@@ -80,6 +83,9 @@ public static partial class CommandPolicy
     {
         "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list", "--show-current",
     };
+
+    /// <summary>Есть ли в команде цепочки, перенаправления или подстановки (тогда по префиксу её не разрешаем).</summary>
+    public static bool IsCompound(string command) => ChainChars().IsMatch(command.Trim());
 
     [GeneratedRegex(@"[;&|<>`]|\$\(|\r|\n")]
     private static partial Regex ChainChars();

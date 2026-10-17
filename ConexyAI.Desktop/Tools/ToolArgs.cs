@@ -55,6 +55,13 @@ public sealed class ToolArgs
         return result;
     }
 
+    public string[]? StrArray(string name)
+    {
+        if (_root.ValueKind != JsonValueKind.Object || !_root.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Array)
+            return null;
+        return v.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToArray();
+    }
+
     public int[]? IntArray(string name)
     {
         if (_root.ValueKind != JsonValueKind.Object || !_root.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Array)

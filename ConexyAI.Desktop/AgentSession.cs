@@ -32,6 +32,28 @@ public sealed class AgentSession : IAsyncDisposable
     /// <summary>Инструменты ПК сверх файлов: Google и локальные MCP-серверы.</summary>
     public Mcp.LocalTools? Local { get; set; }
 
+    /// <summary>Текст ответа агента за последний ход (для /compact и режима плана).</summary>
+    public string LastAnswer => _answer.ToString();
+    private readonly System.Text.StringBuilder _answer = new();
+
+    /// <summary>
+    /// Приписка к следующему сообщению (служебный контекст для агента): «пользователь откатил файлы», пересказ
+    /// прошлого чата после /compact. Статическая, чтобы пережить смену чата.
+    /// </summary>
+    public static string? PendingNote { get; set; }
+
+    /// <summary>Режим плана: к сообщению добавляется инструкция, а клиент блокирует правки.</summary>
+    public bool PlanMode
+    {
+        get => _tools.PlanMode;
+        set => _tools.PlanMode = value;
+    }
+
+    public const string PlanPrefix =
+        "[РЕЖИМ ПЛАНА] Ничего не меняй. Изучи проект (чтение, поиск, просмотр, команды только на чтение) и предложи " +
+        "подробный пошаговый план: какие файлы и что изменить, какие команды выполнить, риски и как проверить результат. " +
+        "Правки файлов и изменяющие команды заблокированы до одобрения плана.\n\n";
+
     public AgentSession(ServerClient server, ToolRunner tools, Guid chatId)
     {
         _server = server;
@@ -61,6 +83,7 @@ public sealed class AgentSession : IAsyncDisposable
         _hub.On<string, string?>("OnContentToken", (delta, _) =>
         {
             _streamedAnything = true;
+            _answer.Append(delta);
             Ui.Idle();
             if (_needBullet)
             {
@@ -99,7 +122,17 @@ public sealed class AgentSession : IAsyncDisposable
         _turnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _streamedAnything = false;
         _needBullet = true;
+        _answer.Clear();
         Ui.Busy();
+
+        _tools.Checkpoints.BeginTurn(prompt);
+        if (PendingNote is { } note)
+        {
+            prompt = note + "\n\n" + prompt;
+            PendingNote = null;
+        }
+        if (PlanMode)
+            prompt = PlanPrefix + prompt;
 
         var taskId = await _server.StartRunAsync(
             prompt, _chatId, Orchestra && Mode == "coder", Attachments.Pending.ToList(), ct,

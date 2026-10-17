@@ -128,8 +128,12 @@ public record LlmUsage(
     [property: JsonPropertyName("prompt_tokens")] int PromptTokens = 0,
     [property: JsonPropertyName("completion_tokens")] int CompletionTokens = 0,
     [property: JsonPropertyName("prompt_cache_hit_tokens")] int PromptCacheHitTokens = 0,
-    [property: JsonPropertyName("prompt_cache_miss_tokens")] int PromptCacheMissTokens = 0
+    [property: JsonPropertyName("prompt_cache_miss_tokens")] int PromptCacheMissTokens = 0,
+    // Формат OpenAI для кэша — на случай другого совместимого апстрима или прокси.
+    [property: JsonPropertyName("prompt_tokens_details")] LlmPromptTokensDetails? PromptTokensDetails = null
 );
+
+public record LlmPromptTokensDetails([property: JsonPropertyName("cached_tokens")] int CachedTokens = 0);
 
 /// <summary>Result of a non-streaming chat completion: the message plus token usage.</summary>
 public record LlmChatResult(ChatMessage Message, int TotalTokens, LlmTokenUsage? Usage = null);

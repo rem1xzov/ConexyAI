@@ -13,12 +13,24 @@ public sealed class ToolRunner
     private readonly WindowTools _windows;
     private readonly Action<string> _log;
     private readonly Mcp.LocalTools? _local;
+    private readonly ICommandApprover _approver;
+
+    /// <summary>Контрольные точки файлов за ходы агента (/rewind).</summary>
+    public Checkpoints Checkpoints { get; } = new();
+
+    /// <summary>
+    /// Режим плана (/plan): агент только изучает проект. Запрет проверяет сам клиент — на послушание
+    /// модели не полагаемся.
+    /// </summary>
+    public bool PlanMode { get; set; }
 
     public ToolRunner(string workspaceRoot, ICommandApprover approver, Action<string> log,
             Func<CancellationToken, Task<string?>>? gitHubToken = null, Mcp.LocalTools? local = null)
     {
         _local = local;
+        _approver = approver;
         _guard = new PathGuard(workspaceRoot);
+        _guard.BeforeWrite = Checkpoints.BeforeWrite;
         _files = new FileTools(_guard);
         _search = new SearchTools(_guard);
         _editor = new EditorTool(_guard, _files);
@@ -36,6 +48,13 @@ public sealed class ToolRunner
         try
         {
             var args = ToolArgs.Parse(argumentsJson);
+            // Служебный запрос сервера в начале каждого хода — без строки в терминале.
+            if (tool == "project_rules")
+                return ProjectRules(args);
+            if (tool == "ask_user")
+                return await AskUserAsync(args, ct);
+            if (PlanMode && PlanBlockReason(tool, args) is { } blocked)
+                return ToolResult.Fail(blocked);
             _log(Describe(tool, args));
 
             // LOCAL_MCP: Google и локальные MCP-серверы.
@@ -92,6 +111,68 @@ public sealed class ToolRunner
         {
             return ToolResult.Fail("Сетевая ошибка: " + ex.Message);
         }
+    }
+
+    // Имена файлов правил — фиксированные: сервер не може этим тихим вызовом читать произвольные файлы.
+    private static readonly HashSet<string> RuleFiles = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CONEXY.md", "CLAUDE.md", "AGENTS.md", ".conexy/rules.md", ".conexy/hooks.json",
+    };
+
+    private async Task<ToolResult> AskUserAsync(ToolArgs args, CancellationToken ct)
+    {
+        var question = args.Required("question", "ask_user");
+        var options = (args.StrArray("options") ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).Take(6).ToArray();
+        var answer = await _approver.AskUserAsync(question, options, ct);
+        return answer is null
+            ? ToolResult.Fail("Пользователь не ответил. Прими разумное решение сам и явно напиши о нём в итоге.")
+            : ToolResult.Ok("Ответ пользователя: " + answer);
+    }
+
+    private static readonly HashSet<string> PlanWriteTools = new(StringComparer.Ordinal)
+    {
+        "file_write", "file_patch", "apply_patch", "file_write_bytes", "bg_start", "install_software",
+        "download_file", "pc_copy_to_project", "window_keys",
+    };
+
+    /// <summary>Почему инструмент запрещён в режиме плана (null — разрешён: чтение, поиск, просмотр).</summary>
+    private static string? PlanBlockReason(string tool, ToolArgs args)
+    {
+        const string why = "РЕЖИМ ПЛАНА: изменения запрещены. Ничего не меняй — изучи проект и опиши этот шаг в плане.";
+        if (PlanWriteTools.Contains(tool))
+            return why;
+        if (tool == "str_replace_editor" && args.Str("command") != "view")
+            return why;
+        if (tool is "bash" or "terminal_exec" or "cmd_exec" && !CommandPolicy.IsReadOnly(args.Str("command") ?? string.Empty))
+            return why + " В плане разрешены только команды чтения (ls, cat, git status/log/diff).";
+        if (tool.StartsWith("local__", StringComparison.Ordinal)
+            && !(tool.StartsWith("local__google__", StringComparison.Ordinal) || tool.StartsWith("local__mail__", StringComparison.Ordinal))
+            || tool.EndsWith("_send", StringComparison.Ordinal) || tool.EndsWith("__send", StringComparison.Ordinal)
+            || tool.EndsWith("attachment", StringComparison.Ordinal) || tool.EndsWith("drive_download", StringComparison.Ordinal))
+            return why;
+        return null;
+    }
+
+    private ToolResult ProjectRules(ToolArgs args)
+    {
+        var result = new List<object>();
+        foreach (var name in args.StrArray("files") ?? [])
+        {
+            if (!RuleFiles.Contains(name))
+                continue;
+            try
+            {
+                var path = _guard.Resolve(name);
+                if (File.Exists(path) && new FileInfo(path).Length <= 200_000)
+                    result.Add(new { file = name, content = File.ReadAllText(path) });
+            }
+            catch (Exception ex) when (ex is ToolException or IOException or UnauthorizedAccessException) { }
+        }
+        // Без \uXXXX: кириллица в правилах иначе раздувает ответ в шесть раз.
+        return ToolResult.Ok(System.Text.Json.JsonSerializer.Serialize(result, new System.Text.Json.JsonSerializerOptions
+        {
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        }));
     }
 
     private ToolResult WriteBytes(ToolArgs args)

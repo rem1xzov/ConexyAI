@@ -102,6 +102,55 @@ public static class SelfTest
             await Check("shell approved", approved, "bash", System.Text.Json.JsonSerializer.Serialize(new { command = echo }), r => !r.IsError && r.Output.Contains("hi"));
             await Check("shell exit code", approved, "bash", System.Text.Json.JsonSerializer.Serialize(new { command = "exit 3" }), r => r.IsError && r.Output.Contains("Exit code: 3"));
             await Check("cmd fallback", approved, "cmd_exec", """{"command":"echo hi"}""", r => !r.IsError && r.Output.Contains("hi"));
+            // grep: контекст, режимы вывода и .gitignore.
+            File.WriteAllText(Path.Combine(root, ".gitignore"), "generated/\n*.log\n");
+            Directory.CreateDirectory(Path.Combine(root, "generated"));
+            File.WriteAllText(Path.Combine(root, "generated", "g.txt"), "needle");
+            File.WriteAllText(Path.Combine(root, "run.log"), "needle");
+            File.WriteAllText(Path.Combine(root, "ctx.txt"), "before\nneedle\nafter\n");
+            await Check("grep context", runner, "grep", """{"pattern":"needle","context_lines":1}""",
+                r => r.Output.Contains("ctx.txt-1- before") && r.Output.Contains("ctx.txt:2: needle") && r.Output.Contains("ctx.txt-3- after"));
+            await Check("grep respects .gitignore", runner, "grep", """{"pattern":"needle","output_mode":"files"}""",
+                r => r.Output.Contains("ctx.txt") && !r.Output.Contains("g.txt") && !r.Output.Contains("run.log"));
+            await Check("grep include_ignored", runner, "grep", """{"pattern":"needle","output_mode":"count","include_ignored":true}""",
+                r => r.Output.Contains("generated/g.txt: 1") && r.Output.Contains("run.log: 1"));
+
+            // /rewind: правка и созданный файл за ход откатываются.
+            var rewind = new ToolRunner(root, new FixedApprover(true), _ => { });
+            File.WriteAllText(Path.Combine(root, "keep.txt"), "original");
+            rewind.Checkpoints.BeginTurn("правка");
+            await rewind.RunAsync("file_write", """{"path":"keep.txt","content":"changed"}""", CancellationToken.None);
+            await rewind.RunAsync("file_write", """{"path":"new/created.txt","content":"x"}""", CancellationToken.None);
+            var (restored, deleted, _, _) = rewind.Checkpoints.Rewind(1);
+            var rewindOk = File.ReadAllText(Path.Combine(root, "keep.txt")) == "original" && !File.Exists(Path.Combine(root, "new", "created.txt"))
+                           && restored == 1 && deleted == 1;
+            Console.WriteLine($"{(rewindOk ? "PASS" : "FAIL")}  rewind restores edits and removes created files");
+            if (!rewindOk) failures++;
+
+            // Режим плана: чтение можно, правки и изменяющие команды — нет.
+            var plan = new ToolRunner(root, new FixedApprover(true), _ => { }) { PlanMode = true };
+            await Check("plan mode allows reading", plan, "file_read", """{"path":"keep.txt"}""", r => !r.IsError);
+            await Check("plan mode blocks writes", plan, "file_write", """{"path":"keep.txt","content":"x"}""", r => r.IsError && r.Output.Contains("РЕЖИМ ПЛАНА"));
+            await Check("plan mode blocks commands", plan, "bash", """{"command":"npm install"}""", r => r.IsError && r.Output.Contains("РЕЖИМ ПЛАНА"));
+            await Check("plan mode blocks editor create", plan, "str_replace_editor", """{"command":"create","path":"p.txt","file_text":"x"}""", r => r.IsError);
+
+            // Постоянные разрешения: префикс подходит, цепочка — нет.
+            var permsOk = PermissionStore.SuggestRule("npm test --silent") == "npm test"
+                          && PermissionStore.SuggestRule("./gradlew build --info") == "./gradlew build"
+                          && PermissionStore.SuggestRule("npm test; rm x") is null
+                          && PermissionStore.SuggestRule("rm -rf /") is null;
+            var perms = new PermissionStore();
+            perms.Projects = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { [Path.GetFullPath(root)] = ["npm test"] };
+            permsOk &= perms.Match(root, "npm test --watch=false") == "npm test"
+                       && perms.Match(root, "npm test && curl evil") is null
+                       && perms.Match(root, "npm testing") is null
+                       && perms.Match(root, "npm install") is null;
+            Console.WriteLine($"{(permsOk ? "PASS" : "FAIL")}  permission rules match single commands only");
+            if (!permsOk) failures++;
+
+            File.WriteAllText(Path.Combine(root, "CLAUDE.md"), "правило: табы");
+            await Check("project rules", approved, "project_rules", """{"files":["CONEXY.md","CLAUDE.md","src/a.txt"]}""",
+                r => !r.IsError && r.Output.Contains("правило: табы") && !r.Output.Contains("a.txt"));
             await Check("shell cwd", approved, "bash", """{"command":"pwd","cwd":"src"}""", r => !r.IsError && r.Output.Contains("src"));
             await Check("shell cwd escape", approved, "bash", """{"command":"pwd","cwd":".."}""", r => r.IsError && r.Output.Contains("вне рабочей папки"));
             await Check("cmdlet failure exit code", approved, "bash", """{"command":"Get-Item C:\\nope_conexy_xyz"}""", r => !OperatingSystem.IsWindows() || r.IsError);

@@ -1318,25 +1318,26 @@ async Task TestCrossChatDigestAsync()
 
     var request = await service.BuildRequestAsync(
         new ConversationContext(Guid.NewGuid(), current, userId, "SYSTEM", "О чём мы говорили в прошлом чате?"));
-    // PREFIX_CACHE: изменяемые блоки (память, другие чаты) теперь во ВТОРОМ system-сообщении, чтобы не
-    // ломать кэш префикса; стабильный устав остаётся первым system-сообщением.
+    // PREFIX_CACHE: изменяемые блоки (память, другие чаты) — отдельным system-сообщением сразу перед
+    // новым вопросом; стабильный устав остаётся первым system-сообщением.
     Assert(request[0].Role == "system" && (request[0].Text ?? "") == "SYSTEM",
         "the first system message must stay the stable charter");
-    var volatileSystem = request[1].Text ?? "";
-    Assert(request[1].Role == "system" && volatileSystem.Contains("кофейни на Лесной") && volatileSystem.Contains("найм бариста"),
+    var volatileMessage = request[^2];
+    var volatileSystem = volatileMessage.Text ?? "";
+    Assert(volatileMessage.Role == "system" && volatileSystem.Contains("кофейни на Лесной") && volatileSystem.Contains("найм бариста"),
         "the other chat's start and last answer must reach the model as a separate system block");
     Assert(!volatileSystem.Contains("ТЕКУЩИЙ чат"), "the current chat is history, not an \"other chat\"");
     Assert(!volatileSystem.Contains("ЧУЖОЙ"), "another user's chats must never leak in");
 
     var incognito = await service.BuildRequestAsync(
         new ConversationContext(Guid.NewGuid(), Guid.NewGuid(), userId, "SYSTEM", "вопрос", Incognito: true));
-    var incognitoVolatile = incognito.Count > 1 ? incognito[1].Text ?? "" : "";
+    var incognitoVolatile = incognito.Count > 2 ? incognito[^2].Text ?? "" : "";
     Assert(!incognitoVolatile.Contains("кофейни"), "an incognito chat must not read other chats");
 }
 
-// PREFIX_CACHE: добавлено 2026-10-06 — кэш префикса DeepSeek совпадает, пока совпадает префикс запроса
-// (устав → system-блоки → схемы инструментов). Изменяемые блоки обязаны идти ВТОРЫМ system-сообщением,
-// иначе новый факт памяти или чат ломает кэш схем инструментов на каждом шаге.
+// PREFIX_CACHE: добавлено 2026-10-06, изменено 2026-10-18 — кэш префикса DeepSeek совпадает, пока
+// совпадает префикс запроса. Изменяемые блоки (в т.ч. время) идут ПОСЛЕ истории, перед новым
+// сообщением: тогда устав и вся прошлая история читаются из кэша на каждом новом сообщении.
 async Task TestPrefixCacheOrderAsync()
 {
     await using var context = CreateContext("prefixcache_" + Guid.NewGuid().ToString("N"));
@@ -1350,16 +1351,30 @@ async Task TestPrefixCacheOrderAsync()
     var request = await service.BuildRequestAsync(
         new ConversationContext(Guid.NewGuid(), Guid.NewGuid(), userId, "СТАБИЛЬНЫЙ УСТАВ", "привет"));
 
-    Assert(request.Count >= 2 && request[0].Role == "system" && request[1].Role == "system",
-        "the request must open with two system messages: stable charter, then volatile context");
+    Assert(request.Count >= 3 && request[0].Role == "system" && request[^2].Role == "system" && request[^1].Role == "user",
+        "the request must be: stable charter, history, volatile context, then the new user message");
     Assert((request[0].Text ?? "") == "СТАБИЛЬНЫЙ УСТАВ",
         "the first system message must be exactly the stable charter, so its prefix stays cacheable");
     Assert(!(request[0].Text ?? "").Contains("маркетинге"),
         "volatile context must never sit inside the stable charter");
-    Assert((request[1].Text ?? "").Contains("маркетинге"),
-        "volatile context (recent chats) must be carried by the second system message");
-    Assert((request[1].Text ?? "").Contains("Текущая дата"),
+    Assert((request[^2].Text ?? "").Contains("маркетинге"),
+        "volatile context (recent chats) must be carried by the system message before the new question");
+    Assert((request[^2].Text ?? "").Contains("Текущая дата"),
         "the current date is a volatile block, never part of the stable charter");
+
+    // История текущего чата — часть стабильного префикса: следующий запрос начинается теми же
+    // сообщениями (устав + прошлые ходы), даже если время и память изменились.
+    var chat = Guid.NewGuid();
+    await history.AppendAsync(userId, chat, "user", "первый вопрос");
+    await history.AppendAsync(userId, chat, "assistant", "первый ответ");
+    var first = await service.BuildRequestAsync(new ConversationContext(Guid.NewGuid(), chat, userId, "УСТАВ", "второй вопрос"));
+    await history.AppendAsync(userId, chat, "user", "второй вопрос");
+    await history.AppendAsync(userId, chat, "assistant", "второй ответ");
+    var second = await service.BuildRequestAsync(new ConversationContext(Guid.NewGuid(), chat, userId, "УСТАВ", "третий вопрос"));
+    var sharedPrefix = first.Count - 2; // всё до волатильного блока
+    Assert(sharedPrefix >= 3 && Enumerable.Range(0, sharedPrefix).All(i =>
+            first[i].Role == second[i].Role && (first[i].Text ?? "") == (second[i].Text ?? "")),
+        "charter and earlier history must be an identical prefix across requests, so they hit the cache");
 }
 
 async Task TestMemoryExtractedAfterFirstMessageAsync()

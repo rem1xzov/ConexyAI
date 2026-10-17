@@ -364,6 +364,16 @@ public class ConexyLlmClient : IConexyLlmClient
                         var cacheHit = IntProp(usageEl, "prompt_cache_hit_tokens");
                         var cacheMiss = IntProp(usageEl, "prompt_cache_miss_tokens");
                         var promptTokens = IntProp(usageEl, "prompt_tokens");
+                        // Другой OpenAI-совместимый апстрим/прокси отдаёт кэш в prompt_tokens_details.cached_tokens —
+                        // без этого весь вход считался бы по полной цене.
+                        if (cacheHit == 0 && cacheMiss == 0 && promptTokens > 0 &&
+                            usageEl.TryGetProperty("prompt_tokens_details", out var details) &&
+                            details.ValueKind == JsonValueKind.Object &&
+                            IntProp(details, "cached_tokens") is > 0 and var openAiCached)
+                        {
+                            cacheHit = Math.Min(openAiCached, promptTokens);
+                            cacheMiss = promptTokens - cacheHit;
+                        }
                         var completionTokens = IntProp(usageEl, "completion_tokens");
                         // Как и в не-стриминговом пути: без разбивки кэша весь вход — обычный.
                         if (cacheHit == 0 && cacheMiss == 0 && promptTokens > 0)
@@ -588,7 +598,10 @@ public class ConexyLlmClient : IConexyLlmClient
         var cached = usage.PromptCacheHitTokens;
         var uncached = usage.PromptCacheMissTokens;
         if (cached == 0 && uncached == 0 && usage.PromptTokens > 0)
-            uncached = usage.PromptTokens;
+        {
+            cached = Math.Min(usage.PromptTokensDetails?.CachedTokens ?? 0, usage.PromptTokens);
+            uncached = usage.PromptTokens - cached;
+        }
 
         var output = usage.CompletionTokens;
         if (output == 0 && usage.TotalTokens > cached + uncached)

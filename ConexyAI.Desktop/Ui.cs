@@ -6,7 +6,7 @@ using ConexyAI.Desktop.Tools;
 namespace ConexyAI.Desktop;
 
 /// <summary>Цвета, баннер, спиннер и оформление вызовов инструментов в консоли (ANSI).</summary>
-public static class Ui
+public static partial class Ui
 {
     private const string Orange = "38;5;209";
     private const string Dim = "38;5;245";
@@ -26,6 +26,9 @@ public static class Ui
 
     /// <summary>Агент чата (для подсказки под вводом): coder или cowork.</summary>
     public static string AgentMode { get; set; } = "coder";
+
+    /// <summary>Режим плана (для подсказки под вводом).</summary>
+    public static bool PlanMode { get; set; }
 
     public static string Version =>
         typeof(Ui).Assembly.GetName().Version is { } v ? $"{v.Major}.{v.Minor}.{v.Build}" : "0";
@@ -184,7 +187,25 @@ public static class Ui
 
     // ── Тариф и токены (строка состояния под вводом) ───────────────────────────────────────
 
-    private static string _status = string.Empty;
+    private static UsageInfo? _usage;
+
+    /// <summary>
+    /// Строка расхода для ТЕКУЩЕГО агента: у Cowork свой пул. Раньше в Cowork показывался пул Coder, и цифра
+    /// «не сходилась» с сайтом.
+    /// </summary>
+    private static string _status
+    {
+        get
+        {
+            if (_usage is not { } u)
+                return string.Empty;
+            var cowork = AgentMode == "cowork";
+            var (used, limit, resets) = cowork ? (u.CoworkUsed, u.CoworkLimit, u.CoworkResetsAt) : (u.AgentUsed, u.AgentLimit, u.AgentResetsAt);
+            var tokens = limit >= long.MaxValue / 2 ? $"{FormatTokens(used)} / ∞" : $"{FormatTokens(used)} / {FormatTokens(limit)}";
+            var reset = resets.Year > 2000 ? $" · сброс {resets.ToLocalTime():dd.MM}" : string.Empty;
+            return $"{u.Tier} · {(cowork ? "cowork" : "агент")}: {tokens} токенов{reset}";
+        }
+    }
 
     public static string FormatTokens(long n) => n switch
     {
@@ -195,19 +216,20 @@ public static class Ui
 
     public static void SetUsage(UsageInfo? usage)
     {
-        if (usage is null)
-            return;
-        var tokens = usage.Unlimited
-            ? $"{FormatTokens(usage.AgentUsed)} / ∞"
-            : $"{FormatTokens(usage.AgentUsed)} / {FormatTokens(usage.AgentLimit)}";
-        var reset = usage.AgentResetsAt.Year > 2000 ? $" · сброс {usage.AgentResetsAt.ToLocalTime():dd.MM}" : string.Empty;
-        _status = $"{usage.Tier} · агент: {tokens} токенов{reset}";
+        if (usage is not null)
+            _usage = usage;
     }
 
     public static void PrintStatus()
     {
-        if (_status.Length > 0)
-            Console.WriteLine("  " + C(Cyan, _status));
+        if (_status.Length == 0)
+            return;
+        Console.WriteLine("  " + C(Cyan, _status));
+        var cached = AgentMode == "cowork" ? _usage!.CoworkCachedTokens : _usage!.AgentCachedTokens;
+        Console.WriteLine("  " + Muted("Учитывается по цене: повторно отправленный контекст берётся из кэша со скидкой"
+            + (_usage.CacheHitDiscountPercent > 0 ? $" {_usage.CacheHitDiscountPercent}%" : string.Empty)
+            + (cached > 0 ? $" (из кэша прочитано {FormatTokens(cached)} — они почти не тратят лимит)" : string.Empty)
+            + ", ответ модели дороже входа."));
     }
 
     // ── Оркестр агентов ──────────────────────────────────────────────────────────
@@ -230,6 +252,8 @@ public static class Ui
         public DateTime Started { get; } = DateTime.UtcNow;
         public DateTime? Finished { get; set; }
         public int Actions { get; set; }
+        /// <summary>Когда начался текущий инструмент на ПК (null — ничего не выполняется).</summary>
+        public DateTime? ToolSince { get; set; }
 
         public void Push(string text, string kind = "step")
         {
@@ -331,7 +355,9 @@ public static class Ui
         lock (Gate)
         {
             var box = Worker(_team ??= new TeamState(), id, role);
-            box.Push(first ?? (result.IsError ? "ошибка" : "готово"), result.IsError ? "error" : "result");
+            var took = box.ToolSince is { } since ? Took(DateTime.UtcNow - since) : string.Empty;
+            box.ToolSince = null;
+            box.Push((first ?? (result.IsError ? "ошибка" : "готово")) + took, result.IsError ? "error" : "result");
         }
     }
 
@@ -390,6 +416,14 @@ public static class Ui
             if (i < shown.Count)
             {
                 var (text, kind) = shown[i];
+                // Долгая команда субагента: таймер в её строке, чтобы было видно, что она ещё идёт.
+                if (i == shown.Count - 1 && kind == "step" && !final && RunningFor(box.ToolSince) is { } running)
+                {
+                    var timer = $" ⏱ {running}";
+                    content = C(LineColor(kind), Fit("• " + text, Math.Max(4, inner - timer.Length))) + C(Yellow, timer);
+                    rows.Add(C(box.Color, "│ ") + content + C(box.Color, " │"));
+                    continue;
+                }
                 var mark = kind switch { "error" => "× ", "done" => "√ ", "result" => "  ", _ => "• " };
                 content = C(LineColor(kind), Fit(mark + text, inner));
             }
@@ -511,7 +545,8 @@ public static class Ui
 
         var modes = (AgentMode == "cowork" ? C("38;5;114", "cowork") : C(Orange, "coder")) + " "
                     + (autoMode ? C(Yellow, ">> авто") + " " : string.Empty)
-                    + (TeamMode && AgentMode == "coder" ? C("38;5;213", "* команда") + " " : string.Empty);
+                    + (TeamMode && AgentMode == "coder" ? C("38;5;213", "* команда") + " " : string.Empty)
+                    + (PlanMode ? C(Cyan, "◆ план") + " " : string.Empty);
         var footer = "  " + modes + (_status.Length > 0 ? C(Cyan, _status) + Muted(" · ") : string.Empty) + Muted("/help");
 
         // Ввод возможен ТОЛЬКО в строке внутри рамки: набранное пока агент работал отбрасываем, а саму строку
@@ -748,6 +783,14 @@ public static class Ui
                         teamMode = true;
                         DrawTeam(i++);
                     }
+                    else if (_toolSince is { } toolSince)
+                    {
+                        // Идёт инструмент: первые 10 с — только точка, дальше таймер рядом с командой.
+                        var running = RunningFor(toolSince);
+                        Console.Write($"\r\x1b[2K  {C(Orange, frames[i++ % frames.Length])} " + (running is null
+                            ? C(Dim, "выполняется…")
+                            : C(Dim, "выполняется ") + C(Yellow, $"⏱ {running}") + C(Dim, " · Ctrl+C — остановить")));
+                    }
                     else
                     {
                         Console.Write($"\r\x1b[2K{C(Orange, frames[i++ % frames.Length])} {C(Dim, $"{_label}… ({(int)watch.Elapsed.TotalSeconds} с · Ctrl+C — остановить)")}");
@@ -810,6 +853,7 @@ public static class Ui
                 var box = Worker(_team ??= new TeamState(), worker.Id, worker.Role);
                 box.Actions++;
                 box.Push(ToolLabel(described));
+                box.ToolSince = DateTime.UtcNow;
             }
             return;
         }
@@ -820,6 +864,7 @@ public static class Ui
             {
                 _team.Lead.Actions++;
                 _team.Lead.Push(ToolLabel(described));
+                _team.Lead.ToolSince = DateTime.UtcNow;
             }
         }
 
@@ -829,7 +874,26 @@ public static class Ui
         var tool = space < 0 ? described : described[..space];
         var arg = space < 0 ? string.Empty : described[(space + 1)..];
         Console.WriteLine("\n" + C(Green, "● ") + Bold(ToolName(tool)) + (arg.Length > 0 ? Muted("(" + arg + ")") : string.Empty));
+
+        // Пока инструмент выполняется — строка под ним с таймером (после 10 с), иначе долгая сборка выглядит как зависание.
+        lock (Gate)
+            _toolSince = DateTime.UtcNow;
+        Busy();
     }
+
+    // Инструмент ведущего, который сейчас выполняется на ПК (null — ничего).
+    private static DateTime? _toolSince;
+
+    /// <summary>Таймер показываем только для команд длиннее 10 с — быстрые не мелькают.</summary>
+    private static string? RunningFor(DateTime? since) =>
+        since is { } s && DateTime.UtcNow - s is { TotalSeconds: >= 10 } t ? Duration(t) : null;
+
+    private static string Duration(TimeSpan t) =>
+        t.TotalHours >= 1 ? $"{(int)t.TotalHours} ч {t.Minutes:00} мин"
+        : t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes} мин {t.Seconds:00} с"
+        : $"{(int)t.TotalSeconds} с";
+
+    private static string Took(TimeSpan t) => t.TotalSeconds >= 10 ? $" · за {Duration(t)}" : string.Empty;
 
     private static string ToolName(string tool) =>
         tool switch
@@ -876,11 +940,19 @@ public static class Ui
 
     public static void ShowToolResult(ToolResult result)
     {
+        string took;
+        lock (Gate)
+        {
+            took = _toolSince is { } since ? Took(DateTime.UtcNow - since) : string.Empty;
+            _toolSince = null;
+            if (_team is not null)
+                _team.Lead.ToolSince = null;
+        }
         var lines = result.Output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         var color = result.IsError ? Red : Dim;
         if (lines.Length == 0)
         {
-            Console.WriteLine(C(color, "  └  " + (result.IsError ? "ошибка" : "готово")));
+            Console.WriteLine(C(color, "  └  " + (result.IsError ? "ошибка" : "готово")) + Muted(took));
             return;
         }
 
@@ -888,7 +960,7 @@ public static class Ui
         for (var i = 0; i < Math.Min(show, lines.Length); i++)
         {
             var text = lines[i].Length > 110 ? lines[i][..110] + "…" : lines[i];
-            Console.WriteLine(C(color, (i == 0 ? "  └  " : "     ") + text));
+            Console.WriteLine(C(color, (i == 0 ? "  └  " : "     ") + text) + (i == 0 ? Muted(took) : string.Empty));
         }
         if (lines.Length > show)
             Console.WriteLine(C(Dim, $"     … ещё {lines.Length - show} строк"));
@@ -897,21 +969,30 @@ public static class Ui
     // ── Подтверждение команды ───────────────────────────────────────────────
 
     /// <summary>Меню «Да / Да, всегда / Нет» со стрелками. Возвращает 0, 1 или 2; -1 — отмена.</summary>
-    public static async Task<int> ConfirmAsync(string title, string command, string folder, CancellationToken ct, bool allowAuto = true)
+    public static async Task<int> ConfirmAsync(string title, string command, string folder, CancellationToken ct,
+        bool allowAuto = true, string? rememberRule = null)
     {
         lock (Gate)
             _confirming = true;
         try
         {
-            return await ConfirmCoreAsync(title, command, folder, ct, allowAuto);
+            return await ConfirmCoreAsync(title, command, folder, ct, allowAuto, rememberRule);
         }
         finally
         {
-            _confirming = false;
+            // Время раздумий человека над подтверждением в таймер команды не входит.
+            lock (Gate)
+            {
+                _confirming = false;
+                if (_toolSince is not null)
+                    _toolSince = DateTime.UtcNow;
+                if (CurrentAgent.Value is { } asker && _team is not null)
+                    Worker(_team, asker.Id, asker.Role).ToolSince = DateTime.UtcNow;
+            }
         }
     }
 
-    private static async Task<int> ConfirmCoreAsync(string title, string command, string folder, CancellationToken ct, bool allowAuto)
+    private static async Task<int> ConfirmCoreAsync(string title, string command, string folder, CancellationToken ct, bool allowAuto, string? rememberRule)
     {
         StopSpinner();
         FlushText();
@@ -929,57 +1010,27 @@ public static class Ui
         Console.WriteLine(C(Yellow, "╰" + new string('─', width - 1)));
         Console.WriteLine(Muted(allowAuto ? "  в " + folder : "  " + folder));
 
-        string[] options = allowAuto ? ["Да", "Да, и больше не спрашивать (авто-режим)", "Нет"] : ["Да", "Нет"];
-        // Без пункта «авто» индексы приводим к общему виду: 0 — да, 2 — нет.
-        int Map(int i) => allowAuto ? i : i == 0 ? 0 : 2;
-        var index = 0;
+        // Коды ответа: 0 — да, 3 — да и запомнить правило, 1 — авто-режим, 2 — нет.
+        var options = new List<(string Label, int Code)> { ("Да", 0) };
+        if (rememberRule is not null)
+            options.Add(($"Да, и всегда разрешать «{rememberRule}…» в этом проекте", 3));
+        if (allowAuto)
+            options.Add(("Да, и больше не спрашивать (авто-режим)", 1));
+        options.Add(("Нет", 2));
 
-        void Draw(bool redraw)
+        var picked = await PickAsync(options.Select(o => o.Label).ToArray(), ct, key => char.ToLowerInvariant(key) switch
         {
-            if (redraw)
-                Console.Write($"\x1b[{options.Length}A");
-            for (var i = 0; i < options.Length; i++)
-            {
-                var text = $"{i + 1}. {options[i]}";
-                Console.WriteLine("\x1b[2K" + (i == index ? C(Orange, "  › " + text) : "    " + text));
-            }
-        }
-
-        Draw(false);
-        while (!ct.IsCancellationRequested)
+            'y' or 'д' => 0,
+            'n' or 'н' => options.Count - 1,
+            'a' or 'ф' when allowAuto => options.FindIndex(o => o.Code == 1),
+            _ => (int?)null,
+        });
+        return picked switch
         {
-            if (!Console.KeyAvailable)
-            {
-                await Task.Delay(30, CancellationToken.None);
-                continue;
-            }
-
-            var key = Console.ReadKey(intercept: true);
-            switch (key.Key)
-            {
-                case ConsoleKey.UpArrow:
-                    index = (index + options.Length - 1) % options.Length;
-                    break;
-                case ConsoleKey.DownArrow:
-                    index = (index + 1) % options.Length;
-                    break;
-                case ConsoleKey.Enter:
-                    return Map(index);
-                case ConsoleKey.Escape:
-                    return 2;
-                default:
-                    switch (char.ToLowerInvariant(key.KeyChar))
-                    {
-                        case '1' or 'y' or 'д': return 0;
-                        case '2' or 'a' or 'ф' when allowAuto: return 1;
-                        case '2' when !allowAuto: return 2;
-                        case '3' or 'n' or 'н': return 2;
-                    }
-                    break;
-            }
-            Draw(true);
-        }
-        return -1;
+            null => -1,
+            -2 => 2, // Esc
+            var i => options[i.Value].Code,
+        };
     }
 
     public static void Decision(bool allowed) =>

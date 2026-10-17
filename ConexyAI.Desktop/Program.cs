@@ -110,6 +110,16 @@ try
             return await SelfTest.McpAsync(args.Skip(1).Where(a => !a.StartsWith("--args=")).ToArray(),
                 args.FirstOrDefault(a => a.StartsWith("--args="))?[7..]);
 
+        case "timertest":
+            // Проверка таймера долгой команды: строка инструмента, таймер после 10 с, итог «за N с».
+            if (args.Contains("--ansi"))
+                Ui.ForceAnsi();
+            Ui.ToolCall("bash .\\gradlew build");
+            await Task.Delay(TimeSpan.FromSeconds(13));
+            Ui.Idle();
+            Ui.ShowToolResult(ToolResult.Ok("BUILD SUCCESSFUL\nExit code: 0"));
+            return 0;
+
         case "teamtest":
             // Проверка панели оркестра без сервера.
             if (args.Contains("--ansi"))
@@ -440,6 +450,11 @@ static void PrintHelp() => Console.WriteLine("""
       /mcp            локальные MCP-серверы (программы на ПК): /mcp catalog — готовые (Playwright,
                       Context7, Sentry, Supabase, Postgres, Notion, Figma), /mcp add <id> — установить из каталога,
                       /mcp add <имя> <команда ...> — свой, /mcp remove <имя>, /mcp reload, /mcp config
+      /plan [on|off]  режим плана: агент только изучает проект и предлагает план, вы одобряете — и он выполняет
+      /rewind [N]     откатить файлы проекта к состоянию до последних ходов агента (правки файлов;
+                      изменения от команд терминала не откатываются)
+      /permissions    команды, разрешённые без вопроса в этом проекте: add <команда>, remove N, clear
+      /compact [фокус]  сжать длинный чат в пересказ и продолжить в новом (дешевле и не упирается в контекст)
       /team [on|off]  оркестр агентов: ведущий собирает команду субагентов (ProMax, Ultra, Admin).
                       Включённый оркестр работает в этом чате, пока вы не выключите его: /team off
       /usage          тариф и расход токенов агента
@@ -456,6 +471,8 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
     ServerClient server, ConsoleApprover approver, ChatStore store, LocalTools local, string root, Guid chatId, bool firstBanner)
 {
     store.Bind(chatId, root);
+    approver.ProjectRoot = root;
+    Ui.PlanMode = false;
     var tools = new ToolRunner(root, approver, Ui.ToolCall, server.GetGitHubTokenAsync, local);
     await using var session = new AgentSession(server, tools, chatId) { Local = local };
     try
@@ -594,6 +611,28 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                 case "/mail":
                     await MailCommandAsync(local, arg);
                     break;
+                case "/rewind":
+                    await RewindCommandAsync(tools, arg);
+                    break;
+                case "/permissions":
+                    PermissionsCommand(approver, root, arg);
+                    break;
+                case "/plan":
+                    session.PlanMode = arg.ToLowerInvariant() switch
+                    {
+                        "on" or "вкл" => true,
+                        "off" or "выкл" => false,
+                        _ => !session.PlanMode,
+                    };
+                    Ui.PlanMode = session.PlanMode;
+                    Ui.Info(session.PlanMode
+                        ? "Режим плана: агент только изучает проект и предлагает план, правки и изменяющие команды заблокированы. После ответа можно одобрить план. /plan — выключить."
+                        : "Режим плана выключен: агент снова может менять файлы.");
+                    break;
+                case "/compact":
+                    if (await CompactCommandAsync(session, arg) is { } fresh)
+                        return (root, fresh);
+                    break;
                 case "/team":
                     bool wantTeam;
                     switch (arg.ToLowerInvariant())
@@ -684,9 +723,28 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
         Console.CancelKeyPress += onCancel;
         try
         {
-            var error = await session.AskAsync(prompt, cts.Token);
-            if (error is not null)
-                Ui.Error(error);
+            string? next = prompt;
+            while (next is not null)
+            {
+                var error = await session.AskAsync(next, cts.Token);
+                next = null;
+                if (error is not null)
+                {
+                    Ui.Error(error);
+                    break;
+                }
+
+                // Режим плана: план готов — человек решает, выполнять ли его (как «exit plan mode» в Claude Code).
+                if (session.PlanMode && session.LastAnswer.Length > 0)
+                {
+                    var choice = await Ui.ChooseAsync("План готов", "Выполнить предложенный план?",
+                        ["Да — выполнить план", "Нет — доработать план (напишите, что изменить)", "Выйти из режима плана"], cts.Token);
+                    if (choice is 0 or 2)
+                        Ui.PlanMode = session.PlanMode = false;
+                    if (choice == 0)
+                        next = "План одобрен. Выполни его полностью, шаг за шагом, и проверь результат.";
+                }
+            }
         }
         catch (InvalidOperationException ex)
         {
@@ -871,6 +929,122 @@ static async Task InstallFromCatalogAsync(LocalTools local, CatalogEntry entry)
         Ui.Info("  " + line);
     if (entry.Note is { } note)
         Ui.Info("  " + Ui.Muted(note));
+}
+
+// /rewind [N]: откат файлов проекта к состоянию до последних ходов агента.
+static async Task RewindCommandAsync(ToolRunner tools, string arg)
+{
+    var turns = tools.Checkpoints.Turns;
+    if (turns.Count == 0)
+    {
+        Ui.Info("  Откатывать нечего: в этой сессии агент не менял файлы проекта.");
+        return;
+    }
+
+    int count;
+    if (int.TryParse(arg, out var n) && n >= 1)
+    {
+        count = Math.Min(n, turns.Count);
+    }
+    else
+    {
+        // Список с новых: выбор k откатывает k последних ходов.
+        var recent = turns.Reverse().Take(9).ToList();
+        var options = recent.Select((t, i) =>
+            $"до хода «{t.Prompt}» ({t.At:HH:mm}, файлов: {t.Originals.Count}){(i > 0 ? $" — отменит {i + 1} хода" : string.Empty)}").ToArray();
+        var picked = await Ui.ChooseAsync("Откат изменений",
+            "К какому моменту вернуть файлы проекта? Откатываются правки агента; изменения от команд (npm install, сборка, git) не откатываются.",
+            options, CancellationToken.None);
+        if (picked < 0)
+        {
+            Ui.Info("  Отменено.");
+            return;
+        }
+        count = picked + 1;
+    }
+
+    var undone = turns.Reverse().Take(count).Select(t => t.Prompt).ToList();
+    var (restored, deleted, failed, untracked) = tools.Checkpoints.Rewind(count);
+    Ui.Info("  " + Ui.Green_($"Откачено ходов: {count}") + $" · восстановлено файлов: {restored}, удалено созданных: {deleted}");
+    if (failed.Count > 0)
+        Ui.Error("Не удалось вернуть (заняты другой программой?): " + string.Join(", ", failed.Select(Path.GetFileName)));
+    if (untracked.Count > 0)
+        Ui.Info("  " + Ui.Muted("Слишком большие для снимка и не откачены: " + string.Join(", ", untracked.Select(Path.GetFileName))));
+    // Агент помнит свои правки — предупреждаем его в следующем сообщении, иначе он будет считать их на месте.
+    AgentSession.PendingNote = "[Пользователь откатил (/rewind) все твои правки файлов из ходов: "
+                               + string.Join("; ", undone.Select(p => $"«{p}»")) + ". Файлы снова в состоянии до них — перечитай их, прежде чем снова править.]";
+}
+
+// /permissions: постоянные разрешения команд для текущего проекта.
+static void PermissionsCommand(ConsoleApprover approver, string root, string arg)
+{
+    var parts = arg.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    switch (parts.FirstOrDefault()?.ToLowerInvariant())
+    {
+        case null or "list":
+            var rules = approver.Permissions.RulesFor(root);
+            Console.WriteLine(Ui.Bold("Разрешённые без вопроса команды") + Ui.Muted(" · " + root));
+            if (rules.Count == 0)
+                Ui.Info("  Пока нет. При подтверждении команды выберите «Да, и всегда разрешать…» или: /permissions add npm test");
+            for (var i = 0; i < rules.Count; i++)
+                Console.WriteLine($"  {i + 1}. {rules[i]}…");
+            Ui.Info("  " + Ui.Muted("Работают только для одиночных команд без ; | && > — цепочки всё равно спрашиваются. /permissions remove N, /permissions clear"));
+            break;
+        case "add" when parts.Length == 2:
+            if (PermissionStore.SuggestRule(parts[1]) is null)
+            {
+                Ui.Error("Такое правило нельзя: только одиночная команда без цепочек и не запрещённая политикой.");
+                break;
+            }
+            approver.Permissions.Add(root, parts[1].Trim());
+            Ui.Info($"  Добавлено: «{parts[1].Trim()}…»");
+            break;
+        case "remove" or "rm" when parts.Length == 2 && int.TryParse(parts[1], out var index):
+            Ui.Info(approver.Permissions.Remove(root, index - 1) ? "  Удалено." : "  Нет правила с таким номером.");
+            break;
+        case "clear":
+            approver.Permissions.Clear(root);
+            Ui.Info("  Все правила этого проекта удалены.");
+            break;
+        default:
+            Ui.Error("Используйте: /permissions, /permissions add <команда>, /permissions remove N, /permissions clear");
+            break;
+    }
+}
+
+// /compact: сжать длинный чат — агент пишет пересказ, работа продолжается в новом чате с этим пересказом.
+// Дешевле и точнее, чем тащить сотни сообщений истории в каждый запрос.
+static async Task<Guid?> CompactCommandAsync(AgentSession session, string focus)
+{
+    Ui.Info("  Сжимаю чат: агент составит пересказ, дальше работа продолжится в новом чате с этим пересказом.");
+    var wasPlan = session.PlanMode;
+    session.PlanMode = false;
+    using var cts = new CancellationTokenSource();
+    ConsoleCancelEventHandler onCancel = (_, e) => { e.Cancel = true; cts.Cancel(); };
+    Console.CancelKeyPress += onCancel;
+    try
+    {
+        var error = await session.AskAsync(
+            "Составь сжатый пересказ ВСЕГО этого чата, чтобы продолжить работу в новом чате без потерь: цель, принятые решения, " +
+            "изменённые файлы, команды сборки и запуска, текущее состояние, открытые проблемы и следующие шаги. " +
+            "Ничего не делай и инструменты не вызывай — только пересказ, без вступлений."
+            + (focus.Length > 0 ? " Особое внимание: " + focus : string.Empty),
+            cts.Token);
+        if (error is not null || session.LastAnswer.Trim().Length < 40)
+        {
+            Ui.Error("Не получилось составить пересказ — остаёмся в этом чате." + (error is null ? string.Empty : " " + error));
+            session.PlanMode = wasPlan;
+            return null;
+        }
+        AgentSession.PendingNote = "[Продолжение прошлого чата. Сжатый пересказ всего, что было сделано и решено:]\n"
+                                   + session.LastAnswer.Trim() + "\n[Конец пересказа.]";
+        Ui.Info("  " + Ui.Green_("Чат сжат.") + " Пересказ уйдёт агенту вместе с вашим следующим сообщением. Старый чат остался в /chats.");
+        return Guid.NewGuid();
+    }
+    finally
+    {
+        Console.CancelKeyPress -= onCancel;
+    }
 }
 
 // /mail: Яндекс Почта / Mail.ru по IMAP и SMTP с паролем приложения.

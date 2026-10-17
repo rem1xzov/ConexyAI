@@ -3,9 +3,9 @@ using ConexyAI.Desktop.Tools;
 namespace ConexyAI.Desktop;
 
 /// <summary>
-/// Подтверждение команд терминала: «Да» / «Да, и больше не спрашивать» (авто-режим) / «Нет».
-/// Авто-режим можно включить флагом --auto или командой /auto. Запрещённые политикой команды
-/// блокируются в любом режиме.
+/// Подтверждение команд терминала: «Да» / «Да, всегда для этой команды в проекте» / «Да, и больше не
+/// спрашивать» (авто-режим) / «Нет». Авто-режим можно включить флагом --auto или командой /auto.
+/// Запрещённые политикой команды блокируются в любом режиме.
 /// </summary>
 public sealed class ConsoleApprover : ICommandApprover
 {
@@ -18,6 +18,11 @@ public sealed class ConsoleApprover : ICommandApprover
         set => _auto = value;
     }
 
+    /// <summary>Корень текущего проекта — к нему привязаны постоянные разрешения.</summary>
+    public string? ProjectRoot { get; set; }
+
+    public PermissionStore Permissions { get; } = PermissionStore.Load();
+
     public Task<bool> ApproveAsync(string command, string workingDirectory, CancellationToken ct) =>
         ApproveAsync("Bash", command, workingDirectory, ct);
 
@@ -25,6 +30,13 @@ public sealed class ConsoleApprover : ICommandApprover
     {
         if (_auto)
             return true;
+
+        var isCommand = title is "Bash" or "cmd";
+        if (isCommand && ProjectRoot is { } root && Permissions.Match(root, command) is { } rule)
+        {
+            Ui.Info("  " + Ui.Muted($"√ разрешено правилом «{rule}» (/permissions)"));
+            return true;
+        }
 
         await _gate.WaitAsync(ct);
         try
@@ -35,10 +47,16 @@ public sealed class ConsoleApprover : ICommandApprover
             if (!Ui.Ansi)
                 return await AskPlainAsync(command, workingDirectory, ct);
 
-            var choice = await Ui.ConfirmAsync(title, command, workingDirectory, ct);
+            var remember = isCommand && ProjectRoot is not null ? PermissionStore.SuggestRule(command) : null;
+            var choice = await Ui.ConfirmAsync(title, command, workingDirectory, ct, rememberRule: remember);
             if (choice == 1)
                 _auto = true;
-            var allowed = choice is 0 or 1;
+            if (choice == 3 && remember is not null)
+            {
+                Permissions.Add(ProjectRoot!, remember);
+                Ui.Info("  " + Ui.Muted($"Запомнил: «{remember}» в этом проекте выполняется без вопроса. Список — /permissions"));
+            }
+            var allowed = choice is 0 or 1 or 3;
             Ui.Decision(allowed);
             if (allowed)
                 Ui.Busy("Выполняю");
@@ -63,6 +81,34 @@ public sealed class ConsoleApprover : ICommandApprover
             if (allowed)
                 Ui.Busy("Выполняю");
             return allowed;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<string?> AskUserAsync(string question, string[] options, CancellationToken ct)
+    {
+        // Вопрос задаётся и в авто-режиме: это не разрешение, а решение, которое агент сам не примет.
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (!Ui.Ansi)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Агент спрашивает: " + question);
+                for (var i = 0; i < options.Length; i++)
+                    Console.WriteLine($"  {i + 1}. {options[i]}");
+                Console.Write("Ответ (номер или текст): ");
+                var line = (await Task.Run(Console.ReadLine, ct))?.Trim();
+                if (string.IsNullOrEmpty(line))
+                    return null;
+                return int.TryParse(line, out var n) && n >= 1 && n <= options.Length ? options[n - 1] : line;
+            }
+            var answer = await Ui.AskUserAsync(question, options, ct);
+            Ui.Busy("Продолжаю");
+            return answer;
         }
         finally
         {

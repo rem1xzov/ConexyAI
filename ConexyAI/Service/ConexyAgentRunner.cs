@@ -72,8 +72,18 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "workspace_list_files", "grep", "glob", "bash", "terminal_exec", "run_tests", "get_diagnostics",
         "cmd_exec", "bg_start", "bg_logs", "bg_stop", "http_request", "page_screenshot",
         "pc_list_dir", "pc_read_file", "pc_copy_to_project", "download_file", "install_software",
-        "window_list", "screen_capture", "window_keys",
+        "window_list", "screen_capture", "window_keys", AskUserTool,
     };
+
+    // DESKTOP_AGENT: вопрос человеку посреди задачи — агент ждёт ответ и продолжает тот же прогон.
+    private const string AskUserTool = "ask_user";
+
+    private static readonly object AskUserSchema =
+        Function(AskUserTool, "Задаёт вопрос пользователю и ЖДЁТ ответа, не завершая работу. Используй, когда без решения человека нельзя двигаться дальше (выбор технологии, неоднозначное требование, секрет, который знает только он). Дай 2–5 вариантов — пользователь выберет стрелками или напишет свой. Не спрашивай то, что можно выяснить самому из проекта, и не спрашивай разрешения на команды — для этого есть окно подтверждения.",
+            new { type = "object", properties = new {
+                question = new { type = "string", description = "Вопрос коротко и по делу" },
+                options = new { type = "array", items = new { type = "string" }, description = "Варианты ответа (необязательно, до 6)" }
+            }, required = new[] { "question" } });
 
     // DESKTOP_AGENT: инструменты, которые есть ТОЛЬКО на десктопе (в каталоге/профиле сервера их нет).
     private static readonly HashSet<string> DesktopOnlyTools = new(StringComparer.Ordinal)
@@ -191,7 +201,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // серверной папкой и вводили бы модель в заблуждение, поэтому в режиме десктопа они отклоняются.
     private static bool IsServerSandboxOnlyTool(string name) =>
         name.StartsWith("browser_", StringComparison.Ordinal)
-        || name is "start_service" or "stop_service" or "take_screenshot" or "view_image"
+        || name is "start_service" or "stop_service" or "take_screenshot"
             or "create_document" or "read_document_file" or "github_action";
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22 — накопленный поток ответа на случай остановки.
     private readonly StringBuilder _streamedOutput = new();
@@ -607,7 +617,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     // PROJECT_RULES: добавлено 2026-09-24 — файлы правил проекта в корне рабочей области чата, в порядке
     // приоритета, и их бюджет в промпте (каждый файл и все вместе).
-    private static readonly string[] ProjectRuleFiles = { "CONEXY.md", "CLAUDE.md", ".conexy/rules.md" };
+    // AGENTS.md — общий стандарт Codex/Cursor/Jules: вайбкодеры приходят с ним из других агентов.
+    private static readonly string[] ProjectRuleFiles = { "CONEXY.md", "CLAUDE.md", "AGENTS.md", ".conexy/rules.md" };
     private const int ProjectRulesMaxCharsPerFile = 16_000;
     private const int ProjectRulesMaxTotalChars = 24_000;
 
@@ -770,7 +781,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // песочницей (Coder): у Cowork нет bash. Запускаются без подтверждения — это автоматизация
         // владельца репозитория, выполняемая в изолированной песочнице.
         _hookRuns = 0;
-        _hooks = _hooksService is null || !_profile.Allows("bash") ? null : await _hooksService.LoadAsync(chatId, ct);
+        _hooks = _hooksService is null || !_profile.Allows("bash")
+            ? null
+            : _job.UseDevice
+                ? _hooksService.Parse((await ReadDeviceProjectFilesAsync([ConexyAgentHooksService.HooksFile], ct)).FirstOrDefault().Content)
+                : await _hooksService.LoadAsync(chatId, ct);
         if (_hooks is not null)
         {
             await group.SendAsync("OnLog", $"[Hooks] Loaded {_hooks.Events.Count} event(s) from {ConexyAgentHooksService.HooksFile}", ct);
@@ -863,6 +878,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var tokenBudgetExceeded = false;
 
 
+        // AUTO_COMPACT: с этого сообщения начинаются шаги прогона (всё раньше — устав, история и вопрос).
+        var runStart = messages.Count;
+
         for (var step = 1; step <= _maxIterations; step++)
         {
             completedSteps = step;
@@ -876,6 +894,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // TOKEN_ECONOMY: перед каждым ходом сжимаем старые длинные выводы инструментов, чтобы
             // история не росла монотонно и каждый шаг не пересылал десятки тысяч токенов заново.
             AgentContextCompressor.Compress(messages);
+            await CompactLongRunAsync(messages, runStart, taskId, group, ct);
 
             // ITERATION_WRAPUP: на последнем разрешённом шаге просим модель не вызывать инструменты, а
             // подвести итог — иначе прогон заканчивался служебной строкой вместо ответа.
@@ -1498,6 +1517,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
             ? _job.UseDevice && _profile.Mode is "coder" or "cowork" or "worker"
               && _job.DeviceTools?.Any(t => t.Name == tool) == true
             :
+        tool == AskUserTool
+            ? _job.UseDevice && _profile.Mode is "coder" or "cowork" or "worker"
+            :
         // DESKTOP_AGENT: инструменты ПК — только в десктопном режиме и только Coder (и его помощникам).
         DesktopOnlyTools.Contains(tool)
             ? _job.UseDevice && _profile.Mode is "coder" or "worker"
@@ -1648,6 +1670,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         if (_job.UseDevice && _profile.Mode is "coder" or "worker")
             tools.AddRange(DesktopToolSchemas);
+        if (_job.UseDevice && _profile.Mode is "coder" or "cowork" or "worker")
+            tools.Add(AskUserSchema);
 
         // LOCAL_MCP: локальные MCP-серверы и встроенные коннекторы десктопа (Gmail, Календарь, Диск).
         if (_job.UseDevice && _job.DeviceTools is { Count: > 0 } && _profile.Mode is "coder" or "cowork" or "worker")
@@ -1863,6 +1887,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
     /// </summary>
     private async Task<ProjectRules?> LoadProjectRulesAsync(Guid chatId, CancellationToken ct)
     {
+        // DESKTOP_AGENT: на десктопе проект лежит на ПК, а не в серверной папке — раньше CLAUDE.md/CONEXY.md
+        // там просто не читались. Клиент отдаёт их одним тихим вызовом (без строки в терминале).
+        if (_job.UseDevice)
+        {
+            return _deviceBridge is null ? null : BuildProjectRules(await ReadDeviceProjectFilesAsync(ProjectRuleFiles, ct));
+        }
+
         // No workspace yet means no rule files — and reading through the workspace service would
         // create an empty directory for every chat (incognito ones included).
         if (_workspaceService.GetTaskWorkspacePathIfExists(chatId) is null)
@@ -1870,17 +1901,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
             return null;
         }
 
-        var sections = new StringBuilder();
-        var files = new List<string>();
-        var remaining = ProjectRulesMaxTotalChars;
-
+        var found = new List<(string File, string Content)>();
         foreach (var file in ProjectRuleFiles)
         {
-            if (remaining <= 0)
-            {
-                break;
-            }
-
             FileReadResult read;
             try
             {
@@ -1896,12 +1919,62 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 continue;
             }
 
-            if (!read.Success || string.IsNullOrWhiteSpace(read.Content))
+            if (read.Success && !string.IsNullOrWhiteSpace(read.Content))
             {
-                continue;
+                found.Add((file, read.Content));
+            }
+        }
+
+        return BuildProjectRules(found);
+    }
+
+    /// <summary>Правила проекта с ПК: клиент читает файлы в корне своей рабочей папки (в пределах PathGuard).</summary>
+    private async Task<List<(string File, string Content)>> ReadDeviceProjectFilesAsync(string[] wanted, CancellationToken ct)
+    {
+        var found = new List<(string File, string Content)>();
+        if (_deviceBridge is null)
+            return found;
+        try
+        {
+            var args = JsonSerializer.Serialize(new { files = wanted });
+            var outcome = await _deviceBridge!.ExecuteAsync(_job.UserId, _job.TaskId, "project_rules", args, ct);
+            if (outcome.IsError || !outcome.Output.TrimStart().StartsWith('['))
+                return found; // старый клиент без этого инструмента или файлов нет
+            using var doc = JsonDocument.Parse(outcome.Output);
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                var file = item.TryGetProperty("file", out var f) ? f.GetString() : null;
+                var content = item.TryGetProperty("content", out var c) ? c.GetString() : null;
+                // Только известные имена: клиент не может подсунуть произвольный блок.
+                if (file is not null && wanted.Contains(file) && !string.IsNullOrWhiteSpace(content))
+                    found.Add((file, content));
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            _logger.LogWarning("Agent project rules from device could not be read ({Error}). task={TaskId}", ex.GetType().Name, _job.TaskId);
+        }
+        return found;
+    }
+
+    private ProjectRules? BuildProjectRules(List<(string File, string Content)> found)
+    {
+        var sections = new StringBuilder();
+        var files = new List<string>();
+        var remaining = ProjectRulesMaxTotalChars;
+
+        foreach (var (file, content) in found)
+        {
+            if (remaining <= 0)
+            {
+                break;
             }
 
-            var text = read.Content.Trim();
+            var text = content.Trim();
             var originalLength = text.Length;
             var cap = Math.Min(ProjectRulesMaxCharsPerFile, remaining);
             var truncated = text.Length > cap;
@@ -1934,6 +2007,43 @@ public class ConexyAgentRunner : IConexyAgentRunner
             : new ProjectRules(ProjectRulesPreamble + sections.ToString().TrimEnd(), files);
     }
 
+    // AUTO_COMPACT: длинный прогон перестаёт помещаться в контекст — середина заменяется пересказом модели.
+    // Сбой пересказа не валит задачу: тогда просто работаем дальше с обрезанными выводами.
+    private async Task CompactLongRunAsync(List<ChatMessage> messages, int runStart, Guid taskId, IClientProxy group, CancellationToken ct)
+    {
+        if (AgentHistoryCompactor.FindRange(messages, runStart) is not { } range)
+            return;
+
+        var before = AgentHistoryCompactor.Size(messages);
+        await group.SendAsync("OnLog", "[Compact] История прогона большая — сжимаю старые шаги в пересказ.", ct);
+        await SendAgentStatusAsync(taskId, "thinking", "Сжимаю историю работы...", ct: ct);
+        try
+        {
+            var request = new List<ChatMessage>
+            {
+                new("system", AgentHistoryCompactor.Instruction),
+                new("user", AgentHistoryCompactor.Transcript(messages, range.Start, range.End)),
+            };
+            var response = await _llmClient.SendChatAsync(_job.ModelType, request, new List<object>(), _job.ReasoningEffort, _job.TaskId, ct);
+            await _subscriptionService.RecordAgentTokensAsync(_job.UserId, _job.ModelType,
+                response.Usage ?? new LlmTokenUsage(UncachedInput: response.TotalTokens), ct);
+            var summary = response.Message.Text;
+            if (string.IsNullOrWhiteSpace(summary))
+                return;
+            AgentHistoryCompactor.Apply(messages, range.Start, range.End, summary);
+            _logger.LogInformation("Agent history compacted: {Before} -> {After} chars, {Removed} messages. task={TaskId}",
+                before, AgentHistoryCompactor.Size(messages), range.End - range.Start, taskId);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Agent history compaction failed; continuing without it. task={TaskId}", taskId);
+        }
+    }
+
     // AGENT_HOOKS: добавлено 2026-10-04 — запуск пользовательских хуков проекта в песочнице. Hooks
     // best-effort: сбой хука не валит задачу, а его вывод (обрезанный) уходит модели отдельной заметкой.
     private async Task RunHooksAsync(
@@ -1964,6 +2074,20 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             try
             {
+                // DESKTOP_AGENT: на десктопе хук идёт на ПК как обычная команда — С ПОДТВЕРЖДЕНИЕМ (или по
+                // постоянному разрешению): в отличие от песочницы чужой репозиторий не должен запускать команды сам.
+                if (_job.UseDevice && _deviceBridge is not null)
+                {
+                    var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, "bash",
+                        JsonSerializer.Serialize(new { command = resolved, timeout_seconds = HookTimeoutSeconds }), ct);
+                    if (outcome.IsError)
+                    {
+                        failureNotes?.Add($"[Hook {eventName}] `{resolved}` → {Truncate(outcome.Output, 1500)}");
+                        await LogAsync(taskId, $"[Hook:{eventName}] failed: {Truncate(outcome.Output, 300)}", ct);
+                    }
+                    continue;
+                }
+
                 var request = new BashToolRequest
                 {
                     Command = resolved,
@@ -3614,11 +3738,24 @@ public class ConexyAgentRunner : IConexyAgentRunner
         }
         else if (!string.IsNullOrWhiteSpace(path))
         {
-            var res = await _workspaceService.ReadBytesAsync(chatId, path!, ct);
-            if (!res.Success)
-                return new ConexyToolResult(toolCall.Id, $"view_image: {res.Error}", true);
-
-            var bytes = res.Content!;
+            byte[] bytes;
+            if (_job.UseDevice && _deviceBridge is not null)
+            {
+                // DESKTOP_AGENT: картинка лежит в проекте на ПК (макет, скриншот бага) — берём байты у клиента.
+                var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, "file_read_bytes",
+                    JsonSerializer.Serialize(new { path }), ct);
+                if (outcome.IsError || !outcome.Output.StartsWith(DeviceToolBridge.FilePrefix, StringComparison.Ordinal))
+                    return new ConexyToolResult(toolCall.Id, $"view_image: {outcome.Output}", true);
+                try { bytes = Convert.FromBase64String(outcome.Output[DeviceToolBridge.FilePrefix.Length..]); }
+                catch (FormatException) { return new ConexyToolResult(toolCall.Id, "view_image: повреждённые данные файла.", true); }
+            }
+            else
+            {
+                var res = await _workspaceService.ReadBytesAsync(chatId, path!, ct);
+                if (!res.Success)
+                    return new ConexyToolResult(toolCall.Id, $"view_image: {res.Error}", true);
+                bytes = res.Content!;
+            }
             if (bytes.Length == 0)
                 return new ConexyToolResult(toolCall.Id, $"view_image: '{path}' is empty.", true);
             if (bytes.LongLength > ImageContent.MaxBytes)
@@ -4528,7 +4665,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 path = new { type = "string", description = "Optional relative directory to search in (default: workspace root)" },
                 glob = new { type = "string", description = "Optional glob to restrict which files are searched, e.g. '*.cs' or 'src/**/*.ts'" },
                 ignore_case = new { type = "boolean", description = "Case-insensitive search (default false)" },
-                max_results = new { type = "integer", description = "Maximum matching lines to return (default 100, max 1000)" }
+                max_results = new { type = "integer", description = "Maximum matching lines to return (default 100, max 1000)" },
+                context_lines = new { type = "integer", description = "Lines of context before and after each match, like grep -C (0–10, default 0)" },
+                output_mode = new { type = "string", @enum = new[] { "content", "files", "count" }, description = "content = matching lines (default); files = only paths of matching files; count = matches per file" },
+                include_ignored = new { type = "boolean", description = "Also search files ignored by .gitignore (default false)" }
             }, required = new[] { "pattern" } }),
         Function("glob", "Find files by glob pattern (supports '**'), e.g. '**/*.ts' or 'src/**/test_*.py'. Returns matching file paths relative to the workspace root, sorted. Use it to discover files before reading or searching them.",
             new { type = "object", properties = new {

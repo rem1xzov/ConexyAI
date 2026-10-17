@@ -15,8 +15,13 @@ public sealed record TranscriptMessage(string Role, string Content, DateTime Cre
 
 public sealed record ClientInfo(string? DownloadUrl, string? Version, string? GoogleClientId = null, string? GoogleClientSecret = null);
 
-/// <summary>Тариф и расход токенов агента: тот же счётчик, что и на сайте.</summary>
-public sealed record UsageInfo(string Tier, long AgentUsed, long AgentLimit, DateTime AgentResetsAt)
+/// <summary>
+/// Тариф и расход токенов: те же счётчики, что и на сайте. У Coder и Cowork разные пулы; «использовано» —
+/// уже с учётом скидки на кэш (взвешенная сумма), а *CachedTokens — сырой объём, прочитанный из кэша.
+/// </summary>
+public sealed record UsageInfo(string Tier, long AgentUsed, long AgentLimit, DateTime AgentResetsAt,
+    long CoworkUsed = 0, long CoworkLimit = 0, DateTime CoworkResetsAt = default,
+    long AgentCachedTokens = 0, long CoworkCachedTokens = 0, int CacheHitDiscountPercent = 0)
 {
     public bool Unlimited => AgentLimit >= long.MaxValue / 2;
 
@@ -171,7 +176,8 @@ public sealed class ServerClient : IDisposable
         if (!response.IsSuccessStatusCode)
             return null;
         var body = await response.Content.ReadFromJsonAsync<UsageBody>(Json, ct);
-        return body is null ? null : new UsageInfo(body.Tier ?? "Free", body.AgentUsed, body.AgentLimit, body.AgentResetsAt);
+        return body is null ? null : new UsageInfo(body.Tier ?? "Free", body.AgentUsed, body.AgentLimit, body.AgentResetsAt,
+            body.CoworkUsed, body.CoworkLimit, body.CoworkResetsAt, body.AgentCachedTokens, body.CoworkCachedTokens, body.CacheHitDiscountPercent);
     }
 
     private string? _gitHubToken;
@@ -215,7 +221,8 @@ public sealed class ServerClient : IDisposable
 
     private sealed record ClientBody(string? DownloadUrl, string? Version, string? GoogleClientId, string? GoogleClientSecret);
 
-    private sealed record UsageBody(string? Tier, long AgentUsed, long AgentLimit, DateTime AgentResetsAt);
+    private sealed record UsageBody(string? Tier, long AgentUsed, long AgentLimit, DateTime AgentResetsAt,
+        long CoworkUsed, long CoworkLimit, DateTime CoworkResetsAt, long AgentCachedTokens, long CoworkCachedTokens, int CacheHitDiscountPercent);
 
     private sealed record RunBody(Guid Id, string? Status, string? Result);
 }

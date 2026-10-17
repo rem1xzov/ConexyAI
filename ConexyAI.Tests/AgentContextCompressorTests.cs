@@ -15,6 +15,7 @@ internal static class AgentContextCompressorTests
         TestRegistry.Add("context compressor: old long tool outputs are trimmed, fresh ones kept", TrimsOldKeepsFreshAsync);
         TestRegistry.Add("context compressor: short outputs and non-tool messages are left alone", ShortAndNonToolUntouchedAsync);
         TestRegistry.Add("context compressor: exactly the kept count is never trimmed", BoundaryAsync);
+        TestRegistry.Add("context compressor: trims in batches so the cached prefix stays stable between steps", BatchKeepsPrefixAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -26,18 +27,18 @@ internal static class AgentContextCompressorTests
         await Task.CompletedTask;
         var longText = new string('x', 10_000);
         var messages = new List<ChatMessage> { new("system", "prompt"), new("user", "task") };
-        for (var i = 0; i < 12; i++) messages.Add(Tool(longText));
+        for (var i = 0; i < 16; i++) messages.Add(Tool(longText));
 
         AgentContextCompressor.Compress(messages);
 
-        // Всего 12 выводов, 8 остаются целыми → первые 4 сжаты.
-        for (var i = 0; i < 4; i++)
+        // Всего 16 выводов, 8 остаются целыми → первые 8 (одна пачка) сжаты.
+        for (var i = 0; i < 8; i++)
         {
             var content = (string)messages[2 + i].Content!;
             Assert(content.Length < longText.Length, $"output #{i} must be shortened");
             Assert(content.Contains("обрезан для экономии"), $"output #{i} must carry the truncation marker");
         }
-        for (var i = 4; i < 12; i++)
+        for (var i = 8; i < 16; i++)
         {
             var content = (string)messages[2 + i].Content!;
             Assert(content.Length == longText.Length, $"output #{i} is among the fresh ones and must stay intact");
@@ -61,6 +62,24 @@ internal static class AgentContextCompressorTests
         // Сообщения не-инструментов не сжимаются, даже будучи длинными.
         Assert(((string)messages[13].Content!).Length == 20_000, "an assistant message must not be trimmed");
         Assert(((string)messages[14].Content!).Length == 20_000, "a user message must not be trimmed");
+    }
+
+    private static async Task BatchKeepsPrefixAsync()
+    {
+        await Task.CompletedTask;
+        var longText = new string('x', 10_000);
+        var messages = new List<ChatMessage> { new("system", "prompt") };
+        for (var i = 0; i < 9; i++) messages.Add(Tool(longText));
+
+        // После каждого нового вывода до заполнения пачки старые сообщения не должны меняться.
+        for (var step = 0; step < AgentContextCompressor.TrimBatch - 1; step++)
+        {
+            var before = messages.Select(m => (string?)m.Content).ToList();
+            AgentContextCompressor.Compress(messages);
+            Assert(messages.Select(m => (string?)m.Content).SequenceEqual(before),
+                $"step {step}: nothing may change until a whole batch is due, or the cache prefix breaks every step");
+            messages.Add(Tool(longText));
+        }
     }
 
     private static async Task BoundaryAsync()

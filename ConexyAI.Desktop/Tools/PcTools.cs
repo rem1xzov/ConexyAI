@@ -413,6 +413,7 @@ public sealed class PcTools : IDisposable
             foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
             {
                 var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+                _guard.BeforeWrite?.Invoke(target);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 File.Copy(file, target, overwrite: true);
                 if (++copied > 5000)
@@ -422,7 +423,10 @@ public sealed class PcTools : IDisposable
         }
 
         if (Directory.Exists(destination))
+        {
             destination = Path.Combine(destination, Path.GetFileName(source));
+            _guard.BeforeWrite?.Invoke(destination);
+        }
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         File.Copy(source, destination, overwrite: true);
         return ToolResult.Ok($"Скопировано → {_guard.Relative(destination)} ({new FileInfo(destination).Length:N0} байт)");
@@ -443,7 +447,10 @@ public sealed class PcTools : IDisposable
         {
             target = _guard.ResolveForWrite(dest);
             if (Directory.Exists(target) || dest.EndsWith('/') || dest.EndsWith('\\'))
+            {
                 target = Path.Combine(target, name);
+                _guard.BeforeWrite?.Invoke(target);
+            }
         }
         else
         {

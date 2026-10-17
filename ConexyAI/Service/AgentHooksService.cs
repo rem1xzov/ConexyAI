@@ -14,6 +14,9 @@ public interface IAgentHooksService
     /// <summary>Loads <c>.conexy/hooks.json</c> for the chat workspace, or <c>null</c> when there are no hooks.</summary>
     Task<AgentHooks?> LoadAsync(Guid chatId, CancellationToken ct = default);
 
+    /// <summary>Разбирает содержимое hooks.json (например, присланное десктопом); null — хуков нет.</summary>
+    AgentHooks? Parse(string? content);
+
     IReadOnlyList<string> CommandsFor(AgentHooks hooks, string eventName);
 
     /// <summary>Replaces <c>{name}</c> placeholders with shell-quoted values.</summary>
@@ -54,12 +57,17 @@ public class ConexyAgentHooksService : IAgentHooksService
             return null;
         }
 
-        if (!read.Success || string.IsNullOrWhiteSpace(read.Content))
+        return read.Success ? Parse(read.Content) : null;
+    }
+
+    public AgentHooks? Parse(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
             return null;
 
         try
         {
-            using var doc = JsonDocument.Parse(read.Content);
+            using var doc = JsonDocument.Parse(content);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
                 return null;

@@ -257,9 +257,12 @@ public class ConversationService : IConversationService
 
         // PREFIX_CACHE: стабильное system-сообщение первым, изменяемое — вторым. Содержимое промпта не
         // меняется, меняется лишь его разбиение и порядок: волатильное уезжает из стабильного префикса.
+        // PREFIX_CACHE (HISTORY_CACHE): изменено 2026-10-18 — волатильный блок идёт ПОСЛЕ истории, прямо перед
+        // новым сообщением. Раньше он стоял перед историей, а время в нём меняется на каждом ходе — кэш
+        // префикса обрывался на нём, и ВСЯ история чата на первом шаге каждого нового сообщения
+        // оплачивалась по полной цене (в длинном чате — десятки тысяч токенов). Теперь устав + история —
+        // общий префикс с прошлым запросом и читаются из кэша.
         var messages = new List<ChatMessage> { new("system", systemPrompt) };
-        if (volatileBlocks.Count > 0)
-            messages.Add(new ChatMessage("system", string.Join("\n", volatileBlocks)));
 
         var depth = context.HistoryDepth ?? _options.HistoryDepth;
         var history = await GetHistoryAsync(context.UserId, context.ChatId, context.Incognito, depth: null, ct);
@@ -277,10 +280,16 @@ public class ConversationService : IConversationService
         {
             // The full history stays in the database; only the oldest rows are dropped from the
             // prompt so the request stays inside the context window.
+            // PREFIX_CACHE (HISTORY_CACHE): обрезаем СТУПЕНЯМИ по четверти глубины, а не «скользящим окном».
+            // Окно сдвигало начало истории на КАЖДОМ сообщении длинного чата, и кэш префикса не
+            // срабатывал ни разу — вся история оплачивалась заново. Теперь граница неподвижна
+            // в течение depth/4 сообщений; в промпт по-прежнему идёт не больше depth сообщений.
+            var chunk = Math.Max(1, depth / 4);
+            var start = ((history.Count - depth + chunk - 1) / chunk) * chunk;
             _logger.LogWarning(
                 "Trimming conversation history for {ChatId}: {Total} rows, retaining last {Kept}.",
-                context.ChatId, history.Count, depth);
-            history = history.Skip(history.Count - depth).ToList();
+                context.ChatId, history.Count, history.Count - start);
+            history = history.Skip(start).ToList();
         }
 
         foreach (var entry in history)
@@ -295,6 +304,9 @@ public class ConversationService : IConversationService
 
             messages.Add(new ChatMessage(entry.Role, entry.Content));
         }
+
+        if (volatileBlocks.Count > 0)
+            messages.Add(new ChatMessage("system", string.Join("\n", volatileBlocks)));
 
         messages.Add(ChatMessageFactory.User(context.UserMessage, context.Attachments));
 
