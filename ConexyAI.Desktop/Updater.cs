@@ -51,6 +51,9 @@ public static class Updater
         }
     }
 
+    /// <summary>Служебный вход для проверки докачки: conexy downloadtest &lt;url&gt; &lt;файл&gt; &lt;версия&gt;.</summary>
+    public static Task<bool> TestDownload(string url, string target, string version) => DownloadResumableAsync(url, target, version);
+
     /// <summary>Служебный вход для проверки скрипта замены: conexy updatetest &lt;цель&gt; &lt;новый файл&gt;.</summary>
     public static int? TestSchedule(string target, string fresh) => ScheduleReplace(target, fresh, [], "test");
 
@@ -102,6 +105,102 @@ public static class Updater
         return 0;
     }
 
+    private const int MaxAttempts = 20;
+    private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Скачивание с докачкой. Соединение с GitHub из России часто рвётся на середине 80-мегабайтного файла
+    /// («unexpected EOF», «response ended prematurely»), и скачивание с нуля не доходило до конца. Теперь при обрыве
+    /// запрашиваем остаток (HTTP Range), а частичный файл переживает и перезапуск клиента (помечен версией).
+    /// </summary>
+    private static async Task<bool> DownloadResumableAsync(string url, string target, string version)
+    {
+        var marker = target + ".version";
+        if (File.Exists(target) && (!File.Exists(marker) || File.ReadAllText(marker).Trim() != version))
+            File.Delete(target); // кусок другой версии — докачивать нельзя
+        File.WriteAllText(marker, version);
+
+        using var http = new HttpClient(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(20) })
+        {
+            Timeout = Timeout.InfiniteTimeSpan, // зависание ловит IdleTimeout на каждом чтении
+        };
+        long total = 0;
+        var lastShown = -1;
+        for (var attempt = 1; ; attempt++)
+        {
+            var have = File.Exists(target) ? new FileInfo(target).Length : 0;
+            if (total > 0 && have >= total)
+                break;
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                if (have > 0)
+                    request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(have, null);
+                using var connect = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+                using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, connect.Token);
+                if (have > 0 && response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable)
+                {
+                    // Файл уже целиком (или кусок испорчен) — начинаем заново, если размер не известен.
+                    if (total > 0 && have == total)
+                        break;
+                    File.Delete(target);
+                    continue;
+                }
+                response.EnsureSuccessStatusCode();
+
+                // Сервер проигнорировал Range и отдаёт файл с начала — пишем тоже с начала.
+                var resumed = have > 0 && response.StatusCode == System.Net.HttpStatusCode.PartialContent;
+                if (!resumed)
+                    have = 0;
+                total = response.Content.Headers.ContentRange?.Length
+                        ?? (response.Content.Headers.ContentLength is { } len ? len + have : 0);
+
+                await using var source = await response.Content.ReadAsStreamAsync();
+                await using var file = new FileStream(target, resumed ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.None);
+                var buffer = new byte[81920];
+                var done = have;
+                while (true)
+                {
+                    using var idle = new CancellationTokenSource(IdleTimeout);
+                    var read = await source.ReadAsync(buffer, idle.Token);
+                    if (read == 0)
+                        break;
+                    await file.WriteAsync(buffer.AsMemory(0, read));
+                    done += read;
+                    if (total > 0 && (int)(done * 100 / total) is var pct && pct != lastShown)
+                    {
+                        lastShown = pct;
+                        Console.Write($"\r  {pct}%   ");
+                    }
+                }
+                if (total == 0 || done >= total)
+                    break;
+                throw new IOException("соединение закрылось раньше конца файла");
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException or OperationCanceledException && attempt < MaxAttempts)
+            {
+                var wait = TimeSpan.FromSeconds(Math.Min(10, attempt * 2));
+                Console.Write($"\r  {Math.Max(lastShown, 0)}%  обрыв соединения, продолжаю ({attempt}/{MaxAttempts - 1})…   ");
+                await Task.Delay(wait);
+            }
+        }
+        Console.WriteLine();
+
+        // Проверка целостности: нужный размер и заголовок exe (MZ), чтобы не подменить рабочую программу обрывком.
+        var size = new FileInfo(target).Length;
+        var header = new byte[2];
+        await using (var check = File.OpenRead(target))
+            _ = await check.ReadAsync(header);
+        if ((total > 0 && size != total) || header[0] != (byte)'M' || header[1] != (byte)'Z')
+        {
+            File.Delete(target);
+            Ui.Error($"Скачанный файл повреждён ({size} из {total} байт) — повторите /update.");
+            return false;
+        }
+        File.Delete(marker);
+        return true;
+    }
+
     /// <summary>Скачивает и подменяет exe, затем запускает новую версию и ждёт её завершения. Возвращает её код выхода.</summary>
     public static async Task<int?> ApplyAsync(ClientInfo info, string[] args)
     {
@@ -113,30 +212,8 @@ public static class Updater
         try
         {
             Console.WriteLine($"Скачиваю v{info.Version}…");
-            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-            using var response = await http.GetAsync(info.DownloadUrl, HttpCompletionOption.ResponseHeadersRead);
-            response.EnsureSuccessStatusCode();
-            var total = response.Content.Headers.ContentLength ?? 0;
-
-            await using (var source = await response.Content.ReadAsStreamAsync())
-            await using (var target = File.Create(fresh))
-            {
-                var buffer = new byte[81920];
-                long done = 0;
-                int read;
-                var lastShown = -1;
-                while ((read = await source.ReadAsync(buffer)) > 0)
-                {
-                    await target.WriteAsync(buffer.AsMemory(0, read));
-                    done += read;
-                    if (total > 0 && (int)(done * 100 / total) is var pct && pct != lastShown)
-                    {
-                        lastShown = pct;
-                        Console.Write($"\r  {pct}%   ");
-                    }
-                }
-            }
-            Console.WriteLine();
+            if (!await DownloadResumableAsync(info.DownloadUrl, fresh, info.Version ?? "?"))
+                return null;
 
             try
             {
@@ -152,10 +229,10 @@ public static class Updater
                 return ScheduleReplace(exe, fresh, args, info.Version);
             }
         }
-        catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException or OperationCanceledException)
         {
-            Ui.Error("Не удалось обновиться: " + ex.Message);
-            try { File.Delete(fresh); } catch (IOException) { }
+            // Скачанную часть не удаляем: следующий /update докачает её с того же места.
+            Ui.Error("Не удалось обновиться: " + ex.Message + " — повторите /update, скачивание продолжится с того же места.");
             return null;
         }
 

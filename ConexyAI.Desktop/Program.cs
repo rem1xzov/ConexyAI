@@ -110,6 +110,9 @@ try
             return await SelfTest.McpAsync(args.Skip(1).Where(a => !a.StartsWith("--args=")).ToArray(),
                 args.FirstOrDefault(a => a.StartsWith("--args="))?[7..]);
 
+        case "downloadtest" when args.Length >= 4:
+            return await Updater.TestDownload(args[1], args[2], args[3]) ? 0 : 1;
+
         case "timertest":
             // Проверка таймера долгой команды: строка инструмента, таймер после 10 с, итог «за N с».
             if (args.Contains("--ansi"))
