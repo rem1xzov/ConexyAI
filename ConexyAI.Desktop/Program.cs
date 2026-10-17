@@ -84,6 +84,19 @@ try
             Ui.FlushText();
             return 0;
 
+        case "mailtest" when args.Length >= 2:
+            // Проверка входа в почту: conexy mailtest name@yandex.ru (пароль приложения — в CONEXY_MAIL_PASSWORD).
+            if (MailProvider.ForAddress(args[1]) is not { } testProvider)
+            {
+                Console.WriteLine("FAIL  неизвестный домен");
+                return 1;
+            }
+            var mailTest = new MailConnector(new ConsoleApprover());
+            var (mailOk, mailMessage) = await mailTest.LoginAsync(testProvider, args[1],
+                Environment.GetEnvironmentVariable("CONEXY_MAIL_PASSWORD") ?? "wrong-password", CancellationToken.None);
+            Console.WriteLine($"{(mailOk ? "PASS" : "FAIL")}  {mailMessage}");
+            return mailOk ? 0 : 1;
+
         case "mcptest":
             return await SelfTest.McpAsync(args.Skip(1).Where(a => !a.StartsWith("--args=")).ToArray(),
                 args.FirstOrDefault(a => a.StartsWith("--args="))?[7..]);
@@ -413,8 +426,11 @@ static void PrintHelp() => Console.WriteLine("""
                       документы и почта (платные тарифы)
       /google [login|logout]  подключить Gmail, Календарь и Диск: агент читает письма и документы,
                       отправка письма — только с вашего подтверждения. Токены хранятся только на этом ПК
-      /mcp            локальные MCP-серверы (программы на ПК): /mcp add <имя> <команда ...>,
-                      /mcp remove <имя>, /mcp reload, /mcp config (формат как у Claude Desktop)
+      /mail [login|logout]  подключить Яндекс Почту или Mail.ru по паролю приложения:
+                      поиск, чтение, вложения, отправка — только с вашего подтверждения
+      /mcp            локальные MCP-серверы (программы на ПК): /mcp catalog — готовые (Playwright,
+                      Context7, Sentry, Supabase, Postgres, Notion, Figma), /mcp add <id> — установить из каталога,
+                      /mcp add <имя> <команда ...> — свой, /mcp remove <имя>, /mcp reload, /mcp config
       /team [on|off]  оркестр агентов: ведущий собирает команду субагентов (ProMax, Ultra, Admin).
                       Включённый оркестр работает в этом чате, пока вы не выключите его: /team off
       /usage          тариф и расход токенов агента
@@ -468,6 +484,8 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
         Ui.Info("  Оркестр агентов включён в этом чате · /team off — выключить");
     if (local.Google.Connected)
         Ui.Info($"  Google подключён: {local.Google.Email} · агент видит Gmail, Календарь и Диск");
+    if (local.Mail.Connected)
+        Ui.Info($"  Почта подключена: {local.Mail.Email} ({local.Mail.ProviderTitle})");
 
     while (true)
     {
@@ -563,6 +581,9 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                     break;
                 case "/mcp":
                     await McpCommandAsync(local, arg);
+                    break;
+                case "/mail":
+                    await MailCommandAsync(local, arg);
                     break;
                 case "/team":
                     bool wantTeam;
@@ -726,13 +747,37 @@ static async Task McpCommandAsync(LocalTools local, string arg)
             Console.WriteLine("  " + (local.Google.Connected
                 ? Ui.Green_("●") + $" google (встроенный): {local.Google.Email} · {local.Google.Tools.Count} инструм."
                 : Ui.Muted("○ google (встроенный): не подключён — /google login")));
+            Console.WriteLine("  " + (local.Mail.Connected
+                ? Ui.Green_("●") + $" mail (встроенный): {local.Mail.Email} · {local.Mail.Tools.Count} инструм."
+                : Ui.Muted("○ mail (встроенный): Яндекс/Mail.ru не подключены — /mail login")));
             foreach (var s in local.Servers)
                 Console.WriteLine("  " + (s.Error is null
                     ? Ui.Green_("●") + $" {s.Name}: {s.Tools.Count} инструм. " + Ui.Muted(string.Join(", ", s.Tools.Take(6).Select(t => t.Tool)) + (s.Tools.Count > 6 ? ", …" : string.Empty))
                     : Ui.Highlight("×") + $" {s.Name}: {s.Error}"));
             if (local.Servers.Count == 0)
-                Ui.Info("  Своих серверов нет. Пример: /mcp add fs npx -y @modelcontextprotocol/server-filesystem C:\\Users\\вы\\Documents");
+                Ui.Info("  Своих серверов нет. Готовые для разработки: /mcp catalog");
+            if (local.LimitWarning() is { } warning)
+                Ui.Error(warning);
             Ui.Info($"  Конфиг: {McpConfig.FilePath}");
+            break;
+        case "catalog":
+            var installed = McpConfig.Load().Servers;
+            Console.WriteLine(Ui.Bold("Каталог MCP") + Ui.Muted(" · установить: /mcp add <id>"));
+            foreach (var e in McpCatalog.Entries)
+            {
+                var has = installed.Values.Any(s => s.CatalogId == e.Id) || installed.ContainsKey(e.Id);
+                Console.WriteLine($"  {(has ? Ui.Green_("●") : Ui.Muted("○"))} {Ui.Bold(e.Id),-12} {e.Title}");
+                Console.WriteLine("      " + Ui.Muted(e.Description));
+            }
+            Ui.Info("  Нужен Node.js (команда npx). Серверы работают на вашем ПК, ключи хранятся зашифрованными.");
+            break;
+        case "add" when parts.Length == 2:
+            if (McpCatalog.Find(parts[1]) is not { } entry)
+            {
+                Ui.Error($"В каталоге нет «{parts[1]}» (список: /mcp catalog). Свой сервер: /mcp add <имя> <команда ...>");
+                break;
+            }
+            await InstallFromCatalogAsync(local, entry);
             break;
         case "add" when parts.Length == 3:
             var config = McpConfig.Load();
@@ -768,7 +813,114 @@ static async Task McpCommandAsync(LocalTools local, string arg)
             Ui.Info($"  {McpConfig.FilePath} — после правки: /mcp reload");
             break;
         default:
-            Ui.Error("Используйте: /mcp, /mcp add <имя> <команда аргументы...>, /mcp remove <имя>, /mcp reload, /mcp config");
+            Ui.Error("Используйте: /mcp, /mcp catalog, /mcp add <id>, /mcp add <имя> <команда аргументы...>, /mcp remove <имя>, /mcp reload, /mcp config");
+            break;
+    }
+}
+
+// /mcp add <id>: сервер из каталога — спрашиваем ключи, шифруем их и запускаем.
+static async Task InstallFromCatalogAsync(LocalTools local, CatalogEntry entry)
+{
+    if (entry.Command == "npx" && OperatingSystem.IsWindows() && StdioMcpClient.FindNpxCli() is null)
+    {
+        Ui.Error("Не найден Node.js (npx). Установите: winget install OpenJS.NodeJS.LTS — или попросите агента «установи Node.js», затем повторите.");
+        return;
+    }
+
+    Console.WriteLine(Ui.Bold(entry.Title) + " — " + entry.Description);
+    var server = new McpServerEntry
+    {
+        Command = entry.Command,
+        Args = entry.Args.ToList(),
+        Env = entry.Env is null ? null : new Dictionary<string, string>(entry.Env),
+        CatalogId = entry.Id,
+    };
+    foreach (var input in entry.Inputs ?? [])
+    {
+        Ui.Info("  " + input.Help);
+        Console.Write($"  {input.Prompt}: ");
+        var value = (input.Secret ? ReadSecret() : Console.ReadLine() ?? string.Empty).Trim();
+        if (value.Length == 0)
+        {
+            if (input.Optional)
+                continue;
+            Ui.Error("Без этого сервер не заработает — установка отменена.");
+            return;
+        }
+        server.SetSecret(input.Name, value);
+        if (input.ArgIfSet is { } arg)
+            server.Args!.Add(arg);
+    }
+
+    var config = McpConfig.Load();
+    config.Servers[entry.Id] = server;
+    config.Save();
+    Ui.Info($"  Добавлен «{entry.Id}», запускаю (первый запуск скачивает пакет — до минуты)…");
+    // Перезапуск именно этого сервера, если он уже был запущен со старыми ключами.
+    var restart = local.Servers.Any(s => s.Name == McpConfig.Slug(entry.Id));
+    foreach (var line in await local.StartAsync(CancellationToken.None, restart))
+        Ui.Info("  " + line);
+    if (entry.Note is { } note)
+        Ui.Info("  " + Ui.Muted(note));
+}
+
+// /mail: Яндекс Почта / Mail.ru по IMAP и SMTP с паролем приложения.
+static async Task MailCommandAsync(LocalTools local, string arg)
+{
+    var parts = arg.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    switch (parts.FirstOrDefault()?.ToLowerInvariant())
+    {
+        case null or "status":
+            Ui.Info(local.Mail.Connected
+                ? $"  Почта подключена: {local.Mail.Email} ({local.Mail.ProviderTitle}). Агент ищет и читает письма, скачивает вложения; отправка — с вашего подтверждения. /mail logout — отключить."
+                : "  Почта не подключена. /mail login — Яндекс Почта или Mail.ru (нужен пароль приложения).");
+            break;
+        case "login":
+            Console.Write("  Адрес почты: ");
+            var email = (Console.ReadLine() ?? string.Empty).Trim();
+            if (!email.Contains('@'))
+            {
+                Ui.Error("Нужен адрес вида name@yandex.ru или name@mail.ru.");
+                break;
+            }
+            var provider = (parts.Length > 1 ? MailProvider.Find(parts[1]) : null) ?? MailProvider.ForAddress(email);
+            if (provider is null)
+            {
+                Console.Write("  Почта на своём домене — чей сервис? [y] Яндекс 360 / [m] Mail.ru для бизнеса: ");
+                provider = (Console.ReadLine() ?? string.Empty).Trim().ToLowerInvariant() switch
+                {
+                    "y" or "н" or "yandex" => MailProvider.Find("yandex"),
+                    "m" or "ь" or "mail" => MailProvider.Find("mailru"),
+                    _ => null,
+                };
+                if (provider is null)
+                {
+                    Ui.Error("Пока поддерживаются Яндекс и Mail.ru. Для Gmail — /google login.");
+                    break;
+                }
+            }
+            Ui.Info($"  {provider.Title}: нужен пароль приложения, не обычный пароль. {provider.PasswordHelp}");
+            Console.Write("  Пароль приложения (символы не отображаются): ");
+            // Яндекс показывает пароль группами через пробел — пробелы убираем.
+            var password = ReadSecret().Replace(" ", string.Empty);
+            if (password.Length == 0)
+            {
+                Ui.Error("Пароль не введён.");
+                break;
+            }
+            Ui.Info("  Проверяю вход…");
+            var (ok, message) = await local.Mail.LoginAsync(provider, email, password, CancellationToken.None);
+            if (ok)
+                Ui.Info("  " + Ui.Green_(message) + Ui.Muted(" · попробуйте: «что нового в почте?»"));
+            else
+                Ui.Error(message);
+            break;
+        case "logout":
+            local.Mail.Logout();
+            Ui.Info("  Почта отключена. Пароль приложения удалён с этого ПК; в настройках почты его можно отозвать.");
+            break;
+        default:
+            Ui.Error("Используйте: /mail, /mail login или /mail logout");
             break;
     }
 }

@@ -86,17 +86,24 @@ public sealed class StdioMcpClient : IAsyncDisposable
 
     private ProcessStartInfo BuildStartInfo()
     {
-        // На Windows npx/uvx — это .cmd-файлы, их нельзя запустить напрямую без оболочки.
         var command = _entry.Command;
-        var args = _entry.Args ?? [];
+        var args = (_entry.Args ?? []).Select(_entry.Expand).ToList();
         ProcessStartInfo psi;
-        if (OperatingSystem.IsWindows() && !Path.HasExtension(command) && !File.Exists(command))
+        if (OperatingSystem.IsWindows() && command.Equals("npx", StringComparison.OrdinalIgnoreCase) && FindNpxCli() is { } npx)
         {
-            psi = new ProcessStartInfo("cmd.exe");
-            psi.ArgumentList.Add("/d");
-            psi.ArgumentList.Add("/s");
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add(command);
+            // npx — это npx.cmd, а cmd.exe заново разбирает строку: `&`, `^`, `%` в строке подключения к БД
+            // или токене ломали бы запуск. Запускаем node с npx-cli.js напрямую — аргументы идут как есть.
+            psi = new ProcessStartInfo(npx.Node);
+            psi.ArgumentList.Add(npx.Cli);
+        }
+        else if (OperatingSystem.IsWindows() && !Path.HasExtension(command) && !File.Exists(command))
+        {
+            // uvx/прочие .cmd — через cmd.exe; каждый аргумент в кавычках, чтобы `&` и `|` не стали командами.
+            psi = new ProcessStartInfo("cmd.exe")
+            {
+                Arguments = "/d /s /c \"" + string.Join(' ', new[] { command }.Concat(args).Select(a => "\"" + a.Replace("\"", "\\\"") + "\"")) + "\"",
+            };
+            args = [];
         }
         else
         {
@@ -114,8 +121,29 @@ public sealed class StdioMcpClient : IAsyncDisposable
         psi.StandardInputEncoding = new UTF8Encoding(false);
         psi.StandardErrorEncoding = new UTF8Encoding(false);
         foreach (var (k, v) in _entry.Env ?? [])
-            psi.Environment[k] = v;
+            psi.Environment[k] = _entry.Expand(v);
         return psi;
+    }
+
+    /// <summary>node.exe и npx-cli.js из установки Node.js в PATH.</summary>
+    internal static (string Node, string Cli)? FindNpxCli()
+    {
+        var path = string.Join(';',
+            Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine),
+            Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User),
+            Environment.GetEnvironmentVariable("PATH"));
+        foreach (var dir in path.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            try
+            {
+                var node = Path.Combine(dir, "node.exe");
+                var cli = Path.Combine(dir, "node_modules", "npm", "bin", "npx-cli.js");
+                if (File.Exists(node) && File.Exists(cli))
+                    return (node, cli);
+            }
+            catch (ArgumentException) { /* мусор в PATH */ }
+        }
+        return null;
     }
 
     private async Task ReadLoopAsync()

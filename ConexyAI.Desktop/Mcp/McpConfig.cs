@@ -16,6 +16,35 @@ public sealed class McpServerEntry
 
     [JsonPropertyName("disabled")]
     public bool Disabled { get; set; }
+
+    /// <summary>
+    /// Секреты в зашифрованном виде (DPAPI). В args и env на них ссылаются как <c>${secret:ИМЯ}</c> — так токен
+    /// не лежит в mcp.json открытым текстом. Другие клиенты (Claude Desktop) это поле просто пропустят.
+    /// </summary>
+    [JsonPropertyName("conexySecrets")]
+    public Dictionary<string, string>? ProtectedSecrets { get; set; }
+
+    /// <summary>Из каталога (/mcp catalog) — для статуса в списке.</summary>
+    [JsonPropertyName("conexyCatalog")]
+    public string? CatalogId { get; set; }
+
+    public void SetSecret(string name, string value) =>
+        (ProtectedSecrets ??= new())[name] = SecretBox.Protect(value);
+
+    /// <summary>Подставляет расшифрованные секреты вместо ${secret:ИМЯ}.</summary>
+    public string Expand(string value)
+    {
+        if (!value.Contains("${secret:", StringComparison.Ordinal))
+            return value;
+        foreach (var (name, protectedValue) in ProtectedSecrets ?? [])
+        {
+            var token = "${secret:" + name + "}";
+            if (value.Contains(token, StringComparison.Ordinal))
+                value = value.Replace(token, SecretBox.Unprotect(protectedValue)
+                    ?? throw new InvalidOperationException($"секрет {name} не расшифрован — добавьте сервер заново (/mcp add)"));
+        }
+        return value;
+    }
 }
 
 /// <summary>

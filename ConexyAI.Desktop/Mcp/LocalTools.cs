@@ -17,9 +17,19 @@ public sealed class LocalTools : IAsyncDisposable
     {
         _approver = approver;
         Google = new GoogleConnector(approver);
+        Mail = new MailConnector(approver);
     }
 
+    /// <summary>Лимит сервера на инструменты десктопа (DeviceToolSanitizer.MaxTools).</summary>
+    public const int MaxTools = 48;
+
     public GoogleConnector Google { get; }
+
+    public MailConnector Mail { get; }
+
+    /// <summary>Сколько инструментов хотят показать агенту все подключённые сервисы (до обрезки по лимиту).</summary>
+    public int WantedToolCount => Google.Tools.Count + Mail.Tools.Count
+        + _servers.Values.Where(s => s.Error is null).Sum(s => s.Tools.Count);
 
     public IReadOnlyCollection<StdioMcpClient> Servers => _servers.Values;
 
@@ -43,7 +53,7 @@ public sealed class LocalTools : IAsyncDisposable
         var started = new List<StdioMcpClient>();
         foreach (var (slug, entry) in wanted)
         {
-            if (slug == GoogleConnector.ServerSlug || _servers.ContainsKey(slug))
+            if (slug is GoogleConnector.ServerSlug or MailConnector.ServerSlug || _servers.ContainsKey(slug))
                 continue;
             var client = new StdioMcpClient(slug, entry);
             _servers[slug] = client;
@@ -51,15 +61,25 @@ public sealed class LocalTools : IAsyncDisposable
         }
         await Task.WhenAll(started.Select(c => c.StartAsync(ct)));
 
-        return started.Select(c => c.Error is null
+        var lines = started.Select(c => c.Error is null
             ? $"MCP «{c.Name}»: {c.Tools.Count} инструм."
             : $"MCP «{c.Name}» не запустился: {c.Error}").ToList();
+        if (LimitWarning() is { } warning)
+            lines.Add(warning);
+        return lines;
     }
+
+    /// <summary>Предупреждение, если часть инструментов не влезет в лимит и агент их не увидит.</summary>
+    public string? LimitWarning() =>
+        WantedToolCount > MaxTools
+            ? $"Инструментов {WantedToolCount}, агенту доступно не больше {MaxTools} — лишние не попадут. Отключите ненужные: /mcp remove <имя>"
+            : null;
 
     /// <summary>Схемы для сервера (имена local__server__tool).</summary>
     public List<LocalToolSpec> Specs()
     {
         var specs = new List<LocalToolSpec>(Google.Tools);
+        specs.AddRange(Mail.Tools);
         foreach (var server in _servers.Values.Where(s => s.Error is null))
         {
             foreach (var (tool, description, schema) in server.Tools)
@@ -69,7 +89,7 @@ public sealed class LocalTools : IAsyncDisposable
                     specs.Add(new LocalToolSpec(name, $"[MCP {server.Name}] {description}", schema));
             }
         }
-        return specs.Take(48).ToList();
+        return specs.Take(MaxTools).ToList();
     }
 
     public async Task<ToolResult> CallAsync(string name, string argumentsJson, PathGuard? project, CancellationToken ct)
@@ -81,6 +101,8 @@ public sealed class LocalTools : IAsyncDisposable
 
         if (server == GoogleConnector.ServerSlug)
             return await Google.CallAsync(tool, ToolArgs.Parse(argumentsJson), project, ct);
+        if (server == MailConnector.ServerSlug)
+            return await Mail.CallAsync(tool, ToolArgs.Parse(argumentsJson), project, ct);
 
         if (!_servers.TryGetValue(server, out var client) || client.Error is not null)
             return ToolResult.Fail($"MCP-сервер «{server}» не запущен на ПК пользователя (/mcp — статус).");
