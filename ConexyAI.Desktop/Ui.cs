@@ -49,6 +49,27 @@ public static class Ui
 
         var handle = GetStdHandle(-11);
         Ansi = GetConsoleMode(handle, out var mode) && SetConsoleMode(handle, mode | 0x0004);
+        DisableQuickEdit();
+    }
+
+    /// <summary>
+    /// В классической консоли Windows включён QuickEdit: клик по окну начинает выделение и СТАВИТ НА ПАУЗУ
+    /// весь вывод программы, пока не нажата клавиша. Панель оркестра пишет под общим замком, поэтому
+    /// вставал весь клиент («подвисает, пока не нажмёшь кнопку»). Отключаем на время работы и
+    /// возвращаем при выходе. В Windows Terminal выделение своё и не паузит — там ничего не меняется.
+    /// </summary>
+    private static void DisableQuickEdit()
+    {
+        if (Console.IsInputRedirected)
+            return;
+        var input = GetStdHandle(-10);
+        if (!GetConsoleMode(input, out var original))
+            return;
+        const uint quickEdit = 0x0040, extendedFlags = 0x0080;
+        if ((original & quickEdit) == 0)
+            return;
+        if (SetConsoleMode(input, (original | extendedFlags) & ~quickEdit))
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => SetConsoleMode(input, original);
     }
 
     [DllImport("kernel32.dll")]
@@ -689,6 +710,11 @@ public static class Ui
 
     private static string _label = "Думаю";
 
+    // Пока открыто меню подтверждения, спиннер и панель оркестра не рисуются: иначе другой
+    // субагент (его результат вызывает Busy) закрашивал меню, и клиент «висел» в ожидании ответа,
+    // которого не видно.
+    private static volatile bool _confirming;
+
     public static void Busy(string? label = null)
     {
         if (!Ansi)
@@ -699,7 +725,7 @@ public static class Ui
         {
             if (label is not null)
                 _label = label;
-            if (_spin is not null)
+            if (_spin is not null || _confirming)
                 return;
             cts = _spin = new CancellationTokenSource();
         }
@@ -714,7 +740,7 @@ public static class Ui
                 var teamMode = false;
                 lock (Gate)
                 {
-                    if (cts.IsCancellationRequested)
+                    if (cts.IsCancellationRequested || _confirming)
                         break;
                     // Пока работает команда — вместо строки спиннера живая панель агентов.
                     if (_team is { Workers.Count: > 0 })
@@ -730,6 +756,22 @@ public static class Ui
                 await Task.Delay(teamMode ? 250 : 120);
             }
         });
+    }
+
+    /// <summary>Останавливает спиннер и стирает панель, даже если цикл спиннера уже вышел сам.</summary>
+    private static void StopSpinner()
+    {
+        lock (Gate)
+        {
+            _spin?.Cancel();
+            _spin = null;
+            if (!Ansi)
+                return;
+            if (_drawn > 0)
+                EraseTeam();
+            else
+                Console.Write("\r\x1b[2K");
+        }
     }
 
     public static void Idle()
@@ -857,8 +899,25 @@ public static class Ui
     /// <summary>Меню «Да / Да, всегда / Нет» со стрелками. Возвращает 0, 1 или 2; -1 — отмена.</summary>
     public static async Task<int> ConfirmAsync(string title, string command, string folder, CancellationToken ct, bool allowAuto = true)
     {
-        Idle();
+        lock (Gate)
+            _confirming = true;
+        try
+        {
+            return await ConfirmCoreAsync(title, command, folder, ct, allowAuto);
+        }
+        finally
+        {
+            _confirming = false;
+        }
+    }
+
+    private static async Task<int> ConfirmCoreAsync(string title, string command, string folder, CancellationToken ct, bool allowAuto)
+    {
+        StopSpinner();
         FlushText();
+        // Нажатое, пока меню ещё не показано, не должно случайно стать ответом «да».
+        while (Console.KeyAvailable)
+            Console.ReadKey(intercept: true);
         // Команду просит субагент — пишем какой, чтобы было понятно, кому разрешаем.
         if (CurrentAgent.Value is { } asker)
             title = $"{title} · {asker.Role}";

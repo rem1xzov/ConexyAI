@@ -475,7 +475,7 @@ public sealed class PcTools : IDisposable
         await Require("Установка программы", $"winget install --id {package}", ct);
         var result = await _shell.RunApprovedAsync(
             $"winget install --id {package} -e --accept-source-agreements --accept-package-agreements --disable-interactivity",
-            900, ct);
+            ShellTool.MaxTimeoutSeconds, ct);
         if (result.Output.Contains("winget") && result.Output.Contains("не распознано", StringComparison.OrdinalIgnoreCase))
             return ToolResult.Fail("winget не найден на этом ПК. Используй download_file с официальным установщиком (затем запуск — с подтверждением).");
         return new ToolResult(result.Output + "\nPATH обновляется автоматически: новые команды доступны в следующих вызовах bash.", result.IsError);

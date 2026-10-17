@@ -16,7 +16,7 @@ public static class ProjectCommands
                           "Не удалось определить тип проекта (нет .sln/.csproj, package.json, pyproject.toml, Cargo.toml, go.mod). " +
                           "Передай явную 'command'.");
 
-        return await shell.RunTrustedAsync(command, timeoutSeconds: 600, ct);
+        return await shell.RunTrustedAsync(command, timeoutSeconds: 1800, ct);
     }
 
     internal static string? Detect(string root, bool test)

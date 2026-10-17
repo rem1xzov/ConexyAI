@@ -35,8 +35,12 @@ public interface IDeviceToolBridge
 
 public sealed class DeviceToolBridge : IDeviceToolBridge
 {
-    /// <summary>Сколько сервер ждёт ответ устройства (подтверждение команды человеком входит в это время).</summary>
-    public static readonly TimeSpan CallTimeout = TimeSpan.FromMinutes(10);
+    /// <summary>
+    /// Сколько сервер ждёт ответ устройства (подтверждение команды человеком входит в это время).
+    /// Должно быть больше максимального таймаута команды на ПК (60 мин) с запасом на подтверждение — иначе
+    /// долгая сборка обрывалась сервером «устройство не ответило», хотя на ПК всё ещё шло.
+    /// </summary>
+    public static readonly TimeSpan CallTimeout = TimeSpan.FromMinutes(70);
 
     private const int MaxOutputChars = 200_000;
 

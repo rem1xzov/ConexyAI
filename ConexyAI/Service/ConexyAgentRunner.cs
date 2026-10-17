@@ -83,13 +83,29 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "window_list", "screen_capture", "window_keys",
     };
 
+    // DESKTOP_AGENT: инструменты-команды ПК: их ненулевой код — результат команды, а не сбой инструмента.
+    private static readonly HashSet<string> DeviceCommandTools = new(StringComparer.Ordinal)
+    {
+        "bash", "terminal_exec", "cmd_exec", "run_tests", "get_diagnostics", "install_software",
+    };
+
+    private static bool IsUserDecline(string output) =>
+        output.StartsWith("USER_REJECTED", StringComparison.OrdinalIgnoreCase)
+        || output.StartsWith("Пользователь отклонил", StringComparison.Ordinal)
+        || output.StartsWith("Пользователь не разрешил", StringComparison.Ordinal);
+
+    /// <summary>Команда запустилась на ПК: клиент дописывает код возврата или пометку о таймауте.</summary>
+    private static bool DeviceCommandRan(string output) =>
+        output.Contains("Exit code:", StringComparison.Ordinal)
+        || output.Contains("прервана по таймауту", StringComparison.Ordinal);
+
     // DESKTOP_AGENT: bash на ПК — не одноразовая песочница: другие лимиты и подпапка через cwd (cd между вызовами не сохраняется).
     private static readonly object DesktopBashSchema =
         Function("bash", "Выполняет команду в оболочке ПК пользователя (на Windows — PowerShell, см. «Режим десктопа»). Для сборки, тестов, пакетных менеджеров и git. Каждый вызов — новая оболочка в корне проекта; для подпапки используй cwd, а не cd. Команды, кроме чтения, подтверждает пользователь. Долгие сервисы — через bg_start.",
             new { type = "object", properties = new {
                 command = new { type = "string", description = "Команда" },
                 cwd = new { type = "string", description = "Подпапка относительно корня проекта, например 'frontend' (необязательно)" },
-                timeout_seconds = new { type = "integer", description = "По умолчанию 120, макс. 900" }
+                timeout_seconds = new { type = "integer", description = "По умолчанию 600 (10 мин), макс. 3600. Для первой сборки со скачиванием зависимостей (Gradle, Maven, npm, Forge) ставь 1800–3600" }
             }, required = new[] { "command" } });
 
     private static readonly IReadOnlyList<object> DesktopToolSchemas = new List<object>
@@ -97,7 +113,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         Function("cmd_exec", "Запасная оболочка: выполняет команду через cmd.exe (Windows) или /bin/sh. Используй, если bash (PowerShell) не запускается или ломает команду. Требует подтверждения.",
             new { type = "object", properties = new {
                 command = new { type = "string" },
-                timeout_seconds = new { type = "integer", description = "По умолчанию 120, макс. 900" }
+                timeout_seconds = new { type = "integer", description = "По умолчанию 600, макс. 3600" }
             }, required = new[] { "command" } }),
         Function("bg_start", "Запускает долгоживущий процесс в фоне (dev-сервер, dotnet run, npm run dev, docker compose up, БД). Возвращает id и первые строки вывода. Требует подтверждения.",
             new { type = "object", properties = new {
@@ -1338,8 +1354,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // Ненулевой код возврата bash/terminal_exec — результат КОМАНДЫ (curl 7, упавший тест,
                 // grep без совпадений), а не поломка инструмента: он идёт в самокоррекцию (BuildHealth),
                 // но не в бюджет сбоев — иначе после пары таких команд агенту объявляли «bash недоступен».
-                var commandOutcome = toolAllowed && result.CommandExecuted && toolName is "bash" or "terminal_exec";
-                if (result.IsError && !commandOutcome)
+                var commandOutcome = toolAllowed && result.CommandExecuted
+                                     && (toolName is "bash" or "terminal_exec" || (_job.UseDevice && DeviceCommandTools.Contains(toolName)));
+                // Отказ человека на ПК — его решение, а не сломанный инструмент.
+                var userDeclined = _job.UseDevice && IsUserDecline(result.Output);
+                if (result.IsError && !commandOutcome && !userDeclined)
                 {
                     totalToolFailures++;
                     consecutiveToolFailures++;
@@ -1396,8 +1415,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // работает, — чтобы модель перестала его вызывать и закончила ответ без него.
             // Ставится ПОСЛЕ всего батча tool-результатов, чтобы не разрывать пары
             // assistant(tool_calls) → tool(...), которые требует формат запроса к модели.
+            // На ПК терминал не «ломается навсегда»: сбой — это конкретная команда (ошибка синтаксиса,
+            // запрещённая политикой), поэтому вердикт «больше не вызывай» к нему не применяем — иначе
+            // агент бросал сборку со словами «bash недоступен». От бесконечной петли защищает ToolFailureBudget.
             var newlyUnavailable = failedToolsThisIteration
                 .Where(name =>
+                    !(_job.UseDevice && DeviceCommandTools.Contains(name)) &&
                     toolFailureCounts.GetValueOrDefault(name) >= ToolRetryWarningLimit &&
                     nudgedTools.Add(name))
                 .ToList();
@@ -2331,7 +2354,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         return new ConexyToolResult(toolCall.Id, "Десктопный режим не настроен на сервере.", true);
 
                     var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, name, toolCall.Function.Arguments, ct);
-                    return new ConexyToolResult(toolCall.Id, outcome.Output, outcome.IsError);
+                    // Команда на ПК реально выполнилась (есть код возврата или таймаут) — неудача это результат
+                    // команды (упала сборка), а не поломка bash. Иначе после трёх упавших сборок агенту объявлялось
+                    // «bash недоступен», и он бросал работу.
+                    return new ConexyToolResult(toolCall.Id, outcome.Output, outcome.IsError)
+                    {
+                        CommandExecuted = DeviceCommandTools.Contains(name) && DeviceCommandRan(outcome.Output),
+                    };
                 }
 
                 // LOCAL_MCP: Cowork на десктопе — документ собирается на сервере, а сохраняется в папку проекта на ПК.

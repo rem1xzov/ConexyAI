@@ -88,9 +88,10 @@ public static partial class CommandPolicy
 /// <summary>bash / terminal_exec: команда в рабочей папке, с подтверждением, таймаутом и убийством дерева процессов.</summary>
 public sealed partial class ShellTool
 {
-    private const int DefaultTimeoutSeconds = 120;
-    private const int MaxTimeoutSeconds = 900;
-    private const int MaxOutputChars = 30_000;
+    // С запасом на первую сборку со скачиванием зависимостей (ForgeGradle, Maven, Android, npm). Сервер ждёт дольше.
+    private const int DefaultTimeoutSeconds = 600;
+    internal const int MaxTimeoutSeconds = 3600;
+    private const int MaxOutputChars = 40_000;
 
     private readonly PathGuard _guard;
     private readonly ICommandApprover _approver;
@@ -134,6 +135,17 @@ public sealed partial class ShellTool
         var psi = BuildStartInfo(command, useCmd, wrapExitCode);
         if (OperatingSystem.IsWindows())
         {
+            // Переменные окружения из реестра заново: установщики прописывают JAVA_HOME, GRADLE_HOME, ANDROID_HOME и т.п.,
+            // а запущенный до установки клиент их иначе не увидит. Сначала системные, потом пользовательские.
+            foreach (var target in new[] { EnvironmentVariableTarget.Machine, EnvironmentVariableTarget.User })
+            {
+                foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables(target))
+                {
+                    var name = (string)entry.Key;
+                    if (!name.Equals("PATH", StringComparison.OrdinalIgnoreCase) && entry.Value is string value)
+                        psi.Environment[name] = Environment.ExpandEnvironmentVariables(value);
+                }
+            }
             var machine = Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine) ?? string.Empty;
             var user = Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User) ?? string.Empty;
             var current = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
