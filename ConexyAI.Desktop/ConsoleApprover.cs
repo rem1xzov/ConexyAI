@@ -50,7 +50,27 @@ public sealed class ConsoleApprover : ICommandApprover
         }
     }
 
-    private async Task<bool> AskPlainAsync(string command, string workingDirectory, CancellationToken ct)
+    public async Task<bool> ApproveSensitiveAsync(string title, string details, string where, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (!Ui.Ansi)
+                return await AskPlainAsync(details, where, ct, allowAuto: false);
+            var choice = await Ui.ConfirmAsync(title, details, where, ct, allowAuto: false);
+            var allowed = choice == 0;
+            Ui.Decision(allowed);
+            if (allowed)
+                Ui.Busy("Выполняю");
+            return allowed;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task<bool> AskPlainAsync(string command, string workingDirectory, CancellationToken ct, bool allowAuto = true)
     {
         Console.WriteLine();
         Console.WriteLine($"Агент хочет выполнить команду в {workingDirectory}:");
@@ -60,7 +80,7 @@ public sealed class ConsoleApprover : ICommandApprover
         var answer = await Task.Run(Console.ReadLine, ct);
         switch (answer?.Trim().ToLowerInvariant())
         {
-            case "a":
+            case "a" when allowAuto:
                 _auto = true;
                 return true;
             case "y" or "д" or "да" or "yes":

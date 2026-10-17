@@ -43,5 +43,7 @@ public record ConexyJob(
     List<McpServerInput>? McpServers = null,
     // DESKTOP_AGENT: добавлено 2026-10-15 — файлы и команды выполняет десктопный клиент на ПК
     // пользователя, а не серверная песочница.
-    bool UseDevice = false
+    bool UseDevice = false,
+    // LOCAL_MCP: добавлено 2026-10-17 — инструменты локальных MCP-серверов десктопа (уже провалидированы).
+    List<DeviceToolSpec>? DeviceTools = null
 );

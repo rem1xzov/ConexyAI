@@ -10,6 +10,25 @@ public static class SelfTest
         public Task<bool> ApproveAsync(string command, string workingDirectory, CancellationToken ct) => Task.FromResult(answer);
     }
 
+    /// <summary>`conexy mcptest команда аргументы...` — запускает stdio MCP-сервер, печатает инструменты и вызывает первый.</summary>
+    public static async Task<int> McpAsync(string[] command, string? callArgs)
+    {
+        var entry = new Mcp.McpServerEntry { Command = command[0], Args = command.Skip(1).ToList() };
+        await using var client = new Mcp.StdioMcpClient("test", entry);
+        await client.StartAsync(CancellationToken.None);
+        if (client.Error is not null)
+        {
+            Console.WriteLine("FAIL  start: " + client.Error);
+            return 1;
+        }
+        Console.WriteLine($"PASS  start: {client.Tools.Count} tools: {string.Join(", ", client.Tools.Select(t => t.Tool))}");
+        if (client.Tools.Count == 0)
+            return 0;
+        var (text, isError) = await client.CallAsync(client.Tools[0].Tool, callArgs ?? "{}", CancellationToken.None);
+        Console.WriteLine($"{(isError ? "FAIL" : "PASS")}  call {client.Tools[0].Tool}: {text}");
+        return isError ? 1 : 0;
+    }
+
     public static async Task<int> RunAsync()
     {
         var root = Path.Combine(Path.GetTempPath(), "conexy-selftest-" + Guid.NewGuid().ToString("N")[..8]);

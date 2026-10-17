@@ -215,6 +215,7 @@
     "desktopTier": "Your plan",
     "mcpTitle": "Personal MCP servers",
     "mcpHint": "Connect external services (Notion, Jira, Linear, …) that expose a remote MCP over HTTP. URLs and tokens are stored on the server, encrypted: they work from background tasks and any of your devices. The agent reaches the service as your account.",
+    "mcpDesktopHint": "Gmail, Google Calendar and Drive, plus local MCP programs on your PC (stdio, like Claude Desktop), are connected in ConexyAI Desktop: /google login and /mcp add. Google tokens stay on your PC only.",
     "mcpNamePlaceholder": "Name (e.g. Notion)",
     "mcpUrlPlaceholder": "Server URL (https://…/mcp)",
     "mcpTokenPlaceholder": "Access token",

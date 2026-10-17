@@ -11,10 +11,12 @@ public sealed class ToolRunner
     private readonly ShellTool _shell;
     private readonly PcTools _pc;
     private readonly Action<string> _log;
+    private readonly Mcp.LocalTools? _local;
 
     public ToolRunner(string workspaceRoot, ICommandApprover approver, Action<string> log,
-            Func<CancellationToken, Task<string?>>? gitHubToken = null)
+            Func<CancellationToken, Task<string?>>? gitHubToken = null, Mcp.LocalTools? local = null)
     {
+        _local = local;
         _guard = new PathGuard(workspaceRoot);
         _files = new FileTools(_guard);
         _search = new SearchTools(_guard);
@@ -34,9 +36,18 @@ public sealed class ToolRunner
             var args = ToolArgs.Parse(argumentsJson);
             _log(Describe(tool, args));
 
+            // LOCAL_MCP: Google и локальные MCP-серверы.
+            if (tool.StartsWith("local__", StringComparison.Ordinal))
+                return _local is null
+                    ? ToolResult.Fail("Локальные инструменты не подключены.")
+                    : await _local.CallAsync(tool, argumentsJson, ct);
+
             return tool switch
             {
                 "file_read" => _files.Read(args),
+                // Служебные: сервер собирает/разбирает .docx/.xlsx/.pptx/.pdf, а байты живут в папке проекта.
+                "file_write_bytes" => WriteBytes(args),
+                "file_read_bytes" => ReadBytes(args),
                 "file_write" => _files.Write(args),
                 "file_patch" => _files.Patch(args),
                 "workspace_list_files" => _files.List(args),
@@ -78,8 +89,36 @@ public sealed class ToolRunner
         }
     }
 
+    private ToolResult WriteBytes(ToolArgs args)
+    {
+        var path = _guard.ResolveForWrite(args.Required("path", "file_write_bytes"));
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(args.Required("content_base64", "file_write_bytes")); }
+        catch (FormatException) { return ToolResult.Fail("Неверные данные файла."); }
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, bytes);
+        return ToolResult.Ok($"Сохранено: {_guard.Relative(path)} ({bytes.Length / 1024 + 1} КБ)");
+    }
+
+    private ToolResult ReadBytes(ToolArgs args)
+    {
+        var path = _guard.Resolve(args.Required("path", "file_read_bytes"));
+        if (!File.Exists(path))
+            return ToolResult.Fail($"Файл не найден: {_guard.Relative(path)}");
+        // Сообщение хаба ограничено 16 МБ, base64 раздувает на треть.
+        if (new FileInfo(path).Length > 10L * 1024 * 1024)
+            return ToolResult.Fail("Файл больше 10 МБ — слишком большой для чтения.");
+        return ToolResult.Ok("FILE_BASE64:" + Convert.ToBase64String(File.ReadAllBytes(path)));
+    }
+
     private static string Describe(string tool, ToolArgs args)
     {
+        if (tool.StartsWith("local__", StringComparison.Ordinal))
+        {
+            var parts = tool.Split("__", 3);
+            var what = args.Str("query") ?? args.Str("id") ?? args.Str("to") ?? string.Empty;
+            return $"{(parts.Length == 3 ? parts[1] + "." + parts[2] : tool)} {what}".TrimEnd();
+        }
         var target = args.Str("path") ?? args.Str("command") ?? args.Str("url") ?? args.Str("source")
                      ?? args.Str("package") ?? args.Str("id") ?? args.Str("pattern") ?? string.Empty;
         if (target.Length > 80)

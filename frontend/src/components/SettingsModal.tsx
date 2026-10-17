@@ -917,6 +917,8 @@ function McpSection() {
       <div className="settings-modal__section">
         <div className="settings-modal__label">{t('settings.mcpTitle')}</div>
         <p className="settings-github__hint">{t('settings.mcpHint')}</p>
+        {/* LOCAL_MCP: Google и stdio-серверы живут в десктопе — подсказка, где их искать. */}
+        <p className="settings-github__hint">{t('settings.mcpDesktopHint')}</p>
         {loaded && servers.length === 0 && <p className="settings-github__hint">{t('settings.mcpEmpty')}</p>}
         {servers.map((server, index) => (
           <div key={index} className="settings-mcp__row">

@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using ConexyAI.Desktop;
+using ConexyAI.Desktop.Mcp;
 using ConexyAI.Desktop.Tools;
 
 const string Usage = """
@@ -81,6 +83,10 @@ try
             Ui.Md.Feed("# Итог\n\n**1. Ассеты** не копируются в `wwwroot`. Это довольно длинный текст, который должен переноситься по ширине окна консоли, а не вылезать за рамки `pony.ini` и `app.js`.\n\n- пункт списка с `кодом` и **жирным** текстом и очень длинным продолжением для проверки переноса строки в списке\n2. нумерованный ✅ пункт\n\n```csharp\nvar x = 1;\n```\n\n> цитата\n\n| a | b |\n|---|---|\n| 1 | 2 |\n");
             Ui.FlushText();
             return 0;
+
+        case "mcptest":
+            return await SelfTest.McpAsync(args.Skip(1).Where(a => !a.StartsWith("--args=")).ToArray(),
+                args.FirstOrDefault(a => a.StartsWith("--args="))?[7..]);
 
         case "teamtest":
             // Проверка панели оркестра без сервера.
@@ -255,11 +261,15 @@ static async Task<int> ChatAsync(string[] args)
 
     var approver = new ConsoleApprover { AutoMode = args.Contains("--auto") };
     var store = ChatStore.Load();
+    // LOCAL_MCP: Google и локальные MCP-серверы живут весь сеанс (не перезапускаются при смене чата).
+    await using var local = new LocalTools(approver);
+    foreach (var line in await local.StartAsync(CancellationToken.None))
+        Ui.Info("  " + line);
     var chatId = store.ChatFor(root, ChatIdFor(root));
     var firstBanner = true;
     while (true)
     {
-        var next = await ChatInFolderAsync(server, approver, store, root, chatId, firstBanner);
+        var next = await ChatInFolderAsync(server, approver, store, local, root, chatId, firstBanner);
         if (next is null)
             return 0;
         (root, chatId) = next.Value;
@@ -399,6 +409,12 @@ static void PrintHelp() => Console.WriteLine("""
       /detach [N]     убрать вложение по номеру или все
       /chats          список всех чатов (синхронизирован с сайтом): переключиться или создать новый,
                       у каждого чата своя папка проекта
+      /agent [coder|cowork]  сменить агента чата: Coder — код и терминал, Cowork — исследования,
+                      документы и почта (платные тарифы)
+      /google [login|logout]  подключить Gmail, Календарь и Диск: агент читает письма и документы,
+                      отправка письма — только с вашего подтверждения. Токены хранятся только на этом ПК
+      /mcp            локальные MCP-серверы (программы на ПК): /mcp add <имя> <команда ...>,
+                      /mcp remove <имя>, /mcp reload, /mcp config (формат как у Claude Desktop)
       /team [on|off]  оркестр агентов: ведущий собирает команду субагентов (ProMax, Ultra, Admin).
                       Включённый оркестр работает в этом чате, пока вы не выключите его: /team off
       /usage          тариф и расход токенов агента
@@ -412,11 +428,11 @@ static void PrintHelp() => Console.WriteLine("""
 
 // Возвращает новую пару (папка, чат), если пользователь переключился, или null для выхода.
 static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
-    ServerClient server, ConsoleApprover approver, ChatStore store, string root, Guid chatId, bool firstBanner)
+    ServerClient server, ConsoleApprover approver, ChatStore store, LocalTools local, string root, Guid chatId, bool firstBanner)
 {
     store.Bind(chatId, root);
-    var tools = new ToolRunner(root, approver, Ui.ToolCall, server.GetGitHubTokenAsync);
-    await using var session = new AgentSession(server, tools, chatId);
+    var tools = new ToolRunner(root, approver, Ui.ToolCall, server.GetGitHubTokenAsync, local);
+    await using var session = new AgentSession(server, tools, chatId) { Local = local };
     try
     {
         await session.ConnectAsync(CancellationToken.None);
@@ -444,8 +460,14 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
     if (store.Team.Contains(chatId) && usage is { TeamAllowed: false })
         store.SetTeam(chatId, false);
     Ui.TeamMode = session.Orchestra = store.Team.Contains(chatId);
+    // Агент — настройка чата; Cowork только на платном тарифе.
+    if (store.ModeOf(chatId) == "cowork" && usage is { CoworkAllowed: false })
+        store.SetMode(chatId, "coder");
+    Ui.AgentMode = session.Mode = store.ModeOf(chatId);
     if (session.Orchestra)
         Ui.Info("  Оркестр агентов включён в этом чате · /team off — выключить");
+    if (local.Google.Connected)
+        Ui.Info($"  Google подключён: {local.Google.Email} · агент видит Gmail, Календарь и Диск");
 
     while (true)
     {
@@ -506,6 +528,41 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                         Ui.Error("Не удалось получить данные о тарифе.");
                     else
                         Ui.PrintStatus();
+                    break;
+                case "/agent":
+                    var wantMode = arg.ToLowerInvariant() switch
+                    {
+                        "" => session.Mode == "coder" ? "cowork" : "coder",
+                        "coder" or "code" or "кодер" => "coder",
+                        "cowork" or "коворк" => "cowork",
+                        _ => null,
+                    };
+                    if (wantMode is null)
+                    {
+                        Ui.Error("Используйте: /agent, /agent coder или /agent cowork");
+                        break;
+                    }
+                    if (wantMode == "cowork")
+                    {
+                        usage ??= await TryUsageAsync(server);
+                        if (usage is { CoworkAllowed: false })
+                        {
+                            Ui.Error($"Cowork доступен на платных тарифах (ваш тариф: {usage.Tier}). Подключить — на сайте.");
+                            break;
+                        }
+                    }
+                    Ui.AgentMode = session.Mode = wantMode;
+                    store.SetMode(chatId, wantMode);
+                    Ui.Info(wantMode == "cowork"
+                        ? "Агент: Cowork — исследования, документы (.docx/.xlsx/.pptx сохраняются в папку), почта и сервисы. Терминала у Cowork нет."
+                          + (session.Orchestra ? " Оркестр работает только в Coder." : string.Empty)
+                        : "Агент: Coder — код, файлы и терминал.");
+                    break;
+                case "/google":
+                    await GoogleCommandAsync(server, local, arg);
+                    break;
+                case "/mcp":
+                    await McpCommandAsync(local, arg);
                     break;
                 case "/team":
                     bool wantTeam;
@@ -612,6 +669,128 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
         usage = await TryUsageAsync(server) ?? usage;
         Ui.SetUsage(usage);
     }
+}
+
+// /google: вход в Google (OAuth в браузере), выход и статус.
+static async Task GoogleCommandAsync(ServerClient server, LocalTools local, string arg)
+{
+    switch (arg.ToLowerInvariant())
+    {
+        case "" or "status":
+            Ui.Info(local.Google.Connected
+                ? $"  Google подключён: {local.Google.Email}. Агент может читать почту, календарь и диск. /google logout — отключить."
+                : "  Google не подключён. /google login — войти (откроется браузер).");
+            break;
+        case "login":
+            var id = Environment.GetEnvironmentVariable("CONEXY_GOOGLE_CLIENT_ID");
+            var secret = Environment.GetEnvironmentVariable("CONEXY_GOOGLE_CLIENT_SECRET");
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                try
+                {
+                    var info = await server.GetClientInfoAsync(cts.Token);
+                    (id, secret) = (info?.GoogleClientId, info?.GoogleClientSecret);
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { }
+            }
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                Ui.Error("Вход в Google ещё не настроен на сервере. Можно указать свой OAuth-клиент (тип «Desktop app») в переменных CONEXY_GOOGLE_CLIENT_ID и CONEXY_GOOGLE_CLIENT_SECRET.");
+                break;
+            }
+            var (ok, message) = await local.Google.LoginAsync(id.Trim(), string.IsNullOrWhiteSpace(secret) ? null : secret.Trim(), CancellationToken.None);
+            if (ok)
+                Ui.Info("  " + Ui.Green_(message) + Ui.Muted(" · попробуйте: «что нового в почте?»"));
+            else
+                Ui.Error(message);
+            break;
+        case "logout":
+            await local.Google.LogoutAsync();
+            Ui.Info("  Google отключён, доступ отозван.");
+            break;
+        default:
+            Ui.Error("Используйте: /google, /google login или /google logout");
+            break;
+    }
+}
+
+// /mcp: локальные MCP-серверы из mcp.json.
+static async Task McpCommandAsync(LocalTools local, string arg)
+{
+    var parts = arg.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    switch (parts.FirstOrDefault()?.ToLowerInvariant())
+    {
+        case null or "list":
+            Console.WriteLine(Ui.Bold("MCP на этом ПК"));
+            Console.WriteLine("  " + (local.Google.Connected
+                ? Ui.Green_("●") + $" google (встроенный): {local.Google.Email} · {local.Google.Tools.Count} инструм."
+                : Ui.Muted("○ google (встроенный): не подключён — /google login")));
+            foreach (var s in local.Servers)
+                Console.WriteLine("  " + (s.Error is null
+                    ? Ui.Green_("●") + $" {s.Name}: {s.Tools.Count} инструм. " + Ui.Muted(string.Join(", ", s.Tools.Take(6).Select(t => t.Tool)) + (s.Tools.Count > 6 ? ", …" : string.Empty))
+                    : Ui.Highlight("×") + $" {s.Name}: {s.Error}"));
+            if (local.Servers.Count == 0)
+                Ui.Info("  Своих серверов нет. Пример: /mcp add fs npx -y @modelcontextprotocol/server-filesystem C:\\Users\\вы\\Documents");
+            Ui.Info($"  Конфиг: {McpConfig.FilePath}");
+            break;
+        case "add" when parts.Length == 3:
+            var config = McpConfig.Load();
+            var commandLine = SplitCommandLine(parts[2]);
+            config.Servers[parts[1]] = new McpServerEntry { Command = commandLine[0], Args = commandLine.Skip(1).ToList() };
+            config.Save();
+            Ui.Info($"  Добавлен «{parts[1]}», запускаю…");
+            foreach (var line in await local.StartAsync(CancellationToken.None))
+                Ui.Info("  " + line);
+            break;
+        case "remove" or "rm" when parts.Length >= 2:
+            var cfg = McpConfig.Load();
+            if (!cfg.Servers.Remove(parts[1]))
+            {
+                Ui.Error($"Нет сервера «{parts[1]}».");
+                break;
+            }
+            cfg.Save();
+            await local.StartAsync(CancellationToken.None);
+            Ui.Info($"  «{parts[1]}» удалён.");
+            break;
+        case "reload":
+            foreach (var line in await local.StartAsync(CancellationToken.None, restart: true))
+                Ui.Info("  " + line);
+            if (local.Servers.Count == 0)
+                Ui.Info("  В mcp.json нет серверов.");
+            break;
+        case "config":
+            if (!File.Exists(McpConfig.FilePath))
+                new McpConfig().Save();
+            try { Process.Start(new ProcessStartInfo(McpConfig.FilePath) { UseShellExecute = true }); }
+            catch (Exception) { /* путь напечатан ниже */ }
+            Ui.Info($"  {McpConfig.FilePath} — после правки: /mcp reload");
+            break;
+        default:
+            Ui.Error("Используйте: /mcp, /mcp add <имя> <команда аргументы...>, /mcp remove <имя>, /mcp reload, /mcp config");
+            break;
+    }
+}
+
+static List<string> SplitCommandLine(string line)
+{
+    var result = new List<string>();
+    var current = new StringBuilder();
+    var quoted = false;
+    foreach (var c in line)
+    {
+        if (c == '"') { quoted = !quoted; continue; }
+        if (c == ' ' && !quoted)
+        {
+            if (current.Length > 0) { result.Add(current.ToString()); current.Clear(); }
+            continue;
+        }
+        current.Append(c);
+    }
+    if (current.Length > 0)
+        result.Add(current.ToString());
+    return result;
 }
 
 static string ResolveFolder(string root, string arg, List<string> listed)

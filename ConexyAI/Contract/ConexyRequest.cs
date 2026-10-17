@@ -41,8 +41,24 @@ public record ConexyRequest(
     // сервере: едут с запросом, чтобы агент работал под аккаунтом пользователя, а не под общим.
     List<McpServerInput>? McpServers = null,
     // DESKTOP_AGENT: добавлено 2026-10-15 — выполнять инструменты на подключённом десктопе.
-    bool UseDevice = false
+    bool UseDevice = false,
+    // LOCAL_MCP: добавлено 2026-10-17 — инструменты, которые десктоп предлагает сам: локальные MCP-серверы
+    // (stdio) и встроенные коннекторы (Google). Выполняются на ПК, сервер лишь показывает схемы модели.
+    List<DeviceToolSpec>? DeviceTools = null
 );
+
+// LOCAL_MCP: схема инструмента, которую прислал десктоп. Имя всегда local__<server>__<tool>.
+public class DeviceToolSpec
+{
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("description")]
+    public string? Description { get; set; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("inputSchema")]
+    public System.Text.Json.JsonElement? InputSchema { get; set; }
+}
 
 // MCP: личный MCP-сервер пользователя. Токен живёт только в браузере и в памяти запроса.
 public class McpServerInput

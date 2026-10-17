@@ -26,6 +26,12 @@ public sealed class AgentSession : IAsyncDisposable
     /// <summary>Оркестр агентов (субагенты): сервер сам решает, разрешён ли он на тарифе.</summary>
     public bool Orchestra { get; set; }
 
+    /// <summary>Агент чата: "coder" (код, терминал) или "cowork" (исследования, документы, почта).</summary>
+    public string Mode { get; set; } = "coder";
+
+    /// <summary>Инструменты ПК сверх файлов: Google и локальные MCP-серверы.</summary>
+    public Mcp.LocalTools? Local { get; set; }
+
     public AgentSession(ServerClient server, ToolRunner tools, Guid chatId)
     {
         _server = server;
@@ -95,7 +101,10 @@ public sealed class AgentSession : IAsyncDisposable
         _needBullet = true;
         Ui.Busy();
 
-        var taskId = await _server.StartRunAsync(prompt, _chatId, Orchestra, Attachments.Pending.ToList(), ct);
+        var taskId = await _server.StartRunAsync(
+            prompt, _chatId, Orchestra && Mode == "coder", Attachments.Pending.ToList(), ct,
+            model: Mode == "cowork" ? "conexy-cowork" : "conexy-coder",
+            deviceTools: Local?.Specs());
         Attachments.Clear(); // ушли с этим ходом — следующему сообщению не нужны
         await _hub.InvokeAsync("JoinTask", taskId, ct);
 
@@ -232,7 +241,9 @@ public sealed class AgentSession : IAsyncDisposable
 
         var shown = result.Output.StartsWith("IMAGE_BASE64:", StringComparison.Ordinal)
             ? ToolResult.Ok($"скриншот снят ({result.Output.Length * 3 / 4 / 1024} КБ), отправлен агенту")
-            : result;
+            : result.Output.StartsWith("FILE_BASE64:", StringComparison.Ordinal)
+                ? ToolResult.Ok($"файл прочитан ({result.Output.Length * 3 / 4 / 1024} КБ), отправлен агенту")
+                : result;
         if (agent is { } worker)
         {
             // Итог субагента — в его карточку на панели команды.

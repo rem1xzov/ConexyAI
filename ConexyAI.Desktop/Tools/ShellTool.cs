@@ -12,6 +12,10 @@ public interface ICommandApprover
     /// <summary>Подтверждение с заголовком («Чтение вне проекта», «Установка» …) для инструментов ПК.</summary>
     Task<bool> ApproveAsync(string title, string details, string workingDirectory, CancellationToken ct) =>
         ApproveAsync(details, workingDirectory, ct);
+
+    /// <summary>Действие от имени пользователя во внешнем сервисе (отправка письма): спрашиваем всегда, даже в авто-режиме.</summary>
+    Task<bool> ApproveSensitiveAsync(string title, string details, string where, CancellationToken ct) =>
+        ApproveAsync(title, details, where, ct);
 }
 
 /// <summary>Правила для команд: что запрещено безусловно и что безопасно выполнять без вопроса.</summary>

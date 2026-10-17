@@ -15,6 +15,18 @@ public sealed class ChatStore
     /// <summary>Чаты, в которых включён оркестр агентов: он работает, пока пользователь не выключит его сам.</summary>
     public HashSet<Guid> Team { get; set; } = new();
 
+    /// <summary>Агент чата (нет записи — Coder).</summary>
+    public Dictionary<Guid, string> Modes { get; set; } = new();
+
+    public string ModeOf(Guid chatId) => Modes.TryGetValue(chatId, out var m) && m == "cowork" ? "cowork" : "coder";
+
+    public void SetMode(Guid chatId, string mode)
+    {
+        if (mode == "coder") Modes.Remove(chatId);
+        else Modes[chatId] = mode;
+        Save();
+    }
+
     public void SetTeam(Guid chatId, bool on)
     {
         if (on ? Team.Add(chatId) : Team.Remove(chatId))

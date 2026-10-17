@@ -43,6 +43,9 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
     /// <summary>Скриншот приходит base64-строкой с этим префиксом — его нельзя обрезать до обычного лимита.</summary>
     public const string ImagePrefix = "IMAGE_BASE64:";
 
+    /// <summary>Байты файла (file_read_bytes) — base64 с этим префиксом, тоже без обрезки до обычного лимита.</summary>
+    public const string FilePrefix = "FILE_BASE64:";
+
     private const int MaxImageChars = 12_000_000;
 
     private sealed record Device(string ConnectionId, string Name, string Os, string Workspace);
@@ -133,6 +136,12 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
         {
             if (output.Length > MaxImageChars)
                 output = "Скриншот слишком большой. Уменьши размер окна (width/height).";
+        }
+        // LOCAL_MCP: байты документа для read_document_file — обрезать нельзя, иначе файл не разберётся.
+        else if (output.StartsWith(FilePrefix, StringComparison.Ordinal))
+        {
+            if (output.Length > MaxImageChars + FilePrefix.Length + 2_000_000)
+                output = "Файл слишком большой для чтения (макс. 10 МБ).";
         }
         else if (output.Length > MaxOutputChars)
             output = output[..MaxOutputChars] + "\n[... вывод обрезан сервером ...]";

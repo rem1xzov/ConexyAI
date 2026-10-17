@@ -1442,6 +1442,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     /// <summary>A tool this run may call: the mode's profile, and never the chat search in incognito.</summary>
     private bool IsToolAllowed(string tool) =>
+        // LOCAL_MCP: инструменты локальных MCP-серверов десктопа (в т.ч. Google) — агентам и только тем, что прислал клиент.
+        DeviceToolSanitizer.IsDeviceTool(tool)
+            ? _job.UseDevice && _profile.Mode is "coder" or "cowork" or "worker"
+              && _job.DeviceTools?.Any(t => t.Name == tool) == true
+            :
         // DESKTOP_AGENT: инструменты ПК — только в десктопном режиме и только Coder (и его помощникам).
         DesktopOnlyTools.Contains(tool)
             ? _job.UseDevice && _profile.Mode is "coder" or "worker"
@@ -1592,6 +1597,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         if (_job.UseDevice && _profile.Mode is "coder" or "worker")
             tools.AddRange(DesktopToolSchemas);
+
+        // LOCAL_MCP: локальные MCP-серверы и встроенные коннекторы десктопа (Gmail, Календарь, Диск).
+        if (_job.UseDevice && _job.DeviceTools is { Count: > 0 } && _profile.Mode is "coder" or "cowork" or "worker")
+        {
+            foreach (var spec in _job.DeviceTools)
+                tools.Add(Function(spec.Name!, $"[ПК] {spec.Description}", spec.InputSchema!));
+        }
 
         // MCP: подключённые удалённые серверы добавляют свои инструменты как mcp__<server>__<tool>.
         // Только для агентских режимов (Coder/Cowork) и только пока список не раздут.
@@ -2261,6 +2273,18 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 return await DispatchMcpToolAsync(taskId, toolCall, root, ct);
             }
 
+            // LOCAL_MCP: инструменты десктопа выполняет сам клиент (он держит процессы MCP и токены Google).
+            if (DeviceToolSanitizer.IsDeviceTool(toolCall.Function.Name))
+            {
+                if (!_job.UseDevice || _deviceBridge is null || !IsToolAllowed(toolCall.Function.Name))
+                    return new ConexyToolResult(toolCall.Id, $"Инструмент '{toolCall.Function.Name}' сейчас недоступен.", true);
+                var label = toolCall.Function.Name[DeviceToolSanitizer.Prefix.Length..].Replace("__", " / ");
+                await SendAgentStatusAsync(taskId, "executing", $"ПК: {label}...", ct: ct);
+                var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, toolCall.Function.Name, toolCall.Function.Arguments, ct);
+                // Данные из почты/документов — чужой текст, а не инструкции (защита от prompt injection в письмах).
+                return new ConexyToolResult(toolCall.Id, Truncate(outcome.Output, 30_000), outcome.IsError);
+            }
+
             // ORCHESTRA: помощник правит только свою область — читать можно везде.
             var scopeError = CheckWorkerScope(toolCall.Function.Name, root);
             if (scopeError is not null)
@@ -2281,6 +2305,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, name, toolCall.Function.Arguments, ct);
                     return new ConexyToolResult(toolCall.Id, outcome.Output, outcome.IsError);
                 }
+
+                // LOCAL_MCP: Cowork на десктопе — документ собирается на сервере, а сохраняется в папку проекта на ПК.
+                if (name is "create_document" or "read_document_file")
+                    return await DeviceDocumentAsync(taskId, toolCall, root, ct);
 
                 if (IsServerSandboxOnlyTool(name))
                 {
@@ -3041,6 +3069,45 @@ public class ConexyAgentRunner : IConexyAgentRunner
     }
 
     // MCP: добавлено 2026-10-04 — вызов инструмента удалённого MCP-сервера.
+    // LOCAL_MCP: добавлено 2026-10-17 — документы Office в десктопном режиме. Формат собирает/разбирает сервер
+    // (там библиотеки), а байты едут на ПК и обратно служебными инструментами file_write_bytes/file_read_bytes.
+    private async Task<ConexyToolResult> DeviceDocumentAsync(Guid taskId, LlmToolCall toolCall, JsonElement root, CancellationToken ct)
+    {
+        if (_deviceBridge is null)
+            return new ConexyToolResult(toolCall.Id, "Десктопный режим не настроен на сервере.", true);
+        var path = GetString(root, "path");
+        if (string.IsNullOrWhiteSpace(path))
+            return new ConexyToolResult(toolCall.Id, $"{toolCall.Function.Name} requires 'path'.", true);
+
+        if (toolCall.Function.Name == "create_document")
+        {
+            if (!OfficeDocumentWriter.TryParseFormat(Path.GetExtension(path), out var format))
+                return new ConexyToolResult(toolCall.Id, "create_document requires 'path' ending in .docx, .xlsx or .pptx.", true);
+            var content = GetString(root, "content");
+            if (string.IsNullOrWhiteSpace(content))
+                return new ConexyToolResult(toolCall.Id, "create_document requires non-empty 'content' (Markdown).", true);
+
+            await SendAgentStatusAsync(taskId, "writing", $"Создаю документ {Path.GetFileName(path)}...", file: path, ct: ct);
+            var bytes = OfficeDocumentWriter.Create(format, content, Optional(root, "title") ?? Path.GetFileNameWithoutExtension(path));
+            var args = JsonSerializer.Serialize(new { path, content_base64 = Convert.ToBase64String(bytes) });
+            var written = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, "file_write_bytes", args, ct);
+            return new ConexyToolResult(toolCall.Id,
+                written.IsError ? written.Output : $"Document '{path}' saved on the user's PC ({bytes.Length} bytes).", written.IsError);
+        }
+
+        if (!DocumentParser.CanExtract(path))
+            return new ConexyToolResult(toolCall.Id, $"Text cannot be extracted from '{Path.GetFileName(path)}'. Supported: .docx, .xlsx, .pptx, .pdf and text files.", true);
+        var read = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, "file_read_bytes", JsonSerializer.Serialize(new { path }), ct);
+        if (read.IsError || !read.Output.StartsWith(DeviceToolBridge.FilePrefix, StringComparison.Ordinal))
+            return new ConexyToolResult(toolCall.Id, read.IsError ? read.Output : "Клиент не вернул файл (обновите conexy).", true);
+        byte[] data;
+        try { data = Convert.FromBase64String(read.Output[DeviceToolBridge.FilePrefix.Length..]); }
+        catch (FormatException) { return new ConexyToolResult(toolCall.Id, "Клиент вернул неверные данные файла (обновите conexy).", true); }
+        var text = DocumentParser.Parse(data, path).Trim();
+        return new ConexyToolResult(toolCall.Id,
+            text.Length == 0 ? $"No text found in '{path}' (it may be a scan or an empty document)." : Truncate(text, 60_000), false);
+    }
+
     private async Task<ConexyToolResult> DispatchMcpToolAsync(Guid taskId, LlmToolCall toolCall, JsonElement root, CancellationToken ct)
     {
         if (_mcpRegistry is null)

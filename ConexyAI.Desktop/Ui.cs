@@ -24,6 +24,9 @@ public static class Ui
     /// <summary>Включён ли оркестр агентов (для подсказки под вводом).</summary>
     public static bool TeamMode { get; set; }
 
+    /// <summary>Агент чата (для подсказки под вводом): coder или cowork.</summary>
+    public static string AgentMode { get; set; } = "coder";
+
     public static string Version =>
         typeof(Ui).Assembly.GetName().Version is { } v ? $"{v.Major}.{v.Minor}.{v.Build}" : "0";
 
@@ -485,8 +488,9 @@ public static class Ui
             return Console.ReadLine();
         }
 
-        var modes = (autoMode ? C(Yellow, ">> авто") + " " : string.Empty)
-                    + (TeamMode ? C("38;5;213", "* команда") + " " : string.Empty);
+        var modes = (AgentMode == "cowork" ? C("38;5;114", "cowork") : C(Orange, "coder")) + " "
+                    + (autoMode ? C(Yellow, ">> авто") + " " : string.Empty)
+                    + (TeamMode && AgentMode == "coder" ? C("38;5;213", "* команда") + " " : string.Empty);
         var footer = "  " + modes + (_status.Length > 0 ? C(Cyan, _status) + Muted(" · ") : string.Empty) + Muted("/help");
 
         // Ввод возможен ТОЛЬКО в строке внутри рамки: набранное пока агент работал отбрасываем, а саму строку
@@ -812,6 +816,8 @@ public static class Ui
             "fetch_web_page" => "Fetch",
             "search_user_chats" => "Chats",
             "search_documents" => "Docs",
+            "file_write_bytes" => "Save",
+            "file_read_bytes" => "Read",
             _ => tool,
         };
 
@@ -846,7 +852,7 @@ public static class Ui
     // ── Подтверждение команды ───────────────────────────────────────────────
 
     /// <summary>Меню «Да / Да, всегда / Нет» со стрелками. Возвращает 0, 1 или 2; -1 — отмена.</summary>
-    public static async Task<int> ConfirmAsync(string title, string command, string folder, CancellationToken ct)
+    public static async Task<int> ConfirmAsync(string title, string command, string folder, CancellationToken ct, bool allowAuto = true)
     {
         Idle();
         FlushText();
@@ -859,9 +865,11 @@ public static class Ui
         foreach (var line in command.Split('\n'))
             Console.WriteLine(C(Yellow, "│ ") + line.TrimEnd('\r'));
         Console.WriteLine(C(Yellow, "╰" + new string('─', width - 1)));
-        Console.WriteLine(Muted("  в " + folder));
+        Console.WriteLine(Muted(allowAuto ? "  в " + folder : "  " + folder));
 
-        string[] options = ["Да", "Да, и больше не спрашивать (авто-режим)", "Нет"];
+        string[] options = allowAuto ? ["Да", "Да, и больше не спрашивать (авто-режим)", "Нет"] : ["Да", "Нет"];
+        // Без пункта «авто» индексы приводим к общему виду: 0 — да, 2 — нет.
+        int Map(int i) => allowAuto ? i : i == 0 ? 0 : 2;
         var index = 0;
 
         void Draw(bool redraw)
@@ -894,14 +902,15 @@ public static class Ui
                     index = (index + 1) % options.Length;
                     break;
                 case ConsoleKey.Enter:
-                    return index;
+                    return Map(index);
                 case ConsoleKey.Escape:
                     return 2;
                 default:
                     switch (char.ToLowerInvariant(key.KeyChar))
                     {
                         case '1' or 'y' or 'д': return 0;
-                        case '2' or 'a' or 'ф': return 1;
+                        case '2' or 'a' or 'ф' when allowAuto: return 1;
+                        case '2' when !allowAuto: return 2;
                         case '3' or 'n' or 'н': return 2;
                     }
                     break;

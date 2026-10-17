@@ -13,7 +13,7 @@ public sealed record ChatItem(
 
 public sealed record TranscriptMessage(string Role, string Content, DateTime CreatedAt);
 
-public sealed record ClientInfo(string? DownloadUrl, string? Version);
+public sealed record ClientInfo(string? DownloadUrl, string? Version, string? GoogleClientId = null, string? GoogleClientSecret = null);
 
 /// <summary>Тариф и расход токенов агента: тот же счётчик, что и на сайте.</summary>
 public sealed record UsageInfo(string Tier, long AgentUsed, long AgentLimit, DateTime AgentResetsAt)
@@ -22,6 +22,9 @@ public sealed record UsageInfo(string Tier, long AgentUsed, long AgentLimit, Dat
 
     /// <summary>Оркестр агентов доступен только ProMax, Ultra и админам (так же, как на сервере).</summary>
     public bool TeamAllowed => Tier is "ProMax" or "Ultra" or "Admin";
+
+    /// <summary>Cowork — платный режим (как на сайте): все тарифы, кроме Free.</summary>
+    public bool CoworkAllowed => Tier is "Go" or "Pro" or "ProMax" or "Ultra" or "Admin";
 }
 
 /// <summary>HTTP-часть: обмен ключа на JWT (с кэшем до истечения) и запуск задач агента.</summary>
@@ -73,13 +76,17 @@ public sealed class ServerClient : IDisposable
 
     /// <summary>Ставит задачу в очередь. Сообщение об ошибке сервера (лимиты, занятость) — в исключении.</summary>
     public async Task<Guid> StartRunAsync(
-        string prompt, Guid chatId, bool orchestra, IReadOnlyList<PendingAttachment> attachments, CancellationToken ct)
+        string prompt, Guid chatId, bool orchestra, IReadOnlyList<PendingAttachment> attachments, CancellationToken ct,
+        string model = "conexy-coder", IReadOnlyList<Mcp.LocalToolSpec>? deviceTools = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "api/conexy/run")
         {
             Content = JsonContent.Create(new
             {
-                model = "conexy-coder",
+                model,
+                deviceTools = deviceTools is { Count: > 0 }
+                    ? deviceTools.Select(t => new { name = t.Name, description = t.Description, inputSchema = t.InputSchema }).ToArray()
+                    : null,
                 prompt = prompt.Replace("\0", string.Empty),
                 chatId = chatId.ToString(),
                 chatKind = "projects",
@@ -102,6 +109,8 @@ public sealed class ServerClient : IDisposable
         var text = await response.Content.ReadAsStringAsync(ct);
         if (response.StatusCode == HttpStatusCode.TooManyRequests && text.Contains("LIMIT_EXCEEDED"))
             throw new InvalidOperationException("Лимит тарифа исчерпан. Подробности и пополнение — на сайте.");
+        if (text.Contains("DEVICE_MODE_UNSUPPORTED"))
+            throw new InvalidOperationException("Сервер ещё не поддерживает Cowork в десктопе. Переключитесь: /agent coder");
         if (response.StatusCode == HttpStatusCode.Conflict && text.Contains("TURN_IN_FLIGHT"))
             throw new InvalidOperationException("Предыдущий ход в этом чате ещё идёт.");
         if (!response.IsSuccessStatusCode)
@@ -151,7 +160,7 @@ public sealed class ServerClient : IDisposable
         if (!response.IsSuccessStatusCode)
             return null;
         var body = await response.Content.ReadFromJsonAsync<ClientBody>(Json, ct);
-        return body is null ? null : new ClientInfo(body.DownloadUrl, body.Version);
+        return body is null ? null : new ClientInfo(body.DownloadUrl, body.Version, body.GoogleClientId, body.GoogleClientSecret);
     }
 
     public async Task<UsageInfo?> GetUsageAsync(CancellationToken ct)
@@ -204,7 +213,7 @@ public sealed class ServerClient : IDisposable
 
     private sealed record TranscriptBody(List<TranscriptMessage> Messages);
 
-    private sealed record ClientBody(string? DownloadUrl, string? Version);
+    private sealed record ClientBody(string? DownloadUrl, string? Version, string? GoogleClientId, string? GoogleClientSecret);
 
     private sealed record UsageBody(string? Tier, long AgentUsed, long AgentLimit, DateTime AgentResetsAt);
 

@@ -1,4 +1,5 @@
 ﻿using ConexyAI.Contract;
+using ConexyAI.Service.Device;
 using ConexyAI.Entity;
 using ConexyAI.Model;
 using ConexyAI.Repository;
@@ -73,12 +74,12 @@ public class ConexyService : IConexyService
             throw new ArgumentException($"Invalid model: '{request.Model}'. Allowed: ConexyV1-flash, ConexyV1-pro, conexy-coder, conexy-cowork");
         }
 
-        // DESKTOP_AGENT: десктопный режим — только для Coder и только с подключённым устройством:
-        // иначе задача сгорала бы на первом же инструменте и тратила квоту.
+        // DESKTOP_AGENT: десктопный режим — для агентов (Coder и, с 2026-10-17, Cowork) и только с подключённым
+        // устройством: иначе задача сгорала бы на первом же инструменте и тратила квоту.
         if (request.UseDevice)
         {
-            if (modelType != ConexyModelType.ConexyCoder)
-                throw new ArgumentException("DEVICE_MODE_UNSUPPORTED: десктопный режим доступен только для conexy-coder.");
+            if (modelType is not (ConexyModelType.ConexyCoder or ConexyModelType.ConexyCowork))
+                throw new ArgumentException("DEVICE_MODE_UNSUPPORTED: десктопный режим доступен только для conexy-coder и conexy-cowork.");
             if (_deviceBridge is null || !_deviceBridge.IsOnline(userId))
                 throw new ArgumentException("DEVICE_OFFLINE: десктопное приложение не подключено. Запустите conexy и повторите.");
         }
@@ -198,7 +199,8 @@ public class ConexyService : IConexyService
             }
 
             // Ставим задачу в фоновую очередь (GitHub-токен не сохраняется в БД, а передаётся только в памяти).
-            await _queueGuard.EnqueueReservedAsync(new ConexyJob(entity.Id, chatId, userId, modelType, request.Prompt, githubToken, request.GitHubRepo, request.Attachments, request.Thinking, request.ReasoningEffort, request.StudentsMode, request.SmartSearch, request.Incognito, request.AssistantPrefix, request.ChatKind, request.Regenerate, Orchestra: request.Orchestra, McpServers: mcpServers, UseDevice: request.UseDevice), ct);
+            await _queueGuard.EnqueueReservedAsync(new ConexyJob(entity.Id, chatId, userId, modelType, request.Prompt, githubToken, request.GitHubRepo, request.Attachments, request.Thinking, request.ReasoningEffort, request.StudentsMode, request.SmartSearch, request.Incognito, request.AssistantPrefix, request.ChatKind, request.Regenerate, Orchestra: request.Orchestra, McpServers: mcpServers, UseDevice: request.UseDevice,
+                            DeviceTools: request.UseDevice ? DeviceToolSanitizer.Clean(request.DeviceTools) : null), ct);
 
             return ToResponse(entity);
         }

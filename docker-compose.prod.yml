@@ -118,6 +118,10 @@ services:
       AiUpstream__DeepSeek__ProAgentModel: ${DEEPSEEK_PRO_AGENT_MODEL:-deepseek-v4-pro}
       GitHub__PersonalAccessToken: ${GITHUB_PAT:-}
       GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      # GOOGLE_CONNECTOR: OAuth client of type "Desktop app" (Google Cloud Console) for Gmail/Calendar/Drive
+      # in the desktop client. Empty = the desktop asks the user for their own client id.
+      Google__DesktopClientId: ${GOOGLE_DESKTOP_CLIENT_ID:-}
+      Google__DesktopClientSecret: ${GOOGLE_DESKTOP_CLIENT_SECRET:-}
       # EMAIL_VERIFICATION: Gmail app password for the sign-up code. Deliberately no default — an
       # unset variable leaves mail unconfigured, and sign-up answers "email_not_configured" with a
       # log line instead of silently accepting accounts nobody can confirm.

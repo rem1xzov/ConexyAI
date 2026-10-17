@@ -58,8 +58,15 @@ public class DeviceController : ControllerBase
             downloadUrl = string.IsNullOrWhiteSpace(url) ? DefaultDownloadUrl : url,
             platform = "windows-x64",
             version = await LatestVersionAsync(ct),
+            // GOOGLE_CONNECTOR: OAuth-клиент типа «Desktop app» для входа в Google из десктопа. Для таких клиентов
+            // Google сам считает secret неконфиденциальным (он вшит в приложение, защита — PKCE), поэтому
+            // отдаём его клиенту. Токены пользователя сервер не видит: они остаются на ПК.
+            googleClientId = NullIfEmpty(_configuration["Google:DesktopClientId"]),
+            googleClientSecret = NullIfEmpty(_configuration["Google:DesktopClientSecret"]),
         });
     }
+
+    private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     /// <summary>Тег последнего релиза клиента без «v» (например 0.1.5) или null, если GitHub недоступен.</summary>
     private async Task<string?> LatestVersionAsync(CancellationToken ct)

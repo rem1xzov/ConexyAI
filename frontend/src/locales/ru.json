@@ -215,6 +215,7 @@
     "desktopTier": "Ваш тариф",
     "mcpTitle": "Личные MCP-серверы",
     "mcpHint": "Подключите внешние сервисы (Notion, Jira, Linear и др.), которые поддерживают удалённый MCP по HTTP. URL и токены хранятся на сервере в зашифрованном виде: работают из фоновых задач и с любого вашего устройства. Агент обращается к сервису под вашим аккаунтом.",
+    "mcpDesktopHint": "Gmail, Google Календарь и Диск, а также локальные MCP-программы на вашем ПК (stdio, как в Claude Desktop) подключаются в ConexyAI Desktop: команды /google login и /mcp add. Токены Google остаются только на вашем ПК.",
     "mcpNamePlaceholder": "Название (например, Notion)",
     "mcpUrlPlaceholder": "URL сервера (https://…/mcp)",
     "mcpTokenPlaceholder": "Токен доступа",
