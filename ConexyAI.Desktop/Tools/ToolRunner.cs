@@ -10,6 +10,7 @@ public sealed class ToolRunner
     private readonly PatchApplier _patch;
     private readonly ShellTool _shell;
     private readonly PcTools _pc;
+    private readonly WindowTools _windows;
     private readonly Action<string> _log;
     private readonly Mcp.LocalTools? _local;
 
@@ -24,6 +25,7 @@ public sealed class ToolRunner
         _patch = new PatchApplier(_guard);
         _shell = new ShellTool(_guard, approver, gitHubToken);
         _pc = new PcTools(_guard, approver, _shell);
+        _windows = new WindowTools(approver, _guard.Root);
         _log = log;
     }
 
@@ -61,6 +63,9 @@ public sealed class ToolRunner
                 "bg_stop" => _pc.BgStop(args),
                 "http_request" => await _pc.HttpAsync(args, ct),
                 "page_screenshot" => await _pc.ScreenshotAsync(args, ct),
+                "window_list" => _windows.List(args),
+                "screen_capture" => await _windows.CaptureAsync(args, ct),
+                "window_keys" => await _windows.KeysAsync(args, ct),
                 "pc_list_dir" => await _pc.ListDirAsync(args, ct),
                 "pc_read_file" => await _pc.ReadFileAsync(args, ct),
                 "pc_copy_to_project" => await _pc.CopyToProjectAsync(args, ct),
@@ -119,7 +124,7 @@ public sealed class ToolRunner
             var what = args.Str("query") ?? args.Str("id") ?? args.Str("to") ?? string.Empty;
             return $"{(parts.Length == 3 ? parts[1] + "." + parts[2] : tool)} {what}".TrimEnd();
         }
-        var target = args.Str("path") ?? args.Str("command") ?? args.Str("url") ?? args.Str("source")
+        var target = args.Str("path") ?? args.Str("command") ?? args.Str("window") ?? args.Str("url") ?? args.Str("source")
                      ?? args.Str("package") ?? args.Str("id") ?? args.Str("pattern") ?? string.Empty;
         if (target.Length > 80)
             target = target[..80] + "…";

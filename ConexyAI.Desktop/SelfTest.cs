@@ -29,8 +29,29 @@ public static class SelfTest
         return isError ? 1 : 0;
     }
 
-    public static async Task<int> RunAsync()
+    /// <summary>Картинка из screen_capture декодируется как PNG: сигнатура, IHDR и корректные CRC.</summary>
+    private static bool IsValidPng(string output)
     {
+        var base64 = output["IMAGE_BASE64:image/png:".Length..].Split('\n')[0];
+        var bytes = Convert.FromBase64String(base64);
+        if (bytes.Length < 33 || bytes[1] != (byte)'P' || bytes[12] != (byte)'I')
+            return false;
+        var pos = 8;
+        while (pos + 12 <= bytes.Length)
+        {
+            var length = (bytes[pos] << 24) | (bytes[pos + 1] << 16) | (bytes[pos + 2] << 8) | bytes[pos + 3];
+            var crc = WindowTools.Crc32(bytes[(pos + 4)..(pos + 8)], bytes[(pos + 8)..(pos + 8 + length)]);
+            var stored = (uint)((bytes[pos + 8 + length] << 24) | (bytes[pos + 9 + length] << 16) | (bytes[pos + 10 + length] << 8) | bytes[pos + 11 + length]);
+            if (crc != stored)
+                return false;
+            pos += 12 + length;
+        }
+        return pos == bytes.Length;
+    }
+
+    public static async Task<int> RunAsync(string[]? args = null)
+    {
+        args ??= [];
         var root = Path.Combine(Path.GetTempPath(), "conexy-selftest-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(root);
         var failures = 0;
@@ -113,6 +134,26 @@ public static class SelfTest
             File.WriteAllText(Path.Combine(root, "page.html"), "<html><body style='background:#c00'><h1>Hello</h1></body></html>");
             await Check("page screenshot", approved, "page_screenshot", """{"url":"page.html","width":400,"height":300}""",
                 r => (!r.IsError && r.Output.StartsWith("IMAGE_BASE64:image/png:")) || r.Output.Contains("не найден Edge"));
+
+            if (OperatingSystem.IsWindows() && Environment.UserInteractive && !args.Contains("--no-windows"))
+            {
+                // Окна: блокнот как подопытное окно с уникальным файлом в заголовке.
+                var note = Path.Combine(root, "conexywin.txt");
+                File.WriteAllText(note, "conexy");
+                using var notepad = System.Diagnostics.Process.Start("notepad.exe", note);
+                await Task.Delay(2500);
+                await Check("window list", approved, "window_list", """{"filter":"conexywin"}""", r => !r.IsError && r.Output.Contains("conexywin"));
+                await Check("screen capture declined", runner, "screen_capture", """{"window":"conexywin"}""", r => r.IsError && r.Output.Contains("не разрешил"));
+                await Check("screen capture", approved, "screen_capture", """{"window":"conexywin","delay_ms":300}""",
+                    r => !r.IsError && r.Output.StartsWith("IMAGE_BASE64:image/png:") && IsValidPng(r.Output));
+                await Check("window keys", approved, "window_keys", """{"window":"conexywin","keys":"END"}""", r => !r.IsError || r.Output.Contains("фокус"));
+                await Check("window keys blocked in terminal", approved, "window_keys", """{"window":"explorer","keys":"ENTER"}""",
+                    r => r.IsError && (r.Output.Contains("запрещено") || r.Output.Contains("не найдено")));
+                await Check("window keys text rejected", approved, "window_keys", """{"window":"conexywin","keys":"rm -rf"}""", r => r.IsError);
+                try { notepad?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+                foreach (var p in System.Diagnostics.Process.GetProcessesByName("notepad").Where(p => p.MainWindowTitle.Contains("conexywin")))
+                    try { p.Kill(); } catch (InvalidOperationException) { }
+            }
         }
         finally
         {

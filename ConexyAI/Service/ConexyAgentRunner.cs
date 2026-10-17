@@ -72,6 +72,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "workspace_list_files", "grep", "glob", "bash", "terminal_exec", "run_tests", "get_diagnostics",
         "cmd_exec", "bg_start", "bg_logs", "bg_stop", "http_request", "page_screenshot",
         "pc_list_dir", "pc_read_file", "pc_copy_to_project", "download_file", "install_software",
+        "window_list", "screen_capture", "window_keys",
     };
 
     // DESKTOP_AGENT: инструменты, которые есть ТОЛЬКО на десктопе (в каталоге/профиле сервера их нет).
@@ -79,6 +80,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
     {
         "cmd_exec", "bg_start", "bg_logs", "bg_stop", "http_request", "page_screenshot",
         "pc_list_dir", "pc_read_file", "pc_copy_to_project", "download_file", "install_software",
+        "window_list", "screen_capture", "window_keys",
     };
 
     // DESKTOP_AGENT: bash на ПК — не одноразовая песочница: другие лимиты и подпапка через cwd (cd между вызовами не сохраняется).
@@ -118,6 +120,23 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 body = new { type = "string" },
                 headers = new { type = "object", description = "Дополнительные заголовки { имя: значение }" }
             }, required = new[] { "url" } }),
+        // DESKTOP_AGENT: окна программ на ПК — игры и нативные приложения (шейдеры Minecraft, Unity, Godot, десктоп-UI).
+        Function("window_list", "Список открытых окон на ПК: заголовок, процесс, размер. Проверить, запустилась ли программа/игра, и узнать имя окна для screen_capture.",
+            new { type = "object", properties = new {
+                filter = new { type = "string", description = "Часть заголовка или имя процесса, например 'Minecraft' (необязательно)" }
+            } }),
+        Function("screen_capture", "Снимок окна программы на ПК (игра, нативное приложение) — картинка приходит тебе для визуальной проверки. Окно на миг выходит на передний план. Первый снимок программы подтверждает пользователь. Для веб-страниц лучше page_screenshot.",
+            new { type = "object", properties = new {
+                window = new { type = "string", description = "Часть заголовка окна или имя процесса (из window_list), например 'Minecraft'" },
+                delay_ms = new { type = "integer", description = "Пауза после активации окна, по умолчанию 600" },
+                keep_focus = new { type = "boolean", description = "Оставить окно активным после снимка" }
+            }, required = new[] { "window" } }),
+        Function("window_keys", "Нажимает горячие клавиши в окне программы (например 'R' — перезагрузка шейдеров в Iris, 'F3+R' — в OptiFine, 'ESC'). Только сочетания клавиш, не набор текста; в терминалы и системные окна нельзя. Каждый вызов подтверждает пользователь.",
+            new { type = "object", properties = new {
+                window = new { type = "string" },
+                keys = new { type = "string", description = "Сочетания через пробел: 'R', 'F3+R', 'ESC ENTER'" },
+                interval_ms = new { type = "integer", description = "Пауза между сочетаниями, по умолчанию 150" }
+            }, required = new[] { "window", "keys" } }),
         Function("page_screenshot", "Открывает страницу в браузере ПК (Edge/Chrome, без окна) и прикладывает скриншот для визуальной проверки: http://localhost:<порт>, любой сайт или html-файл проекта.",
             new { type = "object", properties = new {
                 url = new { type = "string" },
@@ -1226,7 +1245,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                                     ? await HandleViewImageAsync(taskId, chatId, toolCall, batchImages, ct)
                                     : toolName == "browser_screenshot"
                                         ? await HandleBrowserScreenshotAsync(chatId, toolCall, batchImages, group, ct)
-                                        : toolName == "page_screenshot"
+                                        : toolName is "page_screenshot" or "screen_capture"
                                             ? await HandleDeviceScreenshotAsync(taskId, toolCall, batchImages, group, ct)
                                             : await DispatchToolAsync(taskId, chatId, toolCall, ct);
                 }
@@ -2212,7 +2231,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                                 ? await HandleViewImageAsync(taskId, chatId, call, batchImages, ct)
                                 : toolName == "browser_screenshot"
                                     ? await HandleBrowserScreenshotAsync(chatId, call, batchImages, group, ct)
-                                    : toolName == "page_screenshot"
+                                    : toolName is "page_screenshot" or "screen_capture"
                                         ? await HandleDeviceScreenshotAsync(taskId, call, batchImages, group, ct)
                                         : await DispatchToolAsync(taskId, chatId, call, ct);
                     }
@@ -3467,24 +3486,31 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private async Task<ConexyToolResult> HandleDeviceScreenshotAsync(
         Guid taskId, LlmToolCall toolCall, List<ChatMessage> batchImages, IClientProxy group, CancellationToken ct)
     {
-        if (!_job.UseDevice || _deviceBridge is null)
-            return new ConexyToolResult(toolCall.Id, "page_screenshot доступен только в десктопном режиме.", true);
+        var tool = toolCall.Function.Name;
+        if (!_job.UseDevice || _deviceBridge is null || !IsToolAllowed(tool))
+            return new ConexyToolResult(toolCall.Id, $"{tool} доступен только в десктопном режиме.", true);
 
-        var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, "page_screenshot", toolCall.Function.Arguments, ct);
+        var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, tool, toolCall.Function.Arguments, ct);
         if (outcome.IsError || !outcome.Output.StartsWith(DeviceToolBridge.ImagePrefix, StringComparison.Ordinal))
             return new ConexyToolResult(toolCall.Id, outcome.Output, true);
 
-        // Формат: IMAGE_BASE64:<mime>:<base64>
+        // Формат: IMAGE_BASE64:<mime>:<base64>[\nзаметка клиента (размер, яркость)]
         var payload = outcome.Output[DeviceToolBridge.ImagePrefix.Length..];
+        var noteStart = payload.IndexOf('\n');
+        var note = noteStart >= 0 ? payload[(noteStart + 1)..].Trim() : string.Empty;
+        if (noteStart >= 0)
+            payload = payload[..noteStart];
         var colon = payload.IndexOf(':');
         var mime = colon > 0 ? payload[..colon] : "image/png";
         var base64 = colon > 0 ? payload[(colon + 1)..] : payload;
 
         await group.SendAsync("OnScreenshot", base64, ct);
         batchImages.Add(ChatMessageFactory.User(
-            "Screenshot of the page rendered in the user's browser. Check that it works and visually audit the layout.",
-            new List<TaskAttachment> { new(mime == "image/png" ? "page.png" : "page.jpg", base64, mime) }));
-        return new ConexyToolResult(toolCall.Id, "Скриншот снят и приложен для визуальной проверки.", false);
+            tool == "screen_capture"
+                ? "Screenshot of the program window on the user's PC. Check what is actually rendered and compare it with the expected result."
+                : "Screenshot of the page rendered in the user's browser. Check that it works and visually audit the layout.",
+            new List<TaskAttachment> { new(mime == "image/png" ? "screen.png" : "screen.jpg", base64, mime) }));
+        return new ConexyToolResult(toolCall.Id, ("Скриншот снят и приложен для визуальной проверки. " + note).Trim(), false);
     }
 
     // BROWSER_AUTOMATION: снимок ТЕКУЩЕЙ открытой страницы (в отличие от take_screenshot, который сам

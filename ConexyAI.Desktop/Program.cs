@@ -60,7 +60,7 @@ try
             return 0;
 
         case "selftest":
-            return await SelfTest.RunAsync();
+            return await SelfTest.RunAsync(args);
 
         case "logout":
             ClientConfig.Delete();
@@ -96,6 +96,15 @@ try
                 Environment.GetEnvironmentVariable("CONEXY_MAIL_PASSWORD") ?? "wrong-password", CancellationToken.None);
             Console.WriteLine($"{(mailOk ? "PASS" : "FAIL")}  {mailMessage}");
             return mailOk ? 0 : 1;
+
+        case "capturetest" when args.Length >= 3:
+            // Проверка снимка окна: conexy capturetest <окно> <файл.png>
+            var shot = await new WindowTools(new ConsoleApprover { AutoMode = true }, Environment.CurrentDirectory)
+                .CaptureAsync(ToolArgs.Parse(System.Text.Json.JsonSerializer.Serialize(new { window = args[1] })), CancellationToken.None);
+            var lines = shot.Output.Split('\n', 2);
+            File.WriteAllBytes(args[2], Convert.FromBase64String(lines[0]["IMAGE_BASE64:image/png:".Length..]));
+            Console.WriteLine(lines.ElementAtOrDefault(1));
+            return 0;
 
         case "mcptest":
             return await SelfTest.McpAsync(args.Skip(1).Where(a => !a.StartsWith("--args=")).ToArray(),
