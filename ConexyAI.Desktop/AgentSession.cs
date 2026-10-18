@@ -47,6 +47,9 @@ public sealed class AgentSession : IAsyncDisposable
     /// <summary>Журнал фонового демона: что зарегистрировано на сервере (в интерактивном сеансе — null).</summary>
     public Action<string>? Log { get; set; }
 
+    /// <summary>Фоновый демон: сервер должен предпочитать окно клиента, а демон — только когда окон нет.</summary>
+    public bool DaemonMode { get; set; }
+
     /// <summary>Текст ответа агента за последний ход (для /compact и режима плана).</summary>
     public string LastAnswer => _answer.ToString();
     private readonly System.Text.StringBuilder _answer = new();
@@ -149,6 +152,14 @@ public sealed class AgentSession : IAsyncDisposable
             Environment.MachineName,
             System.Runtime.InteropServices.RuntimeInformation.OSDescription + (Tools.ShellTool.HasPwsh ? " · PowerShell 7" : string.Empty),
             _tools?.Root ?? _device.DefaultRoot ?? string.Empty);
+        try
+        {
+            await _hub.InvokeAsync("RegisterDeviceMode", DaemonMode ? "daemon" : "interactive");
+        }
+        catch (Microsoft.AspNetCore.SignalR.HubException)
+        {
+            // Старый сервер: он считает подключение устройством с неизвестным режимом.
+        }
         try
         {
             await _hub.InvokeAsync("RegisterDeviceProjects", _device.Projects.ToJson());

@@ -245,6 +245,12 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
         return Task.CompletedTask;
     }
 
+    // WEB_DEVICE: интерактивное окно важнее фонового демона — иначе демон раз в минуту перехватывает
+    // задачи и выполняет их в своей папке. Старые клиенты этот метод не зовут: они считаются неизвестными.
+    /// <summary>Чем является подключение: <c>interactive</c> (окно) или <c>daemon</c> (фон).</summary>
+    public Task<bool> RegisterDeviceMode(string? mode) =>
+        Task.FromResult(_devices.SetMode(CallerId(), Context.ConnectionId, mode));
+
     // ---- WEB_DEVICE: добавлено 2026-10-18 — запуск из веба «на моём ПК» ----
 
     /// <summary>Десктоп сообщает список своих проектов: JSON <c>[{ "id", "name", "path"? }]</c>.</summary>

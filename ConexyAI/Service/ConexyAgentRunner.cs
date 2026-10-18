@@ -1578,6 +1578,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _job.DeviceTools is { Count: > 0 } ? _job.DeviceTools
         : _deviceBridge?.GetTools(_job.UserId) ?? Array.Empty<DeviceToolSpec>();
 
+    // WEB_DEVICE: связь с ПК может пропасть посреди задачи. Повторные попытки только сжигают время:
+    // после первого обрыва инструменты ПК отказывают, и агент обязан дать итог.
+    private bool _deviceOffline;
+
+    private static bool IsDeviceOffline(string output) => output.StartsWith("Связь с ПК", StringComparison.Ordinal);
+
+    private string? DeviceOfflineRefusal(string tool) => _deviceOffline
+        ? $"Инструмент '{tool}' не выполнен: связь с ПК потеряна. Не вызывай инструменты ПК и не повторяй попытки — " +
+          "сразу напиши пользователю, что нужно открыть ConexyAI Desktop заново и повторить задачу."
+        : null;
+
     /// <summary>Плашка «что делаю сейчас» для вызова на ПК: задача не выглядит зависшей.</summary>
     private static string DeviceToolLabel(string tool) => tool switch
     {
@@ -2587,8 +2598,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
             {
                 if (!_job.UseDevice || _deviceBridge is null || !IsToolAllowed(toolCall.Function.Name))
                     return new ConexyToolResult(toolCall.Id, $"Инструмент '{toolCall.Function.Name}' сейчас недоступен.", true);
+                if (DeviceOfflineRefusal(toolCall.Function.Name) is { } offlineLocal)
+                    return new ConexyToolResult(toolCall.Id, offlineLocal, true);
                 await SendAgentStatusAsync(taskId, "executing", DeviceToolLabel(toolCall.Function.Name), ct: ct);
                 var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, toolCall.Function.Name, toolCall.Function.Arguments, ct, _job.DeviceProjectId, _job.RemoteApprovals);
+                if (outcome.IsError && IsDeviceOffline(outcome.Output))
+                {
+                    _deviceOffline = true;
+                    await SendAgentStatusAsync(taskId, "executing", "Связь с ПК потеряна…", ct: ct);
+                }
                 // Данные из почты/документов — чужой текст, а не инструкции (защита от prompt injection в письмах).
                 return new ConexyToolResult(toolCall.Id, Truncate(outcome.Output, 30_000), outcome.IsError);
             }
@@ -2609,10 +2627,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 {
                     if (_deviceBridge is null)
                         return new ConexyToolResult(toolCall.Id, "Десктопный режим не настроен на сервере.", true);
+                    if (DeviceOfflineRefusal(name) is { } offline)
+                        return new ConexyToolResult(toolCall.Id, offline, true);
 
                     // WEB_DEVICE: видно, что агент не завис, — плашка с действием на время вызова на ПК.
                     await SendAgentStatusAsync(taskId, "executing", DeviceToolLabel(name), ct: ct);
                     var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, name, toolCall.Function.Arguments, ct, _job.DeviceProjectId, _job.RemoteApprovals);
+                    if (outcome.IsError && IsDeviceOffline(outcome.Output))
+                    {
+                        _deviceOffline = true;
+                        await SendAgentStatusAsync(taskId, "executing", "Связь с ПК потеряна…", ct: ct);
+                    }
                     // Команда на ПК реально выполнилась (есть код возврата или таймаут) — неудача это результат
                     // команды (упала сборка), а не поломка bash. Иначе после трёх упавших сборок агенту объявлялось
                     // «bash недоступен», и он бросал работу.
@@ -3777,9 +3802,16 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var tool = toolCall.Function.Name;
         if (!_job.UseDevice || _deviceBridge is null || !IsToolAllowed(tool))
             return new ConexyToolResult(toolCall.Id, $"{tool} доступен только в десктопном режиме.", true);
+        if (DeviceOfflineRefusal(tool) is { } offline)
+            return new ConexyToolResult(toolCall.Id, offline, true);
 
         await SendAgentStatusAsync(taskId, "executing", DeviceToolLabel(tool), ct: ct);
         var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, tool, toolCall.Function.Arguments, ct, _job.DeviceProjectId, _job.RemoteApprovals);
+        if (outcome.IsError && IsDeviceOffline(outcome.Output))
+        {
+            _deviceOffline = true;
+            await SendAgentStatusAsync(taskId, "executing", "Связь с ПК потеряна…", ct: ct);
+        }
         if (outcome.IsError || !outcome.Output.StartsWith(DeviceToolBridge.ImagePrefix, StringComparison.Ordinal))
             return new ConexyToolResult(toolCall.Id, outcome.Output, true);
 

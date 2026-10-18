@@ -19,6 +19,39 @@ internal static class DeviceWebTests
         TestRegistry.Add("web device: queued task can be moved to the sandbox only by its owner", QueueSandboxAsync);
         TestRegistry.Add("web device: turn diff is parsed and stored as a diff block", TurnDiffAsync);
         TestRegistry.Add("web device: local MCP tools of the device are registered and sanitized", DeviceToolsAsync);
+        TestRegistry.Add("web device: the window outranks the daemon and a dropped connection falls back", FallbackAsync);
+    }
+
+    // WEB_DEVICE: обрыв одного подключения не должен терять ПК, а демон — перехватывать задачи у окна клиента.
+    private static Task FallbackAsync()
+    {
+        var bridge = new DeviceToolBridge(new FakeHubContext(), NullLogger<DeviceToolBridge>.Instance);
+        var user = Guid.NewGuid();
+
+        bridge.Register(user, "window", "pc", "Windows", @"C:\work");
+        bridge.SetMode(user, "window", "interactive");
+        bridge.Register(user, "daemon", "pc", "Windows", @"C:\default");
+        bridge.SetMode(user, "daemon", "daemon");
+        Assert(bridge.GetInfo(user)!.Workspace == @"C:\work", "the window owns the device even after the daemon registers");
+
+        bridge.Register(user, "daemon", "pc", "Windows", @"C:\default");
+        Assert(bridge.GetInfo(user)!.Workspace == @"C:\work", "the daemon's periodic re-registration must not steal the window");
+
+        bridge.Register(user, "window2", "pc", "Windows", @"C:\work2");
+        bridge.SetMode(user, "window2", "interactive");
+        Assert(bridge.GetInfo(user)!.Workspace == @"C:\work2", "the newest window wins between windows");
+
+        bridge.Unregister("window2");
+        Assert(bridge.GetInfo(user)!.Workspace == @"C:\work", "a dropped window falls back to the other window, not offline");
+
+        bridge.Unregister("window");
+        Assert(bridge.GetInfo(user)!.Workspace == @"C:\default", "with no windows the daemon takes over");
+
+        bridge.Unregister("daemon");
+        Assert(!bridge.IsOnline(user), "no connections left — offline");
+        Assert(bridge.GetInfo(user) is null, "no device info when offline");
+        Assert(!bridge.SetMode(user, "daemon", "daemon"), "a disconnected connection cannot set its mode");
+        return Task.CompletedTask;
     }
 
     // LOCAL_MCP: без этого агент с сайта не видел Gmail/почту/MCP, хотя на ПК они подключены.

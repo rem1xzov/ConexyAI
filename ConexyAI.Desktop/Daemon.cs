@@ -126,7 +126,7 @@ public static class Daemon
         var delay = TimeSpan.FromSeconds(2);
         while (!cts.IsCancellationRequested)
         {
-            await using var session = new AgentSession(server, null, null, device) { Local = local, Log = Log };
+            await using var session = new AgentSession(server, null, null, device) { Local = local, Log = Log, DaemonMode = true };
             try
             {
                 await session.ConnectAsync(cts.Token);
