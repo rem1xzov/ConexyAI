@@ -44,6 +44,9 @@ public sealed class AgentSession : IAsyncDisposable
     /// <summary>Инструменты ПК сверх файлов: Google и локальные MCP-серверы.</summary>
     public Mcp.LocalTools? Local { get; set; }
 
+    /// <summary>Журнал фонового демона: что зарегистрировано на сервере (в интерактивном сеансе — null).</summary>
+    public Action<string>? Log { get; set; }
+
     /// <summary>Текст ответа агента за последний ход (для /compact и режима плана).</summary>
     public string LastAnswer => _answer.ToString();
     private readonly System.Text.StringBuilder _answer = new();
@@ -158,19 +161,24 @@ public sealed class AgentSession : IAsyncDisposable
         // знать их имена и схемы, иначе он их не увидит и ответит «почтовых инструментов нет».
         if (Local is not null)
         {
+            var (json, count) = ToolSpecsJson();
             try
             {
-                await _hub.InvokeAsync("RegisterDeviceTools", ToolSpecsJson());
+                await _hub.InvokeAsync("RegisterDeviceTools", json);
+                Log?.Invoke(count == 0
+                    ? "Инструментов ПК нет: Google и почта не подключены, локальных MCP нет."
+                    : $"Инструменты ПК для сайта: {count}.");
             }
             catch (Microsoft.AspNetCore.SignalR.HubException)
             {
                 // Старый сервер без инструментов устройства — работаем без них.
+                Log?.Invoke("Сервер не принял список инструментов ПК: обновите сервер.");
             }
         }
     }
 
     /// <summary>Схемы локальных инструментов для сервера. Ограничены по размеру сообщения SignalR (~32 КБ).</summary>
-    private string ToolSpecsJson()
+    private (string Json, int Count) ToolSpecsJson()
     {
         const int budget = 24_000;
         var specs = new List<object>();
@@ -184,7 +192,7 @@ public sealed class AgentSession : IAsyncDisposable
             size += json.Length + 1;
             specs.Add(item);
         }
-        return JsonSerializer.Serialize(specs);
+        return (JsonSerializer.Serialize(specs), specs.Count);
     }
 
     /// <summary>Один ход агента. Возвращает текст ошибки или null при успехе.</summary>

@@ -118,6 +118,7 @@ public static class Daemon
         foreach (var line in await local.StartAsync(cts.Token))
             Log(line);
         device.Local = local;
+        Log($"Локальные инструменты: {local.WantedToolCount} (Google: {(local.Google.Connected ? "подключён" : "нет")}, почта: {(local.Mail.Connected ? "подключена" : "нет")})");
         Log($"Демон запущен (v{Ui.Version}), сервер {server.BaseUrl}, проектов: {device.Projects.Projects.Count}. Журнал: {LogPath}");
         if (device.Projects.Projects.Count == 0)
             Log("Проекты не настроены: conexy projects add <папка>");
@@ -125,7 +126,7 @@ public static class Daemon
         var delay = TimeSpan.FromSeconds(2);
         while (!cts.IsCancellationRequested)
         {
-            await using var session = new AgentSession(server, null, null, device) { Local = local };
+            await using var session = new AgentSession(server, null, null, device) { Local = local, Log = Log };
             try
             {
                 await session.ConnectAsync(cts.Token);
