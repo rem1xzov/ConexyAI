@@ -44,7 +44,12 @@ public record ConexyRequest(
     bool UseDevice = false,
     // LOCAL_MCP: добавлено 2026-10-17 — инструменты, которые десктоп предлагает сам: локальные MCP-серверы
     // (stdio) и встроенные коннекторы (Google). Выполняются на ПК, сервер лишь показывает схемы модели.
-    List<DeviceToolSpec>? DeviceTools = null
+    List<DeviceToolSpec>? DeviceTools = null,
+    // WEB_DEVICE: добавлено 2026-10-18 — запуск из веба «на моём ПК»: проект десктопа, что делать,
+    // если ПК офлайн ("fail" | "queue" | "sandbox"), и подтверждения/вопросы через веб.
+    string? DeviceProjectId = null,
+    string? DeviceOfflinePolicy = null,
+    bool RemoteApprovals = false
 );
 
 // LOCAL_MCP: схема инструмента, которую прислал десктоп. Имя всегда local__<server>__<tool>.

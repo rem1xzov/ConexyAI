@@ -1,5 +1,5 @@
 import type { ConexyModel } from './api';
-import type { BuildProblem, TaskStatus, TodoItem, ToolActionEvent } from './signalr';
+import type { BuildProblem, DeviceDiffPayload, DeviceQuestionPayload, TaskStatus, TodoItem, ToolActionEvent } from './signalr';
 
 export type MessageStatus = 'streaming' | 'complete' | 'error' | 'stopped';
 
@@ -47,6 +47,18 @@ export interface ChatMessage {
   // LOCAL_STORAGE_BUDGET: добавлено 2026-09-24 (M22)
   /** Screenshots are never written to localStorage; this counts the ones dropped from the cache. */
   screenshotsOmitted?: number;
+  // WEB_DEVICE: добавлено 2026-10-18 — ход, выполняемый на ПК пользователя.
+  /** The turn is queued until the user's PC connects (OnAgentStatus `waiting_device`). */
+  waitingDevice?: boolean;
+  /** Questions the agent asked from the PC, with the user's answer once given. */
+  deviceQuestions?: DeviceQuestion[];
+  /** Files the agent changed on the PC (OnDeviceDiff). */
+  deviceDiff?: DeviceDiffPayload;
+}
+
+// WEB_DEVICE: добавлено 2026-10-18
+export interface DeviceQuestion extends DeviceQuestionPayload {
+  answer?: string;
 }
 
 // AGENT_TIMELINE: добавлено 2026-09-22

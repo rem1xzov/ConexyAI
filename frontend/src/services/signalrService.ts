@@ -1,6 +1,6 @@
 import * as signalR from '@microsoft/signalr';
 import { recoverFromUnauthorized } from '../api/client';
-import type { AgentStatusPayload, AgentTeamPayload, BuildProblemsPayload, FileCreatedPayload, PendingActionPayload, SearchStatusPayload, SignalrCallbacks, StopGenerationResult, SupportMessagePayload, TaskCompletedPayload, TerminalOutputPayload, TodoUpdatePayload, ToolActionEvent } from '../types/signalr';
+import type { AgentStatusPayload, AgentTeamPayload, BuildProblemsPayload, DeviceDiffPayload, DeviceQuestionPayload, FileCreatedPayload, PendingActionPayload, SearchStatusPayload, SignalrCallbacks, StopGenerationResult, SupportMessagePayload, TaskCompletedPayload, TerminalOutputPayload, TodoUpdatePayload, ToolActionEvent } from '../types/signalr';
 
 // MULTI_TERMINAL: добавлено 2026-10-05 — вывод терминала адресуется конкретному терминалу чата.
 const MAIN_TERMINAL = 'main';
@@ -294,6 +294,12 @@ class SignalrService {
     return await this.connection!.invoke<boolean>('ConfirmAction', actionId, approved, approveAll);
   }
 
+  // WEB_DEVICE: добавлено 2026-10-18 — ответ на вопрос агента, работающего на ПК.
+  async answerDeviceQuestion(requestId: string, answer: string): Promise<void> {
+    await this.ensureConnected();
+    await this.connection!.invoke('AnswerDeviceQuestion', requestId, answer);
+  }
+
   /** Turns "allow all commands for this task" on or off while the agent task is running. */
   async setTaskAutoApproval(taskId: string, enabled: boolean): Promise<void> {
     await this.ensureConnected();
@@ -473,6 +479,9 @@ class SignalrService {
     this.connection.on('BuildProblems', (payload: BuildProblemsPayload, scopeId?: string) => this.callbacks.onProblems?.(payload, scopeId));
     // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
     this.connection.on('OnPendingActionCreated', (payload: PendingActionPayload, scopeId?: string) => this.callbacks.onPendingActionCreated?.(payload, scopeId));
+    // WEB_DEVICE: добавлено 2026-10-18
+    this.connection.on('OnDeviceQuestion', (payload: DeviceQuestionPayload, scopeId?: string) => this.callbacks.onDeviceQuestion?.(payload, scopeId));
+    this.connection.on('OnDeviceDiff', (payload: DeviceDiffPayload, scopeId?: string) => this.callbacks.onDeviceDiff?.(payload, scopeId));
     // SUPPORT: добавлено 2026-09-19
     this.connection.on('OnSupportMessageReceived', (payload: SupportMessagePayload) => {
       this.callbacks.onSupportMessageReceived?.(payload);

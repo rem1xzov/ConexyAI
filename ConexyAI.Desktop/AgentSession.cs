@@ -11,9 +11,21 @@ namespace ConexyAI.Desktop;
 public sealed class AgentSession : IAsyncDisposable
 {
     private readonly ServerClient _server;
-    private readonly ToolRunner _tools;
-    private readonly Guid _chatId;
+    // WEB_DEVICE: добавлено 2026-10-18 — в режиме демона нет ни своего ToolRunner, ни чата.
+    private readonly ToolRunner? _tools;
+    private readonly Guid? _chatId;
     private readonly HubConnection _hub;
+    private readonly DeviceTools _device;
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly TaskCompletionSource _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    // WEB_DEVICE: сервер до ExecuteTool сообщает проект вызова (ToolProject) и что он с сайта (ToolRemote).
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, string> _callProjects = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, bool> _callRemote = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, bool> _announcedTasks = new();
+
+    /// <summary>Завершается, когда соединение закрыто окончательно (переподключение сдалось).</summary>
+    public Task Closed => _closed.Task;
 
     // ORCHESTRA: сервер сообщает (событием ToolAgent перед ExecuteTool), какому субагенту принадлежит вызов.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, (string Id, string Role)> _callAgents = new();
@@ -45,8 +57,8 @@ public sealed class AgentSession : IAsyncDisposable
     /// <summary>Режим плана: к сообщению добавляется инструкция, а клиент блокирует правки.</summary>
     public bool PlanMode
     {
-        get => _tools.PlanMode;
-        set => _tools.PlanMode = value;
+        get => _tools?.PlanMode ?? false;
+        set { if (_tools is not null) _tools.PlanMode = value; }
     }
 
     public const string PlanPrefix =
@@ -54,17 +66,31 @@ public sealed class AgentSession : IAsyncDisposable
         "подробный пошаговый план: какие файлы и что изменить, какие команды выполнить, риски и как проверить результат. " +
         "Правки файлов и изменяющие команды заблокированы до одобрения плана.\n\n";
 
-    public AgentSession(ServerClient server, ToolRunner tools, Guid chatId)
+    public AgentSession(ServerClient server, ToolRunner? tools, Guid? chatId, DeviceTools device)
     {
         _server = server;
         _tools = tools;
         _chatId = chatId;
+        _device = device;
 
         _hub = new HubConnectionBuilder()
             .WithUrl($"{server.BaseUrl}/hubs/conexy", options => options.AccessTokenProvider = async () => await server.GetTokenAsync())
-            .WithAutomaticReconnect()
+            // WEB_DEVICE: изменено 2026-10-18 — переподключаемся бесконечно (демон живёт сутками).
+            .WithAutomaticReconnect(new ForeverRetryPolicy())
             .Build();
         _hub.ServerTimeout = TimeSpan.FromSeconds(120);
+        _hub.Closed += _ => { _closed.TrySetResult(); return Task.CompletedTask; };
+        device.Remote.Attach(_hub);
+        _hub.On<Guid, string>("ToolProject", (callId, projectId) =>
+        {
+            _callProjects[callId] = projectId;
+            return Task.CompletedTask;
+        });
+        _hub.On<Guid>("ToolRemote", callId =>
+        {
+            _callRemote[callId] = true;
+            return Task.CompletedTask;
+        });
 
         // Обработчик события исполняется в цикле приёма SignalR: пока он ждёт долгую команду (npm install,
         // сборка, подтверждение человеком), клиент не читает ping сервера и через 30 с рвёт соединение —
@@ -106,14 +132,29 @@ public sealed class AgentSession : IAsyncDisposable
     {
         await _hub.StartAsync(ct);
         await RegisterAsync();
-        await _hub.InvokeAsync("JoinTask", _chatId, ct);
+        if (_chatId is { } chatId)
+            await _hub.InvokeAsync("JoinTask", chatId, ct);
     }
 
-    private Task RegisterAsync() => _hub.InvokeAsync(
-        "RegisterDevice",
-        Environment.MachineName,
-        System.Runtime.InteropServices.RuntimeInformation.OSDescription + (Tools.ShellTool.HasPwsh ? " · PowerShell 7" : string.Empty),
-        _tools.Root);
+    // WEB_DEVICE: изменено 2026-10-18 — после устройства регистрируем и список проектов. Демон вызывает это раз в минуту:
+    // на сервере побеждает последняя регистрация, и после выхода из интерактивного сеанса демон вернёт задачи себе.
+    public async Task RegisterAsync()
+    {
+        _device.ReloadProjects();
+        await _hub.InvokeAsync(
+            "RegisterDevice",
+            Environment.MachineName,
+            System.Runtime.InteropServices.RuntimeInformation.OSDescription + (Tools.ShellTool.HasPwsh ? " · PowerShell 7" : string.Empty),
+            _tools?.Root ?? _device.DefaultRoot ?? string.Empty);
+        try
+        {
+            await _hub.InvokeAsync("RegisterDeviceProjects", _device.Projects.ToJson());
+        }
+        catch (Microsoft.AspNetCore.SignalR.HubException)
+        {
+            // Старый сервер без проектов устройства — работаем без них.
+        }
+    }
 
     /// <summary>Один ход агента. Возвращает текст ошибки или null при успехе.</summary>
     public async Task<string?> AskAsync(string prompt, CancellationToken ct)
@@ -125,7 +166,7 @@ public sealed class AgentSession : IAsyncDisposable
         _answer.Clear();
         Ui.Busy();
 
-        _tools.Checkpoints.BeginTurn(prompt);
+        _tools!.Checkpoints.BeginTurn(prompt);
         if (PendingNote is { } note)
         {
             prompt = note + "\n\n" + prompt;
@@ -135,7 +176,7 @@ public sealed class AgentSession : IAsyncDisposable
             prompt = PlanPrefix + prompt;
 
         var taskId = await _server.StartRunAsync(
-            prompt, _chatId, Orchestra && Mode == "coder", Attachments.Pending.ToList(), ct,
+            prompt, _chatId!.Value, Orchestra && Mode == "coder", Attachments.Pending.ToList(), ct,
             model: Mode == "cowork" ? "conexy-cowork" : "conexy-coder",
             deviceTools: Local?.Specs());
         Attachments.Clear(); // ушли с этим ходом — следующему сообщению не нужны
@@ -262,14 +303,63 @@ public sealed class AgentSession : IAsyncDisposable
         (string Id, string Role)? agent = _callAgents.TryRemove(callId, out var a) ? a : null;
         Ui.CurrentAgent.Value = agent;
 
+        // WEB_DEVICE: добавлено 2026-10-18 — выбор проекта и того, кто подтверждает (консоль или сайт).
+        var remote = _callRemote.TryRemove(callId, out _) || _device.Daemon;
+        var projectId = _callProjects.TryRemove(callId, out var pid) ? pid : null;
+        ToolRunner? runner = null;
+        ToolResult? routeError = null;
+        if (projectId is not null)
+        {
+            var root = _device.RootOf(projectId);
+            if (root is null || !Directory.Exists(root))
+                routeError = ToolResult.Fail("Проект не найден на этом ПК");
+            else
+                runner = _device.RunnerFor(root);
+        }
+        else if (remote)
+        {
+            var root = _device.DefaultRoot;
+            if (root is null || !Directory.Exists(root))
+                routeError = ToolResult.Fail("На этом ПК не настроен проект по умолчанию (conexy projects add <папка>).");
+            else
+                runner = _device.RunnerFor(root);
+        }
+        else
+        {
+            runner = _tools;
+        }
+
+        if (remote && !_device.Daemon && _announcedTasks.TryAdd(taskId, true))
+            Ui.Info($"  ◦ с сайта выполняется задача {taskId.ToString()[..8]} на этом ПК ({runner?.Root ?? "—"})");
+
         ToolResult result;
         try
         {
-            result = await _tools.RunAsync(tool, argumentsJson, _turnCts?.Token ?? CancellationToken.None);
+            if (routeError is not null || runner is null)
+                result = routeError ?? ToolResult.Fail("Нет рабочей папки для вызова.");
+            else
+            {
+                ToolCallContext.Current = new ToolCallInfo(taskId, remote, runner.Root);
+                var token = remote ? _lifetime.Token : _turnCts?.Token ?? CancellationToken.None;
+                result = await runner.RunAsync(tool, argumentsJson, token);
+            }
         }
         catch (Exception ex)
         {
             result = ToolResult.Fail("Внутренняя ошибка клиента: " + ex.Message);
+        }
+        finally
+        {
+            ToolCallContext.Current = null;
+        }
+
+        if (remote)
+        {
+            // Задачи с сайта не печатают результат в консоль (их видно на сайте); демон пишет в журнал.
+            if (_device.Daemon && tool is not ("project_rules" or "turn_diff"))
+                _device.Log($"  → {(result.IsError ? "ошибка" : "ok")}: {FirstLine(result.Output)}");
+            await SendResultAsync(callId, result);
+            return;
         }
 
         var shown = result.Output.StartsWith("IMAGE_BASE64:", StringComparison.Ordinal)
@@ -291,6 +381,19 @@ public sealed class AgentSession : IAsyncDisposable
             Ui.Busy();
         }
 
+        await SendResultAsync(callId, result);
+    }
+
+    private static string FirstLine(string text)
+    {
+        if (text.StartsWith("IMAGE_BASE64:", StringComparison.Ordinal) || text.StartsWith("FILE_BASE64:", StringComparison.Ordinal))
+            return $"данные ({text.Length / 1024} КБ)";
+        var line = text.Split('\n', 2)[0];
+        return line.Length > 160 ? line[..160] + "…" : line;
+    }
+
+    private async Task SendResultAsync(Guid callId, ToolResult result)
+    {
         // Результат не должен теряться при кратком разрыве: ждём переподключения и повторяем.
         for (var attempt = 0; ; attempt++)
         {
@@ -305,7 +408,10 @@ public sealed class AgentSession : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                Ui.Error("Не удалось отправить результат инструмента: " + ex.Message);
+                if (_device.Daemon)
+                    _device.Log("Не удалось отправить результат инструмента: " + ex.Message);
+                else
+                    Ui.Error("Не удалось отправить результат инструмента: " + ex.Message);
                 return;
             }
         }
@@ -313,7 +419,20 @@ public sealed class AgentSession : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _lifetime.Cancel();
+        _device.Remote.CancelAll();
         _turnCts?.Dispose();
         await _hub.DisposeAsync();
+        _lifetime.Dispose();
     }
+}
+
+// WEB_DEVICE: добавлено 2026-10-18
+/// <summary>Переподключение без предела попыток: 0, 2, 4, 8 … с, не реже раза в минуту.</summary>
+public sealed class ForeverRetryPolicy : IRetryPolicy
+{
+    public TimeSpan? NextRetryDelay(RetryContext retryContext) =>
+        retryContext.PreviousRetryCount == 0
+            ? TimeSpan.Zero
+            : TimeSpan.FromSeconds(Math.Min(60, Math.Pow(2, Math.Min(retryContext.PreviousRetryCount, 6))));
 }

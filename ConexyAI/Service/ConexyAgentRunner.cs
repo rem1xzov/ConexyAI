@@ -1573,6 +1573,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     /// <summary>A tool this run may call: the mode's profile, and never the chat search in incognito.</summary>
     private bool IsToolAllowed(string tool) =>
+        // WEB_DEVICE: добавлено 2026-10-18 — служебный инструмент устройства: сервер зовёт его сам в конце хода, модели он недоступен.
+        tool == DeviceTurnDiff.Tool
+            ? false
+            :
         // LOCAL_MCP: инструменты локальных MCP-серверов десктопа (в т.ч. Google) — агентам и только тем, что прислал клиент.
         DeviceToolSanitizer.IsDeviceTool(tool)
             ? _job.UseDevice && _profile.Mode is "coder" or "cowork" or "worker"
@@ -2003,7 +2007,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         try
         {
             var args = JsonSerializer.Serialize(new { files = wanted });
-            var outcome = await _deviceBridge!.ExecuteAsync(_job.UserId, _job.TaskId, "project_rules", args, ct);
+            var outcome = await _deviceBridge!.ExecuteAsync(_job.UserId, _job.TaskId, "project_rules", args, ct, _job.DeviceProjectId, _job.RemoteApprovals);
             if (outcome.IsError || !outcome.Output.TrimStart().StartsWith('['))
                 return found; // старый клиент без этого инструмента или файлов нет
             using var doc = JsonDocument.Parse(outcome.Output);
@@ -2145,7 +2149,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 if (_job.UseDevice && _deviceBridge is not null)
                 {
                     var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, "bash",
-                        JsonSerializer.Serialize(new { command = resolved, timeout_seconds = HookTimeoutSeconds }), ct);
+                        JsonSerializer.Serialize(new { command = resolved, timeout_seconds = HookTimeoutSeconds }), ct, _job.DeviceProjectId, _job.RemoteApprovals);
                     if (outcome.IsError)
                     {
                         failureNotes?.Add($"[Hook {eventName}] `{resolved}` → {Truncate(outcome.Output, 1500)}");
@@ -2530,7 +2534,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     return new ConexyToolResult(toolCall.Id, $"Инструмент '{toolCall.Function.Name}' сейчас недоступен.", true);
                 var label = toolCall.Function.Name[DeviceToolSanitizer.Prefix.Length..].Replace("__", " / ");
                 await SendAgentStatusAsync(taskId, "executing", $"ПК: {label}...", ct: ct);
-                var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, toolCall.Function.Name, toolCall.Function.Arguments, ct);
+                var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, toolCall.Function.Name, toolCall.Function.Arguments, ct, _job.DeviceProjectId, _job.RemoteApprovals);
                 // Данные из почты/документов — чужой текст, а не инструкции (защита от prompt injection в письмах).
                 return new ConexyToolResult(toolCall.Id, Truncate(outcome.Output, 30_000), outcome.IsError);
             }
@@ -2552,7 +2556,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     if (_deviceBridge is null)
                         return new ConexyToolResult(toolCall.Id, "Десктопный режим не настроен на сервере.", true);
 
-                    var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, name, toolCall.Function.Arguments, ct);
+                    var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, name, toolCall.Function.Arguments, ct, _job.DeviceProjectId, _job.RemoteApprovals);
                     // Команда на ПК реально выполнилась (есть код возврата или таймаут) — неудача это результат
                     // команды (упала сборка), а не поломка bash. Иначе после трёх упавших сборок агенту объявлялось
                     // «bash недоступен», и он бросал работу.
@@ -3346,14 +3350,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
             await SendAgentStatusAsync(taskId, "writing", $"Создаю документ {Path.GetFileName(path)}...", file: path, ct: ct);
             var bytes = OfficeDocumentWriter.Create(format, content, Optional(root, "title") ?? Path.GetFileNameWithoutExtension(path));
             var args = JsonSerializer.Serialize(new { path, content_base64 = Convert.ToBase64String(bytes) });
-            var written = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, "file_write_bytes", args, ct);
+            var written = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, "file_write_bytes", args, ct, _job.DeviceProjectId, _job.RemoteApprovals);
             return new ConexyToolResult(toolCall.Id,
                 written.IsError ? written.Output : $"Document '{path}' saved on the user's PC ({bytes.Length} bytes).", written.IsError);
         }
 
         if (!DocumentParser.CanExtract(path))
             return new ConexyToolResult(toolCall.Id, $"Text cannot be extracted from '{Path.GetFileName(path)}'. Supported: .docx, .xlsx, .pptx, .pdf and text files.", true);
-        var read = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, "file_read_bytes", JsonSerializer.Serialize(new { path }), ct);
+        var read = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, "file_read_bytes", JsonSerializer.Serialize(new { path }), ct, _job.DeviceProjectId, _job.RemoteApprovals);
         if (read.IsError || !read.Output.StartsWith(DeviceToolBridge.FilePrefix, StringComparison.Ordinal))
             return new ConexyToolResult(toolCall.Id, read.IsError ? read.Output : "Клиент не вернул файл (обновите conexy).", true);
         byte[] data;
@@ -3718,7 +3722,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         if (!_job.UseDevice || _deviceBridge is null || !IsToolAllowed(tool))
             return new ConexyToolResult(toolCall.Id, $"{tool} доступен только в десктопном режиме.", true);
 
-        var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, tool, toolCall.Function.Arguments, ct);
+        var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, tool, toolCall.Function.Arguments, ct, _job.DeviceProjectId, _job.RemoteApprovals);
         if (outcome.IsError || !outcome.Output.StartsWith(DeviceToolBridge.ImagePrefix, StringComparison.Ordinal))
             return new ConexyToolResult(toolCall.Id, outcome.Output, true);
 
@@ -3818,7 +3822,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             {
                 // DESKTOP_AGENT: картинка лежит в проекте на ПК (макет, скриншот бага) — берём байты у клиента.
                 var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, "file_read_bytes",
-                    JsonSerializer.Serialize(new { path }), ct);
+                    JsonSerializer.Serialize(new { path }), ct, _job.DeviceProjectId, _job.RemoteApprovals);
                 if (outcome.IsError || !outcome.Output.StartsWith(DeviceToolBridge.FilePrefix, StringComparison.Ordinal))
                     return new ConexyToolResult(toolCall.Id, $"view_image: {outcome.Output}", true);
                 try { bytes = Convert.FromBase64String(outcome.Output[DeviceToolBridge.FilePrefix.Length..]); }

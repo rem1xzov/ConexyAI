@@ -20,6 +20,11 @@ import {
 } from '../api/userApi';
 import {
   getDesktopClientInfo,
+  // WEB_DEVICE: добавлено 2026-10-18
+  getDeviceStatus,
+  runQueuedTaskInSandbox,
+  cancelQueuedTask,
+  type DeviceStatus,
   issueDeviceKey,
   listDeviceKeys,
   revokeDeviceKey,
@@ -888,6 +893,107 @@ function DesktopSection({ active }: { active: boolean }) {
           </ul>
         )}
       </div>
+
+      <DeviceStatusSection active={active} />
+    </div>
+  );
+}
+
+// WEB_DEVICE: добавлено 2026-10-18 — работа на ПК из веба: как держать клиент в фоне, как
+// добавить проекты, текущий статус ПК и очередь задач, ждущих подключения.
+function DeviceStatusSection({ active }: { active: boolean }) {
+  const { t } = useTranslation();
+  const [status, setStatus] = useState<DeviceStatus | null>(null);
+  const [busyTask, setBusyTask] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function reload() {
+    try {
+      setStatus(await getDeviceStatus());
+    } catch {
+      /* the status is optional here — the help text is still useful */
+    }
+  }
+
+  useEffect(() => {
+    if (!active) return;
+    void reload();
+    const timer = window.setInterval(() => void reload(), 15_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+
+  async function act(taskId: string, action: (id: string) => Promise<void>) {
+    setBusyTask(taskId);
+    setError(null);
+    try {
+      await action(taskId);
+      await reload();
+    } catch {
+      setError(t('device.actionFailed'));
+    } finally {
+      setBusyTask(null);
+    }
+  }
+
+  return (
+    <div className="settings-modal__section">
+      <div className="settings-modal__label">{t('device.settingsTitle')}</div>
+      <p className="settings-github__hint">{t('device.settingsHint')}</p>
+      <ul className="desktop-steps">
+        <li>
+          {t('device.helpDaemon')} <code>conexy daemon --install</code>
+        </li>
+        <li>
+          {t('device.helpProjects')} <code>{t('device.helpProjectsCmd')}</code>
+        </li>
+      </ul>
+
+      {status && (
+        <p className="settings-github__hint device-status-line">
+          <span className={`device-target__dot ${status.online ? 'device-target__dot--online' : ''}`} aria-hidden="true" />
+          <strong>{status.name || t('device.unknownPc')}</strong>
+          {' · '}
+          {status.online ? t('device.online') : t('device.offline')}
+          {status.os ? ` · ${status.os}` : ''}
+          {status.projects.length > 0 && ` · ${t('device.projectsCount', { count: status.projects.length })}`}
+        </p>
+      )}
+
+      {status && status.queued.length > 0 && (
+        <>
+          <div className="settings-modal__label">{t('device.queueTitle')}</div>
+          <ul className="device-queue">
+            {status.queued.map((q) => (
+              <li key={q.taskId} className="device-queue__item">
+                <span className="device-queue__text">
+                  <span className="device-queue__prompt" title={q.prompt}>
+                    {q.prompt}
+                  </span>
+                  <small>{new Date(q.createdAt).toLocaleString()}</small>
+                </span>
+                <button
+                  className="dialog-btn"
+                  type="button"
+                  disabled={busyTask === q.taskId}
+                  onClick={() => void act(q.taskId, runQueuedTaskInSandbox)}
+                >
+                  {t('device.runInSandbox')}
+                </button>
+                <button
+                  className="dialog-btn"
+                  type="button"
+                  disabled={busyTask === q.taskId}
+                  onClick={() => void act(q.taskId, cancelQueuedTask)}
+                >
+                  {t('common.cancel')}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {error && <span className="settings-github__error">{error}</span>}
     </div>
   );
 }

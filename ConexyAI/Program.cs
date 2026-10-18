@@ -249,6 +249,9 @@ builder.Services.AddScoped<IConexyEditorService, ConexyEditorService>();
 // DESKTOP_AGENT: добавлено 2026-10-15 — ключи десктопа и выполнение инструментов на ПК пользователя.
 builder.Services.AddScoped<ConexyAI.Service.Device.IDeviceKeyService, ConexyAI.Service.Device.DeviceKeyService>();
 builder.Services.AddSingleton<ConexyAI.Service.Device.IDeviceToolBridge, ConexyAI.Service.Device.DeviceToolBridge>();
+// WEB_DEVICE: добавлено 2026-10-18 — очередь задач до подключения ПК и подтверждения/вопросы устройства через веб.
+builder.Services.AddSingleton<ConexyAI.Service.Device.IDeviceTaskQueue, ConexyAI.Service.Device.DeviceTaskQueue>();
+builder.Services.AddSingleton<ConexyAI.Service.Device.IDeviceRemoteInteractionService, ConexyAI.Service.Device.DeviceRemoteInteractionService>();
 builder.Services.AddScoped<IConexyBashService, ConexyBashService>();
 // TEST_RUNNER: добавлено 2026-10-04 — структурированный прогон тестов (run_tests).
 builder.Services.AddScoped<ITestRunnerService, ConexyTestRunnerService>();

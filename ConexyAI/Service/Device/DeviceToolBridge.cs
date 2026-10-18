@@ -12,7 +12,10 @@ namespace ConexyAI.Service.Device;
 public sealed record DeviceToolOutcome(string Output, bool IsError);
 
 /// <summary>Сведения о подключённом устройстве — для промпта агента.</summary>
-public sealed record DeviceInfo(string Name, string Os, string Workspace);
+public sealed record DeviceInfo(string Name, string Os, string Workspace, IReadOnlyList<DeviceProject>? Projects = null);
+
+// WEB_DEVICE: добавлено 2026-10-18 — проект (папка) на ПК, который можно выбрать из веба.
+public sealed record DeviceProject(string Id, string Name, string? Path);
 
 public interface IDeviceToolBridge
 {
@@ -26,8 +29,19 @@ public interface IDeviceToolBridge
     /// <summary>Снимает подключение при разрыве; ждущие вызовы этого устройства завершаются ошибкой.</summary>
     void Unregister(string connectionId);
 
-    /// <summary>Отправляет инструмент на устройство и ждёт результат.</summary>
-    Task<DeviceToolOutcome> ExecuteAsync(Guid userId, Guid taskId, string tool, string argumentsJson, CancellationToken ct);
+    // WEB_DEVICE: добавлено 2026-10-18
+    /// <summary>Список проектов устройства (JSON-массив <c>[{id,name,path?}]</c>). False — подключение не устройство пользователя.</summary>
+    bool RegisterProjects(Guid userId, string connectionId, string? projectsJson);
+
+    /// <summary>Является ли подключение зарегистрированным устройством пользователя.</summary>
+    bool IsDeviceConnection(Guid userId, string connectionId);
+
+    /// <summary>
+    /// Отправляет инструмент на устройство и ждёт результат. WEB_DEVICE: <paramref name="projectId"/> уходит
+    /// событием <c>ToolProject</c>, <paramref name="remoteApprovals"/> — событием <c>ToolRemote</c> (оба ДО ExecuteTool).
+    /// </summary>
+    Task<DeviceToolOutcome> ExecuteAsync(Guid userId, Guid taskId, string tool, string argumentsJson, CancellationToken ct,
+        string? projectId = null, bool remoteApprovals = false);
 
     /// <summary>Принимает результат от устройства. Чужое подключение результат принять не может.</summary>
     bool Complete(string connectionId, Guid callId, string output, bool isError);
@@ -52,7 +66,14 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
 
     private const int MaxImageChars = 12_000_000;
 
-    private sealed record Device(string ConnectionId, string Name, string Os, string Workspace);
+    private sealed record Device(string ConnectionId, string Name, string Os, string Workspace)
+    {
+        public IReadOnlyList<DeviceProject> Projects { get; init; } = Array.Empty<DeviceProject>();
+    }
+
+    // WEB_DEVICE: пределы списка проектов — он попадает в промпт и в ответ /device/status.
+    public const int MaxProjects = 50;
+    private const int MaxProjectNameChars = 100;
 
     private sealed record Pending(string ConnectionId, TaskCompletionSource<DeviceToolOutcome> Completion);
 
@@ -70,15 +91,69 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
     public bool IsOnline(Guid userId) => _devices.ContainsKey(userId);
 
     public DeviceInfo? GetInfo(Guid userId) =>
-        _devices.TryGetValue(userId, out var d) ? new DeviceInfo(d.Name, d.Os, d.Workspace) : null;
+        _devices.TryGetValue(userId, out var d) ? new DeviceInfo(d.Name, d.Os, d.Workspace, d.Projects) : null;
+
+    public bool IsDeviceConnection(Guid userId, string connectionId) =>
+        _devices.TryGetValue(userId, out var d) && d.ConnectionId == connectionId;
+
+    public bool RegisterProjects(Guid userId, string connectionId, string? projectsJson)
+    {
+        if (!_devices.TryGetValue(userId, out var device) || device.ConnectionId != connectionId)
+            return false;
+
+        var projects = ParseProjects(projectsJson);
+        _devices.TryUpdate(userId, device with { Projects = projects }, device);
+        _logger.LogInformation("Desktop device projects: user={UserId} count={Count}", userId, projects.Count);
+        return true;
+    }
+
+    // WEB_DEVICE: добавлено 2026-10-18 — клиенту не доверяем: одна строка без управляющих символов, без дублей id.
+    public static IReadOnlyList<DeviceProject> ParseProjects(string? json)
+    {
+        var result = new List<DeviceProject>();
+        if (string.IsNullOrWhiteSpace(json))
+            return result;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return result;
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (result.Count >= MaxProjects)
+                    break;
+                if (item.ValueKind != System.Text.Json.JsonValueKind.Object)
+                    continue;
+                var id = Clean(Str(item, "id"), 100);
+                if (id.Length == 0 || result.Any(p => p.Id == id))
+                    continue;
+                var name = Clean(Str(item, "name"), MaxProjectNameChars);
+                var path = Clean(Str(item, "path"), 260);
+                result.Add(new DeviceProject(id, name.Length == 0 ? id : name, path.Length == 0 ? null : path));
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Битый JSON — просто пустой список.
+        }
+        return result;
+
+        static string? Str(System.Text.Json.JsonElement e, string name) =>
+            e.TryGetProperty(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
+    }
+
+    private static string Clean(string? v, int max) =>
+        new string((v ?? string.Empty).Where(c => !char.IsControl(c)).Take(max).ToArray()).Trim();
 
     public void Register(Guid userId, string connectionId, string deviceName, string? os = null, string? workspace = null)
     {
         var name = string.IsNullOrWhiteSpace(deviceName) ? "device" : deviceName.Trim();
         // ОС и путь попадают в промпт, поэтому чистим: одна строка, без управляющих символов, ограниченная длина.
-        static string Clean(string? v, int max) =>
-            new string((v ?? string.Empty).Where(c => !char.IsControl(c)).Take(max).ToArray()).Trim();
-        _devices[userId] = new Device(connectionId, Clean(name, 100), Clean(os, 80), Clean(workspace, 260));
+        // WEB_DEVICE: повторная регистрация того же подключения сохраняет присланный ранее список проектов.
+        var projects = _devices.TryGetValue(userId, out var previous) && previous.ConnectionId == connectionId
+            ? previous.Projects
+            : Array.Empty<DeviceProject>();
+        _devices[userId] = new Device(connectionId, Clean(name, 100), Clean(os, 80), Clean(workspace, 260)) { Projects = projects };
         _logger.LogInformation("Desktop device registered: user={UserId} connection={ConnectionId} name={Name}", userId, connectionId, name);
     }
 
@@ -98,7 +173,8 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
     }
 
     public async Task<DeviceToolOutcome> ExecuteAsync(
-        Guid userId, Guid taskId, string tool, string argumentsJson, CancellationToken ct)
+        Guid userId, Guid taskId, string tool, string argumentsJson, CancellationToken ct,
+        string? projectId = null, bool remoteApprovals = false)
     {
         if (!_devices.TryGetValue(userId, out var device))
             return new DeviceToolOutcome(
@@ -114,6 +190,12 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
             // сохраняется), а не пятым аргументом: старые клиенты с 4-аргументным обработчиком не сломаются.
             if (AgentExecutionContext.Current is { } agent && agent.Id != AgentIdentity.Lead.Id)
                 await _hub.Clients.Client(device.ConnectionId).SendAsync("ToolAgent", callId, agent.Id, agent.Role, ct);
+            // WEB_DEVICE: добавлено 2026-10-18 — тем же приёмом: в каком проекте ПК выполнять и что подтверждения
+            // этого вызова идут через веб.
+            if (!string.IsNullOrWhiteSpace(projectId))
+                await _hub.Clients.Client(device.ConnectionId).SendAsync("ToolProject", callId, projectId, ct);
+            if (remoteApprovals)
+                await _hub.Clients.Client(device.ConnectionId).SendAsync("ToolRemote", callId, ct);
             await _hub.Clients.Client(device.ConnectionId).SendAsync("ExecuteTool", callId, taskId, tool, argumentsJson, ct);
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);

@@ -18,6 +18,9 @@ public sealed class ToolRunner
     /// <summary>Контрольные точки файлов за ходы агента (/rewind).</summary>
     public Checkpoints Checkpoints { get; } = new();
 
+    // WEB_DEVICE: добавлено 2026-10-18 — исходники файлов по веб-задачам для turn_diff.
+    public TaskChanges TaskChanges { get; } = new();
+
     /// <summary>
     /// Режим плана (/plan): агент только изучает проект. Запрет проверяет сам клиент — на послушание
     /// модели не полагаемся.
@@ -30,7 +33,13 @@ public sealed class ToolRunner
         _local = local;
         _approver = approver;
         _guard = new PathGuard(workspaceRoot);
-        _guard.BeforeWrite = Checkpoints.BeforeWrite;
+        // WEB_DEVICE: добавлено 2026-10-18 — правки веб-задач не попадают в /rewind локального сеанса.
+        _guard.BeforeWrite = path =>
+        {
+            if (ToolCallContext.Current is not { Remote: true })
+                Checkpoints.BeforeWrite(path);
+            TaskChanges.BeforeWrite(path);
+        };
         _files = new FileTools(_guard);
         _search = new SearchTools(_guard);
         _editor = new EditorTool(_guard, _files);
@@ -51,6 +60,11 @@ public sealed class ToolRunner
             // Служебный запрос сервера в начале каждого хода — без строки в терминале.
             if (tool == "project_rules")
                 return ProjectRules(args);
+            // WEB_DEVICE: добавлено 2026-10-18 — итоговый diff задачи, тоже без строки в терминале.
+            if (tool == "turn_diff")
+                return ToolCallContext.Current is { TaskId: var taskId } && taskId != Guid.Empty
+                    ? ToolResult.Ok(TaskChanges.BuildJson(taskId, _guard.Relative))
+                    : ToolResult.Fail("turn_diff: неизвестна задача.");
             if (tool == "ask_user")
                 return await AskUserAsync(args, ct);
             if (PlanMode && PlanBlockReason(tool, args) is { } blocked)

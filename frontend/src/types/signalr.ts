@@ -149,6 +149,32 @@ export interface SignalrCallbacks {
   // CHAT_OWNERSHIP: добавлено 2026-09-24 — контракт C-6: сервер отказал в JoinTask(id), потому что
   // задача или чат принадлежат другому аккаунту. Повторять такой вход бессмысленно.
   onJoinForbidden?: (id: string) => void;
+  // WEB_DEVICE: добавлено 2026-10-18
+  onDeviceQuestion?: (payload: DeviceQuestionPayload, scopeId?: string) => void;
+  onDeviceDiff?: (payload: DeviceDiffPayload, scopeId?: string) => void;
+}
+
+// WEB_DEVICE: добавлено 2026-10-18 — вопрос агента, заданный с ПК, отвечается из веба.
+export interface DeviceQuestionPayload {
+  requestId: string;
+  taskId: string;
+  question: string;
+  options: string[];
+}
+
+export type DeviceDiffFileStatus = 'added' | 'modified' | 'deleted';
+
+export interface DeviceDiffFile {
+  path: string;
+  status: DeviceDiffFileStatus;
+  diff: string;
+}
+
+/** Files the agent changed on the user's PC during the turn. */
+export interface DeviceDiffPayload {
+  taskId: string;
+  files: DeviceDiffFile[];
+  truncated: boolean;
 }
 
 // STOP_CONFIRM: добавлено 2026-09-24 — контракт C-5, ответ хаба на StopGeneration(taskId).

@@ -44,12 +44,18 @@ public class ConexyBackgroundWorker : BackgroundService
             return string.Empty;
 
         var info = services.GetService<Device.IDeviceToolBridge>()?.GetInfo(job.UserId);
-        return info is null
-            ? string.Empty
-            : "\n\n" + Prompts.PromptFragments.DesktopEnvironment(
-                string.IsNullOrEmpty(info.Os) ? "unknown OS" : info.Os,
-                string.IsNullOrEmpty(info.Workspace) ? "(текущая папка)" : info.Workspace,
-                info.Name);
+        if (info is null)
+            return string.Empty;
+
+        // WEB_DEVICE: добавлено 2026-10-18 — выбранный в вебе проект ПК заменяет рабочую папку устройства.
+        var project = string.IsNullOrWhiteSpace(job.DeviceProjectId)
+            ? null
+            : info.Projects?.FirstOrDefault(p => p.Id == job.DeviceProjectId);
+        var workspace = !string.IsNullOrEmpty(project?.Path) ? project.Path : info.Workspace;
+        return "\n\n" + Prompts.PromptFragments.DesktopEnvironment(
+            string.IsNullOrEmpty(info.Os) ? "unknown OS" : info.Os,
+            string.IsNullOrEmpty(workspace) ? "(текущая папка)" : workspace,
+            info.Name);
     }
 
     public ConexyBackgroundWorker(
@@ -296,6 +302,8 @@ public class ConexyBackgroundWorker : BackgroundService
 
             var outcome = TurnOutcome.Completed;
             var result = string.Empty;
+            // WEB_DEVICE: diff ПК для истории, если ход упал.
+            var failedDeviceDiff = string.Empty;
 
             try
             {
@@ -319,6 +327,9 @@ public class ConexyBackgroundWorker : BackgroundService
                 {
                     // conexy-coder / conexy-cowork -> autonomous agent pipeline (tools; Maker-Checker for code).
                     result = await runner.RunLoopAsync(job, context, taskToken);
+
+                    // WEB_DEVICE: добавлено 2026-10-18 — итоговый diff с ПК: в веб (OnDeviceDiff до OnCompleted) и в историю.
+                    result += await Device.DeviceTurnDiff.CollectAsync(scope.ServiceProvider, _hubContext, job, _logger, taskToken);
                 }
                 else
                 {
@@ -397,6 +408,10 @@ public class ConexyBackgroundWorker : BackgroundService
                 outcome = TurnOutcome.Failed;
                 _logger.LogError(ex, "Failed to execute task {TaskId}", job.TaskId);
 
+                // WEB_DEVICE: и при ошибке веб должен увидеть, что уже изменено на ПК.
+                if (isAgent)
+                    failedDeviceDiff = await Device.DeviceTurnDiff.CollectAsync(scope.ServiceProvider, _hubContext, job, _logger, CancellationToken.None);
+
                 entity.Status = ConexyStatus.Failed;
                 entity.Result = ex.Message;
                 entity.FinishedAt = DateTime.UtcNow;
@@ -412,7 +427,7 @@ public class ConexyBackgroundWorker : BackgroundService
                 // Именно асимметрия «в одной ветке пишем, в другой забыли» дважды ломала контекст.
                 try
                 {
-                    var assistantText = outcome == TurnOutcome.Completed ? result : PartialAssistantText(runner, buffer);
+                    var assistantText = outcome == TurnOutcome.Completed ? result : PartialAssistantText(runner, buffer) + failedDeviceDiff;
                     await conversation.PersistTurnAsync(context, assistantText, outcome, CancellationToken.None);
                 }
                 catch (Exception persistEx)

@@ -45,5 +45,9 @@ public record ConexyJob(
     // пользователя, а не серверная песочница.
     bool UseDevice = false,
     // LOCAL_MCP: добавлено 2026-10-17 — инструменты локальных MCP-серверов десктопа (уже провалидированы).
-    List<DeviceToolSpec>? DeviceTools = null
+    List<DeviceToolSpec>? DeviceTools = null,
+    // WEB_DEVICE: добавлено 2026-10-18 — проект на ПК (уходит устройству событием ToolProject) и признак
+    // запуска из веба: подтверждения и вопросы устройства идут через веб (событие ToolRemote).
+    string? DeviceProjectId = null,
+    bool RemoteApprovals = false
 );

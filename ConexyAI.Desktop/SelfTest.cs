@@ -148,6 +148,64 @@ public static class SelfTest
             Console.WriteLine($"{(permsOk ? "PASS" : "FAIL")}  permission rules match single commands only");
             if (!permsOk) failures++;
 
+            // WEB_DEVICE: добавлено 2026-10-18 — diff, turn_diff и маршрутизация проектов/подтверждений.
+            var diff = UnifiedDiff.Create("a\nb\nc\nd\ne\nf\ng\nh\n", "a\nb\nc\nD\ne\nf\ng\nh\nI\n", "x.txt");
+            var diffOk = diff.Contains("--- a/x.txt") && diff.Contains("@@ -1,8 +1,9 @@") && diff.Contains("-d\n+D\n") && diff.Contains("+I\n")
+                         && UnifiedDiff.Create("same\n", "same\n", "x") == string.Empty
+                         && UnifiedDiff.Create(null, "new\n", "n.txt").Contains("--- /dev/null\n+++ b/n.txt\n@@ -0,0 +1,1 @@\n+new");
+            var far = UnifiedDiff.Create(string.Join("\n", Enumerable.Range(1, 30)) + "\n",
+                string.Join("\n", Enumerable.Range(1, 30).Select(n => n is 2 or 28 ? "X" : n.ToString())) + "\n", "f");
+            diffOk &= far.Split("@@ -").Length == 3; // далёкие правки — два ханка
+            Console.WriteLine($"{(diffOk ? "PASS" : "FAIL")}  unified diff" + (diffOk ? string.Empty : $"\n{diff}\n{far}"));
+            if (!diffOk) failures++;
+
+            var web = new ToolRunner(root, new FixedApprover(true), _ => { });
+            File.WriteAllText(Path.Combine(root, "web.txt"), "one\ntwo\n");
+            var task = Guid.NewGuid();
+            ToolCallContext.Current = new ToolCallInfo(task, true, web.Root);
+            try
+            {
+                await web.RunAsync("file_write", """{"path":"web.txt","content":"one\nTWO\n"}""", CancellationToken.None);
+                await web.RunAsync("file_write", """{"path":"web/new.txt","content":"hi\n"}""", CancellationToken.None);
+                await Check("turn_diff", web, "turn_diff", "{}", r => !r.IsError
+                    && r.Output.Contains("\"path\":\"web.txt\",\"status\":\"modified\"") && r.Output.Contains("+TWO")
+                    && r.Output.Contains("\"path\":\"web/new.txt\",\"status\":\"added\"") && r.Output.Contains("\"truncated\":false"));
+                await Check("turn_diff forgets task", web, "turn_diff", "{}", r => !r.IsError && r.Output.Contains("\"files\":[]"));
+            }
+            finally
+            {
+                ToolCallContext.Current = null;
+            }
+            var webNotInRewind = web.Checkpoints.Turns.Count == 0;
+            Console.WriteLine($"{(webNotInRewind ? "PASS" : "FAIL")}  web edits stay out of /rewind");
+            if (!webNotInRewind) failures++;
+
+            var second = Path.Combine(root, "second");
+            Directory.CreateDirectory(second);
+            var device = new DeviceTools(daemon: false, new FixedApprover(true), _ => { }, interactiveRoot: root);
+            var routingOk = device.RunnerFor(second).Root == Path.GetFullPath(second)
+                            && ReferenceEquals(device.RunnerFor(second), device.RunnerFor(second + Path.DirectorySeparatorChar))
+                            && device.DefaultRoot == root
+                            && device.RootOf(Guid.NewGuid().ToString()) is null;
+            // Свой ход — консоль (здесь FixedApprover: да), задача с сайта без связи — отказ.
+            routingOk &= await device.Approver.ApproveAsync("npm install", root, CancellationToken.None);
+            ToolCallContext.Current = new ToolCallInfo(Guid.NewGuid(), true, root);
+            try
+            {
+                routingOk &= !await device.Approver.ApproveAsync("npm install", root, CancellationToken.None)
+                             && await device.Approver.AskUserAsync("?", [], CancellationToken.None) is null;
+                await Check("remote call in other project: declined without web", device.RunnerFor(second), "bash",
+                    System.Text.Json.JsonSerializer.Serialize(new { command = echo }), r => r.IsError && r.Output.Contains("отклонил"));
+            }
+            finally
+            {
+                ToolCallContext.Current = null;
+            }
+            var daemonDevice = new DeviceTools(daemon: true, new FixedApprover(true), _ => { });
+            routingOk &= !await daemonDevice.Approver.ApproveAsync("npm install", root, CancellationToken.None);
+            Console.WriteLine($"{(routingOk ? "PASS" : "FAIL")}  project routing and approval routing");
+            if (!routingOk) failures++;
+
             File.WriteAllText(Path.Combine(root, "CLAUDE.md"), "правило: табы");
             await Check("project rules", approved, "project_rules", """{"files":["CONEXY.md","CLAUDE.md","src/a.txt"]}""",
                 r => !r.IsError && r.Output.Contains("правило: табы") && !r.Output.Contains("a.txt"));

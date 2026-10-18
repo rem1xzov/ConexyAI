@@ -8,5 +8,7 @@ public record ConexyResponse(
     string? Result,
     string Status,
     DateTime CreatedAt,
-    DateTime? FinishedAt
+    DateTime? FinishedAt,
+    // WEB_DEVICE: добавлено 2026-10-18 — задача ждёт подключения ПК (политика "queue").
+    bool WaitingForDevice = false
 );

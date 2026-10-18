@@ -13,6 +13,13 @@ const string Usage = """
       conexy logout                                 забыть ключ
       conexy selftest                               проверить локальные инструменты без сервера
 
+    Задачи с сайта на этом ПК:
+      conexy projects                               список проектов, доступных сайту
+      conexy projects add <папка> [--name <имя>]   добавить проект (имя по умолчанию — имя папки)
+      conexy projects remove <id|имя>             убрать проект
+      conexy daemon                                 фоновый режим: выполнять задачи с сайта, подтверждения — на сайте
+      conexy daemon --install | --uninstall         включить/отключить автозапуск демона при входе в систему
+
     Агент видит и меняет файлы ТОЛЬКО внутри рабочей папки. Любая команда терминала,
     кроме чтения, выполняется после вашего подтверждения.
     """;
@@ -69,6 +76,14 @@ try
 
         case "login":
             return await LoginAsync(args);
+
+        // WEB_DEVICE: добавлено 2026-10-18
+        case "daemon":
+            return await Daemon.RunAsync(args);
+
+        // WEB_DEVICE: добавлено 2026-10-18
+        case "projects":
+            return ProjectsCommand(args);
 
         case "updatetest":
             return Updater.TestSchedule(args[1], args[2]) ?? 1;
@@ -168,6 +183,69 @@ catch (Exception ex) when (ex is not OperationCanceledException)
     Console.Error.WriteLine("Ошибка: " + ex.Message);
     return 4;
 }
+}
+
+// WEB_DEVICE: добавлено 2026-10-18 — conexy projects [add <папка> [--name <имя>] | remove <id|имя>]
+static int ProjectsCommand(string[] args)
+{
+    var store = ProjectStore.Load();
+    var rest = args.SkipWhile(a => a != "projects").Skip(1).ToArray();
+    switch (rest.FirstOrDefault()?.ToLowerInvariant())
+    {
+        case null or "list":
+            if (store.Projects.Count == 0)
+            {
+                Console.WriteLine("Проектов нет. Добавьте: conexy projects add <папка> [--name <имя>]");
+                return 0;
+            }
+            for (var i = 0; i < store.Projects.Count; i++)
+            {
+                var p = store.Projects[i];
+                var missing = Directory.Exists(p.Path) ? string.Empty : "  (папка не найдена)";
+                Console.WriteLine($"{(i == 0 ? "*" : " ")} {p.Name}  {p.Path}{missing}\n    id: {p.Id}");
+            }
+            Console.WriteLine("\n* — проект по умолчанию для демона.");
+            return 0;
+
+        case "add" when rest.Length >= 2 && !rest[1].StartsWith("--"):
+            var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rest[1].Trim('"')));
+            if (!Directory.Exists(path))
+            {
+                Console.Error.WriteLine($"Папка не найдена: {path}");
+                return 1;
+            }
+            var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (store.Projects.FirstOrDefault(p => p.Path.Equals(path, cmp)) is { } existing)
+            {
+                Console.WriteLine($"Уже добавлен: {existing.Name} ({existing.Id})");
+                return 0;
+            }
+            var name = Option(rest, "--name") ?? Path.GetFileName(path);
+            if (string.IsNullOrWhiteSpace(name))
+                name = path;
+            var project = new DeviceProject { Id = Guid.NewGuid().ToString(), Name = name, Path = path };
+            store.Projects.Add(project);
+            store.Save();
+            Console.WriteLine($"Добавлен проект «{project.Name}» ({project.Id}).");
+            if (Daemon.IsRunning())
+                Console.WriteLine("Запущенный демон подхватит его в течение минуты.");
+            return 0;
+
+        case "remove" or "rm" when rest.Length >= 2:
+            if (store.Find(rest[1]) is not { } target)
+            {
+                Console.Error.WriteLine($"Проект не найден: {rest[1]}");
+                return 1;
+            }
+            store.Projects.Remove(target);
+            store.Save();
+            Console.WriteLine($"Удалён проект «{target.Name}».");
+            return 0;
+
+        default:
+            Console.Error.WriteLine("Использование: conexy projects | projects add <папка> [--name <имя>] | projects remove <id|имя>");
+            return 1;
+    }
 }
 
 static async Task<int> LoginAsync(string[] args)
@@ -478,8 +556,12 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
     store.Bind(chatId, root);
     approver.ProjectRoot = root;
     Ui.PlanMode = false;
-    var tools = new ToolRunner(root, approver, Ui.ToolCall, server.GetGitHubTokenAsync, local);
-    await using var session = new AgentSession(server, tools, chatId) { Local = local };
+    // WEB_DEVICE: изменено 2026-10-18 — подтверждения задач с сайта уходят на сайт, своих ходов — в консоль.
+    var device = new DeviceTools(daemon: false, approver,
+        line => { if (ToolCallContext.Current is not { Remote: true }) Ui.ToolCall(line); },
+        server.GetGitHubTokenAsync, local, root);
+    var tools = new ToolRunner(root, device.Approver, Ui.ToolCall, server.GetGitHubTokenAsync, local);
+    await using var session = new AgentSession(server, tools, chatId, device) { Local = local };
     try
     {
         await session.ConnectAsync(CancellationToken.None);
@@ -497,6 +579,9 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
     Ui.SetProject(root);
     if (firstBanner && approver.AutoMode)
         Ui.Info("  Авто-режим включён: команды выполняются без подтверждения.");
+    // WEB_DEVICE: добавлено 2026-10-18 — на сервере побеждает последняя регистрация устройства.
+    if (firstBanner && Daemon.IsRunning())
+        Ui.Info("  Демон conexy запущен: до конца этого сеанса задачи с сайта идут сюда, демон вернёт их себе в течение минуты после выхода.");
     Ui.Info($"  Чат {chatId.ToString()[..8]} · /chats — список чатов, /cd — сменить проект");
     await ShowHistoryAsync(server, chatId);
     var listed = new List<string>();

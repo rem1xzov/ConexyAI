@@ -17,6 +17,8 @@ import { ProducedFiles } from './ProducedFiles';
 import { MessageActions } from './MessageActions';
 import { UserMessageActions } from './UserMessageActions';
 import { useIsMobile } from '../hooks/useMediaQuery';
+// WEB_DEVICE: добавлено 2026-10-18
+import { DeviceTurnExtras } from './DeviceTurnExtras';
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -292,6 +294,9 @@ function MessageBubbleBase({
 
       {/* FILE_CARDS: добавлено 2026-09-24 — files produced in this turn, with a download button. */}
       <ProducedFiles files={files} chatId={chatId} onOpenFile={onOpenFile} />
+
+      {/* WEB_DEVICE: добавлено 2026-10-18 — ожидание ПК, вопросы агента и «Изменения на ПК». */}
+      <DeviceTurnExtras message={message} />
 
       {/* 5. Running light: last element of the message while generating, so it starts directly
           under the timeline and is pushed down as the answer grows. This is the ONLY stopwatch in

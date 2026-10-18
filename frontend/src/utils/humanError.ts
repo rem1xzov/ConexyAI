@@ -25,6 +25,8 @@ export function humanError(err: unknown, t: Translate): string {
   // человеческим текстом, а не как «TURN_IN_FLIGHT».
   const knownKey = knownCodeKey(e.response?.data);
   if (knownKey) return t(knownKey);
+  const deviceCode = deviceErrorCode(err);
+  if (deviceCode) return t(KNOWN_CODES[deviceCode]);
 
   const fromBody = extractServerMessage(e.response?.data);
 
@@ -52,7 +54,30 @@ const KNOWN_CODES: Record<string, string> = {
   CHAT_FORBIDDEN: 'sync.chatForbidden',
   TOO_MANY_ATTEMPTS: 'errors.too_many_attempts',
   too_many_attempts: 'errors.too_many_attempts',
+  // WEB_DEVICE: добавлено 2026-10-18
+  DEVICE_OFFLINE: 'device.errorOffline',
+  DEVICE_PROJECT_NOT_FOUND: 'device.errorProjectNotFound',
+  DEVICE_MODE_UNSUPPORTED: 'device.errorUnsupported',
 };
+
+// WEB_DEVICE: добавлено 2026-10-18 — коды режима «Мой ПК» могут прийти внутри текста ошибки
+// («DEVICE_OFFLINE: ...»), а не отдельным полем, поэтому ищем их по вхождению.
+const DEVICE_CODES = ['DEVICE_OFFLINE', 'DEVICE_PROJECT_NOT_FOUND', 'DEVICE_MODE_UNSUPPORTED'] as const;
+export type DeviceErrorCode = (typeof DEVICE_CODES)[number];
+
+/** The device-mode error code carried by a failed request, if any. */
+export function deviceErrorCode(err: unknown): DeviceErrorCode | null {
+  const data = (err as { response?: { data?: unknown } } | null)?.response?.data;
+  let text = '';
+  if (typeof data === 'string') text = data;
+  else if (data && typeof data === 'object') {
+    const record = data as Record<string, unknown>;
+    text = ['error', 'code', 'message', 'detail', 'title']
+      .map((k) => (typeof record[k] === 'string' ? (record[k] as string) : ''))
+      .join(' ');
+  }
+  return DEVICE_CODES.find((c) => text.includes(c)) ?? null;
+}
 
 /** The i18n key for a machine-readable `{ error }` / `{ code }` the server is known to send. */
 function knownCodeKey(data: unknown): string | null {

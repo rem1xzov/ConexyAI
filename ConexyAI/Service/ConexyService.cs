@@ -3,6 +3,7 @@ using ConexyAI.Service.Device;
 using ConexyAI.Entity;
 using ConexyAI.Model;
 using ConexyAI.Repository;
+using Microsoft.AspNetCore.SignalR;
 
 namespace ConexyAI.Service;
 
@@ -38,6 +39,9 @@ public class ConexyService : IConexyService
     private readonly IUserIntegrationsService _integrations;
     // DESKTOP_AGENT: добавлено 2026-10-15
     private readonly Device.IDeviceToolBridge? _deviceBridge;
+    // WEB_DEVICE: добавлено 2026-10-18
+    private readonly Device.IDeviceTaskQueue? _deviceQueue;
+    private readonly Microsoft.AspNetCore.SignalR.IHubContext<ConexyAI.Hub.ConexyHub>? _hubContext;
     private const int MaxRequestsPerWindow = 60;
     private static readonly TimeSpan WindowDuration = TimeSpan.FromMinutes(1);
 
@@ -52,9 +56,14 @@ public class ConexyService : IConexyService
         IChatAccessService chatAccess,
         IUserIntegrationsService integrations,
         // DESKTOP_AGENT: опциональный — тесты собирают сервис вручную.
-        Device.IDeviceToolBridge? deviceBridge = null)
+        Device.IDeviceToolBridge? deviceBridge = null,
+        // WEB_DEVICE: добавлено 2026-10-18 — очередь задач до подключения ПК (опционально — тесты).
+        Device.IDeviceTaskQueue? deviceQueue = null,
+        Microsoft.AspNetCore.SignalR.IHubContext<ConexyAI.Hub.ConexyHub>? hubContext = null)
     {
         _deviceBridge = deviceBridge;
+        _deviceQueue = deviceQueue;
+        _hubContext = hubContext;
         _chatAccess = chatAccess;
         _repository = repository;
         _queueGuard = queueGuard;
@@ -76,12 +85,29 @@ public class ConexyService : IConexyService
 
         // DESKTOP_AGENT: десктопный режим — для агентов (Coder и, с 2026-10-17, Cowork) и только с подключённым
         // устройством: иначе задача сгорала бы на первом же инструменте и тратила квоту.
+        // WEB_DEVICE: изменено 2026-10-18 — офлайн-ПК по выбору веба: "queue" (ждать ПК), "sandbox" (выполнить
+        // в песочнице), иначе как раньше — DEVICE_OFFLINE. Десктопный CLI политику не шлёт → поведение прежнее.
+        var waitForDevice = false;
         if (request.UseDevice)
         {
             if (modelType is not (ConexyModelType.ConexyCoder or ConexyModelType.ConexyCowork))
                 throw new ArgumentException("DEVICE_MODE_UNSUPPORTED: десктопный режим доступен только для conexy-coder и conexy-cowork.");
             if (_deviceBridge is null || !_deviceBridge.IsOnline(userId))
-                throw new ArgumentException("DEVICE_OFFLINE: десктопное приложение не подключено. Запустите conexy и повторите.");
+            {
+                var policy = request.DeviceOfflinePolicy?.Trim().ToLowerInvariant();
+                if (policy == "sandbox")
+                    request = request with { UseDevice = false, DeviceTools = null, DeviceProjectId = null, RemoteApprovals = false };
+                else if (policy == "queue" && _deviceQueue is not null)
+                    waitForDevice = true;
+                else
+                    throw new ArgumentException("DEVICE_OFFLINE: десктопное приложение не подключено. Запустите conexy и повторите.");
+            }
+            else if (!string.IsNullOrWhiteSpace(request.DeviceProjectId)
+                     && _deviceBridge.GetInfo(userId)?.Projects is { Count: > 0 } projects
+                     && projects.All(p => p.Id != request.DeviceProjectId))
+            {
+                throw new ArgumentException("DEVICE_PROJECT_NOT_FOUND: выбранный проект не найден на ПК.");
+            }
         }
 
         // SUBSCRIPTION_TIERS: добавлено 2026-09-17
@@ -199,8 +225,49 @@ public class ConexyService : IConexyService
             }
 
             // Ставим задачу в фоновую очередь (GitHub-токен не сохраняется в БД, а передаётся только в памяти).
-            await _queueGuard.EnqueueReservedAsync(new ConexyJob(entity.Id, chatId, userId, modelType, request.Prompt, githubToken, request.GitHubRepo, request.Attachments, request.Thinking, request.ReasoningEffort, request.StudentsMode, request.SmartSearch, request.Incognito, request.AssistantPrefix, request.ChatKind, request.Regenerate, Orchestra: request.Orchestra, McpServers: mcpServers, UseDevice: request.UseDevice,
-                            DeviceTools: request.UseDevice ? DeviceToolSanitizer.Clean(request.DeviceTools) : null), ct);
+            var job = new ConexyJob(entity.Id, chatId, userId, modelType, request.Prompt, githubToken, request.GitHubRepo, request.Attachments, request.Thinking, request.ReasoningEffort, request.StudentsMode, request.SmartSearch, request.Incognito, request.AssistantPrefix, request.ChatKind, request.Regenerate, Orchestra: request.Orchestra, McpServers: mcpServers, UseDevice: request.UseDevice,
+                            DeviceTools: request.UseDevice ? DeviceToolSanitizer.Clean(request.DeviceTools) : null,
+                            // WEB_DEVICE: добавлено 2026-10-18
+                            DeviceProjectId: request.UseDevice && !string.IsNullOrWhiteSpace(request.DeviceProjectId) ? request.DeviceProjectId.Trim() : null,
+                            RemoteApprovals: request.UseDevice && request.RemoteApprovals);
+
+            // WEB_DEVICE: ПК офлайн и выбрано «ждать» — задача стоит в очереди устройства, резервация id и чата
+            // сохраняется до отправки в работу или отмены (см. DeviceTaskQueue).
+            if (waitForDevice)
+            {
+                _deviceQueue!.Hold(job);
+                // ПК мог подключиться, пока мы создавали строку, — тогда не ждём следующего подключения.
+                if (_deviceBridge?.IsOnline(userId) == true)
+                {
+                    await _deviceQueue.DispatchAsync(userId, ct);
+                    return ToResponse(entity);
+                }
+
+                if (_hubContext is not null)
+                {
+                    try
+                    {
+                        await _hubContext.Clients.Group($"task_{entity.Id}").SendAsync("OnAgentStatus", new
+                        {
+                            stage = "waiting_device",
+                            label = "Ожидает подключения ПК",
+                            status = "waiting_device",
+                            message = "Ожидает подключения ПК",
+                            file = (string?)null,
+                            agentId = AgentIdentity.Lead.Id,
+                            agentRole = AgentIdentity.Lead.Role,
+                        }, CancellationToken.None);
+                    }
+                    catch (Exception)
+                    {
+                        // Статус — лишь подсказка: веб видит WaitingForDevice в ответе и GET /device/status.
+                    }
+                }
+
+                return ToResponse(entity) with { WaitingForDevice = true };
+            }
+
+            await _queueGuard.EnqueueReservedAsync(job, ct);
 
             return ToResponse(entity);
         }

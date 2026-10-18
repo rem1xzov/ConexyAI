@@ -57,9 +57,22 @@ import { SettingsModal } from './components/SettingsModal';
 import type { SettingsSection } from './components/SettingsModal';
 // WORKSPACE_DIRTY: добавлено 2026-09-24
 import { ConfirmDialog } from './components/Dialog';
+// WEB_DEVICE: добавлено 2026-10-18
+import { DeviceTargetBar } from './components/DeviceTargetBar';
+import { DeviceTurnContext, type DeviceTurnActions } from './components/DeviceTurnExtras';
+import { useDeviceStatus } from './hooks/useDeviceStatus';
+import { cancelQueuedTask, runQueuedTaskInSandbox, type DeviceStatus } from './api/deviceApi';
+import {
+  readDeviceProject,
+  readExecutionTarget,
+  resolveExecutionChoice,
+  writeDeviceProject,
+  writeExecutionTarget,
+  type ExecutionTarget,
+} from './utils/deviceTarget';
 import { getStoredTheme, setTheme, type Theme } from './theme';
 import { setLanguage } from './i18n';
-import type { ChatSummary, ConexyModel, LimitExceededInfo, ReasoningEffort, SendOutcome, SubscriptionUsage, TaskAttachment } from './types/api';
+import type { ChatSummary, ConexyModel, ConexyRequest, ConexyResponse, DeviceOfflinePolicy, LimitExceededInfo, ReasoningEffort, SendOutcome, SubscriptionUsage, TaskAttachment } from './types/api';
 import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep, TurnBlock, AgentAction, TeamAgent } from './types/chat';
 import type { PendingActionPayload, SignalrCallbacks } from './types/signalr';
 // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
@@ -74,7 +87,7 @@ import {
   closeFeedBlocks,
 } from './utils/turnBlocks';
 // DEPLOY_WINDOW_GRACEFUL_ERRORS: добавлено 2026-09-23
-import { humanError } from './utils/humanError';
+import { deviceErrorCode, humanError } from './utils/humanError';
 // SESSION_ISOLATION / CHAT_STORAGE: добавлено 2026-09-24 (H10, M22, L13)
 import { userIdFromToken } from './utils/authToken';
 import {
@@ -1224,7 +1237,15 @@ export default function App() {
         });
         return;
       }
-      patchTurn(ctx, (m) => {
+      // WEB_DEVICE: добавлено 2026-10-18 — задача ждёт ПК; любой следующий статус значит, что она пошла.
+      const rawStatus = (payload as { status?: string }).status;
+      if (payload.stage === 'waiting_device' || rawStatus === 'waiting_device') {
+        const label = payload.label || liveRef.current.t('device.waiting');
+        patchTurn(ctx, (m) => ({ ...m, waitingDevice: true, currentAction: { stage: 'waiting_device', label } }));
+        return;
+      }
+      patchTurn(ctx, (prev) => {
+        const m = prev.waitingDevice ? { ...prev, waitingDevice: false } : prev;
         // AGENT_TIMELINE: добавлено 2026-09-22 — каждая фаза «размышления» становится
         // отдельным шагом со своим startedAt, поэтому таймер каждого шага честно идёт
         // от нуля, а завершённые шаги больше не тикают и не путаются между собой.
@@ -1354,6 +1375,31 @@ export default function App() {
       if (!resolveTurn(scopeId) && !registry.byTask(payload.taskId)) return dropEvent('OnPendingActionCreated', scopeId);
       setPendingAction(payload);
     },
+    // WEB_DEVICE: добавлено 2026-10-18 — вопрос агента с ПК и изменённые на ПК файлы.
+    onDeviceQuestion: (payload, scopeId) => {
+      const ctx = resolveTurn(scopeId) ?? (payload.taskId ? registry.byTask(payload.taskId) : undefined);
+      if (!ctx) return dropEvent('OnDeviceQuestion', scopeId);
+      patchTurn(ctx, (m) =>
+        (m.deviceQuestions ?? []).some((q) => q.requestId === payload.requestId)
+          ? m
+          : { ...m, deviceQuestions: [...(m.deviceQuestions ?? []), { ...payload, options: payload.options ?? [] }] },
+      );
+    },
+    onDeviceDiff: (payload, scopeId) => {
+      const ctx = resolveTurn(scopeId) ?? (payload.taskId ? registry.byTask(payload.taskId) : undefined);
+      const diff = { ...payload, files: payload.files ?? [] };
+      if (ctx) {
+        patchTurn(ctx, (m) => ({ ...m, deviceDiff: diff }));
+        return;
+      }
+      // The diff may land right after the turn was finalised — attach it by task id anyway.
+      if (!payload.taskId) return dropEvent('OnDeviceDiff', scopeId);
+      const taskId = payload.taskId.toLowerCase();
+      patchMessagesWhere(
+        (m) => m.role === 'assistant' && m.taskId?.toLowerCase() === taskId,
+        (m) => ({ ...m, deviceDiff: diff }),
+      );
+    },
     // SIGNALR_RESILIENCE: добавлено 2026-09-22 — после успешного переподключения события,
     // которые не дошли, уже не вернуть, поэтому состояние КАЖДОГО идущего хода перечитываем.
     onReconnected: () => {
@@ -1396,6 +1442,8 @@ export default function App() {
       onSearchStatus: (payload, scopeId) => ev().onSearchStatus?.(payload, scopeId),
       onProblems: (payload, scopeId) => ev().onProblems?.(payload, scopeId),
       onPendingActionCreated: (payload, scopeId) => ev().onPendingActionCreated?.(payload, scopeId),
+      onDeviceQuestion: (payload, scopeId) => ev().onDeviceQuestion?.(payload, scopeId),
+      onDeviceDiff: (payload, scopeId) => ev().onDeviceDiff?.(payload, scopeId),
       onReconnected: () => ev().onReconnected?.(),
       onJoinForbidden: (id) => ev().onJoinForbidden?.(id),
     });
@@ -1778,6 +1826,88 @@ export default function App() {
   const authenticated = Boolean(token && user);
   const authPending = initializing || (Boolean(token) && !user && !profileFailed);
   const isGuest = !authenticated && !authPending;
+
+  // WEB_DEVICE: добавлено 2026-10-18 — «Песочница / Мой ПК»: где выполняются инструменты Coder/Cowork.
+  const deviceTargetVisible = authenticated && isAgentModel(model);
+  const device = useDeviceStatus(deviceTargetVisible);
+  const [executionTarget, setExecutionTargetState] = useState<ExecutionTarget>(
+    () => readExecutionTarget(activeId) ?? 'sandbox',
+  );
+  const [storedDeviceProject, setStoredDeviceProject] = useState<string | null>(() => readDeviceProject(activeId));
+  useEffect(() => {
+    setExecutionTargetState(readExecutionTarget(activeId) ?? 'sandbox');
+    setStoredDeviceProject(readDeviceProject(activeId));
+  }, [activeId]);
+  const deviceProjects = device.status?.projects ?? [];
+  const deviceProjectId = deviceProjects.some((p) => p.id === storedDeviceProject)
+    ? storedDeviceProject
+    : (deviceProjects[0]?.id ?? null);
+
+  function changeExecutionTarget(target: ExecutionTarget) {
+    writeExecutionTarget(activeId, target);
+    setExecutionTargetState(target);
+    if (target === 'device') void device.refresh();
+  }
+
+  function changeDeviceProject(projectId: string) {
+    writeDeviceProject(activeId, projectId);
+    setStoredDeviceProject(projectId);
+  }
+
+  type OfflineChoice = Exclude<DeviceOfflinePolicy, 'fail'> | null;
+  const [deviceOfflinePrompt, setDeviceOfflinePrompt] = useState<((choice: OfflineChoice) => void) | null>(null);
+  const deviceRef = useRef({} as {
+    status: DeviceStatus | null;
+    askOffline: () => Promise<OfflineChoice>;
+  });
+  deviceRef.current = {
+    status: device.status,
+    askOffline: () => new Promise<OfflineChoice>((resolve) => setDeviceOfflinePrompt(() => resolve)),
+  };
+
+  function resolveDeviceOffline(choice: OfflineChoice) {
+    deviceOfflinePrompt?.(choice);
+    setDeviceOfflinePrompt(null);
+  }
+
+  /** Patches every message matching `match` (across chats) without touching the other chats. */
+  function patchMessagesWhere(match: (m: ChatMessage) => boolean, updater: (m: ChatMessage) => ChatMessage) {
+    setSessions((prev) =>
+      prev.map((s) => (s.messages.some(match) ? { ...s, messages: s.messages.map((m) => (match(m) ? updater(m) : m)) } : s)),
+    );
+  }
+
+  const sameTask = (taskId: string) => (m: ChatMessage) => m.taskId?.toLowerCase() === taskId.toLowerCase();
+  const deviceActionsRef = useRef<DeviceTurnActions | null>(null);
+  deviceActionsRef.current = {
+    runInSandbox: async (taskId) => {
+      await runQueuedTaskInSandbox(taskId);
+      patchMessagesWhere(sameTask(taskId), (m) => ({ ...m, waitingDevice: false }));
+      void device.refresh();
+    },
+    cancelQueued: async (taskId) => {
+      await cancelQueuedTask(taskId);
+      finishFromServer(taskId, 'stopped', {});
+      patchMessagesWhere(sameTask(taskId), (m) => ({ ...m, waitingDevice: false }));
+      void device.refresh();
+    },
+    answerQuestion: async (messageId, requestId, answer) => {
+      await signalrService.answerDeviceQuestion(requestId, answer);
+      patchMessagesWhere(
+        (m) => m.id === messageId,
+        (m) => ({
+          ...m,
+          deviceQuestions: (m.deviceQuestions ?? []).map((q) => (q.requestId === requestId ? { ...q, answer } : q)),
+        }),
+      );
+    },
+  };
+  // A stable object, so MessageBubble's memo is not defeated; it always calls the latest handlers.
+  const [deviceActions] = useState<DeviceTurnActions>(() => ({
+    runInSandbox: (taskId) => deviceActionsRef.current!.runInSandbox(taskId),
+    cancelQueued: (taskId) => deviceActionsRef.current!.cancelQueued(taskId),
+    answerQuestion: (messageId, requestId, answer) => deviceActionsRef.current!.answerQuestion(messageId, requestId, answer),
+  }));
 
   // USER_NAME: подтягиваем имя из персонализации для приветствия. Ошибку глотаем — приветствие
   // просто останется на прежнем (email-производном) варианте.
@@ -2230,6 +2360,28 @@ export default function App() {
     const ctx: TurnContext = { sessionId, messageId: assistantId, startedAt: Date.now() };
     turns.begin(ctx);
 
+    // WEB_DEVICE: добавлено 2026-10-18 — ход Coder/Cowork на ПК пользователя. Если ПК заведомо не в
+    // сети, спрашиваем заранее; иначе шлём «fail» и спрашиваем, только если сервер ответит DEVICE_OFFLINE.
+    const deviceChoice = isAgentModel(live.model) ? resolveExecutionChoice(sessionId) : null;
+    const useDevice = deviceChoice?.target === 'device';
+    let deviceOfflinePolicy: DeviceOfflinePolicy = 'fail';
+    let deviceProjectId: string | undefined;
+    if (useDevice) {
+      const status = deviceRef.current.status;
+      const projects = status?.projects ?? [];
+      deviceProjectId = projects.some((p) => p.id === deviceChoice.projectId)
+        ? (deviceChoice.projectId ?? undefined)
+        : (projects[0]?.id ?? deviceChoice.projectId ?? undefined);
+      if (status && !status.online) {
+        const choice = await deviceRef.current.askOffline();
+        if (!choice) {
+          turns.end(ctx);
+          return { ok: false, reason: 'cancelled' };
+        }
+        deviceOfflinePolicy = choice;
+      }
+    }
+
     // ATTACHMENTS_IN_BUBBLE: turn the outgoing files into the transcript representation (image
     // thumbnails, file chips). Only the preview is kept — the originals go to the model.
     let messageAttachments: Awaited<ReturnType<typeof toMessageAttachment>>[] = [];
@@ -2327,7 +2479,7 @@ export default function App() {
       // TURN_SCOPE (H6): sessionId больше не отправляется. Бэкенд превращал его в taskId, поэтому все
       // ходы чата жили в ОДНОЙ группе task_{id}, и события соседних ходов было не различить. Теперь у
       // каждого хода свой taskId; рабочая область и история по-прежнему ключуются chatId.
-      const res = await runTask({
+      const request: ConexyRequest = {
         model: live.model,
         prompt,
         attachments: attachments.length ? attachments : undefined,
@@ -2357,9 +2509,33 @@ export default function App() {
           live.model === 'conexy-coder' || live.model === 'conexy-cowork'
             ? (readMcpServers().length ? readMcpServers() : undefined)
             : undefined,
-      });
+      };
+
+      // WEB_DEVICE: ПК мог отключиться между опросом статуса и отправкой — тогда тот же диалог и повтор.
+      let res: ConexyResponse;
+      for (;;) {
+        try {
+          res = await runTask(
+            useDevice
+              ? { ...request, useDevice: true, remoteApprovals: true, deviceProjectId, deviceOfflinePolicy }
+              : request,
+          );
+          break;
+        } catch (e) {
+          if (!useDevice || deviceOfflinePolicy !== 'fail' || deviceErrorCode(e) !== 'DEVICE_OFFLINE') throw e;
+
+          const choice = await deviceRef.current.askOffline();
+          if (!choice) {
+            turns.end(ctx);
+            rollback(previousSessionStatus === 'Running' ? 'Idle' : previousSessionStatus);
+            return { ok: false, reason: 'cancelled' };
+          }
+          deviceOfflinePolicy = choice;
+        }
+      }
 
       const taskId = res.id;
+      const waitingDevice = res.waitingForDevice === true;
       if (storeUserRef.current !== ownerAtStart) return { ok: true };
       setSessions((prev) =>
         updateSession(prev, sessionId, (s) => ({
@@ -2368,7 +2544,11 @@ export default function App() {
           remote: true,
           // TRANSCRIPT_REFRESH (M25): the server's next change to this chat is our own.
           unsyncedTurns: (s.unsyncedTurns ?? 0) + 1,
-          messages: s.messages.map((m) => (m.id === assistantId ? { ...m, taskId, awaitingTaskId: undefined } : m)),
+          messages: s.messages.map((m) =>
+            m.id === assistantId
+              ? { ...m, taskId, awaitingTaskId: undefined, waitingDevice: waitingDevice || undefined }
+              : m,
+          ),
         })),
       );
 
@@ -2825,7 +3005,8 @@ export default function App() {
   }
 
   return (
-    <>
+    // WEB_DEVICE: добавлено 2026-10-18 — действия карточек «Ждёт ПК» и вопросов агента в ленте.
+    <DeviceTurnContext.Provider value={deviceActions}>
       {/* GLASS_AURA: базовый слой с цветными пятнами под стеклом — без него backdrop-filter на
           однородном фоне не читается. Идёт ДО incognito-aura, чтобы непрозрачная аура инкогнито
           (рисуется позже, тот же z-index) перекрывала его и режим инкогнито не ломался. */}
@@ -3096,6 +3277,23 @@ export default function App() {
                     // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
                     // onOpenLive={() => setIsLiveOpen(true)}
                     onSend={handleSend}
+                    executionTarget={
+                      deviceTargetVisible ? (
+                        <DeviceTargetBar
+                          target={executionTarget}
+                          onTargetChange={changeExecutionTarget}
+                          status={device.status}
+                          hasKey={device.hasKey}
+                          projectId={deviceProjectId}
+                          onProjectChange={changeDeviceProject}
+                          onOpenSetup={() => {
+                            setSettingsSection('desktop');
+                            setSettingsOpen(true);
+                          }}
+                          disabled={agentRunning}
+                        />
+                      ) : undefined
+                    }
                     externalFiles={droppedFiles}
                     editTarget={composerEdit}
                     onSubmitEdit={handleSubmitEdit}
@@ -3221,7 +3419,19 @@ export default function App() {
           onPreferencesSaved={(p: UserPreferences) => setPreferredName(p.name.trim() ? p.name.trim() : null)}
         />
       )}
+
+      {/* WEB_DEVICE: добавлено 2026-10-18 — «ПК не в сети» при отправке хода на ПК. */}
+      {deviceOfflinePrompt && (
+        <ConfirmDialog
+          title={t('device.offlineTitle')}
+          message={t('device.offlineMessage', { name: device.status?.name || t('device.unknownPc') })}
+          confirmLabel={t('device.queue')}
+          extraAction={{ label: t('device.runInSandbox'), onClick: () => resolveDeviceOffline('sandbox') }}
+          onConfirm={() => resolveDeviceOffline('queue')}
+          onCancel={() => resolveDeviceOffline(null)}
+        />
+      )}
       </div>
-    </>
+    </DeviceTurnContext.Provider>
   );
 }

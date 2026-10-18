@@ -22,6 +22,9 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     private readonly ILogger<ConexyHub> _logger;
     // DESKTOP_AGENT: добавлено 2026-10-15
     private readonly ConexyAI.Service.Device.IDeviceToolBridge _devices;
+    // WEB_DEVICE: добавлено 2026-10-18
+    private readonly ConexyAI.Service.Device.IDeviceTaskQueue _deviceQueue;
+    private readonly ConexyAI.Service.Device.IDeviceRemoteInteractionService _deviceRemote;
 
     public ConexyHub(
         IIdeTerminalService terminalService,
@@ -32,9 +35,13 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
         ISupportRepository support,
         ISandboxTerminalService sandboxTerminal,
         ILogger<ConexyHub> logger,
-        ConexyAI.Service.Device.IDeviceToolBridge devices)
+        ConexyAI.Service.Device.IDeviceToolBridge devices,
+        ConexyAI.Service.Device.IDeviceTaskQueue deviceQueue,
+        ConexyAI.Service.Device.IDeviceRemoteInteractionService deviceRemote)
     {
         _devices = devices;
+        _deviceQueue = deviceQueue;
+        _deviceRemote = deviceRemote;
         _terminalService = terminalService;
         _cancellations = cancellations;
         _pendingActions = pendingActions;
@@ -59,6 +66,7 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         _devices.Unregister(Context.ConnectionId);
+        _deviceRemote.DropConnection(Context.ConnectionId);
         if (exception is null)
         {
             _logger.LogInformation("SignalR disconnected: {ConnectionId} (graceful).", Context.ConnectionId);
@@ -132,6 +140,10 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     {
         if (!await _chatAccess.IsTaskOwnerAsync(CallerId(), taskId, Context.ConnectionAborted))
             return "not_found";
+
+        // WEB_DEVICE: задача, ждущая ПК, ещё не в рабочей очереди — её отменяет сама очередь устройства.
+        if (await _deviceQueue.CancelAsync(CallerId(), taskId))
+            return "cancelled";
 
         return _cancellations.Stop(taskId, _queueGuard.IsInFlight(taskId)) switch
         {
@@ -221,9 +233,35 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     /// <summary>The desktop client announces itself; the server then runs the agent's tools on this PC.</summary>
     public Task RegisterDevice(string deviceName, string? os, string? workspace)
     {
-        _devices.Register(CallerId(), Context.ConnectionId, deviceName, os, workspace);
+        var userId = CallerId();
+        _devices.Register(userId, Context.ConnectionId, deviceName, os, workspace);
+        // WEB_DEVICE: добавлено 2026-10-18 — ПК подключился: задачи, ждавшие его, уходят в работу. Не ждём здесь:
+        // агент сразу шлёт устройству инструменты, а его вызовы хаба идут по одному.
+        _ = Task.Run(async () =>
+        {
+            try { await _deviceQueue.DispatchAsync(userId); }
+            catch (Exception ex) { _logger.LogError(ex, "Dispatching queued device tasks failed for user {UserId}.", userId); }
+        });
         return Task.CompletedTask;
     }
+
+    // ---- WEB_DEVICE: добавлено 2026-10-18 — запуск из веба «на моём ПК» ----
+
+    /// <summary>Десктоп сообщает список своих проектов: JSON <c>[{ "id", "name", "path"? }]</c>.</summary>
+    public Task<bool> RegisterDeviceProjects(string projectsJson) =>
+        Task.FromResult(_devices.RegisterProjects(CallerId(), Context.ConnectionId, projectsJson));
+
+    /// <summary>Устройство просит подтвердить действие через веб; решение придёт событием <c>DeviceApprovalResult</c>.</summary>
+    public Task<bool> RequestDeviceApproval(Guid requestId, Guid taskId, string title, string details, string where, bool sensitive) =>
+        _deviceRemote.RequestApprovalAsync(CallerId(), Context.ConnectionId, requestId, taskId, title, details, where, sensitive, Context.ConnectionAborted);
+
+    /// <summary>Устройство задаёт вопрос ask_user через веб; ответ придёт событием <c>DeviceQuestionAnswer</c>.</summary>
+    public Task<bool> RequestDeviceQuestion(Guid requestId, Guid taskId, string question, string[] options) =>
+        _deviceRemote.RequestQuestionAsync(CallerId(), Context.ConnectionId, requestId, taskId, question, options, Context.ConnectionAborted);
+
+    /// <summary>Веб отвечает на вопрос устройства (null — без ответа).</summary>
+    public Task<bool> AnswerDeviceQuestion(Guid requestId, string? answer) =>
+        _deviceRemote.AnswerQuestionAsync(CallerId(), requestId, answer);
 
     /// <summary>The desktop client returns the result of a tool the server asked it to run.</summary>
     public Task<bool> ToolResult(Guid callId, string output, bool isError) =>

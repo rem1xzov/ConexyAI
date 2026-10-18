@@ -22,6 +22,9 @@ public class DeviceController : ControllerBase
     private readonly ILogger<DeviceController> _logger;
     private readonly IConfiguration _configuration;
     private readonly IHttpClientFactory _httpFactory;
+    // WEB_DEVICE: добавлено 2026-10-18
+    private readonly IDeviceToolBridge _bridge;
+    private readonly IDeviceTaskQueue _deviceQueue;
 
     // Кэш номера последнего релиза: GitHub API не дёргаем на каждый запрос.
     private static string? _cachedVersion;
@@ -38,8 +41,12 @@ public class DeviceController : ControllerBase
         IUserIntegrationsService integrations,
         ILogger<DeviceController> logger,
         IConfiguration configuration,
-        IHttpClientFactory httpFactory)
+        IHttpClientFactory httpFactory,
+        IDeviceToolBridge bridge,
+        IDeviceTaskQueue deviceQueue)
     {
+        _bridge = bridge;
+        _deviceQueue = deviceQueue;
         _httpFactory = httpFactory;
         _keys = keys;
         _integrations = integrations;
@@ -156,6 +163,44 @@ public class DeviceController : ControllerBase
             ? NoContent()
             : Ok(new { token = stored.GitHubToken });
     }
+
+    // ---- WEB_DEVICE: добавлено 2026-10-18 — состояние ПК и очередь задач для веба ----
+
+    /// <summary>Подключён ли ПК, его проекты и задачи, ждущие его подключения.</summary>
+    [HttpGet("status")]
+    [Authorize]
+    public IActionResult Status()
+    {
+        var userId = User.GetUserId();
+        var info = _bridge.GetInfo(userId);
+        return Ok(new
+        {
+            online = info is not null,
+            name = info?.Name,
+            os = info?.Os,
+            workspace = info?.Workspace,
+            projects = (info?.Projects ?? Array.Empty<DeviceProject>()).Select(p => new { id = p.Id, name = p.Name }),
+            queued = _deviceQueue.List(userId).Select(q => new
+            {
+                taskId = q.Job.TaskId,
+                chatId = q.Job.ChatId,
+                prompt = q.Job.Prompt.Length <= 200 ? q.Job.Prompt : q.Job.Prompt[..200],
+                createdAt = q.CreatedAt,
+            }),
+        });
+    }
+
+    /// <summary>Выполнить ждущую ПК задачу в песочнице.</summary>
+    [HttpPost("queue/{taskId:guid}/sandbox")]
+    [Authorize]
+    public async Task<IActionResult> QueueToSandbox(Guid taskId, CancellationToken ct) =>
+        await _deviceQueue.MoveToSandboxAsync(User.GetUserId(), taskId, ct) ? NoContent() : NotFound();
+
+    /// <summary>Отменить ждущую ПК задачу.</summary>
+    [HttpDelete("queue/{taskId:guid}")]
+    [Authorize]
+    public async Task<IActionResult> CancelQueued(Guid taskId, CancellationToken ct) =>
+        await _deviceQueue.CancelAsync(User.GetUserId(), taskId, ct) ? NoContent() : NotFound();
 
     [HttpGet("keys")]
     [Authorize]

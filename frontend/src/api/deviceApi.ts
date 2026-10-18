@@ -43,3 +43,48 @@ export async function issueDeviceKey(name: string): Promise<IssuedDeviceKey> {
 export async function revokeDeviceKey(id: string): Promise<void> {
   await http.delete(`/device/keys/${encodeURIComponent(id)}`);
 }
+
+// WEB_DEVICE: добавлено 2026-10-18 — выполнение агентских задач на ПК пользователя.
+
+export interface DeviceProject {
+  id: string;
+  name: string;
+}
+
+export interface DeviceQueuedTask {
+  taskId: string;
+  chatId: string;
+  prompt: string;
+  createdAt: string;
+}
+
+export interface DeviceStatus {
+  online: boolean;
+  name: string | null;
+  os: string | null;
+  workspace: string | null;
+  projects: DeviceProject[];
+  queued: DeviceQueuedTask[];
+}
+
+export async function getDeviceStatus(): Promise<DeviceStatus> {
+  const { data } = await http.get<Partial<DeviceStatus>>('/device/status');
+  return {
+    online: Boolean(data?.online),
+    name: data?.name ?? null,
+    os: data?.os ?? null,
+    workspace: data?.workspace ?? null,
+    projects: Array.isArray(data?.projects) ? data.projects : [],
+    queued: Array.isArray(data?.queued) ? data.queued : [],
+  };
+}
+
+/** Runs a task that is waiting for the PC in the server sandbox instead. */
+export async function runQueuedTaskInSandbox(taskId: string): Promise<void> {
+  await http.post(`/device/queue/${encodeURIComponent(taskId)}/sandbox`);
+}
+
+/** Cancels a task that is waiting for the PC. */
+export async function cancelQueuedTask(taskId: string): Promise<void> {
+  await http.delete(`/device/queue/${encodeURIComponent(taskId)}`);
+}

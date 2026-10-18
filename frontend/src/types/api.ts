@@ -33,8 +33,11 @@ export interface SendOutcome {
   // TURN_GUARD: добавлено 2026-09-24 (H6, контракт C-2)
   /** Why nothing was sent: a turn of this chat is still running (`busy`, also 409 TURN_IN_FLIGHT)
    *  or the chat belongs to another account (`forbidden`, 403 CHAT_FORBIDDEN). */
-  reason?: 'busy' | 'forbidden' | 'loading';
+  reason?: 'busy' | 'forbidden' | 'loading' | 'cancelled';
 }
+
+// WEB_DEVICE: добавлено 2026-10-18 — что делать, если ПК не в сети в момент отправки.
+export type DeviceOfflinePolicy = 'fail' | 'queue' | 'sandbox';
 
 // LEGAL_DOCS: добавлено 2026-09-26
 /**
@@ -86,6 +89,11 @@ export interface ConexyRequest {
   /** The turn replaces the chat's LAST stored turn (regenerate, resend or edit of the last user
    *  message) instead of appending a duplicate user row. Never set for an ordinary new message. */
   regenerate?: boolean;
+  // WEB_DEVICE: добавлено 2026-10-18 — инструменты агента выполняются на ПК пользователя.
+  useDevice?: boolean;
+  remoteApprovals?: boolean;
+  deviceProjectId?: string;
+  deviceOfflinePolicy?: DeviceOfflinePolicy;
 }
 
 export interface ConexyResponse {
@@ -97,6 +105,8 @@ export interface ConexyResponse {
   status: string;
   createdAt: string;
   finishedAt?: string | null;
+  // WEB_DEVICE: добавлено 2026-10-18 — задача ждёт подключения ПК (политика queue).
+  waitingForDevice?: boolean;
 }
 
 // CHAT_SYNC: добавлено 2026-09-23

@@ -23,6 +23,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
 
+// AGENT_EVAL: добавлено 2026-10-18 — `dotnet run --project ConexyAI.Tests -- eval ...` гоняет настоящую модель.
+if (args.Length > 0 && args[0] == "eval")
+    return await AgentEval.RunAsync(args.Skip(1).ToArray());
+
 int failures = 0;
 
 await RunAsync("UpdateAsync avoids ChangeTracker conflict when entity is already tracked", TestUpdateAsyncAvoidsTrackingConflictAsync);
