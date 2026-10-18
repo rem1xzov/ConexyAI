@@ -93,8 +93,9 @@ public static class Daemon
         }
 
         using var cts = new CancellationTokenSource();
-        using var stopEvent = new EventWaitHandle(false, EventResetMode.AutoReset, StopEventName);
-        var stopWait = ThreadPool.RegisterWaitForSingleObject(stopEvent, (_, _) =>
+        // Именованные события есть только в Windows; на Linux/macOS демоном управляет systemd/launchd.
+        using var stopEvent = OperatingSystem.IsWindows() ? new EventWaitHandle(false, EventResetMode.AutoReset, StopEventName) : null;
+        var stopWait = stopEvent is null ? null : ThreadPool.RegisterWaitForSingleObject(stopEvent, (_, _) =>
         {
             try { cts.Cancel(); }
             catch (ObjectDisposedException) { }
@@ -151,7 +152,7 @@ public static class Daemon
             }
         }
 
-        stopWait.Unregister(null);
+        stopWait?.Unregister(null);
         Log("Демон остановлен.");
         return 0;
     }
@@ -161,6 +162,8 @@ public static class Daemon
     {
         if (!IsRunning())
             return true;
+        if (!OperatingSystem.IsWindows())
+            return false;
         try
         {
             if (!EventWaitHandle.TryOpenExisting(StopEventName, out var stop))
