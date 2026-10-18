@@ -113,6 +113,11 @@ public static class Daemon
 
         using var server = new ServerClient(config.ServerUrl, key);
         var device = new DeviceTools(daemon: true, console: null, Log, server.GetGitHubTokenAsync);
+        // LOCAL_MCP: Gmail, почта и локальные MCP — и в фоне: агент с сайта видит их, подтверждения идут на сайт.
+        await using var local = new Mcp.LocalTools(device.Approver);
+        foreach (var line in await local.StartAsync(cts.Token))
+            Log(line);
+        device.Local = local;
         Log($"Демон запущен (v{Ui.Version}), сервер {server.BaseUrl}, проектов: {device.Projects.Projects.Count}. Журнал: {LogPath}");
         if (device.Projects.Projects.Count == 0)
             Log("Проекты не настроены: conexy projects add <папка>");
@@ -120,7 +125,7 @@ public static class Daemon
         var delay = TimeSpan.FromSeconds(2);
         while (!cts.IsCancellationRequested)
         {
-            await using var session = new AgentSession(server, null, null, device);
+            await using var session = new AgentSession(server, null, null, device) { Local = local };
             try
             {
                 await session.ConnectAsync(cts.Token);

@@ -14,7 +14,6 @@ public sealed class DeviceTools
     private readonly ConcurrentDictionary<string, ToolRunner> _runners =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     private readonly Func<CancellationToken, Task<string?>>? _gitHubToken;
-    private readonly Mcp.LocalTools? _local;
     private readonly string? _interactiveRoot;
 
     public DeviceTools(bool daemon, ICommandApprover? console, Action<string> log,
@@ -25,7 +24,7 @@ public sealed class DeviceTools
         Approver = new RoutingApprover(daemon ? null : console, Remote);
         Log = log;
         _gitHubToken = gitHubToken;
-        _local = local;
+        Local = local;
         _interactiveRoot = interactiveRoot;
         Projects = ProjectStore.Load();
     }
@@ -41,6 +40,9 @@ public sealed class DeviceTools
 
     public ProjectStore Projects { get; private set; }
 
+    /// <summary>Локальные инструменты (Google, почта, MCP). Фоновый демон создаёт их после устройства: подтверждения идут на сайт.</summary>
+    public Mcp.LocalTools? Local { get; set; }
+
     /// <summary>Перечитать projects.json (демон подхватывает conexy projects add без перезапуска).</summary>
     public void ReloadProjects() => Projects = ProjectStore.Load();
 
@@ -52,5 +54,5 @@ public sealed class DeviceTools
 
     public ToolRunner RunnerFor(string root) =>
         _runners.GetOrAdd(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)),
-            r => new ToolRunner(r, Approver, Log, _gitHubToken, _local));
+            r => new ToolRunner(r, Approver, Log, _gitHubToken, Local));
 }

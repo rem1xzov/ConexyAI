@@ -251,6 +251,11 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     public Task<bool> RegisterDeviceProjects(string projectsJson) =>
         Task.FromResult(_devices.RegisterProjects(CallerId(), Context.ConnectionId, projectsJson));
 
+    // LOCAL_MCP: инструменты Google/почты/MCP, которые предлагает ПК: агент с сайта должен их видеть.
+    /// <summary>Десктоп сообщает свои локальные инструменты: JSON <c>[{ "name", "description", "inputSchema" }]</c>.</summary>
+    public Task<bool> RegisterDeviceTools(string toolsJson) =>
+        Task.FromResult(_devices.RegisterTools(CallerId(), Context.ConnectionId, toolsJson));
+
     /// <summary>Устройство просит подтвердить действие через веб; решение придёт событием <c>DeviceApprovalResult</c>.</summary>
     public Task<bool> RequestDeviceApproval(Guid requestId, Guid taskId, string title, string details, string where, bool sensitive) =>
         _deviceRemote.RequestApprovalAsync(CallerId(), Context.ConnectionId, requestId, taskId, title, details, where, sensitive, Context.ConnectionAborted);

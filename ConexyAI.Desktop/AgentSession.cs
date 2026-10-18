@@ -154,6 +154,37 @@ public sealed class AgentSession : IAsyncDisposable
         {
             // Старый сервер без проектов устройства — работаем без них.
         }
+        // LOCAL_MCP: инструменты Google, почты и локальных MCP — только на этом ПК, но агент с сайта должен
+        // знать их имена и схемы, иначе он их не увидит и ответит «почтовых инструментов нет».
+        if (Local is not null)
+        {
+            try
+            {
+                await _hub.InvokeAsync("RegisterDeviceTools", ToolSpecsJson());
+            }
+            catch (Microsoft.AspNetCore.SignalR.HubException)
+            {
+                // Старый сервер без инструментов устройства — работаем без них.
+            }
+        }
+    }
+
+    /// <summary>Схемы локальных инструментов для сервера. Ограничены по размеру сообщения SignalR (~32 КБ).</summary>
+    private string ToolSpecsJson()
+    {
+        const int budget = 24_000;
+        var specs = new List<object>();
+        var size = 2;
+        foreach (var spec in Local!.Specs())
+        {
+            var item = new { name = spec.Name, description = spec.Description, inputSchema = spec.InputSchema };
+            var json = JsonSerializer.Serialize(item);
+            if (size + json.Length + 1 > budget)
+                break;
+            size += json.Length + 1;
+            specs.Add(item);
+        }
+        return JsonSerializer.Serialize(specs);
     }
 
     /// <summary>Один ход агента. Возвращает текст ошибки или null при успехе.</summary>

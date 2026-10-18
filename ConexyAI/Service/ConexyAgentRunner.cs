@@ -1572,6 +1572,61 @@ public class ConexyAgentRunner : IConexyAgentRunner
     }
 
     /// <summary>A tool this run may call: the mode's profile, and never the chat search in incognito.</summary>
+    // LOCAL_MCP: схемы инструментов ПК — из запроса или, если веб их не присылал, из регистрации устройства.
+    // Второе важно для задач, поставленных в очередь до подключения ПК: у сохранённой задачи списка нет.
+    private IReadOnlyList<DeviceToolSpec> DeviceToolSpecs =>
+        _job.DeviceTools is { Count: > 0 } ? _job.DeviceTools
+        : _deviceBridge?.GetTools(_job.UserId) ?? Array.Empty<DeviceToolSpec>();
+
+    /// <summary>Плашка «что делаю сейчас» для вызова на ПК: задача не выглядит зависшей.</summary>
+    private static string DeviceToolLabel(string tool) => tool switch
+    {
+        "bash" or "terminal_exec" or "cmd_exec" => "Выполняю команду на ПК…",
+        "run_tests" => "Запускаю тесты на ПК…",
+        "get_diagnostics" => "Собираю проверку проекта…",
+        "file_read" or "file_read_bytes" => "Читаю файл на ПК…",
+        "file_write" or "file_write_bytes" => "Пишу файл на ПК…",
+        "file_patch" or "apply_patch" or "str_replace_editor" => "Правлю файлы на ПК…",
+        "grep" or "glob" => "Ищу по проекту на ПК…",
+        "workspace_list_files" => "Смотрю файлы проекта…",
+        "page_screenshot" or "screen_capture" or "window_list" or "window_keys" => "Смотрю экран ПК…",
+        "download_file" => "Скачиваю файл на ПК…",
+        "http_request" => "Запрашиваю сайт с ПК…",
+        "bg_start" => "Запускаю процесс на ПК…",
+        "bg_logs" => "Читаю вывод процесса…",
+        "bg_stop" => "Останавливаю процесс…",
+        "pc_list_dir" => "Смотрю папки ПК…",
+        "pc_read_file" => "Читаю файл на ПК…",
+        "pc_copy_to_project" => "Копирую файл в проект…",
+        _ when LocalToolLabel(tool) is { } local => local,
+        _ => "Работаю на вашем ПК…",
+    };
+
+    /// <summary>Понятные подписи для встроенных коннекторов и MCP-серверов десктопа.</summary>
+    private static string? LocalToolLabel(string tool)
+    {
+        if (!tool.StartsWith(DeviceToolSanitizer.Prefix, StringComparison.Ordinal))
+            return null;
+        var parts = tool.Split("__", 3);
+        if (parts.Length != 3)
+            return "Локальный инструмент…";
+        var (server, name) = (parts[1], parts[2]);
+        if (server == "google")
+            return name switch
+            {
+                "gmail_search" => "Ищу письма в Gmail…",
+                "gmail_read" => "Читаю письмо…",
+                "gmail_attachment" => "Скачиваю вложение из письма…",
+                "gmail_send" => "Готовлю письмо…",
+                _ => name.StartsWith("calendar", StringComparison.Ordinal) ? "Смотрю календарь…" : "Работаю с Google…",
+            };
+        if (server == "mail")
+            return name.Contains("send", StringComparison.Ordinal) || name.Contains("attachment", StringComparison.Ordinal)
+                ? "Работаю с почтой…"
+                : "Проверяю почту…";
+        return $"MCP «{server}»: {name.Replace('_', ' ')}…";
+    }
+
     private bool IsToolAllowed(string tool) =>
         // WEB_DEVICE: добавлено 2026-10-18 — служебный инструмент устройства: сервер зовёт его сам в конце хода, модели он недоступен.
         tool == DeviceTurnDiff.Tool
@@ -1580,7 +1635,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // LOCAL_MCP: инструменты локальных MCP-серверов десктопа (в т.ч. Google) — агентам и только тем, что прислал клиент.
         DeviceToolSanitizer.IsDeviceTool(tool)
             ? _job.UseDevice && _profile.Mode is "coder" or "cowork" or "worker"
-              && _job.DeviceTools?.Any(t => t.Name == tool) == true
+              && DeviceToolSpecs.Any(t => t.Name == tool)
             :
         tool == AskUserTool
             ? _job.UseDevice && _profile.Mode is "coder" or "cowork" or "worker"
@@ -1744,9 +1799,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
             tools.Add(ReadSkillSchema);
 
         // LOCAL_MCP: локальные MCP-серверы и встроенные коннекторы десктопа (Gmail, Календарь, Диск).
-        if (_job.UseDevice && _job.DeviceTools is { Count: > 0 } && _profile.Mode is "coder" or "cowork" or "worker")
+        if (_job.UseDevice && _profile.Mode is "coder" or "cowork" or "worker")
         {
-            foreach (var spec in _job.DeviceTools)
+            foreach (var spec in DeviceToolSpecs)
                 tools.Add(Function(spec.Name!, $"[ПК] {spec.Description}", spec.InputSchema!));
         }
 
@@ -2532,8 +2587,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             {
                 if (!_job.UseDevice || _deviceBridge is null || !IsToolAllowed(toolCall.Function.Name))
                     return new ConexyToolResult(toolCall.Id, $"Инструмент '{toolCall.Function.Name}' сейчас недоступен.", true);
-                var label = toolCall.Function.Name[DeviceToolSanitizer.Prefix.Length..].Replace("__", " / ");
-                await SendAgentStatusAsync(taskId, "executing", $"ПК: {label}...", ct: ct);
+                await SendAgentStatusAsync(taskId, "executing", DeviceToolLabel(toolCall.Function.Name), ct: ct);
                 var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, toolCall.Function.Name, toolCall.Function.Arguments, ct, _job.DeviceProjectId, _job.RemoteApprovals);
                 // Данные из почты/документов — чужой текст, а не инструкции (защита от prompt injection в письмах).
                 return new ConexyToolResult(toolCall.Id, Truncate(outcome.Output, 30_000), outcome.IsError);
@@ -2556,6 +2610,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     if (_deviceBridge is null)
                         return new ConexyToolResult(toolCall.Id, "Десктопный режим не настроен на сервере.", true);
 
+                    // WEB_DEVICE: видно, что агент не завис, — плашка с действием на время вызова на ПК.
+                    await SendAgentStatusAsync(taskId, "executing", DeviceToolLabel(name), ct: ct);
                     var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, name, toolCall.Function.Arguments, ct, _job.DeviceProjectId, _job.RemoteApprovals);
                     // Команда на ПК реально выполнилась (есть код возврата или таймаут) — неудача это результат
                     // команды (упала сборка), а не поломка bash. Иначе после трёх упавших сборок агенту объявлялось
@@ -3722,6 +3778,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         if (!_job.UseDevice || _deviceBridge is null || !IsToolAllowed(tool))
             return new ConexyToolResult(toolCall.Id, $"{tool} доступен только в десктопном режиме.", true);
 
+        await SendAgentStatusAsync(taskId, "executing", DeviceToolLabel(tool), ct: ct);
         var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, tool, toolCall.Function.Arguments, ct, _job.DeviceProjectId, _job.RemoteApprovals);
         if (outcome.IsError || !outcome.Output.StartsWith(DeviceToolBridge.ImagePrefix, StringComparison.Ordinal))
             return new ConexyToolResult(toolCall.Id, outcome.Output, true);

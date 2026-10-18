@@ -73,6 +73,8 @@ public sealed class DeviceRemoteInteractionService : IDeviceRemoteInteractionSer
             ? body
             : $"[{Limit(cleanTitle, 100)}] {body}";
         var workingDirectory = Limit(where, 500);
+        // Пока ждём решение, в чате видно, что агент не завис.
+        await SendStatusAsync(taskId, sensitive ? "Жду вашего подтверждения (важное действие)…" : "Жду вашего подтверждения…");
 
         _ = Task.Run(async () =>
         {
@@ -109,6 +111,7 @@ public sealed class DeviceRemoteInteractionService : IDeviceRemoteInteractionSer
         if (await ResolveOwnedTaskChatAsync(userId, connectionId, taskId, ct) is null)
             return false;
 
+        await SendStatusAsync(taskId, "Жду вашего ответа…");
         var timeout = new CancellationTokenSource(QuestionTimeout);
         if (!_questions.TryAdd(requestId, new PendingQuestion(userId, connectionId, taskId, timeout)))
         {
@@ -164,6 +167,19 @@ public sealed class DeviceRemoteInteractionService : IDeviceRemoteInteractionSer
         pending.Timeout.Dispose();
         await SendAnswerAsync(pending.ConnectionId, requestId, answer is null ? null : Limit(answer, MaxQuestionChars));
         return true;
+    }
+
+    /// <summary>Плашка текущего действия в чате: то же событие, что шлёт прогон агента.</summary>
+    private async Task SendStatusAsync(Guid taskId, string label)
+    {
+        try
+        {
+            await _hub.Clients.Group($"task_{taskId}").SendAsync("OnAgentStatus", new { stage = "executing", label }, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not send device status for task {TaskId}.", taskId);
+        }
     }
 
     public void DropConnection(string connectionId)

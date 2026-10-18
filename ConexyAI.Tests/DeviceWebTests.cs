@@ -18,6 +18,41 @@ internal static class DeviceWebTests
         TestRegistry.Add("web device: queued task keeps its reservation and is dispatched on connect", QueueDispatchAsync);
         TestRegistry.Add("web device: queued task can be moved to the sandbox only by its owner", QueueSandboxAsync);
         TestRegistry.Add("web device: turn diff is parsed and stored as a diff block", TurnDiffAsync);
+        TestRegistry.Add("web device: local MCP tools of the device are registered and sanitized", DeviceToolsAsync);
+    }
+
+    // LOCAL_MCP: без этого агент с сайта не видел Gmail/почту/MCP, хотя на ПК они подключены.
+    private static Task DeviceToolsAsync()
+    {
+        var bridge = new DeviceToolBridge(new FakeHubContext(), NullLogger<DeviceToolBridge>.Instance);
+        var user = Guid.NewGuid();
+
+        Assert(bridge.GetTools(user) is null, "no device — no tools");
+        Assert(!bridge.RegisterTools(user, "c1", "[]"), "an unregistered connection must be refused");
+
+        bridge.Register(user, "c1", "pc");
+        Assert(bridge.RegisterTools(user, "c1", """
+            [
+              {"name":"local__google__gmail_search","description":"Gmail: поиск писем","inputSchema":{"type":"object","properties":{"query":{"type":"string"}}}},
+              {"name":"file_read","description":"not a device tool","inputSchema":{"type":"object"}},
+              {"name":"local__mail__search","description":"","inputSchema":"junk"},
+              {"name":"local__google__gmail_search","description":"duplicate","inputSchema":{"type":"object"}}
+            ]
+            """), "device connection accepted");
+
+        var tools = bridge.GetTools(user)!;
+        Assert(tools.Select(t => t.Name).SequenceEqual(new[] { "local__google__gmail_search", "local__mail__search" }),
+            $"only local tools, no duplicates, got {string.Join(",", tools.Select(t => t.Name))}");
+        Assert(tools[0].Description!.Contains("Gmail"), "description kept");
+        Assert(tools[0].InputSchema!.Value.TryGetProperty("properties", out _), "schema kept");
+        Assert(tools[1].InputSchema is { ValueKind: System.Text.Json.JsonValueKind.Object }, "broken schema replaced");
+
+        Assert(!bridge.RegisterTools(user, "other", "[]"), "another connection cannot overwrite tools");
+        bridge.Register(user, "c1", "pc");
+        Assert(bridge.GetTools(user)!.Count == 2, "re-registering the same connection keeps tools");
+        bridge.Register(user, "c2", "pc");
+        Assert(bridge.GetTools(user) is null, "a new connection starts without tools");
+        return Task.CompletedTask;
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);

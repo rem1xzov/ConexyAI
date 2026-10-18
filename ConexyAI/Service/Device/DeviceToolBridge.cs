@@ -1,3 +1,4 @@
+using ConexyAI.Contract;
 using System.Collections.Concurrent;
 using ConexyAI.Hub;
 using Microsoft.AspNetCore.SignalR;
@@ -36,6 +37,13 @@ public interface IDeviceToolBridge
     /// <summary>Является ли подключение зарегистрированным устройством пользователя.</summary>
     bool IsDeviceConnection(Guid userId, string connectionId);
 
+    // LOCAL_MCP: инструменты, которые предлагает ПК (Google, почта, локальные MCP) — агент с сайта должен их знать.
+    /// <summary>Регистрирует локальные инструменты устройства (JSON-массив <c>[{name,description,inputSchema}]</c>).</summary>
+    bool RegisterTools(Guid userId, string connectionId, string? toolsJson);
+
+    /// <summary>Инструменты подключённого устройства или null.</summary>
+    IReadOnlyList<DeviceToolSpec>? GetTools(Guid userId);
+
     /// <summary>
     /// Отправляет инструмент на устройство и ждёт результат. WEB_DEVICE: <paramref name="projectId"/> уходит
     /// событием <c>ToolProject</c>, <paramref name="remoteApprovals"/> — событием <c>ToolRemote</c> (оба ДО ExecuteTool).
@@ -69,6 +77,7 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
     private sealed record Device(string ConnectionId, string Name, string Os, string Workspace)
     {
         public IReadOnlyList<DeviceProject> Projects { get; init; } = Array.Empty<DeviceProject>();
+        public IReadOnlyList<DeviceToolSpec> Tools { get; init; } = Array.Empty<DeviceToolSpec>();
     }
 
     // WEB_DEVICE: пределы списка проектов — он попадает в промпт и в ответ /device/status.
@@ -145,15 +154,63 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
     private static string Clean(string? v, int max) =>
         new string((v ?? string.Empty).Where(c => !char.IsControl(c)).Take(max).ToArray()).Trim();
 
+    public bool RegisterTools(Guid userId, string connectionId, string? toolsJson)
+    {
+        if (!_devices.TryGetValue(userId, out var device) || device.ConnectionId != connectionId)
+            return false;
+
+        var tools = DeviceToolSanitizer.Clean(ParseTools(toolsJson)) ?? new List<DeviceToolSpec>();
+        _devices.TryUpdate(userId, device with { Tools = tools }, device);
+        _logger.LogInformation("Desktop device tools: user={UserId} count={Count}", userId, tools.Count);
+        return true;
+    }
+
+    public IReadOnlyList<DeviceToolSpec>? GetTools(Guid userId) =>
+        _devices.TryGetValue(userId, out var d) && d.Tools.Count > 0 ? d.Tools : null;
+
+    /// <summary>JSON с клиента — только для чтения: имя, описание и схема (чистит DeviceToolSanitizer).</summary>
+    private static List<DeviceToolSpec> ParseTools(string? json)
+    {
+        var result = new List<DeviceToolSpec>();
+        if (string.IsNullOrWhiteSpace(json))
+            return result;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return result;
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != System.Text.Json.JsonValueKind.Object)
+                    continue;
+                result.Add(new DeviceToolSpec
+                {
+                    Name = item.TryGetProperty("name", out var n) && n.ValueKind == System.Text.Json.JsonValueKind.String ? n.GetString() : null,
+                    Description = item.TryGetProperty("description", out var d) && d.ValueKind == System.Text.Json.JsonValueKind.String ? d.GetString() : null,
+                    InputSchema = item.TryGetProperty("inputSchema", out var s) && s.ValueKind == System.Text.Json.JsonValueKind.Object ? s.Clone() : null,
+                });
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Битый JSON — инструментов нет.
+        }
+        return result;
+    }
+
     public void Register(Guid userId, string connectionId, string deviceName, string? os = null, string? workspace = null)
     {
         var name = string.IsNullOrWhiteSpace(deviceName) ? "device" : deviceName.Trim();
         // ОС и путь попадают в промпт, поэтому чистим: одна строка, без управляющих символов, ограниченная длина.
         // WEB_DEVICE: повторная регистрация того же подключения сохраняет присланный ранее список проектов.
-        var projects = _devices.TryGetValue(userId, out var previous) && previous.ConnectionId == connectionId
-            ? previous.Projects
-            : Array.Empty<DeviceProject>();
-        _devices[userId] = new Device(connectionId, Clean(name, 100), Clean(os, 80), Clean(workspace, 260)) { Projects = projects };
+        var sameConnection = _devices.TryGetValue(userId, out var previous) && previous.ConnectionId == connectionId;
+        var projects = sameConnection ? previous!.Projects : Array.Empty<DeviceProject>();
+        var tools = sameConnection ? previous!.Tools : Array.Empty<DeviceToolSpec>();
+        _devices[userId] = new Device(connectionId, Clean(name, 100), Clean(os, 80), Clean(workspace, 260))
+        {
+            Projects = projects,
+            Tools = tools,
+        };
         _logger.LogInformation("Desktop device registered: user={UserId} connection={ConnectionId} name={Name}", userId, connectionId, name);
     }
 
