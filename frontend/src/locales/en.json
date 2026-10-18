@@ -1035,6 +1035,8 @@
     "target": "Run on",
     "sandbox": "Sandbox",
     "myPc": "My PC",
+    "sandboxDesc": "Cloud workspace on the server",
+    "pcBadge": "PC",
     "online": "Online",
     "offline": "offline",
     "unknownPc": "My PC",

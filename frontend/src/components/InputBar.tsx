@@ -82,8 +82,9 @@ interface InputBarProps {
   // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
   // onOpenLive: () => void;
   onSend: (prompt: string, attachments: TaskAttachment[]) => Promise<SendOutcome> | SendOutcome | void;
-  // WEB_DEVICE: добавлено 2026-10-18 — переключатель «Песочница / Мой ПК» над полем ввода.
+  // WEB_DEVICE: добавлено 2026-10-18 — раздел «Песочница / Мой ПК» в меню моделей.
   executionTarget?: React.ReactNode;
+  executionOnDevice?: boolean;
   // FILE_DROP: добавлено 2026-09-24 (L11) — файлы, брошенные на колонку чата; nonce отличает
   // повторный бросок тех же файлов.
   externalFiles?: { files: File[]; nonce: number } | null;
@@ -122,6 +123,7 @@ export function InputBar({
   onStop,
   onSend,
   executionTarget,
+  executionOnDevice,
   externalFiles,
   onComposerFocus,
   onComposerBlur,
@@ -865,8 +867,6 @@ export function InputBar({
           </div>
         )}
 
-        {executionTarget}
-
         <div className="inputbar__row">
           <div className="attach-wrap" ref={menuRef}>
           <button
@@ -995,6 +995,8 @@ export function InputBar({
             onOrchestraChange={onOrchestraChange}
             orchestraAvailable={orchestraAvailable}
             onUpgradeClick={onUpgradeClick}
+            executionTarget={executionTarget}
+            onDevice={executionOnDevice}
           />
         )}
 

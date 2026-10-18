@@ -1,9 +1,10 @@
 import { useTranslation } from 'react-i18next';
 import type { DeviceStatus } from '../api/deviceApi';
 import type { ExecutionTarget } from '../utils/deviceTarget';
+import { CheckIcon } from './Icons';
 
-// WEB_DEVICE: добавлено 2026-10-18 — переключатель «Песочница / Мой ПК» в композере агентских
-// режимов (Coder / Cowork), на ПК и на телефоне.
+// WEB_DEVICE: добавлено 2026-10-18 — «Песочница / Мой ПК» для Coder / Cowork.
+// Раздел меню моделей (ModelPicker): две галочки-варианта, на ПК и на телефоне одинаково.
 interface DeviceTargetBarProps {
   target: ExecutionTarget;
   onTargetChange: (target: ExecutionTarget) => void;
@@ -30,23 +31,40 @@ export function DeviceTargetBar({
   const neverSetUp = hasKey === false && !status?.name;
   const projects = status?.projects ?? [];
 
+  const option = (value: ExecutionTarget, title: string, desc: React.ReactNode) => (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={target === value}
+      className="modelpicker__thinking device-target__opt"
+      onClick={() => onTargetChange(value)}
+      disabled={disabled}
+    >
+      <span className={`modelpicker__checkbox ${target === value ? 'modelpicker__checkbox--on' : ''}`}>
+        {target === value ? <CheckIcon size={12} /> : ''}
+      </span>
+      <span className="modelpicker__thinking-label">
+        <span className="modelpicker__thinking-title">{title}</span>
+        <span className="modelpicker__thinking-desc">{desc}</span>
+      </span>
+    </button>
+  );
+
   return (
-    <div className="device-target">
-      <div className="device-target__switch" role="radiogroup" aria-label={t('device.target')}>
-        {(['sandbox', 'device'] as const).map((value) => (
-          <button
-            key={value}
-            type="button"
-            role="radio"
-            aria-checked={target === value}
-            className={`device-target__opt ${target === value ? 'device-target__opt--active' : ''}`}
-            onClick={() => onTargetChange(value)}
-            disabled={disabled}
-          >
-            {value === 'sandbox' ? t('device.sandbox') : t('device.myPc')}
-          </button>
-        ))}
-      </div>
+    <div className="device-target" role="radiogroup" aria-label={t('device.target')}>
+      <span className="device-target__heading">{t('device.target')}</span>
+      {option('sandbox', t('device.sandbox'), t('device.sandboxDesc'))}
+      {option(
+        'device',
+        t('device.myPc'),
+        <span className="device-target__status">
+          <span className={`device-target__dot ${status?.online ? 'device-target__dot--online' : ''}`} aria-hidden="true" />
+          <span className="device-target__name">{status?.name || t('device.unknownPc')}</span>
+          <span className={status?.online ? '' : 'device-target__offline'}>
+            · {status?.online ? t('device.online') : t('device.offline')}
+          </span>
+        </span>,
+      )}
 
       {target === 'device' &&
         (neverSetUp ? (
@@ -54,34 +72,21 @@ export function DeviceTargetBar({
             {t('device.setUp')}
           </button>
         ) : (
-          <>
-            <span
-              className="device-target__status"
-              title={status?.online ? t('device.online') : t('device.offline')}
+          projects.length > 0 && (
+            <select
+              className="device-target__project"
+              value={projectId ?? projects[0].id}
+              onChange={(e) => onProjectChange(e.target.value)}
+              aria-label={t('device.project')}
+              disabled={disabled}
             >
-              <span
-                className={`device-target__dot ${status?.online ? 'device-target__dot--online' : ''}`}
-                aria-hidden="true"
-              />
-              <span className="device-target__name">{status?.name || t('device.unknownPc')}</span>
-              {!status?.online && <span className="device-target__offline">· {t('device.offline')}</span>}
-            </span>
-            {projects.length > 0 && (
-              <select
-                className="device-target__project"
-                value={projectId ?? projects[0].id}
-                onChange={(e) => onProjectChange(e.target.value)}
-                aria-label={t('device.project')}
-                disabled={disabled}
-              >
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          )
         ))}
     </div>
   );

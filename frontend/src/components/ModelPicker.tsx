@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConexyModel, ReasoningEffort } from '../types/api';
 import { CheckIcon, ChevronDownIcon } from './Icons';
@@ -72,6 +72,9 @@ interface ModelPickerProps {
   orchestraAvailable?: boolean;
   // ORCHESTRA: действие кнопки «Обновить» у заблокированных пунктов (Cowork и оркестр).
   onUpgradeClick?: () => void;
+  // WEB_DEVICE: раздел «Где выполнять» (DeviceTargetBar) и метка «ПК» на кнопке.
+  executionTarget?: ReactNode;
+  onDevice?: boolean;
 }
 
 export function ModelPicker({
@@ -91,6 +94,8 @@ export function ModelPicker({
   onOrchestraChange,
   orchestraAvailable = false,
   onUpgradeClick,
+  executionTarget,
+  onDevice = false,
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -144,6 +149,7 @@ export function ModelPicker({
       >
         <span className="modelpicker__label-full">{current.label}</span>
         <span className="modelpicker__label-short">{current.shortLabel}</span>
+        {executionTarget && onDevice && <span className="modelpicker__target-badge">{t('device.pcBadge')}</span>}
         <span className="chevron">
           <ChevronDownIcon size={14} />
         </span>
@@ -188,6 +194,13 @@ export function ModelPicker({
               )}
             </button>
           ))}
+
+          {executionTarget && (
+            <>
+              <div className="modelpicker__divider" />
+              {executionTarget}
+            </>
+          )}
 
           {showThinking && (
             <>

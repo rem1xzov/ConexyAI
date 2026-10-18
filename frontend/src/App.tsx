@@ -3004,6 +3004,23 @@ export default function App() {
     );
   }
 
+  // WEB_DEVICE: «Песочница / Мой ПК» — раздел меню моделей (композер на ПК, шапка на телефоне).
+  const executionTargetSection = deviceTargetVisible ? (
+    <DeviceTargetBar
+      target={executionTarget}
+      onTargetChange={changeExecutionTarget}
+      status={device.status}
+      hasKey={device.hasKey}
+      projectId={deviceProjectId}
+      onProjectChange={changeDeviceProject}
+      onOpenSetup={() => {
+        setSettingsSection('desktop');
+        setSettingsOpen(true);
+      }}
+      disabled={agentRunning}
+    />
+  ) : undefined;
+
   return (
     // WEB_DEVICE: добавлено 2026-10-18 — действия карточек «Ждёт ПК» и вопросов агента в ленте.
     <DeviceTurnContext.Provider value={deviceActions}>
@@ -3111,6 +3128,8 @@ export default function App() {
                     onOrchestraChange={setOrchestra}
                     orchestraAvailable={orchestraAvailable}
                     onUpgradeClick={handleUpgrade}
+                    executionTarget={executionTargetSection}
+                    onDevice={executionTarget === 'device'}
                   />
                 </div>
                 <div className="chat-header__actions">
@@ -3277,23 +3296,8 @@ export default function App() {
                     // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
                     // onOpenLive={() => setIsLiveOpen(true)}
                     onSend={handleSend}
-                    executionTarget={
-                      deviceTargetVisible ? (
-                        <DeviceTargetBar
-                          target={executionTarget}
-                          onTargetChange={changeExecutionTarget}
-                          status={device.status}
-                          hasKey={device.hasKey}
-                          projectId={deviceProjectId}
-                          onProjectChange={changeDeviceProject}
-                          onOpenSetup={() => {
-                            setSettingsSection('desktop');
-                            setSettingsOpen(true);
-                          }}
-                          disabled={agentRunning}
-                        />
-                      ) : undefined
-                    }
+                    executionTarget={executionTargetSection}
+                    executionOnDevice={executionTarget === 'device'}
                     externalFiles={droppedFiles}
                     editTarget={composerEdit}
                     onSubmitEdit={handleSubmitEdit}
