@@ -11,6 +11,8 @@ namespace ConexyAI.Desktop;
 public static class Daemon
 {
     private const string MutexName = "Global\\ConexyAI.Daemon";
+    // Сигнал остановки: у фонового демона нет консоли, Ctrl+C ему не отправить.
+    private const string StopEventName = "Global\\ConexyAI.Daemon.Stop";
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string RunValue = "ConexyAI";
     private const long MaxLogBytes = 5L * 1024 * 1024;
@@ -91,6 +93,12 @@ public static class Daemon
         }
 
         using var cts = new CancellationTokenSource();
+        using var stopEvent = new EventWaitHandle(false, EventResetMode.AutoReset, StopEventName);
+        var stopWait = ThreadPool.RegisterWaitForSingleObject(stopEvent, (_, _) =>
+        {
+            try { cts.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }, null, Timeout.Infinite, executeOnlyOnce: true);
         Console.CancelKeyPress += (_, e) =>
         {
             e.Cancel = true;
@@ -143,14 +151,42 @@ public static class Daemon
             }
         }
 
+        stopWait.Unregister(null);
         Log("Демон остановлен.");
         return 0;
+    }
+
+    /// <summary>Останавливает запущенный демон и ждёт до 5 секунд. True — демона больше нет.</summary>
+    public static bool Stop()
+    {
+        if (!IsRunning())
+            return true;
+        try
+        {
+            if (!EventWaitHandle.TryOpenExisting(StopEventName, out var stop))
+                return false;
+            using (stop)
+                stop.Set();
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException) { return false; }
+        for (var i = 0; i < 50 && IsRunning(); i++)
+            Thread.Sleep(100);
+        return !IsRunning();
+    }
+
+    /// <summary>Включён ли автозапуск при входе в Windows.</summary>
+    public static bool AutostartEnabled()
+    {
+        if (!OperatingSystem.IsWindows())
+            return false;
+        using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKey);
+        return key?.GetValue(RunValue) is string;
     }
 
     private static string StartCommand =>
         $"\"{Environment.ProcessPath}\" daemon --background";
 
-    private static int Install()
+    public static int Install()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -168,7 +204,7 @@ public static class Daemon
         return 0;
     }
 
-    private static int Uninstall()
+    public static int Uninstall()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -177,7 +213,7 @@ public static class Daemon
         }
         using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKey, writable: true))
             key?.DeleteValue(RunValue, throwOnMissingValue: false);
-        Console.WriteLine("Автозапуск отключён." + (IsRunning() ? " Запущенный демон работает до выхода из системы (или завершите процесс conexy)." : string.Empty));
+        Console.WriteLine("Автозапуск отключён." + (Stop() ? " Демон остановлен." : " Демон не ответил — завершите процесс conexy в диспетчере задач."));
         return 0;
     }
 

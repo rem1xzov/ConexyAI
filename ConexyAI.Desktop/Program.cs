@@ -88,6 +88,10 @@ try
         case "updatetest":
             return Updater.TestSchedule(args[1], args[2]) ?? 1;
 
+        case "helptest":
+            PrintHelp();
+            return 0;
+
         case "cliptest":
             var (clipText, clipMessage) = Attachments.PasteFromClipboard();
             Console.WriteLine($"text={clipText ?? "-"} message={clipMessage ?? "-"} attached={Attachments.Pending.Count}");
@@ -511,43 +515,129 @@ static async Task<UsageInfo?> TryUsageAsync(ServerClient server)
     }
 }
 
-static void PrintHelp() => Console.WriteLine("""
-    Команды:
-      /ls [путь]      показать содержимое папки (папки пронумерованы)
-      /cd <путь|N|..> сменить рабочую папку (N — номер из /ls)
-      /pwd            текущая папка
-      /attach <файл>  прикрепить файл/картинку (также: перетащите файл в окно или напишите @путь в сообщении)
-      /paste          прикрепить картинку или файлы из буфера обмена (то же делает Ctrl+V).
-                      Вложения не отправляются сразу: добавьте ещё, допишите текст и нажмите Enter
-      /detach [N]     убрать вложение по номеру или все
-      /chats          список всех чатов (синхронизирован с сайтом): переключиться или создать новый,
-                      у каждого чата своя папка проекта
-      /agent [coder|cowork]  сменить агента чата: Coder — код и терминал, Cowork — исследования,
-                      документы и почта (платные тарифы)
-      /google [login|logout]  подключить Gmail, Календарь и Диск: агент читает письма и документы,
-                      отправка письма — только с вашего подтверждения. Токены хранятся только на этом ПК
-      /mail [login|logout]  подключить Яндекс Почту или Mail.ru по паролю приложения:
-                      поиск, чтение, вложения, отправка — только с вашего подтверждения
-      /mcp            локальные MCP-серверы (программы на ПК): /mcp catalog — готовые (Playwright,
-                      Context7, Sentry, Supabase, Postgres, Notion, Figma), /mcp add <id> — установить из каталога,
-                      /mcp add <имя> <команда ...> — свой, /mcp remove <имя>, /mcp reload, /mcp config
-      /skill          скиллы агента (SKILL.md, как в Claude): /skill add <файл или папка>, /skill remove <имя>,
-                      /skill on|off <имя>. Общие с сайтом; агент сам берёт нужный по описанию
-      /plan [on|off]  режим плана: агент только изучает проект и предлагает план, вы одобряете — и он выполняет
-      /rewind [N]     откатить файлы проекта к состоянию до последних ходов агента (правки файлов;
-                      изменения от команд терминала не откатываются)
-      /permissions    команды, разрешённые без вопроса в этом проекте: add <команда>, remove N, clear
-      /compact [фокус]  сжать длинный чат в пересказ и продолжить в новом (дешевле и не упирается в контекст)
-      /team [on|off]  оркестр агентов: ведущий собирает команду субагентов (ProMax, Ultra, Admin).
-                      Включённый оркестр работает в этом чате, пока вы не выключите его: /team off
-      /usage          тариф и расход токенов агента
-      /update         проверить обновления (или команда conexy update)
-      /auto           вкл/выкл выполнение команд без подтверждения (или флаг --auto)
-      /help           эта справка
-      /exit           выход (также: exit)
-    Всё остальное — задача для агента. Ctrl+C во время ответа — остановить.
-    Токен GitHub и MCP-серверы берутся из настроек на сайте автоматически.
-    """);
+static void DaemonCommand(string arg, string root)
+{
+    switch (arg.ToLowerInvariant())
+    {
+        case "on" or "install" or "--install":
+            var (project, added) = ProjectStore.Load().Ensure(root);
+            if (added)
+                Ui.Info($"Папка «{project.Name}» добавлена в проекты: сайт сможет запускать в ней задачи.");
+            Daemon.Install();
+            Ui.Info("Можно закрывать это окно: демон работает в фоне, задачи и подтверждения — на сайте в режиме «Мой ПК».");
+            break;
+        case "off" or "uninstall" or "--uninstall":
+            Daemon.Uninstall();
+            break;
+        case "" or "status":
+            var projects = ProjectStore.Load().Projects;
+            Ui.Info($"Демон: {(Daemon.IsRunning() ? "работает" : "не запущен")} · автозапуск: {(Daemon.AutostartEnabled() ? "включён" : "выключен")} · проектов: {projects.Count}");
+            foreach (var p in projects)
+                Ui.Info($"  {p.Name}  {Ui.Muted(p.Path)}");
+            Ui.Info("/daemon on — работать в фоне и запускаться с Windows · /daemon off — остановить. Журнал: " + Daemon.LogPath);
+            break;
+        default:
+            Ui.Info("/daemon [on|off|status]");
+            break;
+    }
+}
+
+// Справка-конспект: разделы, выровненная колонка команд, описание переносится по ширине окна,
+// подкоманды — отдельными строками под командой.
+static void PrintHelp()
+{
+    (string Title, (string Command, string Text)[] Items)[] sections =
+    [
+        ("Проект и файлы", [
+            ("/ls [путь]", "содержимое папки, папки пронумерованы"),
+            ("/cd <путь|N|..>", "сменить рабочую папку (N — номер из /ls)"),
+            ("/pwd", "текущая папка"),
+            ("/attach <файл>", "прикрепить файл или картинку; можно перетащить файл в окно или написать @путь"),
+            ("/paste", "вложить из буфера обмена (или Ctrl+V); уходит вместе со следующим сообщением"),
+            ("/detach [N]", "убрать вложение по номеру или все"),
+            ("/rewind [N]", "откатить правки файлов за последние N ходов (команды терминала не откатываются)"),
+        ]),
+        ("Чат и агент", [
+            ("/chats", "все чаты (общие с сайтом): переключиться или создать; у каждого своя папка"),
+            ("/agent coder|cowork", "Coder — код и терминал; Cowork — исследования, документы, почта (платные тарифы)"),
+            ("/compact [фокус]", "сжать длинный чат в пересказ и продолжить в новом — дешевле"),
+            ("/usage", "тариф и расход токенов"),
+        ]),
+        ("Режимы работы", [
+            ("/plan on|off", "агент только изучает проект и предлагает план; выполняет после вашего одобрения"),
+            ("/team on|off", "оркестр: ведущий агент собирает команду субагентов (ProMax, Ultra, Admin); действует в чате до /team off"),
+            ("/auto", "выполнять команды без подтверждения — вкл/выкл (или флаг --auto)"),
+            ("/permissions", "команды без вопроса в этом проекте\nadd <команда> · remove N · clear"),
+        ]),
+        ("Фоновая работа с сайта", [
+            ("/daemon on", "работать в фоне и запускаться вместе с Windows: задачи с сайта («Мой ПК») выполняются и при закрытом окне; текущая папка становится проектом"),
+            ("/daemon off", "остановить и убрать из автозапуска"),
+            ("/daemon", "состояние, проекты и журнал"),
+        ]),
+        ("Подключения", [
+            ("/google login|logout", "Gmail, Календарь, Диск; отправка — только с подтверждения, токены только на этом ПК"),
+            ("/mail login|logout", "Яндекс Почта или Mail.ru по паролю приложения; отправка — с подтверждения"),
+            ("/mcp", "локальные MCP-серверы\ncatalog — готовые (Playwright, Context7, Sentry, Supabase, Postgres, Notion, Figma)\nadd <id> — из каталога · add <имя> <команда> — свой\nremove <имя> · reload · config"),
+            ("/skill", "скиллы агента (SKILL.md), общие с сайтом\nadd <файл|папка> · remove <имя> · on|off <имя>"),
+        ]),
+        ("Прочее", [
+            ("/update", "проверить обновления"),
+            ("/help", "эта справка"),
+            ("/exit", "выход (или exit)"),
+        ]),
+    ];
+
+    var column = sections.SelectMany(s => s.Items).Max(i => i.Command.Length) + 4;
+    int width;
+    try { width = Math.Max(60, Console.IsOutputRedirected ? 100 : Console.WindowWidth - 1); }
+    catch (IOException) { width = 100; }
+    var textWidth = Math.Max(30, width - column);
+    var indent = new string(' ', column);
+
+    foreach (var (title, items) in sections)
+    {
+        Console.WriteLine();
+        Console.WriteLine("  " + Ui.Bold(Ui.Accent(title)));
+        foreach (var (command, text) in items)
+        {
+            var lines = text.Split('\n');
+            var first = true;
+            foreach (var (line, sub) in lines.Select((l, i) => (l, i > 0)))
+            {
+                var subStart = true;
+                foreach (var chunk in Wrap(line, textWidth - (sub ? 2 : 0)))
+                {
+                    var left = first ? "  " + Ui.Accent(command) + new string(' ', column - 2 - command.Length) : indent;
+                    Console.WriteLine(left + (sub ? Ui.Muted((subStart ? "› " : "  ") + chunk) : chunk));
+                    first = false;
+                    subStart = false;
+                }
+            }
+        }
+    }
+    Console.WriteLine();
+    Console.WriteLine(Ui.Muted("  Всё остальное — задача для агента. Ctrl+C во время ответа — остановить."));
+    Console.WriteLine(Ui.Muted("  Токен GitHub и MCP-серверы берутся из настроек на сайте автоматически."));
+    Console.WriteLine(Ui.Muted("  Выделение текста: ведите мышью, Enter или правый клик — скопировать, Esc — отмена."));
+
+    static IEnumerable<string> Wrap(string text, int max)
+    {
+        var line = new System.Text.StringBuilder();
+        foreach (var word in text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (line.Length > 0 && line.Length + 1 + word.Length > max)
+            {
+                yield return line.ToString();
+                line.Clear();
+            }
+            if (line.Length > 0)
+                line.Append(' ');
+            line.Append(word);
+        }
+        if (line.Length > 0)
+            yield return line.ToString();
+    }
+}
 
 // Возвращает новую пару (папка, чат), если пользователь переключился, или null для выхода.
 static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
@@ -610,6 +700,19 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
             return null;
         if (string.IsNullOrWhiteSpace(prompt) && Attachments.Pending.Count == 0)
             continue;
+
+        // Команды терминала Windows, набранные внутри клиента («conexy daemon --install», «/ conexy …»).
+        if (prompt.TrimStart('/', ' ').StartsWith("conexy ", StringComparison.OrdinalIgnoreCase))
+        {
+            var shellCommand = prompt.TrimStart('/', ' ')["conexy ".Length..].Trim();
+            if (shellCommand.StartsWith("daemon", StringComparison.OrdinalIgnoreCase))
+                prompt = shellCommand.Contains("--uninstall") ? "/daemon off" : shellCommand.Contains("--install") ? "/daemon on" : "/daemon";
+            else
+            {
+                Ui.Info("Это команда для терминала Windows (cmd/PowerShell), а не для чата. Внутри conexy — команды со слешем: /help.");
+                continue;
+            }
+        }
 
         if (prompt.StartsWith('/'))
         {
@@ -766,6 +869,9 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                     }
                     else
                         Ui.Info($"У вас последняя версия (v{Ui.Version}).");
+                    break;
+                case "/daemon":
+                    DaemonCommand(arg, root);
                     break;
                 case "/auto":
                     approver.AutoMode = !approver.AutoMode;

@@ -52,28 +52,25 @@ public static partial class Ui
 
         var handle = GetStdHandle(-11);
         Ansi = GetConsoleMode(handle, out var mode) && SetConsoleMode(handle, mode | 0x0004);
-        DisableQuickEdit();
+        EnableQuickEdit();
     }
 
     /// <summary>
-    /// В классической консоли Windows включён QuickEdit: клик по окну начинает выделение и СТАВИТ НА ПАУЗУ
-    /// весь вывод программы, пока не нажата клавиша. Панель оркестра пишет под общим замком, поэтому
-    /// вставал весь клиент («подвисает, пока не нажмёшь кнопку»). Отключаем на время работы и
-    /// возвращаем при выходе. В Windows Terminal выделение своё и не паузит — там ничего не меняется.
+    /// Выделение текста мышью в классической консоли Windows — это QuickEdit. Раньше мы его выключали: пока
+    /// идёт выделение, conhost ставит вывод на паузу. Теперь включаем: пауза длится только до Enter/правого
+    /// клика (копирование) или Esc. ENABLE_MOUSE_INPUT снимаем, чтобы колесо прокручивало окно.
+    /// В Windows Terminal выделение своё и не паузит.
     /// </summary>
-    private static void DisableQuickEdit()
+    private static void EnableQuickEdit()
     {
         if (Console.IsInputRedirected)
             return;
         var input = GetStdHandle(-10);
         if (!GetConsoleMode(input, out var original))
             return;
-        // Вместе с QuickEdit снимаем и ENABLE_MOUSE_INPUT: без QuickEdit он отдаёт колесо мыши программе,
-        // и окно перестаёт прокручиваться (мышь нам не нужна — ввод только с клавиатуры).
         const uint mouseInput = 0x0010, quickEdit = 0x0040, extendedFlags = 0x0080;
-        if ((original & (quickEdit | mouseInput)) == 0)
-            return;
-        if (SetConsoleMode(input, (original | extendedFlags) & ~quickEdit & ~mouseInput))
+        var wanted = (original | extendedFlags | quickEdit) & ~mouseInput;
+        if (wanted != original && SetConsoleMode(input, wanted))
             AppDomain.CurrentDomain.ProcessExit += (_, _) => SetConsoleMode(input, original);
     }
 

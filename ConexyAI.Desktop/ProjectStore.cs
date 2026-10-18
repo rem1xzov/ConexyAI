@@ -43,6 +43,19 @@ public sealed class ProjectStore
         Projects.FirstOrDefault(p => p.Id.Equals(idOrName, StringComparison.OrdinalIgnoreCase))
         ?? Projects.FirstOrDefault(p => p.Name.Equals(idOrName, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>Проект для папки: найденный или новый (сохраняется сразу). Added — был ли он добавлен сейчас.</summary>
+    public (DeviceProject Project, bool Added) Ensure(string folder)
+    {
+        var path = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(folder));
+        var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (Projects.FirstOrDefault(p => p.Path.Equals(path, cmp)) is { } existing)
+            return (existing, false);
+        var project = new DeviceProject { Name = System.IO.Path.GetFileName(path) is { Length: > 0 } n ? n : path, Path = path };
+        Projects.Add(project);
+        Save();
+        return (project, true);
+    }
+
     /// <summary>JSON для хаба RegisterDeviceProjects: [{id,name,path}].</summary>
     public string ToJson() => JsonSerializer.Serialize(
         Projects.Select(p => new { id = p.Id, name = p.Name, path = p.Path }),
