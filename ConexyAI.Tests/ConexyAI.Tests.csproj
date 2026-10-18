@@ -9,6 +9,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\ConexyAI\ConexyAI.csproj" />
+        <ProjectReference Include="..\ConexyAI.Desktop\ConexyAI.Desktop.csproj" />
         <!-- Pin the EF Core runtime to 9.0.1 so the transitive Npgsql dependency does
              not resolve Microsoft.EntityFrameworkCore.Relational to a different version. -->
         <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.1" />
