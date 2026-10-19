@@ -16,6 +16,39 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("loop guard: changing output or another call in between is not a loop", NotALoopAsync);
         TestRegistry.Add("loop guard: web tools are capped per model turn, and the cap resets each turn", WebBudgetAsync);
         TestRegistry.Add("loop guard: the last step asks the model to wrap up instead of stopping silently", WrapUpFragmentAsync);
+        TestRegistry.Add("loop guard: different arguments with the same output stop the run", NoProgressAsync);
+    }
+
+    // LOOP_GUARD: в реальном прогоне модель перебирала имена файлов (t.xlsx, t2.xlsx, …), а вывод
+    // оставался тем же. Точное совпадение аргументов такое не ловит.
+    private static Task NoProgressAsync()
+    {
+        var guard = new AgentLoopGuard();
+        for (var i = 1; i <= AgentLoopGuard.NoProgressThreshold; i++)
+        {
+            var args = $"{{\"command\":\"python t{i}.py\"}}";
+            Assert(guard.Refuse("bash", args) is null, $"call #{i} must be allowed");
+            guard.Record("bash", args, "C15 = 11350");
+            // Между командами модель читала результат другим инструментом — цепочка не должна рваться.
+            guard.Record("file_read", $"{{\"path\":\"out{i}.txt\"}}", "C15 = 11350");
+        }
+
+        Assert(guard.Refuse("bash", """{"command":"python t99.py"}""") == AgentLoopGuard.NoProgressRefusal,
+            "the next call with the same output must be refused");
+        Assert(guard.Refusals == 1 && !guard.ShouldStop, "one refusal is not enough to stop yet");
+
+        Assert(guard.Refuse("bash", """{"command":"python t100.py"}""") == AgentLoopGuard.NoProgressRefusal, "still refused");
+        Assert(guard.Refuse("bash", """{"command":"python t101.py"}""") == AgentLoopGuard.NoProgressRefusal, "still refused");
+        Assert(guard.ShouldStop, $"after {AgentLoopGuard.StopAfterRefusals} refusals the runner must force a final answer");
+
+        // Новый результат снимает петлю: это уже работа, а не топтание на месте.
+        var fresh = new AgentLoopGuard();
+        for (var i = 1; i <= 4; i++)
+        {
+            fresh.Record("bash", $"{{\"command\":\"step {i}\"}}", $"result {i}");
+        }
+        Assert(fresh.Refuse("bash", """{"command":"step 5"}""") is null, "changing output is progress, not a loop");
+        return Task.CompletedTask;
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);

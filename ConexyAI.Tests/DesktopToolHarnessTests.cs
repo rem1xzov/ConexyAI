@@ -15,6 +15,8 @@ internal static class DesktopToolHarnessTests
         TestRegistry.Add("desktop tools: shell, background processes and project commands", ShellAsync);
         TestRegistry.Add("desktop tools: pc_* tools reach outside the project", PcAsync);
         TestRegistry.Add("desktop tools: service tools and guards (paths, unknown tools, plan mode)", GuardsAsync);
+        TestRegistry.Add("desktop tools: a system folder is never a workspace", SystemRootAsync,
+            () => OperatingSystem.IsWindows() ? null : "the system-folder guard is Windows-specific");
         TestRegistry.Add("desktop tools: http_request and download_file", NetworkAsync,
             () => NetworkAvailable() ? null : "requires network access to example.com");
         TestRegistry.Add("desktop tools: window_list, screen_capture, page_screenshot", ScreenAsync,
@@ -119,6 +121,22 @@ internal static class DesktopToolHarnessTests
             Assert(File.ReadAllText(Path.Combine(h.Root, "copied.txt")) == "outside", "pc_copy_to_project must copy the content");
         }
         finally { File.Delete(outside); }
+    }
+
+    // WORKSPACE_GUARD: агент один раз выполнил листинг C:\WINDOWS\system32 и принял это за работу.
+    private static Task SystemRootAsync()
+    {
+        var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        Assert(ConexyAI.Desktop.Workspace.IsUnsafe(windows), "the Windows folder must not be a workspace");
+        Assert(ConexyAI.Desktop.Workspace.IsUnsafe(Path.Combine(windows, "system32")), "system32 must not be a workspace");
+        Assert(ConexyAI.Desktop.Workspace.IsUnsafe(Path.GetPathRoot(windows)), "a drive root must not be a workspace");
+        Assert(!ConexyAI.Desktop.Workspace.IsUnsafe(Path.GetTempPath()), "a temp folder is fine");
+
+        var runner = new DesktopToolRunner(Path.Combine(windows, "system32"), new AutoApprover(), _ => { });
+        var result = runner.RunAsync("file_read", "{\"path\":\"kernel32.dll\"}", CancellationToken.None).GetAwaiter().GetResult();
+        Assert(result.IsError, "tools must refuse to work when the workspace is a system folder");
+        Assert(result.Output.Contains("не используется"), $"the refusal must explain why: {result.Output}");
+        return Task.CompletedTask;
     }
 
     private static async Task GuardsAsync()

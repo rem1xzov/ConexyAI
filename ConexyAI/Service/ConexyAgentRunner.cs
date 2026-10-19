@@ -911,6 +911,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var nudgedTools = new HashSet<string>(StringComparer.Ordinal);
         var toolBudgetExhausted = false;
         var completedSteps = 0;
+        // LOOP_GUARD: после исчерпания отказов инструменты отключаются — модель обязана ответить текстом.
+        // Это тот же приём, что у последнего шага цикла, но раньше и по факту петли.
+        var finalAnswerForced = false;
 
         // Инструменты этого прогона: по профилю режима; take_screenshot убирается, если Chromium нет.
         // MCP: реестр на прогон — операторские серверы + личные серверы пользователя из запроса.
@@ -970,7 +973,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 : "Обдумываю следующий шаг...";
             await SendAgentStatusAsync(taskId, "thinking", thinkingLabel, ct: ct);
 
-            var llmTurn = await StreamAgentTurnAsync(taskId, messages, ct);
+            var llmTurn = await StreamAgentTurnAsync(taskId, messages, ct, disableTools: finalAnswerForced);
             var responseMessage = llmTurn.Message;
             // PRICED_BILLING: начисляем по цене (кэш − 2%, выход ×4) и берём именно начисленную сумму,
             // чтобы токен-брейкер ниже сравнивал её с остатком того же (взвешенного) бюджета.
@@ -1507,6 +1510,22 @@ public class ConexyAgentRunner : IConexyAgentRunner
             if (newlyUnavailable.Count > 0)
             {
                 messages.Add(new ChatMessage("system", ToolUnavailablePrompt(newlyUnavailable)));
+            }
+
+            // LOOP_GUARD: несколько отказов подряд — модель топчется на месте. Отключаем инструменты,
+            // чтобы следующий ход был именно итогом, а не новой попыткой того же самого.
+            if (!finalAnswerForced && loopGuard.ShouldStop)
+            {
+                finalAnswerForced = true;
+                _logger.LogWarning(
+                    "Agent loop guard stopped the run: {Refusals} refusals without progress. task={TaskId}",
+                    loopGuard.Refusals, taskId);
+                await group.SendAsync(
+                    "OnLog",
+                    $"[Loop Guard] {loopGuard.Refusals} повтор(ов) без нового результата — инструменты отключены, прошу итог.",
+                    ct);
+                await SendAgentStatusAsync(taskId, "thinking", "Подвожу итог…", ct: ct);
+                messages.Add(new ChatMessage("system", "[Loop Guard] " + AgentLoopGuard.LoopStopRefusal));
             }
 
             // AGENT_TOOL_FAILURES: и жёсткая верхняя граница. Дальше модели не даётся шанса крутить
@@ -3609,7 +3628,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         CancellationToken ct,
         // ORCHESTRA: помощник не стримит свой текст в чат — иначе его черновики влились бы в ответ
         // ведущего. Через модель он идёт тем же путём, просто без публикации наружу.
-        bool streamToClient = true)
+        bool streamToClient = true,
+        // LOOP_GUARD: ход без инструментов — модель не может снова уйти в цикл и обязана ответить текстом.
+        bool disableTools = false)
     {
         var group = _hubContext.Clients.Group($"task_{taskId}");
         var content = new StringBuilder();
@@ -3620,8 +3641,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         LlmTokenUsage? usage = null;
         var yieldedAnyDelta = false;
 
+        var turnTools = disableTools ? new List<object>() : _tools;
         var stream = _llmClient
-            .StreamChatAsync(messages, _job.ModelType, _job.ReasoningEffort, _tools, taskId: _job.TaskId, ct: ct)
+            .StreamChatAsync(messages, _job.ModelType, _job.ReasoningEffort, turnTools, taskId: _job.TaskId, ct: ct)
             .GetAsyncEnumerator(ct);
 
         await using (stream)

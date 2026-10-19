@@ -218,6 +218,11 @@ static int ProjectsCommand(string[] args)
                 Console.Error.WriteLine($"Папка не найдена: {path}");
                 return 1;
             }
+            if (Workspace.WhyUnsafe(path) is { } unsafeProject)
+            {
+                Console.Error.WriteLine($"Папка «{path}» не подходит: {unsafeProject}. Укажите папку проекта, а не системную.");
+                return 1;
+            }
             var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
             if (store.Projects.FirstOrDefault(p => p.Path.Equals(path, cmp)) is { } existing)
             {
@@ -324,6 +329,20 @@ static async Task<int> ChatAsync(string[] args)
     {
         Console.Error.WriteLine($"Папка не найдена: {root}");
         return 1;
+    }
+
+    // WORKSPACE_GUARD: системная папка (бывает, если клиент запущен со странным cwd) — не рабочая область.
+    if (Workspace.WhyUnsafe(root) is { } unsafeRoot)
+    {
+        if (Option(args, "--dir") is not null)
+        {
+            Console.Error.WriteLine($"Папка «{root}» не подходит: {unsafeRoot}. Укажите папку проекта.");
+            return 1;
+        }
+        var safeRoot = Workspace.Suggest();
+        Console.Error.WriteLine($"Рабочая папка «{root}» не подходит: {unsafeRoot}.");
+        Console.Error.WriteLine($"Беру «{safeRoot}». Сменить: /cd <папка> или запуск с --dir <папка>.");
+        root = safeRoot;
     }
 
     // Ранняя проверка ключа. Если ключ отозван или заменён — предлагаем ввести новый, а не падаем.

@@ -47,10 +47,14 @@ public sealed class DeviceTools
     public void ReloadProjects() => Projects = ProjectStore.Load();
 
     /// <summary>Корень по умолчанию: --dir интерактивного сеанса или первый проект демона.</summary>
-    public string? DefaultRoot => _interactiveRoot ?? Projects.Projects.FirstOrDefault()?.Path;
+    public string? DefaultRoot => _interactiveRoot ?? Projects.Projects.FirstOrDefault(IsUsable)?.Path;
 
     public string? RootOf(string projectId) => Projects.Projects
-        .FirstOrDefault(p => p.Id.Equals(projectId, StringComparison.OrdinalIgnoreCase))?.Path;
+        .FirstOrDefault(p => p.Id.Equals(projectId, StringComparison.OrdinalIgnoreCase) && IsUsable(p))?.Path;
+
+    // WORKSPACE_GUARD: старый projects.json мог сохранить системную папку — такие проекты не выполняем.
+    private static bool IsUsable(DeviceProject project) =>
+        !string.IsNullOrWhiteSpace(project.Path) && !Workspace.IsUnsafe(project.Path);
 
     public ToolRunner RunnerFor(string root) =>
         _runners.GetOrAdd(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)),

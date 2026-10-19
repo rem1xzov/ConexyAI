@@ -21,11 +21,22 @@ public sealed class PathGuard
     public PathGuard(string root)
     {
         Root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        // WORKSPACE_GUARD: даже если корень пришёл из старого projects.json или cwd процесса — системная
+        // папка не становится рабочей. Иначе «осмотр» даёт дамп system32, а модель считает это работой.
+        UnsafeReason = Workspace.WhyUnsafe(Root);
     }
+
+    /// <summary>Почему корень не годится как рабочая папка (null — годится).</summary>
+    public string? UnsafeReason { get; }
 
     /// <summary>Разрешает путь для чтения.</summary>
     public string Resolve(string? path)
     {
+        if (UnsafeReason is not null)
+            throw new ToolException(
+                $"Рабочая папка '{Root}' не используется: {UnsafeReason}. " +
+                "Выберите проект командой /cd или добавьте его: conexy projects add <папка>.");
+
         if (string.IsNullOrWhiteSpace(path))
             throw new ToolException("Путь не указан.");
 
@@ -40,6 +51,10 @@ public sealed class PathGuard
     /// <summary>Разрешает путь для записи: дополнительно запрещает трогать служебную папку .git.</summary>
     public string ResolveForWrite(string? path)
     {
+        if (UnsafeReason is not null)
+            throw new ToolException(
+                $"Рабочая папка '{Root}' не используется: {UnsafeReason}. " +
+                "Выберите проект командой /cd или добавьте его: conexy projects add <папка>.");
         var full = Resolve(path);
         var relative = Path.GetRelativePath(Root, full);
         if (relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
