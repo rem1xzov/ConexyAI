@@ -221,13 +221,25 @@ body {
   gap: 14px;
   padding: 14px 12px;
   transition: width 0.2s ease, min-width 0.2s ease;
-  overflow-y: auto;
+  /* ACCOUNT_PINNED: скроллится только список чатов, поэтому блок аккаунта всегда
+     остаётся внизу и не уезжает вместе с длинным списком. */
+  overflow: hidden;
+  min-height: 0;
 }
 
 .sidebar--collapsed {
   width: 60px;
   min-width: 60px;
   padding: 14px 10px;
+}
+
+/* ACCOUNT_PINNED: шапка, вкладки, «Новый чат» и аккаунт не сжимаются —
+   всё свободное место и прокрутка отданы списку чатов. */
+.sidebar__top,
+.sidebar .tabs,
+.sidebar .new-chat,
+.sidebar__footer {
+  flex: none;
 }
 
 .sidebar__top {
@@ -352,6 +364,12 @@ body {
   flex-direction: column;
   gap: 6px;
   margin-top: 4px;
+  /* ACCOUNT_PINNED: список чатов забирает свободное место и скроллится сам. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
 }
 
 .chats__label {
@@ -3843,6 +3861,9 @@ html[data-plain-code='true'] .markdown strong.chat-term {
   margin-top: auto;
   border-top: 1px solid var(--border);
   padding-top: 12px;
+  /* ACCOUNT_PINNED: не даём блоку аккаунта сжиматься и исчезать при длинном списке. */
+  flex: none;
+  background: inherit;
 }
 
 .sidebar__auth {
