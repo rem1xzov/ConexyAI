@@ -15,6 +15,7 @@ internal static class DesktopToolHarnessTests
         TestRegistry.Add("desktop tools: shell, background processes and project commands", ShellAsync);
         TestRegistry.Add("desktop tools: pc_* tools reach outside the project", PcAsync);
         TestRegistry.Add("desktop tools: service tools and guards (paths, unknown tools, plan mode)", GuardsAsync);
+        TestRegistry.Add("desktop tools: re-reading the same file is stopped until an edit", ReadLoopAsync);
         TestRegistry.Add("desktop tools: a system folder is never a workspace", SystemRootAsync,
             () => OperatingSystem.IsWindows() ? null : "the system-folder guard is Windows-specific");
         TestRegistry.Add("desktop tools: http_request and download_file", NetworkAsync,
@@ -121,6 +122,26 @@ internal static class DesktopToolHarnessTests
             Assert(File.ReadAllText(Path.Combine(h.Root, "copied.txt")) == "outside", "pc_copy_to_project must copy the content");
         }
         finally { File.Delete(outside); }
+    }
+
+    // LOOP_GUARD: клиент сам останавливает бесконечное чтение — даже если сервер старый и не прислал отказ.
+    private static async Task ReadLoopAsync()
+    {
+        using var h = new Harness();
+        File.WriteAllText(Path.Combine(h.Root, "a.txt"), "line\n");
+
+        for (var i = 0; i < 3; i++)
+            await h.Ok("file_read", new { path = "a.txt" });
+        await h.Fail("file_read", new { path = "a.txt" });
+
+        // Правка — прогресс: после неё читать снова можно.
+        await h.Ok("file_write", new { path = "a.txt", content = "line\nchanged\n" });
+        await h.Ok("file_read", new { path = "a.txt" }, o => o.Contains("changed"));
+
+        // То же самое через оболочку: `cat a.txt` — тоже чтение.
+        for (var i = 0; i < 3; i++)
+            await h.Ok("bash", new { command = OperatingSystem.IsWindows() ? "Get-Content a.txt" : "cat a.txt" });
+        await h.Fail("bash", new { command = OperatingSystem.IsWindows() ? "Get-Content a.txt" : "cat a.txt" });
     }
 
     // WORKSPACE_GUARD: агент один раз выполнил листинг C:\WINDOWS\system32 и принял это за работу.

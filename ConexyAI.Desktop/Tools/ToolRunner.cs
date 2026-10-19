@@ -14,6 +14,8 @@ public sealed class ToolRunner
     private readonly Action<string> _log;
     private readonly Mcp.LocalTools? _local;
     private readonly ICommandApprover _approver;
+    // LOOP_GUARD: счётчик чтений без правок — заслон работает даже со старой версией сервера.
+    private readonly ReadLoopGuard _readGuard = new();
 
     /// <summary>Контрольные точки файлов за ходы агента (/rewind).</summary>
     public Checkpoints Checkpoints { get; } = new();
@@ -52,6 +54,9 @@ public sealed class ToolRunner
 
     public string Root => _guard.Root;
 
+    /// <summary>Новый ход/задача: счётчики чтения начинаются с нуля.</summary>
+    public void ResetReadGuard() => _readGuard.Reset();
+
     public async Task<ToolResult> RunAsync(string tool, string argumentsJson, CancellationToken ct)
     {
         try
@@ -69,6 +74,9 @@ public sealed class ToolRunner
                 return await AskUserAsync(args, ct);
             if (PlanMode && PlanBlockReason(tool, args) is { } blocked)
                 return ToolResult.Fail(blocked);
+            if (_readGuard.Refuse(tool, args) is { } readRefusal)
+                return ToolResult.Fail(readRefusal);
+
             _log(Describe(tool, args));
 
             // LOCAL_MCP: Google и локальные MCP-серверы.
@@ -77,7 +85,7 @@ public sealed class ToolRunner
                     ? ToolResult.Fail("Локальные инструменты не подключены.")
                     : await _local.CallAsync(tool, argumentsJson, _guard, ct);
 
-            return tool switch
+            var result = tool switch
             {
                 "file_read" => _files.Read(args),
                 // Служебные: сервер собирает/разбирает .docx/.xlsx/.pptx/.pdf, а байты живут в папке проекта.
@@ -108,6 +116,10 @@ public sealed class ToolRunner
                 "get_diagnostics" => await ProjectCommands.RunAsync(_guard.Root, _shell, args, test: false, ct),
                 _ => ToolResult.Fail($"Инструмент '{tool}' не поддерживается десктопным клиентом."),
             };
+            // LOOP_GUARD: считаем только реально выполненные вызовы.
+            if (!result.IsError)
+                _readGuard.Record(tool, args);
+            return result;
         }
         catch (ToolException ex)
         {

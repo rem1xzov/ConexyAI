@@ -19,7 +19,7 @@ namespace ConexyAI.Service;
 /// конкретной задачи, и состояние не должно перетекать в следующий запуск.
 /// </para>
 /// </summary>
-public sealed class AgentLoopGuard
+public sealed partial class AgentLoopGuard
 {
     /// <summary>Сколько одинаковых вызовов с одинаковым результатом подряд считаются петлёй.</summary>
     public const int RepeatThreshold = 3;
@@ -82,6 +82,49 @@ public sealed class AgentLoopGuard
         "view_image", "read_document_file", "project_rules",
     };
 
+    /// <summary>Оболочки: команду внутри ещё надо распознать как чтение или действие.</summary>
+    public static bool IsShellTool(string tool) => tool is "bash" or "terminal_exec" or "cmd_exec";
+
+    /// <summary>
+    /// Читающая команда оболочки (Get-Content, Get-ChildItem, cat, head, git log…). Агент обходил защиту
+    /// ровно так: десятки `bash Get-Content -Skip N` вместо инструмента чтения.
+    /// </summary>
+    public static bool IsReadOnlyCommand(string argumentsJson)
+    {
+        var command = ReadCommand(argumentsJson);
+        if (string.IsNullOrWhiteSpace(command))
+            return false;
+        // Запись, цепочки и подстановки — это уже действие, а не чтение.
+        if (command.Contains('>') || command.Contains(';') || command.Contains("&&", StringComparison.Ordinal) ||
+            command.Contains("||", StringComparison.Ordinal) || command.Contains("$(", StringComparison.Ordinal) ||
+            command.Contains('`') || command.Contains('\n') || command.Contains('\r'))
+            return false;
+        return command.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .All(segment => SafeCommandHead().IsMatch(segment));
+    }
+
+    private static string? ReadCommand(string argumentsJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+            return doc.RootElement.ValueKind == JsonValueKind.Object &&
+                   doc.RootElement.TryGetProperty("command", out var value) &&
+                   value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(
+        @"^(?:get-content|gc|get-childitem|gci|dir|ls|cat|type|head|tail|grep|rg|select-string|sls|findstr|wc|where|which|pwd|tree|stat|file|sort|uniq|diff|find|git\s+(?:status|log|diff|show|branch|remote|rev-parse|ls-files|blame))\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex SafeCommandHead();
+
     /// <summary>Инструменты, которые ходят в интернет и считаются в общий бюджет.</summary>
     private static readonly HashSet<string> WebTools = new(StringComparer.Ordinal)
     {
@@ -129,7 +172,7 @@ public sealed class AgentLoopGuard
     /// </summary>
     public string? Refuse(string tool, string arguments)
     {
-        if (ReadTools.Contains(tool) && _targets.GetValueOrDefault(Target(tool, arguments)) >= ReadTargetThreshold)
+        if (IsRead(tool, arguments) && _targets.GetValueOrDefault(Target(tool, arguments)) >= ReadTargetThreshold)
         {
             Refusals++;
             return ReadTargetRefusal;
@@ -178,7 +221,7 @@ public sealed class AgentLoopGuard
         // Любая правка/команда — прогресс: счётчики чтения обнуляются, перечитывать после правки нормально.
         if (IsProgressTool(tool, arguments))
             _targets.Clear();
-        else if (ReadTools.Contains(tool))
+        else if (IsRead(tool, arguments))
         {
             var key = Target(tool, arguments);
             _targets[key] = _targets.GetValueOrDefault(key) + 1;
@@ -244,9 +287,15 @@ public sealed class AgentLoopGuard
         return matching >= _repeatThreshold;
     }
 
+    /// <summary>Чтение — либо инструмент чтения, либо читающая команда оболочки.</summary>
+    public static bool IsRead(string tool, string arguments) =>
+        ReadTools.Contains(tool) || IsShellTool(tool) && IsReadOnlyCommand(arguments);
+
     /// <summary>Ключ объекта чтения без пагинации: тот же файл с другим view_range — тот же объект.</summary>
     private static string Target(string tool, string arguments)
     {
+        if (IsShellTool(tool))
+            return tool + "|" + NormalizeCommand(ReadCommand(arguments) ?? arguments);
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(arguments) ? "{}" : arguments);
@@ -267,6 +316,40 @@ public sealed class AgentLoopGuard
         }
     }
 
+    /// <summary>
+    /// Одинаковые по сути читающие команды: `Get-Content f -Skip 100 -TotalCount 100` и `-Skip 200` —
+    /// тот же файл. Поэтому убираем числа, лишние пробелы и кавычки.
+    /// </summary>
+    private static string NormalizeCommand(string command)
+    {
+        var sb = new StringBuilder(command.Length);
+        var space = false;
+        foreach (var c in command.ToLowerInvariant())
+        {
+            if (char.IsDigit(c) || c is '\'' or '"')
+                continue;
+            if (char.IsWhiteSpace(c))
+            {
+                if (!space) sb.Append(' ');
+                space = true;
+                continue;
+            }
+            sb.Append(c);
+            space = false;
+        }
+
+        // Флаги пагинации не делают команду другой: `-Skip`, `-TotalCount`, `head`/`tail` — всё то же чтение.
+        var kept = sb.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(token => !PagingTokens.Contains(token));
+        return string.Join(' ', kept);
+    }
+
+    private static readonly HashSet<string> PagingTokens = new(StringComparer.Ordinal)
+    {
+        "-skip", "-first", "-last", "-totalcount", "-n", "-c", "-l", "-lines", "-offset", "-limit",
+        "--skip", "--first", "--last", "--limit", "--offset", "--lines", "head", "tail",
+    };
+
     private static readonly HashSet<string> PagingKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         "view_range", "offset", "limit", "max_results", "lines", "tail_lines", "head_lines",
@@ -277,7 +360,9 @@ public sealed class AgentLoopGuard
     public static bool IsProgressTool(string tool, string arguments) => tool switch
     {
         "file_write" or "file_write_bytes" or "file_patch" or "apply_patch" => true,
-        "bash" or "terminal_exec" or "cmd_exec" or "run_tests" or "get_diagnostics" => true,
+        // Запуск сборки/тестов — действие, а `Get-Content`/`Get-ChildItem` — всё ещё чтение.
+        "bash" or "terminal_exec" or "cmd_exec" => !IsReadOnlyCommand(arguments),
+        "run_tests" or "get_diagnostics" => true,
         "bg_start" or "bg_stop" or "install_software" => true,
         "str_replace_editor" => !arguments.Contains("\"view\"", StringComparison.Ordinal),
         _ => false,

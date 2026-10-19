@@ -1318,8 +1318,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // LOOP_GUARD: если модель читает и читает, отказ идёт раньше прочих проверок: выполнять
                 // этот вызов бессмысленно — данные у неё уже есть.
                 string? readRefusal = null;
-                if (toolAllowed && AgentLoopGuard.ReadTools.Contains(toolName) &&
-                    (readOnlyStreak >= ReadStreakHardLimit || readOnlyTotal >= ReadTotalLimit))
+                var isReadCall = toolAllowed && AgentLoopGuard.IsRead(toolName, toolCall.Function.Arguments);
+                if (isReadCall && (readOnlyStreak >= ReadStreakHardLimit || readOnlyTotal >= ReadTotalLimit))
                 {
                     readRefusal = loopGuard.RefuseRead();
                 }
@@ -1399,7 +1399,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     loopGuard.Record(toolName, toolCall.Function.Arguments, result.Output);
                     // TOOL_INTEGRITY: считаем именно РЕАЛЬНО доведённые до вызова инструменты.
                     executedToolCounts[toolName] = executedToolCounts.GetValueOrDefault(toolName) + 1;
-                    if (AgentLoopGuard.ReadTools.Contains(toolName))
+                    if (isReadCall)
                     {
                         readOnlyStreak++;
                         readOnlyTotal++;

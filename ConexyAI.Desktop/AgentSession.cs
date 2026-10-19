@@ -217,6 +217,8 @@ public sealed class AgentSession : IAsyncDisposable
         Ui.Busy();
 
         _tools!.Checkpoints.BeginTurn(prompt);
+        // LOOP_GUARD: новый ход — новый счётчик чтений.
+        _tools.ResetReadGuard();
         if (PendingNote is { } note)
         {
             prompt = note + "\n\n" + prompt;
@@ -379,7 +381,11 @@ public sealed class AgentSession : IAsyncDisposable
             runner = _tools;
         }
 
-        if (remote && !_device.Daemon && _announcedTasks.TryAdd(taskId, true))
+        // LOOP_GUARD: у задачи с сайта свой счётчик чтений; первый вызов задачи его обнуляет.
+        var firstCallOfTask = remote && _announcedTasks.TryAdd(taskId, true);
+        if (firstCallOfTask && runner is not null)
+            runner.ResetReadGuard();
+        if (firstCallOfTask && !_device.Daemon)
             Ui.Info($"  ◦ с сайта выполняется задача {taskId.ToString()[..8]} на этом ПК ({runner?.Root ?? "—"})");
 
         ToolResult result;

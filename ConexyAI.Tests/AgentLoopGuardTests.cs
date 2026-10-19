@@ -18,6 +18,38 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("loop guard: the last step asks the model to wrap up instead of stopping silently", WrapUpFragmentAsync);
         TestRegistry.Add("loop guard: different arguments with the same output stop the run", NoProgressAsync);
         TestRegistry.Add("loop guard: re-reading the same file with new ranges is refused until an edit", ReadTargetAsync);
+        TestRegistry.Add("loop guard: reading the same file through bash with new offsets is a loop", ShellReadAsync);
+    }
+
+    // LOOP_GUARD: агент читал файлы не инструментом file_read, а `bash Get-Content -Skip N` — такой обход
+    // раньше считался действием и сбрасывал счётчик чтения.
+    private static Task ShellReadAsync()
+    {
+        Assert(AgentLoopGuard.IsReadOnlyCommand("""{"command":"Get-Content MainForm.cs -Skip 100 -TotalCount 100"}"""),
+            "PowerShell Get-Content is a read");
+        Assert(AgentLoopGuard.IsReadOnlyCommand("""{"command":"Get-ChildItem -Recurse"}"""), "Get-ChildItem is a read");
+        Assert(AgentLoopGuard.IsReadOnlyCommand("""{"command":"cat app.js | grep drag"}"""), "a pipe of reads is a read");
+        Assert(AgentLoopGuard.IsReadOnlyCommand("""{"command":"git log -5"}"""), "git log is a read");
+        Assert(!AgentLoopGuard.IsReadOnlyCommand("""{"command":"dotnet build"}"""), "a build is an action");
+        Assert(!AgentLoopGuard.IsReadOnlyCommand("""{"command":"Get-Content a.cs > b.cs"}"""), "redirection writes");
+        Assert(!AgentLoopGuard.IsReadOnlyCommand("""{"command":"Get-ChildItem; Remove-Item x"}"""), "chained commands are not a read");
+        Assert(!AgentLoopGuard.IsReadOnlyCommand("""{"command":"git checkout main"}"""), "checkout is an action");
+
+        var guard = new AgentLoopGuard();
+        for (var i = 1; i <= AgentLoopGuard.ReadTargetThreshold; i++)
+        {
+            var args = $"{{\"command\":\"Get-Content MainForm.cs -Skip {i * 100} -TotalCount 100\"}}";
+            Assert(guard.Refuse("bash", args) is null, $"shell read #{i} must be allowed");
+            guard.Record("bash", args, $"chunk {i}");
+        }
+        Assert(guard.Refuse("bash", """{"command":"Get-Content MainForm.cs -Skip 999"}""") == AgentLoopGuard.ReadTargetRefusal,
+            "the same file with another offset must be refused");
+
+        // Сборка — действие: после неё перечитывать файл можно снова.
+        guard.Record("bash", """{"command":"dotnet build"}""", "ok");
+        Assert(guard.Refuse("bash", """{"command":"Get-Content MainForm.cs"}""") is null,
+            "after a build the file may be read again");
+        return Task.CompletedTask;
     }
 
     // LOOP_GUARD: агент читал один файл десятки раз подряд разными кусками и не вносил правок.
