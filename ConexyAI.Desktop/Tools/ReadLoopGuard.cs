@@ -40,7 +40,7 @@ public sealed partial class ReadLoopGuard
             case "bash":
             case "terminal_exec":
             case "cmd_exec":
-                return CommandPolicy.IsReadOnly(args.Str("command") ?? string.Empty);
+                return IsReadOnlyScript(args.Str("command") ?? string.Empty);
             default:
                 return false;
         }
@@ -79,6 +79,40 @@ public sealed partial class ReadLoopGuard
             _targets.Clear();
         }
     }
+
+    /// <summary>
+    /// Читающий ли скрипт. `CommandPolicy.IsReadOnly` намеренно строг (нужен для подтверждений) и отказывает
+    /// любой команде с `;`. Агент этим пользовался: `$t=[IO.File]::ReadAllText(...); $t.Substring(...)` —
+    /// формально цепочка, фактически чтение, и счётчик чтений сбрасывался.
+    /// </summary>
+    private static bool IsReadOnlyScript(string command)
+    {
+        var lower = command.ToLowerInvariant();
+        if (lower.Length == 0)
+            return false;
+        if (ShellWriteTokens.Any(token => lower.Contains(token, StringComparison.Ordinal)))
+            return false;
+        if (lower.Contains(">>", StringComparison.Ordinal) || lower.Contains(" > ", StringComparison.Ordinal))
+            return false;
+        return ShellReadTokens.Any(token => lower.Contains(token, StringComparison.Ordinal));
+    }
+
+    private static readonly string[] ShellReadTokens =
+    {
+        "get-content", "get-childitem", "gci ", "select-string", "findstr", "readalltext", "readalllines",
+        "readallbytes", "get-item", "test-path", "resolve-path", "select-object", "measure-object",
+        "out-string", "format-table", "format-list", "where-object", "sort-object", "convertto-json",
+        "rg ", "grep", "cat ", "head ", "tail ", "wc ", "stat ", "ls ", "dir ",
+    };
+
+    private static readonly string[] ShellWriteTokens =
+    {
+        "set-content", "add-content", "out-file", "remove-item", "new-item", "copy-item", "move-item",
+        "rename-item", "set-item", "clear-content", "writealltext", "writeallbytes", "appendalltext",
+        "::delete", "::move", "::copy", "start-process", "invoke-expression", "iex ", "dotnet ",
+        "npm ", "yarn ", "pnpm ", "gradle ", "mvn ", "msbuild ", "git add", "git commit", "git push",
+        "git checkout", "git reset", "git clean", "git stash", "del ", "erase ", "rmdir",
+    };
 
     private static bool IsAction(string tool, ToolArgs args) => tool switch
     {

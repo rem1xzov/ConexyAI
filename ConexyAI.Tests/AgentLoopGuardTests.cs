@@ -53,6 +53,13 @@ internal static class AgentLoopGuardTests
         Assert(!AgentLoopGuard.IsReadOnlyCommand("""{"command":"Get-Content a.cs > b.cs"}"""), "redirection writes");
         Assert(!AgentLoopGuard.IsReadOnlyCommand("""{"command":"Get-ChildItem; Remove-Item x"}"""), "chained commands are not a read");
         Assert(!AgentLoopGuard.IsReadOnlyCommand("""{"command":"git checkout main"}"""), "checkout is an action");
+        // PowerShell-однострочник с `;` и `$` — чтение, если ничего не пишет.
+        Assert(AgentLoopGuard.IsReadOnlyCommand(
+                """{"command":"$t=[System.IO.File]::ReadAllText('a.cs',[Text.Encoding]::UTF8); $t.Substring(100,200)"}"""),
+            "a PowerShell read one-liner is a read");
+        Assert(!AgentLoopGuard.IsReadOnlyCommand(
+                """{"command":"$p='a.cs'; Set-Content $p 'x'"}"""),
+            "a script that writes is an action");
 
         var guard = new AgentLoopGuard();
         for (var i = 1; i <= AgentLoopGuard.ReadTargetThreshold; i++)

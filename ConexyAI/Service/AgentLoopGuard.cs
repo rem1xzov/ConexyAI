@@ -94,6 +94,16 @@ public sealed partial class AgentLoopGuard
         var command = ReadCommand(argumentsJson);
         if (string.IsNullOrWhiteSpace(command))
             return false;
+
+        // PowerShell-скрипт: `$t=[IO.File]::ReadAllText(...); $t.Substring(...)` — цепочка, но только чтение.
+        var lower = command.ToLowerInvariant();
+        if (!ShellWriteTokens.Any(token => lower.Contains(token, StringComparison.Ordinal)) &&
+            !lower.Contains(">>", StringComparison.Ordinal) && !lower.Contains(" > ", StringComparison.Ordinal) &&
+            ShellReadTokens.Any(token => lower.Contains(token, StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
         // Запись, цепочки и подстановки — это уже действие, а не чтение.
         if (command.Contains('>') || command.Contains(';') || command.Contains("&&", StringComparison.Ordinal) ||
             command.Contains("||", StringComparison.Ordinal) || command.Contains("$(", StringComparison.Ordinal) ||
@@ -102,6 +112,23 @@ public sealed partial class AgentLoopGuard
         return command.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .All(segment => SafeCommandHead().IsMatch(segment));
     }
+
+    private static readonly string[] ShellReadTokens =
+    {
+        "get-content", "get-childitem", "gci ", "select-string", "findstr", "readalltext", "readalllines",
+        "readallbytes", "get-item", "test-path", "resolve-path", "select-object", "measure-object",
+        "out-string", "format-table", "format-list", "where-object", "sort-object", "convertto-json",
+        "rg ", "grep", "cat ", "head ", "tail ", "wc ", "stat ", "ls ", "dir ",
+    };
+
+    private static readonly string[] ShellWriteTokens =
+    {
+        "set-content", "add-content", "out-file", "remove-item", "new-item", "copy-item", "move-item",
+        "rename-item", "set-item", "clear-content", "writealltext", "writeallbytes", "appendalltext",
+        "::delete", "::move", "::copy", "start-process", "invoke-expression", "iex ", "dotnet ",
+        "npm ", "yarn ", "pnpm ", "gradle ", "mvn ", "msbuild ", "git add", "git commit", "git push",
+        "git checkout", "git reset", "git clean", "git stash", "del ", "erase ", "rmdir",
+    };
 
     private static string? ReadCommand(string argumentsJson)
     {

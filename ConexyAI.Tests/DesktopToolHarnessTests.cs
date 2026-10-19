@@ -1,6 +1,7 @@
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using ConexyAI.Desktop.Tools;
 using DesktopToolResult = ConexyAI.Desktop.Tools.ToolResult;
 using DesktopToolRunner = ConexyAI.Desktop.Tools.ToolRunner;
 using ICommandApprover = ConexyAI.Desktop.Tools.ICommandApprover;
@@ -138,10 +139,19 @@ internal static class DesktopToolHarnessTests
         await h.Ok("file_write", new { path = "a.txt", content = "line\nchanged\n" });
         await h.Ok("file_read", new { path = "a.txt" }, o => o.Contains("changed"));
 
+        // PowerShell-однострочник для чтения куска файла — тоже чтение, хотя в нём есть `;` и `$`.
+        var readScript = ToolArgs.Parse("""{"command":"$p='a.txt'; $t=[System.IO.File]::ReadAllText($p,[System.Text.Encoding]::UTF8); $t.Substring(0,10)"}""");
+        Assert(ReadLoopGuard.IsRead("bash", readScript), "a PowerShell read one-liner must count as a read");
+        var writeScript = ToolArgs.Parse("""{"command":"$p='a.txt'; Set-Content $p 'x'"}""");
+        Assert(!ReadLoopGuard.IsRead("bash", writeScript), "a script that writes is an action");
+
         // То же самое через оболочку: `cat a.txt` — тоже чтение.
         for (var i = 0; i < ConexyAI.Desktop.Tools.ReadLoopGuard.TargetLimit; i++)
             await h.Ok("bash", new { command = OperatingSystem.IsWindows() ? "Get-Content a.txt" : "cat a.txt" });
         await h.Fail("bash", new { command = OperatingSystem.IsWindows() ? "Get-Content a.txt" : "cat a.txt" });
+
+        // grep по конкретному файлу должен искать, а не возвращать «0 файлов».
+        await h.Ok("grep", new { pattern = "changed", path = "a.txt" }, o => o.Contains("a.txt"));
     }
 
     // WORKSPACE_GUARD: агент один раз выполнил листинг C:\WINDOWS\system32 и принял это за работу.

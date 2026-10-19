@@ -42,7 +42,13 @@ public sealed class SearchTools
         int found = 0, searched = 0, files = 0;
         var truncated = false;
 
-        foreach (var file in EnumerateFiles(baseDir, matcher, args.Bool("include_ignored") == true))
+        // `path` может быть файлом: раньше EnumerateFiles получал файл и возвращал 0 результатов —
+        // агент считал, что совпадений нет, и переходил на десятки PowerShell-чтений.
+        var candidates = File.Exists(baseDir)
+            ? new[] { baseDir }
+            : EnumerateFiles(baseDir, matcher, args.Bool("include_ignored") == true);
+
+        foreach (var file in candidates)
         {
             if (new FileInfo(file).Length > MaxFileBytes)
                 continue;
