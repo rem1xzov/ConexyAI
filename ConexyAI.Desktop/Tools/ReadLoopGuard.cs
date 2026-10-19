@@ -9,10 +9,10 @@ namespace ConexyAI.Desktop.Tools;
 public sealed partial class ReadLoopGuard
 {
     /// <summary>Сколько раз можно прочитать ОДИН И ТОТ ЖЕ объект, пока не внесена правка.</summary>
-    public const int TargetLimit = 3;
+    public const int TargetLimit = 2;
 
     /// <summary>Сколько чтений подряд без действий допустимо за сеанс.</summary>
-    public const int StreakLimit = 15;
+    public const int StreakLimit = 10;
 
     private readonly Dictionary<string, int> _targets = new(StringComparer.Ordinal);
     private int _streak;

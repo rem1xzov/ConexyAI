@@ -130,7 +130,7 @@ internal static class DesktopToolHarnessTests
         using var h = new Harness();
         File.WriteAllText(Path.Combine(h.Root, "a.txt"), "line\n");
 
-        for (var i = 0; i < 3; i++)
+        for (var i = 0; i < ConexyAI.Desktop.Tools.ReadLoopGuard.TargetLimit; i++)
             await h.Ok("file_read", new { path = "a.txt" });
         await h.Fail("file_read", new { path = "a.txt" });
 
@@ -139,7 +139,7 @@ internal static class DesktopToolHarnessTests
         await h.Ok("file_read", new { path = "a.txt" }, o => o.Contains("changed"));
 
         // То же самое через оболочку: `cat a.txt` — тоже чтение.
-        for (var i = 0; i < 3; i++)
+        for (var i = 0; i < ConexyAI.Desktop.Tools.ReadLoopGuard.TargetLimit; i++)
             await h.Ok("bash", new { command = OperatingSystem.IsWindows() ? "Get-Content a.txt" : "cat a.txt" });
         await h.Fail("bash", new { command = OperatingSystem.IsWindows() ? "Get-Content a.txt" : "cat a.txt" });
     }

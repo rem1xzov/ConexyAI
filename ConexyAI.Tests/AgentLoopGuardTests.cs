@@ -19,6 +19,25 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("loop guard: different arguments with the same output stop the run", NoProgressAsync);
         TestRegistry.Add("loop guard: re-reading the same file with new ranges is refused until an edit", ReadTargetAsync);
         TestRegistry.Add("loop guard: reading the same file through bash with new offsets is a loop", ShellReadAsync);
+        TestRegistry.Add("verify gate: a success claim without any check is caught", UnverifiedClaimsAsync);
+    }
+
+    // VERIFY_CLAIMS: «всё работает» после правок без сборки/запуска — ложный отчёт, который видел пользователь.
+    private static Task UnverifiedClaimsAsync()
+    {
+        Assert(ConexyAgentRunner.HasUnverifiedSuccessClaim("Готово: всё работает, залипание устранено", true, false, false),
+            "a success claim after edits without checks must be caught");
+        Assert(!ConexyAgentRunner.HasUnverifiedSuccessClaim("Всё работает", true, true, false),
+            "a green build is evidence");
+        Assert(!ConexyAgentRunner.HasUnverifiedSuccessClaim("Всё работает", true, false, true),
+            "running the app and taking a screenshot is evidence");
+        Assert(!ConexyAgentRunner.HasUnverifiedSuccessClaim("Всё работает", false, false, false),
+            "without file changes another gate applies");
+        Assert(!ConexyAgentRunner.HasUnverifiedSuccessClaim("Прочитал MainForm.cs и app.js, причина в pointerup", true, false, false),
+            "talking about the code is not a success claim");
+        Assert(!ConexyAgentRunner.HasUnverifiedSuccessClaim("Правки внесены, но сборка не проверялась", true, false, false),
+            "an honest report of missing verification must pass");
+        return Task.CompletedTask;
     }
 
     // LOOP_GUARD: агент читал файлы не инструментом file_read, а `bash Get-Content -Skip N` — такой обход

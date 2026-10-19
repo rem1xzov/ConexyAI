@@ -576,8 +576,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private const string MissingVerificationPrompt =
         "[Definition of Done] Ты изменил файлы, но за прогон не запускалось ни одной проверки. Прежде чем завершать: " +
         "запусти сборку (`bash: dotnet build` / `npm run build`) или тесты (`run_tests`) / проверку типов и линтера " +
-        "(`get_diagnostics`) и добейся успеха. Если проверка для этой задачи неприменима (например, изменён только текст " +
-        "или конфиг без проекта для сборки) — прямо скажи это в ответе и завершай.";
+        "(`get_diagnostics`) и добейся успеха. Если задача про приложение или UI — запусти его (`bg_start`) и убедись " +
+        "по снимку (`screen_capture`, `page_screenshot`, `window_list`), а не только сборкой. Если проверка для этой задачи " +
+        "неприменима (изменён только текст или конфиг без проекта для сборки) — прямо скажи это и завершай.";
     private const int MaxVerificationNudges = 1;
 
     // ANTI_LIE: добавлено 2026-10-10 — модель повторила ложный отчёт о выполнении GitHub-операции
@@ -590,6 +591,37 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "Либо сделай операцию РЕАЛЬНО через `github_action` (например `pull`/`fetch` с `repo_folder`), либо честно напиши, что не смог и почему. " +
         "Никогда не сообщай о выполнении того, чего не было.";
     private const int MaxClaimPushbacks = 2;
+
+    // VERIFY_CLAIMS: добавлено 2026-10-19 — агент пишет «всё работает/исправлено/проверил», не выполнив
+    // ни сборки, ни запуска. Это то самое враньё, после которого пользователь проверял — и не работало.
+    // Такие утверждения отправляются на доработку, а если бюджет исчерпан — приписка «не подтверждено».
+    private const string UnverifiedClaimPrompt =
+        "[Verify] Ты написал, что всё работает/исправлено/проверено, но за этот прогон не было ни успешной сборки, " +
+        "ни тестов, ни запуска приложения (bg_start) с проверкой окна/снимка. Так утверждать нельзя. " +
+        "Либо выполни проверку, доступную для этой задачи (сборка, тесты, запуск и снимок окна/страницы), и опирайся на её результат, " +
+        "либо убери утверждение и честно напиши, что проверка не проводилась и что именно осталось проверить пользователю.";
+    private const int MaxUnverifiedClaimPushbacks = 1;
+
+    /// <summary>Фразы, которыми модель выдаёт результат за проверенный. Узкие: только про результат, не про чтение кода.</summary>
+    private static readonly string[] SuccessClaimMarkers =
+    {
+        "всё работает", "все работает", "теперь работает", "исправление работает", "приложение работает",
+        "сборка прошла", "сборка успешна", "сборка зелёная", "сборка без ошибок", "тесты прошли", "тесты зелёные",
+        "ошибок компиляции нет", "проверил вживую", "проверено вживую", "убедился, что работает", "всё исправлено",
+        "все исправлено", "готово к использованию", "проблема решена", "баг исправлен", "залипание устранено",
+    };
+
+    /// <summary>
+    /// Заявляет ли ответ об успехе без единого факта проверки. Файлы должны быть изменены: разговор
+    /// о коде без правок оценивает другой гейт (NO_EDIT).
+    /// </summary>
+    public static bool HasUnverifiedSuccessClaim(string text, bool filesChanged, bool verificationRan, bool runtimeCheckRan)
+    {
+        if (!filesChanged || verificationRan || runtimeCheckRan || string.IsNullOrWhiteSpace(text))
+            return false;
+        var lower = text.ToLowerInvariant();
+        return SuccessClaimMarkers.Any(marker => lower.Contains(marker, StringComparison.Ordinal));
+    }
 
     // INCOMPLETE_WORK: добавлено 2026-10-14 — агент завершал ход отчётом «могу, но не сделал»:
     // перечислял, что осталось несделанным, хотя всё это выполнимо его же инструментами, и ждал
@@ -608,6 +640,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "осталось сделать", "осталось незаверш", "осталось подключ", "осталось реализовать",
         "не стал делать", "не принялся",
         "но не сделал", "но не подключил", "но не создал", "но не реализовал",
+        // AGENT_STALL: агент заканчивал ход обещанием «скажи делай — следующим ходом сделаю».
+        "скажи делай", "скажи «делай»", "скажи делать", "если скажешь", "если разрешишь",
+        "следующим ходом", "в следующем ходе", "готов сделать", "дай команду", "жду твоего",
         "did not implement", "not implemented", "not wired up", "not connected",
     };
 
@@ -891,6 +926,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var planFinishNudged = 0;
         // ANTI_LIE: сколько раз мы ловили ложный отчёт о GitHub-работе.
         var claimPushbacks = 0;
+        var unverifiedPushbacks = 0;
         // INCOMPLETE_WORK: сколько раз мы возвращали ответ, где агент сам признал работу незавершённой.
         var incompleteNudges = 0;
         // NO_EDIT_GATE: сколько раз вернули ход, завершаемый без единой реальной правки файлов.
@@ -1108,6 +1144,21 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     continue;
                 }
 
+                // VERIFY_CLAIMS: «всё работает» без сборки/запуска — это ложный отчёт о проверке.
+                var runtimeChecked = executedToolCounts.Keys.Any(k =>
+                    k is "bg_start" or "screen_capture" or "page_screenshot" or "window_list" or "http_request");
+                if (HasUnverifiedSuccessClaim(finalText, changedFiles.Count > 0, buildHealth.AnyVerificationRan, runtimeChecked)
+                    && unverifiedPushbacks < MaxUnverifiedClaimPushbacks && step < _maxIterations)
+                {
+                    unverifiedPushbacks++;
+                    _logger.LogWarning(
+                        "Agent verify gate: success claimed without any verification. task={TaskId}", taskId);
+                    await group.SendAsync("OnLog", "[Verify] В ответе заявлен рабочий результат без проверки — отправляю на доработку.", ct);
+                    await SendAgentStatusAsync(taskId, "thinking", "Проверяю результат…", ct: ct);
+                    messages.Add(new ChatMessage("system", UnverifiedClaimPrompt));
+                    continue;
+                }
+
                 // INCOMPLETE_WORK: агент подвёл итог со списком несделанного, хотя это выполнимо его
                 // инструментами. Отправляем на доработку (ограниченно), чтобы пользователю не приходилось
                 // просить второй раз. Внешняя блокировка (нет файлов/доступа/ключей, шаг за пользователем)
@@ -1207,6 +1258,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 var incompleteWorkNote = unfinishedPlan.Count == 0 && DetectIncompleteWork(finalText) is not null
                     ? "Проверено системой: в ответе заявлена незавершённая работа — задача не доведена до конца."
                     : null;
+                // VERIFY_CLAIMS: бюджет доработок исчерпан, а утверждение о проверенном результате так и не подтверждено.
+                var unverifiedClaimNote = HasUnverifiedSuccessClaim(finalText, changedFiles.Count > 0,
+                    buildHealth.AnyVerificationRan, runtimeChecked)
+                    ? "Проверено системой: в ответе сказано, что всё работает, но за прогон не было ни сборки, ни тестов, " +
+                      "ни запуска приложения с проверкой окна — утверждение не подтверждено."
+                    : null;
                 await SendAgentStatusAsync(taskId, "idle", "Готово", ct: ct);
                 if (string.IsNullOrWhiteSpace(finalText) && answer.Length > 0)
                 {
@@ -1238,6 +1295,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     await StreamNoteAsync(group, answer, incompleteWorkNote, ct);
                 }
 
+                if (unverifiedClaimNote is not null)
+                {
+                    await StreamNoteAsync(group, answer, unverifiedClaimNote, ct);
+                }
+
                 await group.SendAsync("OnLog", "[Agent Completed] Solution finalized.", ct);
 
                 // AGENT_TERMINATION: без этой строки нельзя было отличить «модель закончила» от
@@ -1252,11 +1314,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // No file modifications were made: the model's text is the whole answer.
                 if (changedFiles.Count == 0)
                 {
-                    return AppendNote(answer, JoinNotes(naturalTokenNote, verificationNote, integrityNote));
+                    return AppendNote(answer, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote));
                 }
 
                 // File changes were made: return the final report plus a summary card.
-                return BuildFinalReport(AppendNote(finalText, JoinNotes(naturalTokenNote, verificationNote, integrityNote)), changedFiles, executedCommands);
+                return BuildFinalReport(AppendNote(finalText, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote)), changedFiles, executedCommands);
             }
 
             // AGENT_TOOL_FAILURES: инструменты, упавшие именно в этом ходе (для одного сообщения
