@@ -1,12 +1,46 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content"
     />
-    <title>ConexyAI</title>
+
+    <!-- BRAND_SEO: название пишется одним словом — ConexyAI. Оно одинаково в title, og:*, JSON-LD
+         и на странице, чтобы Google связывал запросы именно с этой сущностью. -->
+    <title>ConexyAI — AI-агент для кода и задач</title>
+    <meta
+      name="description"
+      content="ConexyAI — AI-агент на вашем компьютере: правит файлы, запускает команды и сборки, проверяет результат. Веб-чат и десктопный клиент для Windows."
+    />
+    <link rel="canonical" href="https://conexyai.ru/" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
+    <meta name="application-name" content="ConexyAI" />
+    <meta name="apple-mobile-web-app-title" content="ConexyAI" />
+
+    <!-- SOCIAL: карточка ссылки в мессенджерах и соцсетях. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ConexyAI" />
+    <meta property="og:title" content="ConexyAI — AI-агент для кода и задач" />
+    <meta
+      property="og:description"
+      content="AI-агент на вашем компьютере: правит файлы, запускает команды и сборки, проверяет результат."
+    />
+    <meta property="og:url" content="https://conexyai.ru/" />
+    <meta property="og:image" content="https://conexyai.ru/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Логотип ConexyAI" />
+    <meta property="og:locale" content="ru_RU" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="ConexyAI — AI-агент для кода и задач" />
+    <meta
+      name="twitter:description"
+      content="AI-агент на вашем компьютере: правит файлы, запускает команды и сборки, проверяет результат."
+    />
+    <meta name="twitter:image" content="https://conexyai.ru/og-image.png" />
+
     <!-- FAVICON: the brand mark itself (dark tile, white chevrons), served from public/.
          SVG is crisp at any size; PNG and ICO are the fallbacks that bookmarks, Windows shortcuts
          and older browsers use. `?v=2` busts the cached "site has no icon" state. -->
@@ -15,10 +49,61 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=2" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=2" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2" />
+    <link rel="manifest" href="/site.webmanifest" />
     <meta name="theme-color" content="#0a0a0a" />
+
+    <!-- ENTITY: Organization + WebSite + SoftwareApplication. `alternateName` содержит только
+         реальные варианты написания (Conexy AI, Conexy) — чужое «ConnexAI» сюда не попадает,
+         иначе Google получил бы подтверждение путаницы. sameAs связывает сайт с репозиторием. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://conexyai.ru/#organization",
+            "name": "ConexyAI",
+            "alternateName": ["Conexy AI", "Conexy"],
+            "url": "https://conexyai.ru/",
+            "logo": "https://conexyai.ru/apple-touch-icon.png",
+            "description": "ConexyAI — AI-агент для кода и задач, работающий на компьютере пользователя.",
+            "sameAs": ["https://github.com/rem1xzov/ConexyAI"]
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://conexyai.ru/#website",
+            "url": "https://conexyai.ru/",
+            "name": "ConexyAI",
+            "alternateName": ["Conexy AI", "Conexy"],
+            "inLanguage": "ru-RU",
+            "publisher": { "@id": "https://conexyai.ru/#organization" }
+          },
+          {
+            "@type": "SoftwareApplication",
+            "name": "ConexyAI",
+            "url": "https://conexyai.ru/",
+            "applicationCategory": "DeveloperApplication",
+            "operatingSystem": "Windows, macOS, Linux",
+            "description": "AI-агент для кода и задач: правит файлы, запускает команды и сборки, проверяет результат на вашем компьютере.",
+            "publisher": { "@id": "https://conexyai.ru/#organization" }
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
+    <!-- SEARCH_TEXT: без JS поисковик всё равно видит, что это за сайт. Текст не скрытый:
+         он показывается только при отключённом JavaScript. -->
+    <noscript>
+      <h1>ConexyAI</h1>
+      <p>
+        ConexyAI — AI-агент для кода и задач. Работает на вашем компьютере: правит файлы,
+        запускает команды и сборки, проверяет результат. Есть веб-чат и десктопный клиент
+        для Windows.
+      </p>
+      <p>Для работы приложения включите JavaScript.</p>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

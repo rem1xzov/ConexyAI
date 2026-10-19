@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /hubs/
+
+Sitemap: https://conexyai.ru/sitemap.xml

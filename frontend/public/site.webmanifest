@@ -1,0 +1,15 @@
+{
+  "name": "ConexyAI",
+  "short_name": "ConexyAI",
+  "description": "AI-агент для кода и задач: правит файлы и запускает команды на вашем ПК.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "lang": "ru",
+  "icons": [
+    { "src": "/favicon-32.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/conexyai.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
