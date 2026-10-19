@@ -152,6 +152,9 @@ public sealed partial class AgentLoopGuard
         System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
     private static partial System.Text.RegularExpressions.Regex SafeCommandHead();
 
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?:[A-Za-z]:)?[A-Za-z0-9_.\-/\\]+\.(?:cs|js|ts|tsx|jsx|css|html|htm|json|md|py|csproj|sln|txt|xml|yml|yaml|props|targets|ps1|sh|bat)")]
+    private static partial System.Text.RegularExpressions.Regex FilePathInCommand();
+
     /// <summary>Инструменты, которые ходят в интернет и считаются в общий бюджет.</summary>
     private static readonly HashSet<string> WebTools = new(StringComparer.Ordinal)
     {
@@ -322,7 +325,15 @@ public sealed partial class AgentLoopGuard
     private static string Target(string tool, string arguments)
     {
         if (IsShellTool(tool))
-            return tool + "|" + NormalizeCommand(ReadCommand(arguments) ?? arguments);
+        {
+            // Объект — файл из команды, а не текст скрипта: ReadAllText/ReadAllLines/Select-String одного
+            // файла — одно и то же чтение, сколько бы разных однострочников модель ни придумала.
+            var command = ReadCommand(arguments) ?? arguments;
+            var file = FilePathInCommand().Match(command);
+            return tool + "|" + (file.Success
+                ? file.Value.Replace('\\', '/').ToLowerInvariant()
+                : NormalizeCommand(command));
+        }
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(arguments) ? "{}" : arguments);

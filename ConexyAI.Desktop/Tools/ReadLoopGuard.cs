@@ -127,7 +127,7 @@ public sealed partial class ReadLoopGuard
     private static string Target(string tool, ToolArgs args)
     {
         if (tool is "bash" or "terminal_exec" or "cmd_exec")
-            return tool + "|" + Digits().Replace(args.Str("command") ?? string.Empty, string.Empty).ToLowerInvariant();
+            return tool + "|" + ShellTarget(args.Str("command") ?? string.Empty);
 
         var parts = new List<string> { tool };
         foreach (var key in new[] { "path", "pattern", "glob", "window", "url" })
@@ -137,6 +137,21 @@ public sealed partial class ReadLoopGuard
         }
         return string.Join('|', parts);
     }
+
+    /// <summary>
+    /// Объект чтения для команды: файл, о котором она, а не текст скрипта. Модель читала один файл
+    /// десятками разных однострочников (ReadAllText/ReadAllLines/Select-String) — текст разный, файл тот же.
+    /// </summary>
+    private static string ShellTarget(string command)
+    {
+        var match = FilePathInCommand().Match(command);
+        return match.Success
+            ? match.Value.Replace('\\', '/').ToLowerInvariant()
+            : Digits().Replace(command, string.Empty).ToLowerInvariant();
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?:[A-Za-z]:)?[A-Za-z0-9_.\-/\\]+\.(?:cs|js|ts|tsx|jsx|css|html|htm|json|md|py|csproj|sln|txt|xml|yml|yaml|props|targets|ps1|sh|bat)")]
+    private static partial System.Text.RegularExpressions.Regex FilePathInCommand();
 
     [System.Text.RegularExpressions.GeneratedRegex(@"(?<=\s)-?\d+|\d+")]
     private static partial System.Text.RegularExpressions.Regex Digits();

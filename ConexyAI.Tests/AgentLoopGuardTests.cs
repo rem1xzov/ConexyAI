@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using ConexyAI.Service;
 using ConexyAI.Service.Prompts;
 
@@ -70,6 +71,24 @@ internal static class AgentLoopGuardTests
         }
         Assert(guard.Refuse("bash", """{"command":"Get-Content MainForm.cs -Skip 999"}""") == AgentLoopGuard.ReadTargetRefusal,
             "the same file with another offset must be refused");
+
+        // Разная форма скрипта — тот же файл: ReadAllText/ReadAllLines/Select-String не должны обходить предел.
+        var mixed = new AgentLoopGuard();
+        var scripts = new[]
+        {
+            "$t=[IO.File]::ReadAllText('MainForm.cs'); $t.Substring(0,100)",
+            "$l=[IO.File]::ReadAllLines('MainForm.cs'); $l[10]",
+            "Select-String -Path MainForm.cs -Pattern 'Drag'",
+        };
+        for (var i = 0; i < scripts.Length; i++)
+        {
+            var args = JsonSerializer.Serialize(new { command = scripts[i] });
+            Assert(mixed.Refuse("bash", args) is null, $"shape #{i + 1} must be allowed");
+            mixed.Record("bash", args, $"out {i}");
+        }
+        Assert(mixed.Refuse("bash", JsonSerializer.Serialize(new { command = "$t=[IO.File]::ReadAllText('MainForm.cs'); $t" }))
+               == AgentLoopGuard.ReadTargetRefusal,
+            "a different one-liner for the same file is still a repeat read");
 
         // Сборка — действие: после неё перечитывать файл можно снова.
         guard.Record("bash", """{"command":"dotnet build"}""", "ok");
