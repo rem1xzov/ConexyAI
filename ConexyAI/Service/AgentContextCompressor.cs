@@ -21,13 +21,14 @@ namespace ConexyAI.Service;
 public static class AgentContextCompressor
 {
     /// <summary>Сколько последних выводов инструментов остаются неприкосновенными.</summary>
-    public const int KeepFullOutputs = 8;
+    // TOKEN_ECONOMY: каждый неприкосновенный вывод пересылается на каждом шаге. Четырёх хватает.
+    public const int KeepFullOutputs = 4;
 
     /// <summary>С какого размера (символов) старый вывод инструмента подлежит сжатию.</summary>
-    public const int TrimThresholdChars = 4_000;
+    public const int TrimThresholdChars = 2_500;
 
     /// <summary>Сколько символов головы старого вывода оставляем при сжатии.</summary>
-    public const int TrimHeadChars = 1_500;
+    public const int TrimHeadChars = 1_200;
 
     /// <summary>
     /// PREFIX_CACHE: сжимаем ПАЧКАМИ по столько выводов, а не по одному на каждом шаге. Любая правка

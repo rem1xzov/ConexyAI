@@ -7,8 +7,9 @@ namespace ConexyAI.Desktop.Tools;
 /// <summary>grep / glob по рабочей папке.</summary>
 public sealed class SearchTools
 {
-    private const int DefaultMaxResults = 200;
-    private const int HardMaxResults = 1_000;
+    // TOKEN_ECONOMY: каждая строка — токены в контексте. 80 совпадений достаточно, чтобы найти место.
+    private const int DefaultMaxResults = 80;
+    private const int HardMaxResults = 400;
     private const long MaxFileBytes = 2_000_000;
 
     private readonly PathGuard _guard;

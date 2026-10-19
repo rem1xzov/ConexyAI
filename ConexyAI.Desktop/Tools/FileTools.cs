@@ -5,9 +5,13 @@ namespace ConexyAI.Desktop.Tools;
 /// <summary>file_read / file_write / file_patch / workspace_list_files.</summary>
 public sealed class FileTools
 {
-    internal const int MaxReadChars = 200_000;
+    // TOKEN_ECONOMY: 200k символов — это ~50k токенов за одно чтение, и они пересылаются на каждом шаге.
+    // Теперь чтение постраничное: 400 строк / 24k символов за раз, дальше — offset/limit.
+    internal const int MaxReadChars = 24_000;
+    internal const int DefaultReadLines = 400;
+    internal const int MaxReadLines = 2_000;
     internal const long MaxReadBytes = 5_000_000;
-    internal const int MaxListEntries = 2_000;
+    internal const int MaxListEntries = 500;
 
     internal static readonly HashSet<string> IgnoredDirs = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -34,9 +38,32 @@ public sealed class FileTools
         if (text.Contains('\0'))
             throw new ToolException("Похоже на двоичный файл — читать как текст нельзя.");
 
-        return ToolResult.Ok(text.Length > MaxReadChars
-            ? text[..MaxReadChars] + "\n[... файл обрезан ...]"
-            : text);
+        var lines = text.Split('\n');
+        var offset = Math.Max(0, args.Int("offset") ?? 0);
+        var limit = Math.Clamp(args.Int("limit") ?? DefaultReadLines, 1, MaxReadLines);
+
+        // Файл влезает целиком — отдаём как есть.
+        if (offset == 0 && lines.Length <= limit && text.Length <= MaxReadChars)
+            return ToolResult.Ok(text);
+
+        if (offset >= lines.Length && lines.Length > 1)
+            throw new ToolException($"offset {offset} за концом файла ({lines.Length} строк). Укажи offset от 0 до {lines.Length - 1}.");
+
+        var end = Math.Min(lines.Length, offset + limit);
+        var body = string.Join('\n', lines.Skip(offset).Take(end - offset));
+        var cutByChars = body.Length > MaxReadChars;
+        if (cutByChars)
+            body = body[..MaxReadChars];
+
+        var note = new StringBuilder();
+        note.Append("\n[... строки ").Append(offset + 1).Append('–').Append(end)
+            .Append(" из ").Append(lines.Length);
+        if (cutByChars)
+            note.Append(", обрезано по размеру");
+        if (end < lines.Length)
+            note.Append("; дальше: offset=").Append(end).Append(", limit=").Append(limit);
+        note.Append(" ...]");
+        return ToolResult.Ok(body + note);
     }
 
     public ToolResult Write(ToolArgs args)

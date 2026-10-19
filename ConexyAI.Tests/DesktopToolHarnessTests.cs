@@ -17,6 +17,7 @@ internal static class DesktopToolHarnessTests
         TestRegistry.Add("desktop tools: pc_* tools reach outside the project", PcAsync);
         TestRegistry.Add("desktop tools: service tools and guards (paths, unknown tools, plan mode)", GuardsAsync);
         TestRegistry.Add("desktop tools: re-reading the same file is stopped until an edit", ReadLoopAsync);
+        TestRegistry.Add("desktop tools: file reads are paginated and capped", ReadPagingAsync);
         TestRegistry.Add("desktop tools: a system folder is never a workspace", SystemRootAsync,
             () => OperatingSystem.IsWindows() ? null : "the system-folder guard is Windows-specific");
         TestRegistry.Add("desktop tools: http_request and download_file", NetworkAsync,
@@ -123,6 +124,21 @@ internal static class DesktopToolHarnessTests
             Assert(File.ReadAllText(Path.Combine(h.Root, "copied.txt")) == "outside", "pc_copy_to_project must copy the content");
         }
         finally { File.Delete(outside); }
+    }
+
+    // TOKEN_ECONOMY: целый файл — это десятки тысяч токенов в контексте на каждом шаге.
+    private static async Task ReadPagingAsync()
+    {
+        using var h = new Harness();
+        var lines = Enumerable.Range(1, 1_000).Select(i => $"line {i} " + new string('x', 20)).ToArray();
+        File.WriteAllLines(Path.Combine(h.Root, "big.txt"), lines);
+
+        var first = await h.Ok("file_read", new { path = "big.txt" }, o => o.Contains("line 1"));
+        Assert(first.Contains("дальше: offset=400"), $"the first page must point to the next offset: {first[^200..]}");
+        Assert(first.Length < 26_000, $"a read must be capped, got {first.Length} chars");
+
+        var tail = await h.Ok("file_read", new { path = "big.txt", offset = 900, limit = 50 }, o => o.Contains("line 950"));
+        Assert(tail.Contains("строки 901–950"), $"the page range is reported: {tail[^200..]}");
     }
 
     // LOOP_GUARD: клиент сам останавливает бесконечное чтение — даже если сервер старый и не прислал отказ.

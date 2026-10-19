@@ -704,8 +704,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // приоритета, и их бюджет в промпте (каждый файл и все вместе).
     // AGENTS.md — общий стандарт Codex/Cursor/Jules: вайбкодеры приходят с ним из других агентов.
     private static readonly string[] ProjectRuleFiles = { "CONEXY.md", "CLAUDE.md", "AGENTS.md", ".conexy/rules.md" };
-    private const int ProjectRulesMaxCharsPerFile = 16_000;
-    private const int ProjectRulesMaxTotalChars = 24_000;
+    // TOKEN_ECONOMY: правила проекта едут в каждом запросе прогона; 12k символов (~3k токенов) достаточно.
+    private const int ProjectRulesMaxCharsPerFile = 8_000;
+    private const int ProjectRulesMaxTotalChars = 12_000;
 
     // AGENT_HOOKS: добавлено 2026-10-04 — бюджеты хуков, чтобы автоматизация не могла зациклиться или
     // залить контекст выводом.
@@ -728,6 +729,31 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // Именно серия, а не сумма: любой успешный вызов сбрасывает счётчик, поэтому обычная отладка
     // (упал тест → поправил → прошёл) его не наберёт, а петля на недоступном инструменте — наберёт.
     private const int ToolFailureBudget = 6;
+
+    // TOKEN_ECONOMY: постраничное чтение — те же пределы, что у десктопного file_read.
+    private const int MaxReadChars = 24_000;
+    private const int DefaultReadLines = 400;
+
+    private static string SliceRead(string content, int offset, int limit)
+    {
+        var lines = content.Split('\n');
+        offset = Math.Max(0, offset);
+        limit = limit > 0 ? Math.Min(limit, 2_000) : DefaultReadLines;
+        if (offset == 0 && lines.Length <= limit && content.Length <= MaxReadChars)
+            return content;
+        if (offset >= lines.Length)
+            return $"offset {offset} за концом файла ({lines.Length} строк). Укажи offset от 0 до {Math.Max(0, lines.Length - 1)}.";
+
+        var end = Math.Min(lines.Length, offset + limit);
+        var body = string.Join('\n', lines.Skip(offset).Take(end - offset));
+        var cut = body.Length > MaxReadChars;
+        if (cut)
+            body = body[..MaxReadChars];
+
+        var note = $"\n[... строки {offset + 1}–{end} из {lines.Length}" + (cut ? ", обрезано по размеру" : "") +
+                   (end < lines.Length ? $"; дальше: offset={end}, limit={limit}" : "") + " ...]";
+        return body + note;
+    }
 
     // LOOP_GUARD: чтение без правок. Агент один раз прочитал одни и те же файлы десятки раз и так и не
     // перешёл к изменениям. Мягкий порог — напоминание, жёсткий — отказ в чтении, потолок — на весь прогон.
@@ -2940,7 +2966,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         return new ConexyToolResult(toolCall.Id, "file_read requires 'path'.", true);
 
                     var res = await _workspaceService.ReadFileAsync(chatId, path, ct);
-                    return new ConexyToolResult(toolCall.Id, res.Success ? res.Content! : res.Error!, !res.Success);
+                    // TOKEN_ECONOMY: целый файл в контексте — десятки тысяч токенов на каждом шаге.
+                    var content = res.Success
+                        ? SliceRead(res.Content!, GetInt(root, "offset", 0), GetInt(root, "limit", 0))
+                        : res.Error!;
+                    return new ConexyToolResult(toolCall.Id, content, !res.Success);
                 }
 
                 case "file_patch":
@@ -4920,8 +4950,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
             }, required = new[] { "command", "port" } }),
         Function("stop_service", "Останавливает сервис, запущенный через start_service.",
             new { type = "object", properties = new { } }),
-        Function("file_read", "Read the full contents of a workspace file.",
-            new { type = "object", properties = new { path = new { type = "string", description = "Relative path to the file within the workspace." } }, required = new[] { "path" } }),
+        Function("file_read", "Read a workspace file. Long files are paginated: by default up to 400 lines and 24k characters; use offset/limit to read another part instead of re-reading.",
+            new { type = "object", properties = new {
+                path = new { type = "string", description = "Relative path to the file within the workspace." },
+                offset = new { type = "integer", description = "0-based line offset (default 0)." },
+                limit = new { type = "integer", description = "Maximum lines to return (default 400, max 2000)." }
+            }, required = new[] { "path" } }),
         Function("file_write", "Write or overwrite a workspace file with the complete new content.",
             new { type = "object", properties = new {
                 path = new { type = "string", description = "Relative path to the file (e.g. 'index.html', 'src/App.tsx')" },
@@ -4960,7 +4994,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 path = new { type = "string", description = "Optional relative directory to search in (default: workspace root)" },
                 glob = new { type = "string", description = "Optional glob to restrict which files are searched, e.g. '*.cs' or 'src/**/*.ts'" },
                 ignore_case = new { type = "boolean", description = "Case-insensitive search (default false)" },
-                max_results = new { type = "integer", description = "Maximum matching lines to return (default 100, max 1000)" },
+                max_results = new { type = "integer", description = "Maximum matching lines to return (default 80, max 400)" },
                 context_lines = new { type = "integer", description = "Lines of context before and after each match, like grep -C (0–10, default 0)" },
                 output_mode = new { type = "string", @enum = new[] { "content", "files", "count" }, description = "content = matching lines (default); files = only paths of matching files; count = matches per file" },
                 include_ignored = new { type = "boolean", description = "Also search files ignored by .gitignore (default false)" }

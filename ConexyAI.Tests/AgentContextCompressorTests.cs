@@ -69,7 +69,8 @@ internal static class AgentContextCompressorTests
         await Task.CompletedTask;
         var longText = new string('x', 10_000);
         var messages = new List<ChatMessage> { new("system", "prompt") };
-        for (var i = 0; i < 9; i++) messages.Add(Tool(longText));
+        // Начинаем с одного лишнего вывода: пока не наберётся целая пачка, трогать ничего нельзя.
+        for (var i = 0; i < AgentContextCompressor.KeepFullOutputs + 1; i++) messages.Add(Tool(longText));
 
         // После каждого нового вывода до заполнения пачки старые сообщения не должны меняться.
         for (var step = 0; step < AgentContextCompressor.TrimBatch - 1; step++)

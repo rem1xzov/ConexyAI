@@ -97,7 +97,9 @@ public sealed partial class ShellTool
     // С запасом на первую сборку со скачиванием зависимостей (ForgeGradle, Maven, Android, npm). Сервер ждёт дольше.
     private const int DefaultTimeoutSeconds = 600;
     internal const int MaxTimeoutSeconds = 3600;
-    private const int MaxOutputChars = 40_000;
+    // TOKEN_ECONOMY: вывод команд тоже едет в контекст на каждом шаге. Логи сборки читаются
+    // по краям (начало + конец), 16k символов — ~4k токенов.
+    private const int MaxOutputChars = 16_000;
 
     private readonly PathGuard _guard;
     private readonly ICommandApprover _approver;
