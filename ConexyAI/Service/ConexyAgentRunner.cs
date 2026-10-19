@@ -694,6 +694,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // (упал тест → поправил → прошёл) его не наберёт, а петля на недоступном инструменте — наберёт.
     private const int ToolFailureBudget = 6;
 
+    // LOOP_GUARD: чтение без правок. Агент один раз прочитал одни и те же файлы десятки раз и так и не
+    // перешёл к изменениям. Мягкий порог — напоминание, жёсткий — отказ в чтении, потолок — на весь прогон.
+    private const int ReadStreakNudge = 6;
+    private const int ReadStreakHardLimit = 10;
+    private const int ReadTotalLimit = 40;
+
     // Сколько раз ОДИН инструмент должен упасть, чтобы мы сказали модели «он тут не работает».
     private const int ToolRetryWarningLimit = 3;
 
@@ -911,6 +917,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var nudgedTools = new HashSet<string>(StringComparer.Ordinal);
         var toolBudgetExhausted = false;
         var completedSteps = 0;
+        // LOOP_GUARD: сколько подряд идёт чтений без единой правки/команды.
+        var readOnlyStreak = 0;
+        var readOnlyTotal = 0;
+        var readNudged = false;
         // LOOP_GUARD: после исчерпания отказов инструменты отключаются — модель обязана ответить текстом.
         // Это тот же приём, что у последнего шага цикла, но раньше и по факту петли.
         var finalAnswerForced = false;
@@ -1305,7 +1315,16 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // вызова инструмента. Проверка после запуска была бы бесполезной: команда уже
                 // выполнилась в четвёртый раз (и снова сожгла время), а отказ пришёл бы к её результату.
                 // P2_PLAN_FIRST: отказ-план имеет приоритет над прочими (правки не выполняются вовсе).
-                var refusal = planRefusal ?? teamRefusal ?? (toolAllowed ? loopGuard.Refuse(toolName, toolCall.Function.Arguments) : null);
+                // LOOP_GUARD: если модель читает и читает, отказ идёт раньше прочих проверок: выполнять
+                // этот вызов бессмысленно — данные у неё уже есть.
+                string? readRefusal = null;
+                if (toolAllowed && AgentLoopGuard.ReadTools.Contains(toolName) &&
+                    (readOnlyStreak >= ReadStreakHardLimit || readOnlyTotal >= ReadTotalLimit))
+                {
+                    readRefusal = loopGuard.RefuseRead();
+                }
+                var refusal = planRefusal ?? teamRefusal ?? readRefusal
+                    ?? (toolAllowed ? loopGuard.Refuse(toolName, toolCall.Function.Arguments) : null);
 
                 if (toolAllowed && refusal is null)
                 {
@@ -1380,6 +1399,16 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     loopGuard.Record(toolName, toolCall.Function.Arguments, result.Output);
                     // TOOL_INTEGRITY: считаем именно РЕАЛЬНО доведённые до вызова инструменты.
                     executedToolCounts[toolName] = executedToolCounts.GetValueOrDefault(toolName) + 1;
+                    if (AgentLoopGuard.ReadTools.Contains(toolName))
+                    {
+                        readOnlyStreak++;
+                        readOnlyTotal++;
+                    }
+                    else if (AgentLoopGuard.IsProgressTool(toolName, toolCall.Function.Arguments))
+                    {
+                        readOnlyStreak = 0;
+                        readNudged = false;
+                    }
                 }
 
                 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
@@ -1510,6 +1539,20 @@ public class ConexyAgentRunner : IConexyAgentRunner
             if (newlyUnavailable.Count > 0)
             {
                 messages.Add(new ChatMessage("system", ToolUnavailablePrompt(newlyUnavailable)));
+            }
+
+            // LOOP_GUARD: слишком много чтений без правки — сначала просим действовать, а не читать дальше.
+            if (!readNudged && readOnlyStreak >= ReadStreakNudge)
+            {
+                readNudged = true;
+                _logger.LogInformation(
+                    "Agent read-only streak {Streak}: asking for an action. task={TaskId}", readOnlyStreak, taskId);
+                await group.SendAsync(
+                    "OnLog",
+                    $"[Reading] {readOnlyStreak} чтений без изменений — прошу перейти к правке.", ct);
+                messages.Add(new ChatMessage("system",
+                    "[Reading] Ты уже собрал нужный контекст. Следующий вызов обязан быть действием: правка файла, " +
+                    "редактор или команда. Не читай те же файлы снова — применяй прочитанное."));
             }
 
             // LOOP_GUARD: несколько отказов подряд — модель топчется на месте. Отключаем инструменты,

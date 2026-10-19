@@ -17,6 +17,38 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("loop guard: web tools are capped per model turn, and the cap resets each turn", WebBudgetAsync);
         TestRegistry.Add("loop guard: the last step asks the model to wrap up instead of stopping silently", WrapUpFragmentAsync);
         TestRegistry.Add("loop guard: different arguments with the same output stop the run", NoProgressAsync);
+        TestRegistry.Add("loop guard: re-reading the same file with new ranges is refused until an edit", ReadTargetAsync);
+    }
+
+    // LOOP_GUARD: агент читал один файл десятки раз подряд разными кусками и не вносил правок.
+    private static Task ReadTargetAsync()
+    {
+        var guard = new AgentLoopGuard();
+        for (var i = 1; i <= AgentLoopGuard.ReadTargetThreshold; i++)
+        {
+            var args = $"{{\"path\":\"MainForm.cs\",\"view_range\":[{i},{i + 100}]}}";
+            Assert(guard.Refuse("file_read", args) is null, $"read #{i} must be allowed");
+            guard.Record("file_read", args, $"chunk {i}");
+        }
+
+        // Другой кусок того же файла — тот же объект: новые данные ничего не дают.
+        Assert(guard.Refuse("file_read", """{"path":"MainForm.cs","view_range":[5,500]}""") == AgentLoopGuard.ReadTargetRefusal,
+            "another range of the same file must be refused");
+
+        // Другой файл — другой объект.
+        Assert(guard.Refuse("file_read", """{"path":"TrayIcon.cs"}""") is null, "a different file is allowed");
+
+        // Правка — прогресс: после неё файл можно читать снова.
+        guard.Record("file_write", """{"path":"MainForm.cs","content":"x"}""", "ok");
+        Assert(guard.Refuse("file_read", """{"path":"MainForm.cs"}""") is null,
+            "after an edit the file may be read again");
+
+        // Бюджет чтения тоже питает счётчик отказов: после трёх — принудительный итог.
+        Assert(guard.RefuseRead() == AgentLoopGuard.ReadBudgetRefusal, "the read budget refusal has its own text");
+        guard.RefuseRead();
+        guard.RefuseRead();
+        Assert(guard.ShouldStop, "three read refusals must force a final answer");
+        return Task.CompletedTask;
     }
 
     // LOOP_GUARD: в реальном прогоне модель перебирала имена файлов (t.xlsx, t2.xlsx, …), а вывод

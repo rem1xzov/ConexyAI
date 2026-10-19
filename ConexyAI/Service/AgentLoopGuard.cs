@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -33,6 +34,12 @@ public sealed class AgentLoopGuard
     public const int StopAfterRefusals = 3;
 
     /// <summary>
+    /// Сколько раз можно обратиться к ОДНОМУ И ТОМУ ЖЕ объекту чтения (файл, шаблон, папка), пока не внесена
+    /// правка. Агент один раз перечитывал один файл десятки раз с разными параметрами и не переходил к делу.
+    /// </summary>
+    public const int ReadTargetThreshold = 3;
+
+    /// <summary>
     /// Сколько интернет-обращений (web_search + fetch_web_page) разрешено за ОДИН ход модели.
     /// Счётчик сбрасывается на каждом шаге цикла (<see cref="ResetWebBudget"/>), поэтому в целом за
     /// задачу поиск не ограничен — ограничен только «взрыв» поисков внутри одного ответа.
@@ -54,10 +61,26 @@ public sealed class AgentLoopGuard
         "Инструменты отключены: ты повторял одни и те же действия без нового результата. Дай итоговый ответ текстом — " +
         "что сделано, что не получилось и что нужно от пользователя.";
 
+    /// <summary>Текст отказа, когда один и тот же объект читается снова и снова.</summary>
+    public const string ReadTargetRefusal =
+        "Ты уже читал этот файл/объект несколько раз, и данные у тебя есть. Хватит читать — примени то, что уже " +
+        "прочитал: внеси правку, выполни команду или дай итог. Повторное чтение с другими параметрами нового не даст.";
+
+    /// <summary>Текст отказа, когда исчерпан бюджет чтения за прогон.</summary>
+    public const string ReadBudgetRefusal =
+        "Бюджет чтения на этот запуск исчерпан. Больше не читай — действуй: правка файла или команда, затем проверка.";
+
     /// <summary>Текст отказа, когда интернет-бюджет этого хода исчерпан.</summary>
     public const string WebBudgetRefusal =
         "Лимит интернет-запросов на этот ход исчерпан. Не повторяй поиск сейчас — обработай уже " +
         "найденную информацию и продолжай задачу.";
+
+    /// <summary>Инструменты чтения: повторный запрос к тому же объекту ничего не добавляет.</summary>
+    public static readonly HashSet<string> ReadTools = new(StringComparer.Ordinal)
+    {
+        "file_read", "file_read_bytes", "grep", "glob", "workspace_list_files",
+        "view_image", "read_document_file", "project_rules",
+    };
 
     /// <summary>Инструменты, которые ходят в интернет и считаются в общий бюджет.</summary>
     private static readonly HashSet<string> WebTools = new(StringComparer.Ordinal)
@@ -70,6 +93,7 @@ public sealed class AgentLoopGuard
     private readonly int _webCallBudget;
     private readonly int _windowSize;
     private readonly List<Call> _recent = new();
+    private readonly Dictionary<string, int> _targets = new(StringComparer.Ordinal);
 
     public AgentLoopGuard(
         int repeatThreshold = RepeatThreshold,
@@ -105,6 +129,12 @@ public sealed class AgentLoopGuard
     /// </summary>
     public string? Refuse(string tool, string arguments)
     {
+        if (ReadTools.Contains(tool) && _targets.GetValueOrDefault(Target(tool, arguments)) >= ReadTargetThreshold)
+        {
+            Refusals++;
+            return ReadTargetRefusal;
+        }
+
         if (RefusesRepeat(tool, arguments))
         {
             Refusals++;
@@ -135,9 +165,24 @@ public sealed class AgentLoopGuard
     /// Запоминает фактический результат — только по нему и видно, что повтор ничего не меняет
     /// (упавшая команда и та же команда с новым выводом — разные ситуации).
     /// </summary>
+    /// <summary>Отказ по бюджету чтения: раннер сам решает, когда чтения стало слишком много.</summary>
+    public string RefuseRead()
+    {
+        Refusals++;
+        return ReadBudgetRefusal;
+    }
+
     public void Record(string tool, string arguments, string output)
     {
         _recent.Add(new Call(tool, arguments, Hash(output)));
+        // Любая правка/команда — прогресс: счётчики чтения обнуляются, перечитывать после правки нормально.
+        if (IsProgressTool(tool, arguments))
+            _targets.Clear();
+        else if (ReadTools.Contains(tool))
+        {
+            var key = Target(tool, arguments);
+            _targets[key] = _targets.GetValueOrDefault(key) + 1;
+        }
 
         if (_recent.Count > _windowSize)
         {
@@ -198,6 +243,45 @@ public sealed class AgentLoopGuard
 
         return matching >= _repeatThreshold;
     }
+
+    /// <summary>Ключ объекта чтения без пагинации: тот же файл с другим view_range — тот же объект.</summary>
+    private static string Target(string tool, string arguments)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(arguments) ? "{}" : arguments);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return tool + "|" + arguments;
+            var parts = new List<string>();
+            foreach (var property in doc.RootElement.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
+            {
+                if (PagingKeys.Contains(property.Name))
+                    continue;
+                parts.Add(property.Name + "=" + property.Value.GetRawText());
+            }
+            return tool + "|" + string.Join(";", parts);
+        }
+        catch (JsonException)
+        {
+            return tool + "|" + arguments;
+        }
+    }
+
+    private static readonly HashSet<string> PagingKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "view_range", "offset", "limit", "max_results", "lines", "tail_lines", "head_lines",
+        "context_lines", "start", "end", "from", "to", "length", "start_line", "end_line", "count",
+    };
+
+    /// <summary>Правка или команда — значит, работа идёт, и счётчики чтения можно сбросить.</summary>
+    public static bool IsProgressTool(string tool, string arguments) => tool switch
+    {
+        "file_write" or "file_write_bytes" or "file_patch" or "apply_patch" => true,
+        "bash" or "terminal_exec" or "cmd_exec" or "run_tests" or "get_diagnostics" => true,
+        "bg_start" or "bg_stop" or "install_software" => true,
+        "str_replace_editor" => !arguments.Contains("\"view\"", StringComparison.Ordinal),
+        _ => false,
+    };
 
     private static string Hash(string text) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
