@@ -7,11 +7,15 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content"
     />
     <title>ConexyAI</title>
-    <!-- FAVICON: the brand mark itself (dark tile, white chevrons), served straight from public/.
-         SVG is what every current browser wants for a tab icon: one file, crisp at any size. The
-         old browsers that cannot read it fall back to their own default icon — a raster fallback
-         would need a real PNG/ICO, which is not generated here. -->
-    <link rel="icon" type="image/svg+xml" href="/conexyai.svg" />
+    <!-- FAVICON: the brand mark itself (dark tile, white chevrons), served from public/.
+         SVG is crisp at any size; PNG and ICO are the fallbacks that bookmarks, Windows shortcuts
+         and older browsers use. `?v=2` busts the cached "site has no icon" state. -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/svg+xml" href="/conexyai.svg?v=2" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=2" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=2" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2" />
+    <meta name="theme-color" content="#0a0a0a" />
   </head>
   <body>
     <div id="root"></div>
