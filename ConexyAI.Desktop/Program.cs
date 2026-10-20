@@ -182,6 +182,18 @@ catch (HttpRequestException ex)
     Console.Error.WriteLine("Не удалось связаться с сервером: " + ex.Message);
     return 3;
 }
+// TIMEOUT_VISIBLE: TaskCanceledException — это OperationCanceledException, и раньше он проскакивал
+// мимо общего catch. Приложение падало без единой строки, окно закрывалось — со стороны «не открывается».
+catch (TaskCanceledException)
+{
+    Console.Error.WriteLine("Сервер не ответил вовремя. Проверьте интернет и повторите запуск.");
+    Console.Error.WriteLine("Если повторяется — перезапустите сервер: docker restart conexy_backend");
+    return 5;
+}
+catch (OperationCanceledException)
+{
+    return 130;
+}
 catch (Exception ex) when (ex is not OperationCanceledException)
 {
     Console.Error.WriteLine("Ошибка: " + ex.Message);
@@ -344,6 +356,9 @@ static async Task<int> ChatAsync(string[] args)
         Console.Error.WriteLine($"Беру «{safeRoot}». Сменить: /cd <папка> или запуск с --dir <папка>.");
         root = safeRoot;
     }
+
+    // Раньше до подключения на экране было пусто: при медленном сервере окно выглядело «мёртвым».
+    Ui.Info($"  Подключаюсь к {config.ServerUrl}…");
 
     // Ранняя проверка ключа. Если ключ отозван или заменён — предлагаем ввести новый, а не падаем.
     ServerClient? verified = null;

@@ -49,7 +49,8 @@ public sealed class ServerClient : IDisposable
     {
         BaseUrl = baseUrl.TrimEnd('/');
         _key = key;
-        _http = new HttpClient { BaseAddress = new Uri(BaseUrl + "/"), Timeout = TimeSpan.FromSeconds(60) };
+        // TIMEOUT_VISIBLE: 60 секунд пустого окна при зависшем запросе — слишком долго.
+        _http = new HttpClient { BaseAddress = new Uri(BaseUrl + "/"), Timeout = TimeSpan.FromSeconds(30) };
     }
 
     public async Task<string> GetTokenAsync(CancellationToken ct = default)
