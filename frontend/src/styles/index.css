@@ -1261,11 +1261,11 @@ body {
   bottom: calc(100% + 8px);
   right: 0;
   width: 290px;
-  /* MENU_FITS_SCREEN: меню высокое (2 модели + «Где выполнять» + оркестр + глубина мышления),
-     а открывается вверх от нижнего композера — на низком окне верхние пункты уходили за край
-     экрана и срезались `overflow: hidden` у `.app`. Ограничиваем высоту и даём прокрутку:
-     всё содержимое остаётся доступным и ничто не вылезает за окно. */
-  max-height: min(70vh, calc(100vh - 120px));
+  /* MENU_FITS_SCREEN: меню открывается вверх от композера, а композер на стартовом экране
+     стоит примерно на середине окна — свободного места над ним около 45% высоты. Потолок
+     `70vh` был больше этого, поэтому меню уезжало за верхний край и срезалось. 42vh гарантирует,
+     что оно целиком помещается в окно при любой высоте браузера, а лишнее прокручивается внутри. */
+  max-height: 42vh;
   overflow-y: auto;
   overscroll-behavior: contain;
   background: var(--surface-solid);
@@ -1287,7 +1287,7 @@ body {
   border: none;
   color: var(--text);
   text-align: left;
-  padding: 10px 12px;
+  padding: 8px 12px;
   border-radius: 10px;
   cursor: pointer;
 }
@@ -1354,7 +1354,7 @@ body {
   border: none;
   color: var(--text);
   text-align: left;
-  padding: 10px 12px;
+  padding: 8px 12px;
   border-radius: 10px;
   cursor: pointer;
 }
