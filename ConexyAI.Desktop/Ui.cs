@@ -615,10 +615,28 @@ public static partial class Ui
             }
         }
 
+        // Ctrl+V в Windows Terminal перехватывает терминал: текст он вставляет как клавиши,
+        // а картинку или файлы из Проводника не присылает вовсе. Поэтому буфер обмена
+        // проверяем сами, пока ждём нажатия, — скопированное фото/файл прикрепляется сразу.
+        Attachments.WatchClipboardFromNow();
         Redraw();
         while (true)
         {
-            var queued = Console.KeyAvailable;
+            // `queued` — как и раньше: в очереди уже была пачка нажатий (вставка), а не
+            // одиночное нажатие человека. Раз ждали — значит нажатие одиночное.
+            var waited = false;
+            while (!Console.KeyAvailable)
+            {
+                waited = true;
+                if (Attachments.PollClipboard(out var notice))
+                {
+                    Hint(notice, true);
+                    Redraw();
+                }
+                Thread.Sleep(25);
+            }
+
+            var queued = !waited;
             var key = Console.ReadKey(intercept: true);
             if (queued)
                 burst++;
@@ -647,9 +665,11 @@ public static partial class Ui
                     break;
                 }
             }
-            // Ctrl+V: картинка или файлы из буфера прикрепляются (без отправки), текст вставляется в строку.
-            // (Когда терминал сам перехватывает Ctrl+V для текста, текст приходит как пачка нажатий.)
-            else if (key.KeyChar == '\u0016' || (key.Key == ConsoleKey.V && key.Modifiers.HasFlag(ConsoleModifiers.Control)))
+            // Ctrl+V (или Alt+V — когда Ctrl+V забрал терминал): картинка или файлы из буфера
+            // прикрепляются без отправки, текст вставляется в строку. Обычно же картинку ловит
+            // опрос буфера выше, поэтому Ctrl+V нужен в основном для текста.
+            else if (key.KeyChar == '\u0016' || (key.Key == ConsoleKey.V &&
+                     (key.Modifiers.HasFlag(ConsoleModifiers.Control) || key.Modifiers.HasFlag(ConsoleModifiers.Alt))))
             {
                 var (pasted, message) = Attachments.PasteFromClipboard();
                 if (pasted is not null)

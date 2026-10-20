@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -226,6 +227,60 @@ public static partial class Attachments
         if (added.Count > 0)
             return (null, "Прикреплено: " + string.Join(", ", added));
         return (null, errors ?? "В буфере обмена нет картинки, файлов или текста.");
+    }
+
+    // ── Автоматическое прикрепление из буфера ───────────────────────────────
+    // Windows Terminal перехватывает Ctrl+V сам: текст он вставляет как клавиши, а картинку или
+    // файлы из Проводника не присылает вообще, поэтому обработчик Ctrl+V в приложении до них
+    // не доходит. Пока пользователь в строке ввода, следим за номером изменения буфера (дешёвый
+    // вызов без чтения содержимого) и приклеиваем картинки/файлы сами.
+
+    private const uint CfBitmap = 2;
+    private const uint CfDib = 8;
+    private const uint CfHDrop = 15;
+
+    [DllImport("user32.dll")]
+    private static extern uint GetClipboardSequenceNumber();
+
+    [DllImport("user32.dll")]
+    private static extern bool IsClipboardFormatAvailable(uint format);
+
+    private static uint _clipboardSequence;
+
+    /// <summary>Запоминает текущее состояние буфера: уже скопированное до ввода не приклеиваем.</summary>
+    public static void WatchClipboardFromNow()
+    {
+        if (OperatingSystem.IsWindows())
+            _clipboardSequence = GetClipboardSequenceNumber();
+    }
+
+    /// <summary>
+    /// Проверяет, не скопировали ли картинку или файлы, и прикрепляет их. Текст не трогаем —
+    /// его вставляет сам терминал по Ctrl+V.
+    /// </summary>
+    public static bool PollClipboard(out string message)
+    {
+        message = string.Empty;
+        if (!OperatingSystem.IsWindows())
+            return false;
+
+        var sequence = GetClipboardSequenceNumber();
+        if (sequence == _clipboardSequence)
+            return false;
+        _clipboardSequence = sequence;
+
+        // Только картинка или список файлов: обычный текст — не наше дело.
+        if (!IsClipboardFormatAvailable(CfDib) && !IsClipboardFormatAvailable(CfBitmap) &&
+            !IsClipboardFormatAvailable(CfHDrop))
+            return false;
+
+        var before = Pending.Count;
+        var (text, note) = PasteFromClipboard();
+        if (text is not null || Pending.Count == before)
+            return false;
+
+        message = note ?? "Прикреплено: " + string.Join(", ", Pending.Skip(before).Select(a => a.FileName));
+        return true;
     }
 
     [GeneratedRegex("\"([^\"]+\\.[A-Za-z0-9]{1,8})\"")]

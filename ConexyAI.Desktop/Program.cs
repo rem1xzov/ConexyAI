@@ -93,6 +93,25 @@ try
             return 0;
 
         case "cliptest":
+            // cliptest --watch [секунды] — как строка ввода следит за буфером: печатает, что прикрепилось.
+            if (args.Contains("--watch"))
+            {
+                var seconds = 10;
+                var watchIndex = Array.IndexOf(args, "--watch");
+                if (watchIndex + 1 < args.Length && int.TryParse(args[watchIndex + 1], out var parsedSeconds))
+                    seconds = Math.Clamp(parsedSeconds, 1, 120);
+                Attachments.WatchClipboardFromNow();
+                Console.WriteLine($"Слежу за буфером {seconds} с…");
+                var deadline = DateTime.UtcNow.AddSeconds(seconds);
+                while (DateTime.UtcNow < deadline)
+                {
+                    if (Attachments.PollClipboard(out var notice))
+                        Console.WriteLine("ATTACHED " + notice);
+                    await Task.Delay(100);
+                }
+                Console.WriteLine("ИТОГ: " + (Attachments.Pending.Count == 0 ? "вложений нет" : Attachments.Describe()));
+                return 0;
+            }
             var (clipText, clipMessage) = Attachments.PasteFromClipboard();
             Console.WriteLine($"text={clipText ?? "-"} message={clipMessage ?? "-"} attached={Attachments.Pending.Count}");
             return 0;
@@ -587,7 +606,7 @@ static void PrintHelp()
             ("/cd <путь|N|..>", "сменить рабочую папку (N — номер из /ls)"),
             ("/pwd", "текущая папка"),
             ("/attach <файл>", "прикрепить файл или картинку; можно перетащить файл в окно или написать @путь"),
-            ("/paste", "вложить из буфера обмена (или Ctrl+V); уходит вместе со следующим сообщением"),
+            ("/paste", "вложить из буфера обмена (Ctrl+V или Alt+V); картинку и файл клиент подхватывает сам, как только вы их скопировали"),
             ("/detach [N]", "убрать вложение по номеру или все"),
             ("/rewind [N]", "откатить правки файлов за последние N ходов (команды терминала не откатываются)"),
         ]),
