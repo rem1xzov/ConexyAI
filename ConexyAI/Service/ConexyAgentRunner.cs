@@ -623,6 +623,183 @@ public class ConexyAgentRunner : IConexyAgentRunner
         return SuccessClaimMarkers.Any(marker => lower.Contains(marker, StringComparison.Ordinal));
     }
 
+    // RUN_GATE: добавлено 2026-10-20 — агент доводил дело до сборки/проверки типов и на этом
+    // заканчивал: «готово». Живой пример: Expo-приложение с зелёным `tsc` и собранным бандлом,
+    // которое ни разу не запускали. Сборка не доказывает, что приложение стартует, поэтому для
+    // задач с точкой запуска запуск и проверка по факту обязательны: одно напоминание, затем
+    // честная машинная приписка «запуск не проверялся».
+    private const int MaxRunGateNudges = 1;
+    private const string RunCheckPrompt =
+        "[Run Check] Сборка и проверка типов не доказывают, что приложение работает: оно может не стартовать. " +
+        "За этот прогон запуск ни разу не подтверждён. Сделай это сейчас, по шагам:\n" +
+        "1) запусти сервис через `bg_start` (`npm run dev`, `npm start`, `npx expo start`, `dotnet run`, `python main.py`, `docker compose up`);\n" +
+        "2) дождись готовности: `bg_logs` или `http_request` на http://localhost:<порт>;\n" +
+        "3) веб-страницу проверь `page_screenshot`, нативное окно — `window_list` + `screen_capture`;\n" +
+        "4) упало — читай вывод, исправляй и повторяй, пока не поднимется.\n" +
+        "Если нативное приложение (мобильное, десктоп) нельзя поднять без устройства или эмулятора — запусти то, " +
+        "что поднимается на этом ПК (`npx expo start --web`, веб-сборка, серверная часть) и проверь по снимку. " +
+        "Если запускать действительно нечего (библиотека, конфиг, документация) — так и напиши одной фразой и завершай.";
+
+    /// <summary>Имена файлов, по которым видно, что в проекте есть что запускать (а не только собирать).</summary>
+    private static readonly HashSet<string> RunnableFileNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "index.html", "app.json", "app.config.js", "app.config.ts",
+        "App.tsx", "App.jsx", "App.js", "App.vue", "App.svelte",
+        "vite.config.js", "vite.config.ts", "vite.config.mjs",
+        "next.config.js", "next.config.mjs", "next.config.ts",
+        "nuxt.config.ts", "angular.json", "svelte.config.js",
+        "Program.cs", "Startup.cs", "MainForm.cs", "Form1.cs",
+        "main.py", "app.py", "manage.py", "wsgi.py", "asgi.py", "server.py",
+        "main.go", "main.rs", "Cargo.toml", "pubspec.yaml",
+        "Dockerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml",
+    };
+
+    /// <summary>Появилась ли в изменённых файлах точка входа приложения или сервиса.</summary>
+    public static bool LooksLikeRunnableApp(IEnumerable<string>? changedFiles)
+    {
+        if (changedFiles is null)
+            return false;
+        foreach (var path in changedFiles)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                continue;
+            var name = path.Replace('\\', '/');
+            name = name[(name.LastIndexOf('/') + 1)..];
+            if (RunnableFileNames.Contains(name) || name.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    // Адрес, который dev-сервер печатает при старте (Vite/Next/Expo/dotnet): доказательство, что
+    // процесс действительно поднялся, даже если команда потом упала по таймауту.
+    private static readonly Regex LocalServerUrl = new(
+        @"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    // Что стоит перед командой запуска в сегменте: env-переменные, cd, powershell/cmd -c.
+    private static readonly Regex LaunchWrapper = new(
+        @"^(?:[A-Za-z_][A-Za-z0-9_]*=(?:""[^""]*""|'[^']*'|\S*)\s+" +
+        @"|cd\s+\S+\s+&&\s+" +
+        @"|(?:powershell|pwsh|cmd)(?:\.exe)?\s+(?:-\S+\s+)*(?:-c(?:ommand)?|/c)\s+[""']?)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    // Сегмент команды, который ЗАПУСКАЕТ приложение/сервис, а не собирает его.
+    private static readonly Regex LaunchSegment = new(
+        @"^(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|preview)\b" +
+        @"|npx\s+(?:--?[\w-]+\s+)*(?:expo\s+start|vite(?:\s|$)|serve\b|http-server|next\s+dev|nuxt\s+dev)" +
+        @"|(?:vite|next\s+dev|nuxt\s+dev|astro\s+dev|ng\s+serve|expo\s+start|react-scripts\s+start)\b" +
+        @"|dotnet\s+(?:run|watch)\b" +
+        @"|(?:python|python3|py)(?:\.exe)?\s+(?:-\S+\s+)*(?:main|app|server|run|wsgi|asgi|manage)\.py\b" +
+        @"|(?:python|python3|py)(?:\.exe)?\s+(?:-\S+\s+)*-\s*m\s+(?:http\.server|flask|uvicorn|fastapi|streamlit|django)\b" +
+        @"|(?:uvicorn|gunicorn|flask\s+run|fastapi\s+dev|streamlit\s+run|manage\.py\s+runserver)\b" +
+        @"|(?:go\s+run|cargo\s+run|mvn\s+spring-boot:run|gradlew?\s+bootRun|java\s+-jar)\b" +
+        @"|docker(?:-compose|\s+compose)\s+up\b" +
+        @"|node\s+(?:server|app|index|main)\.(?:js|mjs|cjs)\b" +
+        @"|start-process\b)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    // Обращение к локальному сервису (curl/Invoke-WebRequest) — проверка, что он отвечает.
+    private static readonly Regex LocalProbe = new(
+        @"\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex LocalHost = new(
+        @"localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    /// <summary>Вывод команды показывает, что сервис поднялся и напечатал свой адрес.</summary>
+    public static bool CommandShowsServerStarted(string? output) =>
+        !string.IsNullOrEmpty(output) && LocalServerUrl.IsMatch(output);
+
+    /// <summary>Команда запускает приложение или сервис (а не собирает и не тестирует).</summary>
+    public static bool IsLaunchCommand(string? command)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+            return false;
+        foreach (var raw in command.Split(["&&", "||", ";", "|", "\n", "\r"], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var text = raw.Trim();
+            for (var guard = 0; guard < 6 && text.Length > 0; guard++)
+            {
+                var wrapper = LaunchWrapper.Match(text);
+                if (!wrapper.Success || wrapper.Length == 0)
+                    break;
+                text = text[wrapper.Length..].TrimStart();
+            }
+            if (LaunchSegment.IsMatch(text))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Проверка локального сервиса: curl/Invoke-WebRequest по localhost.</summary>
+    public static bool IsLocalServiceProbe(string? command) =>
+        !string.IsNullOrWhiteSpace(command) && LocalProbe.IsMatch(command) && LocalHost.IsMatch(command);
+
+    /// <summary>
+    /// Запуск подтверждён. Ошибка инструмента подтверждением не считается: упавший <c>bg_start</c>
+    /// ничего не доказывает. Исключение — вывод, где сервис уже напечатал свой адрес.
+    /// </summary>
+    public static bool IsRuntimeCheck(string toolName, string arguments, bool isError, string? output)
+    {
+        switch (toolName)
+        {
+            case "bg_start":
+            case "page_screenshot":
+            case "screen_capture":
+            case "browser_screenshot":
+            case "window_list":
+                return !isError;
+            case "http_request":
+                return !isError && LocalHost.IsMatch(arguments);
+            case "bash":
+            case "terminal_exec":
+            case "cmd_exec":
+            {
+                if (CommandShowsServerStarted(output))
+                    return true;
+                if (isError)
+                    return false;
+                var command = CommandFromArguments(arguments);
+                return IsLaunchCommand(command) || IsLocalServiceProbe(command);
+            }
+            default:
+                return false;
+        }
+    }
+
+    private static string CommandFromArguments(string arguments)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(arguments);
+            return GetString(doc.RootElement, "command");
+        }
+        catch (Exception)
+        {
+            return string.Empty;
+        }
+    }
+
+    private static readonly string[] RuntimeClaimMarkers =
+    {
+        "приложение работает", "приложение запускается", "приложение открывается", "приложение стартует",
+        "запускается без ошибок", "запустил и проверил", "проверил запуск", "проверил вживую",
+        "страница открывается", "страница работает", "интерфейс работает", "экран работает",
+        "сервер запускается", "сервер поднимается", "сервис запускается", "сервис поднялся",
+        "app runs", "app starts", "works in the browser",
+    };
+
+    /// <summary>Ответ заявляет, что приложение или сервис реально запущен и работает.</summary>
+    public static bool ClaimsRuntimeResult(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+        var lower = text.ToLowerInvariant();
+        return RuntimeClaimMarkers.Any(marker => lower.Contains(marker, StringComparison.Ordinal));
+    }
+
     // INCOMPLETE_WORK: добавлено 2026-10-14 — агент завершал ход отчётом «могу, но не сделал»:
     // перечислял, что осталось несделанным, хотя всё это выполнимо его же инструментами, и ждал
     // второй просьбы. План-гейт такое не ловит (он работает только когда план писался), поэтому
@@ -957,6 +1134,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var incompleteNudges = 0;
         // NO_EDIT_GATE: сколько раз вернули ход, завершаемый без единой реальной правки файлов.
         var noEditNudges = 0;
+        // RUN_GATE: подтверждён ли за прогон запуск приложения (успешный bg_start, локальный запрос,
+        // снимок окна/страницы или dev-сервер, напечатавший адрес) и сколько раз просили его выполнить.
+        var runtimeCheckRan = false;
+        var runGateNudged = 0;
 
         // ITERATION_WRAPUP: добавлено 2026-10-06 — на последнем шаге просим модель подвести итог,
         // и только один раз (иначе на перезапуске этого же шага подсказка добавилась бы дважды).
@@ -1171,8 +1352,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
 
                 // VERIFY_CLAIMS: «всё работает» без сборки/запуска — это ложный отчёт о проверке.
-                var runtimeChecked = executedToolCounts.Keys.Any(k =>
-                    k is "bg_start" or "screen_capture" or "page_screenshot" or "window_list" or "http_request");
+                // RUN_GATE: runtimeCheckRan считается по успешным вызовам, а не по именам инструментов:
+                // упавший bg_start раньше засчитывался как «проверил запуск».
+                var runtimeChecked = runtimeCheckRan;
                 if (HasUnverifiedSuccessClaim(finalText, changedFiles.Count > 0, buildHealth.AnyVerificationRan, runtimeChecked)
                     && unverifiedPushbacks < MaxUnverifiedClaimPushbacks && step < _maxIterations)
                 {
@@ -1182,6 +1364,25 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     await group.SendAsync("OnLog", "[Verify] В ответе заявлен рабочий результат без проверки — отправляю на доработку.", ct);
                     await SendAgentStatusAsync(taskId, "thinking", "Проверяю результат…", ct: ct);
                     messages.Add(new ChatMessage("system", UnverifiedClaimPrompt));
+                    continue;
+                }
+
+                // RUN_GATE: сборка и проверка типов не доказывают, что приложение стартует. Если в
+                // прогоне появилась точка запуска (веб-страница, сервер, десктоп-приложение) или агент
+                // утверждает, что всё запущено, а запуска фактически не было — требуем запустить и
+                // проверить по факту. Это второй по счёту отказ после Definition of Done, поэтому
+                // условие требует уже случившейся сборки/проверки типов.
+                var runtimeExpected = _profile.AuditsCode && changedFiles.Count > 0 &&
+                                      (LooksLikeRunnableApp(changedFiles) || ClaimsRuntimeResult(finalText));
+                if (runtimeExpected && !runtimeCheckRan && buildHealth.AnyVerificationRan
+                    && runGateNudged < MaxRunGateNudges && step < _maxIterations)
+                {
+                    runGateNudged++;
+                    _logger.LogInformation(
+                        "Agent run gate: build/typecheck ran but the app was never started; sending back. task={TaskId}", taskId);
+                    await group.SendAsync("OnLog", "[Run Check] Сборка есть, запуска не было — запускаю приложение и проверяю.", ct);
+                    await SendAgentStatusAsync(taskId, "thinking", "Запускаю приложение и проверяю…", ct: ct);
+                    messages.Add(new ChatMessage("system", RunCheckPrompt));
                     continue;
                 }
 
@@ -1290,6 +1491,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     ? "Проверено системой: в ответе сказано, что всё работает, но за прогон не было ни сборки, ни тестов, " +
                       "ни запуска приложения с проверкой окна — утверждение не подтверждено."
                     : null;
+                // RUN_GATE: бюджет доработок исчерпан, а приложение так и не запускалось — говорим прямо,
+                // что подтверждена только сборка, а не работа в реальном запуске.
+                var runNotCheckedNote = runtimeExpected && !runtimeCheckRan
+                    ? "Проверено системой: приложение (или сервис) за прогон ни разу не запускалось — проверены только " +
+                      "сборка и типы. Работоспособность в реальном запуске не подтверждена."
+                    : null;
                 await SendAgentStatusAsync(taskId, "idle", "Готово", ct: ct);
                 if (string.IsNullOrWhiteSpace(finalText) && answer.Length > 0)
                 {
@@ -1324,6 +1531,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 if (unverifiedClaimNote is not null)
                 {
                     await StreamNoteAsync(group, answer, unverifiedClaimNote, ct);
+                }
+
+                if (runNotCheckedNote is not null)
+                {
+                    await StreamNoteAsync(group, answer, runNotCheckedNote, ct);
                 }
 
                 await group.SendAsync("OnLog", "[Agent Completed] Solution finalized.", ct);
@@ -1487,6 +1699,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     loopGuard.Record(toolName, toolCall.Function.Arguments, result.Output);
                     // TOOL_INTEGRITY: считаем именно РЕАЛЬНО доведённые до вызова инструменты.
                     executedToolCounts[toolName] = executedToolCounts.GetValueOrDefault(toolName) + 1;
+                    // RUN_GATE: запуск засчитывается только по успешному вызову (и по выводу, где сервис
+                    // напечатал свой адрес), а не по самому факту вызова инструмента.
+                    if (!runtimeCheckRan && IsRuntimeCheck(toolName, toolCall.Function.Arguments, result.IsError, result.Output))
+                        runtimeCheckRan = true;
                     if (isReadCall)
                     {
                         readOnlyStreak++;
