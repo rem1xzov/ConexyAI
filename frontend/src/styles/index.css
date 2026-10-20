@@ -1261,6 +1261,13 @@ body {
   bottom: calc(100% + 8px);
   right: 0;
   width: 290px;
+  /* MENU_FITS_SCREEN: меню высокое (2 модели + «Где выполнять» + оркестр + глубина мышления),
+     а открывается вверх от нижнего композера — на низком окне верхние пункты уходили за край
+     экрана и срезались `overflow: hidden` у `.app`. Ограничиваем высоту и даём прокрутку:
+     всё содержимое остаётся доступным и ничто не вылезает за окно. */
+  max-height: min(70vh, calc(100vh - 120px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--surface-solid);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
