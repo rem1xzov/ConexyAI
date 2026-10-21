@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -379,6 +380,19 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private const string TeamMessageTool = "team_message";
     /// <summary>Сколько шагов даётся одному помощнику.</summary>
     private const int WorkerMaxIterations = 20;
+
+    // ORCHESTRA_WATCHDOG: помощники работают параллельно, и ведущий не может вмешаться, пока идёт
+    // Task.WhenAll. Живые случаи: (1) агент зацикливался на одной команде, (2) в отчёте «готово»,
+    // а файлов нет. Теперь помощник проверяет себя сам: минута без прогресса и отчёт без правок
+    // возвращаются ему на доработку.
+    private const int MaxWorkerStalls = 3;
+    private const string WorkerStallPrompt =
+        "[Orchestra] Минута без прогресса: ни одного изменённого файла, ни успешной команды. " +
+        "Повторять то же самое бессмысленно. Смени подход или прямо скажи, что именно мешает, назвав конкретную причину.";
+    private const string WorkerNoWorkPrompt =
+        "[Orchestra] В отчёте сказано, что работа сделана, но ни один файл не изменён. Это не результат. " +
+        "Прямо сейчас сделай работу своими инструментами (создай или поправь файлы в своём scope) " +
+        "или честно напиши, что не смог и почему.";
     /// <summary>Верхняя граница числа помощников за один вызов (ведущий — отдельно, итого 5).</summary>
     private const int MaxOrchestraAgents = 4;
 
@@ -623,6 +637,35 @@ public class ConexyAgentRunner : IConexyAgentRunner
         return SuccessClaimMarkers.Any(marker => lower.Contains(marker, StringComparison.Ordinal));
     }
 
+    // WEB_FIRST: добавлено 2026-10-20 — агент отвечал «такой версии не существует» без единого
+    // поиска (живой случай: новая модель и её версия). Знания модели заканчиваются на дате
+    // обучения, поэтому отрицать существование продукта без поиска нельзя. Один возврат — и
+    // только потом такой ответ считается финальным.
+    private const int MaxWebFirstPushbacks = 1;
+    private const string WebFirstPrompt =
+        "[Web First] Ты утверждаешь, что чего-то не существует или не выпущено, но за этот прогон не было " +
+        "ни одного поиска. Твои знания заканчиваются на дате обучения: новые версии моделей, сервисов и " +
+        "свежие события ты не знаешь. Выполни `web_search` (1–2 запроса: название, версия, «release»/«анонс») " +
+        "и только потом делай вывод. Если поиск ничего не дал — так и напиши («поиск не дал результатов»), " +
+        "а не «этого не существует».";
+
+    private static readonly string[] ExistenceDenialMarkers =
+    {
+        "не существует", "не выпущен", "не выпущена", "не выпускался", "не выпускалась",
+        "такой версии нет", "такой модели нет", "нет такой версии", "нет такой модели",
+        "не анонсирован", "не анонсирована", "мне ничего не известно о", "мне неизвестно о",
+        "не нашёл информации", "не нашел информации", "не удалось найти информацию",
+        "does not exist", "no such version", "no such model",
+    };
+
+    /// <summary>Ответ отрицает существование чего-то — то, что нельзя утверждать без поиска.</summary>
+    public static bool ClaimsSomethingDoesNotExist(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var lower = text.ToLowerInvariant();
+        return ExistenceDenialMarkers.Any(marker => lower.Contains(marker, StringComparison.Ordinal));
+    }
+
     // RUN_GATE: добавлено 2026-10-20 — агент доводил дело до сборки/проверки типов и на этом
     // заканчивал: «готово». Живой пример: Expo-приложение с зелёным `tsc` и собранным бандлом,
     // которое ни разу не запускали. Сборка не доказывает, что приложение стартует, поэтому для
@@ -816,6 +859,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "не изменен", "не изменён", "не обновл", "не заверш", "не довед",
         "осталось сделать", "осталось незаверш", "осталось подключ", "осталось реализовать",
         "не стал делать", "не принялся",
+        // AGENT_STALL: агент заканчивал ход просьбой произнести «волшебное слово», чтобы он продолжил.
+        "скажите «", "скажи «", "напишите «", "ответьте «", "следующий ход будет", "на следующем ходе",
         "но не сделал", "но не подключил", "но не создал", "но не реализовал",
         // AGENT_STALL: агент заканчивал ход обещанием «скажи делай — следующим ходом сделаю».
         "скажи делай", "скажи «делай»", "скажи делать", "если скажешь", "если разрешишь",
@@ -1138,6 +1183,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // снимок окна/страницы или dev-сервер, напечатавший адрес) и сколько раз просили его выполнить.
         var runtimeCheckRan = false;
         var runGateNudged = 0;
+        // WEB_FIRST: сколько раз возвращали ответ, отрицающий существование без поиска.
+        var webFirstPushbacks = 0;
 
         // ITERATION_WRAPUP: добавлено 2026-10-06 — на последнем шаге просим модель подвести итог,
         // и только один раз (иначе на перезапуске этого же шага подсказка добавилась бы дважды).
@@ -1198,10 +1245,33 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // AUTO_COMPACT: с этого сообщения начинаются шаги прогона (всё раньше — устав, история и вопрос).
         var runStart = messages.Count;
 
-        for (var step = 1; step <= _maxIterations; step++)
+        // STEP_BUDGET: большой задаче не хватало 100 шагов (схема БД, миграции, API, тесты — это
+        // десятки шагов), но бесконечный лимит — это ровно то, из-за чего прогон выглядел
+        // зависшим. Поэтому лимит продлевается ПО ФАКТУ ПРОГРЕССА: пока агент правит файлы и
+        // запускает успешные команды, к лимиту добавляется ещё половина базы (не больше двух
+        // раз). Как только прогресса нет — продления нет, и прогон заканчивается как раньше.
+        var stepLimit = _maxIterations;
+        var stepExtensions = 0;
+        var productiveSteps = 0;
+        const int MaxStepExtensions = 2;
+
+        for (var step = 1; step <= stepLimit; step++)
         {
             completedSteps = step;
             ct.ThrowIfCancellationRequested();
+
+            // STEP_BUDGET: на границе лимита решаем, давать ли ещё шагов.
+            if (step == stepLimit && stepExtensions < MaxStepExtensions && productiveSteps >= 12)
+            {
+                var bonus = Math.Max(25, _maxIterations / 2);
+                stepExtensions++;
+                stepLimit += bonus;
+                productiveSteps = 0;
+                _logger.LogInformation(
+                    "Agent step budget: extending by {Bonus} to {Limit} after real progress. task={TaskId}",
+                    bonus, stepLimit, taskId);
+                await group.SendAsync("OnLog", $"[Budget] Работа идёт — продлеваю лимит шагов до {stepLimit}.", ct);
+            }
 
             // LOOP_GUARD: новый ход — новый бюджет интернет-обращений. Ограничиваем «взрыв» поисков
             // внутри одного ответа, но НЕ поиск за задачу: пользователь может искать сколько угодно
@@ -1215,7 +1285,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             // ITERATION_WRAPUP: на последнем разрешённом шаге просим модель не вызывать инструменты, а
             // подвести итог — иначе прогон заканчивался служебной строкой вместо ответа.
-            if (step == _maxIterations && !wrappedUp)
+            if (step == stepLimit && !wrappedUp)
             {
                 wrappedUp = true;
                 messages.Add(new ChatMessage("system", PromptFragments.FinalStepWrapUp));
@@ -1260,7 +1330,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // «генерация не завершается»): растущий номер шага при нулевом тексте = петля,
             // а один шаг с toolCalls=0 = нормальное завершение.
             _logger.LogInformation(
-                "Agent iteration " + step + "/" + _maxIterations +
+                "Agent iteration " + step + "/" + stepLimit +
                 " task=" + taskId +
                 " toolCalls=" + (responseMessage.ToolCalls?.Count ?? 0) +
                 " contentChars=" + (responseMessage.Text?.Length ?? 0) +
@@ -1351,12 +1421,26 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     continue;
                 }
 
+                // WEB_FIRST: отрицание без поиска — не вывод, а догадка.
+                var webChecked = executedToolCounts.ContainsKey("web_search") || executedToolCounts.ContainsKey("fetch_web_page");
+                if (!webChecked && ClaimsSomethingDoesNotExist(finalText)
+                    && webFirstPushbacks < MaxWebFirstPushbacks && step < stepLimit)
+                {
+                    webFirstPushbacks++;
+                    _logger.LogInformation(
+                        "Agent web-first gate: the answer denies something without a single search; sending back. task={TaskId}", taskId);
+                    await group.SendAsync("OnLog", "[Web First] В ответе «не существует» без поиска — сначала проверю в интернете.", ct);
+                    await SendAgentStatusAsync(taskId, "thinking", "Проверяю в интернете…", ct: ct);
+                    messages.Add(new ChatMessage("system", WebFirstPrompt));
+                    continue;
+                }
+
                 // VERIFY_CLAIMS: «всё работает» без сборки/запуска — это ложный отчёт о проверке.
                 // RUN_GATE: runtimeCheckRan считается по успешным вызовам, а не по именам инструментов:
                 // упавший bg_start раньше засчитывался как «проверил запуск».
                 var runtimeChecked = runtimeCheckRan;
                 if (HasUnverifiedSuccessClaim(finalText, changedFiles.Count > 0, buildHealth.AnyVerificationRan, runtimeChecked)
-                    && unverifiedPushbacks < MaxUnverifiedClaimPushbacks && step < _maxIterations)
+                    && unverifiedPushbacks < MaxUnverifiedClaimPushbacks && step < stepLimit)
                 {
                     unverifiedPushbacks++;
                     _logger.LogWarning(
@@ -1375,7 +1459,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 var runtimeExpected = _profile.AuditsCode && changedFiles.Count > 0 &&
                                       (LooksLikeRunnableApp(changedFiles) || ClaimsRuntimeResult(finalText));
                 if (runtimeExpected && !runtimeCheckRan && buildHealth.AnyVerificationRan
-                    && runGateNudged < MaxRunGateNudges && step < _maxIterations)
+                    && runGateNudged < MaxRunGateNudges && step < stepLimit)
                 {
                     runGateNudged++;
                     _logger.LogInformation(
@@ -1391,7 +1475,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // просить второй раз. Внешняя блокировка (нет файлов/доступа/ключей, шаг за пользователем)
                 // — белый список, такой ответ завершается нормально. На последнем шаге не бьём: бюджета
                 // на доработку уже нет, там сработает финальная приписка.
-                var incompleteWork = step < _maxIterations ? DetectIncompleteWork(finalText) : null;
+                var incompleteWork = step < stepLimit ? DetectIncompleteWork(finalText) : null;
                 if (incompleteWork is not null && incompleteNudges < MaxIncompleteNudges)
                 {
                     incompleteNudges++;
@@ -1405,7 +1489,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
 
                 // NO_EDIT_GATE: ход закрывается без единой правки, хотя просили изменить код или ответ хвастается правками.
-                if (_profile.AuditsCode && changedFiles.Count == 0 && step < _maxIterations
+                if (_profile.AuditsCode && changedFiles.Count == 0 && step < stepLimit
                     && noEditNudges < MaxNoEditNudges
                     && (LooksLikeEditDemand(job.Prompt) || ClaimsEdits(finalText)))
                 {
@@ -1544,7 +1628,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // «гейт отправил на доработку» — теперь виден и шаг, и число доработок.
                 _logger.LogInformation(
                     "Agent loop finished at step {Step}/{Max} task={TaskId} selfCorrections={Corrections} red={Red} auditReworks={Reworks} changedFiles={Files} textChars={Chars}",
-                    step, _maxIterations, taskId, selfCorrections, buildHealth.IsRed, auditReworks, changedFiles.Count, finalText.Length);
+                    step, stepLimit, taskId, selfCorrections, buildHealth.IsRed, auditReworks, changedFiles.Count, finalText.Length);
 
                 // AGENT_HOOKS: after_task — финальный хук проекта перед завершением прогона.
                 await RunHooksAsync(taskId, chatId, "after_task", HookValues(chatId, "after_task"), null, ct);
@@ -1703,6 +1787,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     // напечатал свой адрес), а не по самому факту вызова инструмента.
                     if (!runtimeCheckRan && IsRuntimeCheck(toolName, toolCall.Function.Arguments, result.IsError, result.Output))
                         runtimeCheckRan = true;
+                    // STEP_BUDGET: прогресс — это действие, а не чтение (правка, команда, запуск).
+                    if (!isReadCall && !result.IsError)
+                        productiveSteps++;
                     if (isReadCall)
                     {
                         readOnlyStreak++;
@@ -1894,7 +1981,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _logger.LogWarning(
             "Agent loop stopped early: reason={Reason} step={Step}/{Max} consecutiveToolFailures={Consecutive} totalToolFailures={Total} selfCorrections={Corrections} red={Red} auditReworks={Reworks} changedFiles={Files}",
             tokenBudgetExceeded ? "token_limit_exceeded" : toolBudgetExhausted ? "tool-failure-budget" : "iteration-cap",
-            completedSteps, _maxIterations, consecutiveToolFailures, totalToolFailures, selfCorrections, buildHealth.IsRed, auditReworks, changedFiles.Count);
+            completedSteps, stepLimit, consecutiveToolFailures, totalToolFailures, selfCorrections, buildHealth.IsRed, auditReworks, changedFiles.Count);
 
         // SELF_CORRECTION: раньше красная сборка на этом пути бросала исключение — задача падала в
         // Failed, а всё, что модель уже написала, пропадало. Исчерпанный лимит шагов или бюджет
@@ -2261,6 +2348,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
         if (!health.AnyVerificationRan)
             return "---\n**Изменения не проверены.** За прогон не запускалось ни одной сборки, тестов или линтера — " +
                    "результат не подтверждён. Запустите проверку вручную или попросите меня её выполнить.";
+
+        // TEST_EMPTY: `dotnet test` без единого теста — это не проверка, и говорить «тесты прошли» нельзя.
+        if (health.NoTestsFound)
+            return "---\n**Проверено системой:** сборка прошла, но тестов в проекте не обнаружено — " +
+                   "тестами результат НЕ подтверждён.";
 
         return "---\n**Проверено системой:** сборка/тесты/линтер завершились успешно.";
     }
@@ -2842,9 +2934,25 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         var answer = new StringBuilder();
         var group = _hubContext.Clients.Group($"task_{taskId}");
+        // ORCHESTRA_WATCHDOG: помощник под присмотром — своё состояние и свой часовой.
+        var workerFiles = new HashSet<string>(StringComparer.Ordinal);
+        var workerCommands = new List<string>();
+        var lastProgress = Stopwatch.StartNew();
+        var stalls = 0;
+        var noWorkNudged = false;
+
         for (var step = 1; step <= WorkerMaxIterations; step++)
         {
             ct.ThrowIfCancellationRequested();
+
+            if (stalls < MaxWorkerStalls && lastProgress.Elapsed > TimeSpan.FromSeconds(60))
+            {
+                stalls++;
+                lastProgress.Restart();
+                messages.Add(new ChatMessage("system", WorkerStallPrompt));
+                _logger.LogInformation("Orchestra: worker {Role} stalled for a minute, nudging. task={TaskId}", identity.Role, taskId);
+                await group.SendAsync("OnLog", $"[Orchestra] [{identity.Role}] минуту без прогресса — поправляю.", ct);
+            }
 
             var turn = await StreamAgentTurnAsync(taskId, messages, ct, streamToClient: false);
             // TOKEN_BREAKER: расход помощников идёт в тот же агентский пул тарифа.
@@ -2853,6 +2961,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             if (turn.Message.ToolCalls is not { Count: > 0 })
             {
+                // ORCHESTRA_WATCHDOG: «готово» без единого файла — не готово. Один возврат.
+                if (!noWorkNudged && workerFiles.Count == 0 && step < WorkerMaxIterations &&
+                    (LooksLikeEditDemand(brief) || ClaimsEdits(ExtractTextContent(turn.Message))))
+                {
+                    noWorkNudged = true;
+                    messages.Add(new ChatMessage("system", WorkerNoWorkPrompt));
+                    _logger.LogInformation("Orchestra: worker {Role} reported done without edits, nudging. task={TaskId}", identity.Role, taskId);
+                    await group.SendAsync("OnLog", $"[Orchestra] [{identity.Role}] отчёт без правок — требую результат.", ct);
+                    continue;
+                }
+
                 answer.Append(ExtractTextContent(turn.Message));
                 break;
             }
@@ -2860,6 +2979,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // L9: картинки накапливаются и прикладываются ПОСЛЕ всех tool-результатов хода: сообщение
             // user(image) между assistant(tool_calls) и его tool-результатами ломает формат запроса.
             var batchImages = new List<ChatMessage>();
+            var filesBefore = workerFiles.Count;
+            var commandsBefore = workerCommands.Count;
             foreach (var call in turn.Message.ToolCalls)
             {
                 var toolName = call.Function.Name;
@@ -2896,9 +3017,18 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
 
                 messages.Add(new ChatMessage(Role: "tool", Content: result.Output, ToolCallId: call.Id));
+                if (!result.IsError)
+                    RecordToolEffect(call, workerFiles, workerCommands);
             }
             messages.AddRange(batchImages);
+            if (workerFiles.Count > filesBefore || workerCommands.Count > commandsBefore)
+                lastProgress.Restart();
         }
+
+        // ORCHESTRA_WATCHDOG: ведущий должен видеть, что агент НИЧЕГО не сделал, а не читать его
+        // красивый отчёт как факт.
+        if (workerFiles.Count == 0)
+            answer.Append("\n\n[система] Этот агент за прогон не изменил ни одного файла.");
 
         return answer.ToString();
     }
@@ -4059,7 +4189,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         {
             // The upstream did not report usage for this streamed turn. Approximate from the
             // payload so the agent token budget still accrues instead of never being enforced.
-            totalTokens = EstimateTokens(content.Length, reasoning.Length, toolCalls);
+            totalTokens = EstimateTokens(content, reasoning, toolCalls);
         }
 
         // PRICED_BILLING: если апстрим не дал разбивку, считаем ход целиком обычным входом — счёт
@@ -4080,12 +4210,39 @@ public class ConexyAgentRunner : IConexyAgentRunner
     }
 
     /// <summary>
-    /// Rough ~4 chars/token fallback used only when a streamed turn reports no usage.
+    /// Rough fallback used only when a streamed turn reports no usage. Latin text is ~4 chars per
+    /// token, Cyrillic ~2.5: BPE режет русские слова мельче, и если считать их как латиницу,
+    /// расход прогона занижается вдвое — тогда бюджет агента никогда не срабатывает.
     /// </summary>
-    private static int EstimateTokens(int contentChars, int reasoningChars, List<LlmToolCall>? toolCalls)
+    private static int EstimateTokens(StringBuilder? content, StringBuilder? reasoning, List<LlmToolCall>? toolCalls)
     {
-        var toolCallChars = toolCalls?.Sum(tc => tc.Function.Name.Length + tc.Function.Arguments.Length) ?? 0;
-        return (contentChars + reasoningChars + toolCallChars + 3) / 4;
+        var toolCallText = toolCalls is null
+            ? 0
+            : toolCalls.Sum(tc => EstimateText(tc.Function.Name) + EstimateText(tc.Function.Arguments));
+        return EstimateText(content) + EstimateText(reasoning) + toolCallText;
+    }
+
+    private static int EstimateText(StringBuilder? text)
+    {
+        if (text is null || text.Length == 0)
+            return 0;
+        var wide = 0;
+        for (var i = 0; i < text.Length; i++)
+            if (text[i] > 127) wide++;
+        var narrow = text.Length - wide;
+        return (narrow + 3) / 4 + (wide * 2 + 4) / 5;
+    }
+
+    /// <summary>Оценка токенов текста без обращения к апстриму (см. EstimateTokens).</summary>
+    public static int EstimateText(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return 0;
+        var wide = 0;
+        foreach (var c in text)
+            if (c > 127) wide++;
+        var narrow = text.Length - wide;
+        return (narrow + 3) / 4 + (wide * 2 + 4) / 5;
     }
 
     // TOOL_PILLS: добавлено 2026-09-20
@@ -5460,6 +5617,17 @@ public static class VerificationCommands
     public static bool OutputShowsFailure(string? output) =>
         !string.IsNullOrEmpty(output) && FailureMarker.IsMatch(output);
 
+    // TEST_EMPTY: «тесты прошли» — неправда, если тестов не нашлось. Живой случай: `dotnet test`
+    // напечатал «нет доступных тестов», а системная приписка сказала «сборка/тесты завершились успешно».
+    private static readonly Regex NoTestsMarker = new(
+        @"нет доступных тестов|no test(?:s)? (?:were |are )?(?:found|available|discovered|to run)" +
+        @"|No test matches the given testcase filter|Test Run Aborted|\b0 tests? (?:ran|executed|passed)\b" +
+        @"|\bNo tests found\b|test files? (?:were )?not found",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    public static bool OutputShowsNoTests(string? output) =>
+        !string.IsNullOrEmpty(output) && NoTestsMarker.IsMatch(output);
+
     /// <summary>First line of <paramref name="output"/> that looks like an error, else the last non-empty one.</summary>
     public static string? FirstErrorLine(string? output)
     {
@@ -5616,6 +5784,9 @@ public sealed class BuildHealth
     /// <summary>Проверка запускалась и сейчас ничего не падает.</summary>
     public bool IsGreen => AnyVerificationRan && !IsRed;
 
+    /// <summary>Тест-команда запускалась, но ни одного теста не нашлось — это НЕ успешная проверка.</summary>
+    public bool NoTestsFound { get; private set; }
+
     /// <summary>Failing checks, for logs (metadata only — no command text, no output).</summary>
     public string FailingChecks => string.Join(", ", _failing.Keys);
 
@@ -5628,6 +5799,9 @@ public sealed class BuildHealth
             return BuildHealthChange.None;
 
         AnyVerificationRan = true;
+
+        if (verification.Checks.Any(check => check.EndsWith(":test", StringComparison.Ordinal)))
+            NoTestsFound = VerificationCommands.OutputShowsNoTests(output);
 
         bool failed;
         if (!verification.ExitCodeMasked)
