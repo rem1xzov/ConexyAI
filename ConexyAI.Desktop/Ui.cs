@@ -734,6 +734,18 @@ public static partial class Ui
                         text.Remove(0, pos);
                         pos = 0;
                     }
+                    // Ctrl+Z — убрать последнее вложение (фото/файл, вставленный в строку):
+                    // отменить вставку можно без чистки текста и без /detach.
+                    // Кроме Modifiers ловим и классический control-символ SUB (\u001a): терминалы
+                    // по-разному отдают модификатор, а символ приходит всегда.
+                    else if ((key.Key == ConsoleKey.Z && key.Modifiers.HasFlag(ConsoleModifiers.Control)) ||
+                             key.KeyChar == '\u001a')
+                    {
+                        var removed = Attachments.RemoveLast();
+                        Hint(removed is null
+                            ? "Вложений нет."
+                            : $"Убрано вложение: {removed} · вложений: {Attachments.Pending.Count}", removed is not null);
+                    }
                     else if (!char.IsControl(key.KeyChar))
                     {
                         text.Insert(pos++, key.KeyChar);

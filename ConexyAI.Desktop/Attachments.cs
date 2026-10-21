@@ -72,6 +72,16 @@ public static partial class Attachments
         return true;
     }
 
+    /// <summary>Убирает последнее вложение (Ctrl+Z в строке ввода) и возвращает его имя.</summary>
+    public static string? RemoveLast()
+    {
+        if (Pending.Count == 0)
+            return null;
+        var last = Pending[^1];
+        Pending.RemoveAt(Pending.Count - 1);
+        return last.FileName;
+    }
+
     /// <summary>Строка-«чипсы» над полем ввода.</summary>
     public static string Describe()
     {
