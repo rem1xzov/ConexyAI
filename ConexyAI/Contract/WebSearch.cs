@@ -65,6 +65,7 @@ public static class FetchWebPageTool
             description = "Open a public web page (http/https) and read its text: title, final URL after redirects and the readable content " +
                           "(headings as Markdown '#', list items as '- ', link text kept; scripts, navigation, headers/footers and forms removed). " +
                           "Use it to actually read the pages found with web_search — documentation, API references, articles, reports — instead of relying on search snippets. " +
+                          "Read several pages at once: put 3–5 fetch_web_page calls in one turn, they are fetched in parallel — do not open them one by one. " +
                           "Supports HTML, plain text, Markdown and JSON; internal/private addresses are refused.",
             parameters = new
             {

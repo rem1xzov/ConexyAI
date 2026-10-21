@@ -546,7 +546,7 @@ internal static class AgentCapabilityTests
 
             var result = await runner.RunLoopAsync(job, context, Guard());
 
-            Assert(llm.Requests.Count == 4, $"one tool turn + two push-backs + the final turn, was {llm.Requests.Count}");
+            Assert(llm.Requests.Count == 5, $"one tool turn + two push-backs + the final turn, was {llm.Requests.Count}");
             var pushBack = llm.Requests[2].Last();
             Assert(pushBack.Role == "system" && (pushBack.Text ?? "").Contains("[Self-Correction 1/2]") && pushBack.Text!.Contains("error CS1002") &&
                    pushBack.Text.Contains("dotnet build") && pushBack.Text.Contains("str_replace_editor"),
@@ -584,7 +584,10 @@ internal static class AgentCapabilityTests
 
             var result = await runner.RunLoopAsync(job, context, Guard());
 
-            Assert(llm.Requests.Count == 4, $"build → push-back → rebuild → final, was {llm.Requests.Count}");
+            Assert(llm.Requests.Count == 5, $"build → push-back → rebuild → final, was {llm.Requests.Count}");
+            // NO_EDIT_GATE: «Готово» без единого изменённого файла — ещё один возврат (бюджет 1).
+            Assert((llm.Requests[^1].Last().Text ?? "").Contains("[No Edit]"),
+                "a final claim with zero changed files is sent back before the run ends");
             Assert(llm.Requests[^1].Count(m => (m.Text ?? "").Contains("[Self-Correction")) == 1, "exactly one push-back");
             Assert(result.Contains("сборка зелёная") && !result.Contains("Проверка не пройдена"), $"a green rebuild ends the run normally, got '{result}'");
 
@@ -648,7 +651,7 @@ internal static class AgentCapabilityTests
 
             var result = await runner.RunLoopAsync(job, context, Guard());
 
-            Assert(llm.Requests.Count == 4,
+            Assert(llm.Requests.Count == 5,
                 $"an unfinished plan must be sent back before finishing, requests={llm.Requests.Count}");
             Assert(llm.Requests[2].Any(m => (m.Text ?? "").Contains("[Plan Incomplete]")),
                 "the gate must ask the model to finish its plan");
@@ -740,7 +743,10 @@ internal static class AgentCapabilityTests
 
             var result = await runner.RunLoopAsync(job, context, Guard());
 
-            Assert(llm.Requests.Count == 2, $"an incomplete answer must be sent back once, requests={llm.Requests.Count}");
+            Assert(llm.Requests.Count == 3, $"an incomplete answer must be sent back once, requests={llm.Requests.Count}");
+            // NO_EDIT_GATE: «Готово: всё подключил и создал» без единого файла — второй возврат.
+            Assert((llm.Requests[2].Last().Text ?? "").Contains("[No Edit]"),
+                "a claim of done without any file change is sent back");
             Assert((llm.Requests[1].Last().Text ?? "").Contains("[Incomplete Work]"),
                 "the gate must ask the model to finish the work");
             Assert(result.Contains("всё подключил"), $"the finished answer stands, got '{result}'");

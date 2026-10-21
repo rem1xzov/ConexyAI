@@ -378,6 +378,41 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private const string SpawnAgentsTool = "spawn_agents";
     /// <summary>Инструмент: сообщение другому агенту команды (передача задачи/артефакта).</summary>
     private const string TeamMessageTool = "team_message";
+    /// <summary>
+    /// WEB_PARALLEL: страницы, запрошенные в одном ответе, читаются одновременно (только
+    /// <c>fetch_web_page</c> — инструменты с побочными эффектами так не запускаются).
+    /// </summary>
+    private async Task<Dictionary<string, ConexyToolResult>> PrefetchWebPagesAsync(
+        List<LlmToolCall> calls, Guid taskId, Guid chatId, CancellationToken ct)
+    {
+        var prefetched = new Dictionary<string, ConexyToolResult>(StringComparer.Ordinal);
+        var pages = calls
+            .Where(call => call.Function.Name == "fetch_web_page" && IsToolAllowed(call.Function.Name))
+            .ToList();
+        if (pages.Count < 2)
+            return prefetched;
+
+        var tasks = pages.Select(async call =>
+        {
+            try
+            {
+                return (call.Id, Result: await DispatchToolAsync(taskId, chatId, call, ct));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return (call.Id, Result: new ConexyToolResult(call.Id, "Tool error (fetch_web_page): " + ex.Message, true));
+            }
+        });
+
+        foreach (var (id, result) in await Task.WhenAll(tasks))
+            prefetched[id] = result;
+        return prefetched;
+    }
+
     /// <summary>Сколько шагов даётся одному помощнику.</summary>
     private const int WorkerMaxIterations = 20;
 
@@ -887,7 +922,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // но ни один файл не изменился. Это самый злой вид вранья для пользователя, который уже просил несколько
     // раз. Если ход завершается с нулём реальных правок, а пользователь просил изменить код (или сам ответ
     // заявляет о правках) — ответ возвращается с жёстким требованием вызвать инструмент правки.
-    private const int MaxNoEditNudges = 3;
+    private const int MaxNoEditNudges = 1;
     private static readonly string[] EditDemandMarkers =
     {
         "сделай", "доделай", "исправь", "поправь", "почини", "измени", "добавь", "убери", "удали", "перепиши",
@@ -910,6 +945,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private static bool LooksLikeEditDemand(string? prompt) =>
         !string.IsNullOrWhiteSpace(prompt) &&
         EditDemandMarkers.Any(m => prompt.Contains(m, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Ответ честно признаёт неудачу («не смог», «не удалось»). Такой текст нельзя бить гейтом
+    /// «ни один файл не изменён»: модель не врёт — она правда не сделала, и повторный запрос
+    /// ничего не изменит, только сожжёт контекст.
+    /// </summary>
+    private static bool HasHonestFailure(string? text) =>
+        !string.IsNullOrWhiteSpace(text) &&
+        DenialMarkers.Any(m => text.Contains(m, StringComparison.OrdinalIgnoreCase));
 
     private static bool ClaimsEdits(string? text) =>
         !string.IsNullOrWhiteSpace(text) &&
@@ -1491,6 +1535,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // NO_EDIT_GATE: ход закрывается без единой правки, хотя просили изменить код или ответ хвастается правками.
                 if (_profile.AuditsCode && changedFiles.Count == 0 && step < stepLimit
                     && noEditNudges < MaxNoEditNudges
+                    && !HasHonestFailure(finalText)
                     && (LooksLikeEditDemand(job.Prompt) || ClaimsEdits(finalText)))
                 {
                     noEditNudges++;
@@ -1581,6 +1626,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     ? "Проверено системой: приложение (или сервис) за прогон ни разу не запускалось — проверены только " +
                       "сборка и типы. Работоспособность в реальном запуске не подтверждена."
                     : null;
+                // NO_EDIT_GATE: бюджет доработок исчерпан, а правок так и нет — говорим прямо, чтобы
+                // «готово» в ответе не выдавалось за сделанную работу.
+                var noEditNote = _profile.AuditsCode && changedFiles.Count == 0 && !HasHonestFailure(finalText)
+                                 && (LooksLikeEditDemand(job.Prompt) || ClaimsEdits(finalText))
+                    ? "Проверено системой: за прогон ни один файл не изменён — правок в проекте нет, несмотря на текст выше."
+                    : null;
                 await SendAgentStatusAsync(taskId, "idle", "Готово", ct: ct);
                 if (string.IsNullOrWhiteSpace(finalText) && answer.Length > 0)
                 {
@@ -1620,6 +1671,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 if (runNotCheckedNote is not null)
                 {
                     await StreamNoteAsync(group, answer, runNotCheckedNote, ct);
+                }
+
+                if (noEditNote is not null)
+                {
+                    await StreamNoteAsync(group, answer, noEditNote, ct);
                 }
 
                 await group.SendAsync("OnLog", "[Agent Completed] Solution finalized.", ct);
@@ -1688,6 +1744,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
             }
 
+            // WEB_PARALLEL: модель часто просит несколько страниц в одном ответе — качаем их
+            // одновременно. По очереди пять страниц — это пять сетевых ожиданий подряд, и
+            // исследование растягивается на минуты.
+            var prefetchedPages = await PrefetchWebPagesAsync(responseMessage.ToolCalls, taskId, chatId, ct);
+
             foreach (var toolCall in responseMessage.ToolCalls)
             {
                 var toolName = toolCall.Function.Name;
@@ -1741,15 +1802,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
                                 toolCall.Id,
                                 $"Tool '{toolName}' is not available in {_profile.Mode} mode.",
                                 true)
-                            : toolName == "take_screenshot"
-                                ? await HandleScreenshotAsync(chatId, toolCall, batchImages, group, ct)
-                                : toolName == "view_image"
-                                    ? await HandleViewImageAsync(taskId, chatId, toolCall, batchImages, ct)
-                                    : toolName == "browser_screenshot"
-                                        ? await HandleBrowserScreenshotAsync(chatId, toolCall, batchImages, group, ct)
-                                        : toolName is "page_screenshot" or "screen_capture"
-                                            ? await HandleDeviceScreenshotAsync(taskId, toolCall, batchImages, group, ct)
-                                            : await DispatchToolAsync(taskId, chatId, toolCall, ct);
+                            : prefetchedPages.TryGetValue(toolCall.Id, out var prefetched)
+                                ? prefetched
+                                : toolName == "take_screenshot"
+                                    ? await HandleScreenshotAsync(chatId, toolCall, batchImages, group, ct)
+                                    : toolName == "view_image"
+                                        ? await HandleViewImageAsync(taskId, chatId, toolCall, batchImages, ct)
+                                        : toolName == "browser_screenshot"
+                                            ? await HandleBrowserScreenshotAsync(chatId, toolCall, batchImages, group, ct)
+                                            : toolName is "page_screenshot" or "screen_capture"
+                                                ? await HandleDeviceScreenshotAsync(taskId, toolCall, batchImages, group, ct)
+                                                : await DispatchToolAsync(taskId, chatId, toolCall, ct);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
