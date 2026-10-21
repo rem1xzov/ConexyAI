@@ -1,7 +1,9 @@
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { TeamAgent, TurnBlock } from '../types/chat';
+import type { TeamAgent, TurnBlock, TurnToolBlock } from '../types/chat';
 import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
 import { ActionStepLine, type ActionKind, type ActionState } from './ActionStepLine';
+import { ChevronDownIcon, GlobeIcon } from './Icons';
 import { CommandConfirmCard } from './CommandConfirmCard';
 import { ThinkingStep } from './ThinkingStep';
 import { TodoPanel } from './TodoPanel';
@@ -113,6 +115,72 @@ function describeAction(event: ToolActionEvent, t: Translate): ActionDescriptor 
   return { action: 'command', label: event.summary || `${event.toolName} ${command}`.trim() };
 }
 
+// WEB_GROUP: добавлено 2026-10-21 — поиск и чтение страниц идут пачками по 10–15 шагов подряд, и
+// лента превращалась в полотно из «Поиск в интернете: … / Читаю страницу …». Теперь подряд идущие
+// веб-шаги собираются в одну строку «Найдено N страниц», которую можно развернуть и увидеть
+// каждый запрос и каждую страницу по отдельности.
+const WebTools = new Set(['web_search', 'fetch_web_page']);
+
+function isWebBlock(block: TurnBlock): block is TurnToolBlock {
+  return block.type === 'tool' && !block.actionId && WebTools.has(block.name);
+}
+
+interface WebResearchGroupProps {
+  blocks: TurnToolBlock[];
+  renderRow: (block: TurnToolBlock) => ReactNode;
+}
+
+function WebResearchGroup({ blocks, renderRow }: WebResearchGroupProps) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const events = blocks.map(toolEventFromBlock);
+  const pages = events.filter((event) => event.toolName === 'fetch_web_page');
+  const searches = events.filter((event) => event.toolName === 'web_search');
+  const running = blocks.some((block) => !isTerminalToolStatus(block.status));
+  const failed = !running && blocks.some((block) => block.status === 'error' || block.status === 'rejected');
+  const hosts = [...new Set(pages.map((event) => urlHost((event.command ?? '').trim())).filter(Boolean))];
+
+  const title = pages.length > 0
+    ? t('timeline.webPages', { count: pages.length })
+    : `${t('toolPill.searchWeb')}: ${searches.length}`;
+  const details = [
+    searches.length > 0 && pages.length > 0 ? t('timeline.webQueries', { count: searches.length }) : '',
+    hosts.length > 0 ? hosts.slice(0, 3).join(', ') + (hosts.length > 3 ? ' …' : '') : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <div className="web-group">
+      <button
+        type="button"
+        className="web-group__head"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        title={t('timeline.webExpand')}
+      >
+        <span className="action-line__icon action-line__icon--web" aria-hidden="true">
+          <GlobeIcon size={13} />
+        </span>
+        <span className="web-group__title">{title}</span>
+        {details && <span className="web-group__meta">{details}</span>}
+        {running ? (
+          <span className="action-line__spinner" aria-hidden="true" />
+        ) : failed ? (
+          <span className="action-line__mark chat-danger">✕</span>
+        ) : (
+          <span className="action-line__mark chat-ok">✓</span>
+        )}
+        <ChevronDownIcon
+          size={12}
+          className={`action-line__chevron ${open ? 'action-line__chevron--open' : ''}`}
+        />
+      </button>
+      {open && <div className="web-group__body">{blocks.map(renderRow)}</div>}
+    </div>
+  );
+}
+
 export function AgentTimeline({
   blocks,
   messageId,
@@ -208,6 +276,29 @@ export function AgentTimeline({
     }
   };
 
+  const renderBlocks = (list: TurnBlock[]) => {
+    const nodes: ReactNode[] = [];
+    for (let index = 0; index < list.length; index++) {
+      const block = list[index];
+      if (isWebBlock(block)) {
+        let end = index;
+        while (end < list.length && isWebBlock(list[end])) end++;
+        const run = list.slice(index, end) as TurnToolBlock[];
+        nodes.push(
+          run.length === 1 ? (
+            renderBlock(run[0], index)
+          ) : (
+            <WebResearchGroup key={`web-${run[0].id}`} blocks={run} renderRow={(row) => renderBlock(row, index)} />
+          ),
+        );
+        index = end - 1;
+        continue;
+      }
+      nodes.push(renderBlock(block, index));
+    }
+    return nodes;
+  };
+
   // ORCHESTRA: состав берём из события AgentTeam, но НЕ зависим от него: если оно не дошло
   // (мобильное переподключение, поздний JoinTask, обрыв сокета), помощников выводим из их же
   // шагов — у каждого tool-блока есть agentId/agentRole. Иначе действия субагентов пропадали бы.
@@ -257,7 +348,7 @@ export function AgentTimeline({
             <span className="agent-card__role">{t('orchestra.lead')}</span>
             {statusPill && <span className="agent-card__status">{statusPill.label}</span>}
           </header>
-          <div className="agent-card__feed">{leadBlocks.map(renderBlock)}</div>
+          <div className="agent-card__feed">{renderBlocks(leadBlocks)}</div>
         </section>
 
         {team.map((agent) => {
@@ -279,7 +370,7 @@ export function AgentTimeline({
                 {agentBlocks.length === 0 ? (
                   <div className="agent-card__idle">{t('orchestra.idle')}</div>
                 ) : (
-                  agentBlocks.map(renderBlock)
+                  renderBlocks(agentBlocks)
                 )}
               </div>
             </section>
@@ -293,7 +384,7 @@ export function AgentTimeline({
 
   return (
     <div className="agent-timeline">
-      {feed.map(renderBlock)}
+      {renderBlocks(feed)}
       {statusRow}
     </div>
   );

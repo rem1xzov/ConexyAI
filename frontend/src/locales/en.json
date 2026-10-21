@@ -684,7 +684,12 @@
     "thinkingEmpty": "The model left no text for this step",
     "copyCommand": "Copy command",
     "copied": "Copied",
-    "toggleOutput": "Show or hide the output"
+    "toggleOutput": "Show or hide the output",
+    "webPages_one": "{{count}} page found",
+    "webPages_other": "{{count}} pages found",
+    "webQueries_one": "{{count}} query",
+    "webQueries_other": "{{count}} queries",
+    "webExpand": "Show the queries and the pages read"
   },
   "toolAction": {
     "completed": "Done",

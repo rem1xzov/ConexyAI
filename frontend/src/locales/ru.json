@@ -692,7 +692,14 @@
     "thinkingEmpty": "Модель не оставила текста для этого шага",
     "copyCommand": "Копировать команду",
     "copied": "Скопировано",
-    "toggleOutput": "Показать или скрыть вывод"
+    "toggleOutput": "Показать или скрыть вывод",
+    "webPages_one": "Найдена {{count}} страница",
+    "webPages_few": "Найдено {{count}} страницы",
+    "webPages_many": "Найдено {{count}} страниц",
+    "webQueries_one": "{{count}} запрос",
+    "webQueries_few": "{{count}} запроса",
+    "webQueries_many": "{{count}} запросов",
+    "webExpand": "Показать запросы и прочитанные страницы"
   },
   "toolAction": {
     "completed": "Выполнено",
