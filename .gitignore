@@ -24,3 +24,6 @@ dist-ssr/
 # Local agent worktrees
 .claude/worktrees/
 publish/
+
+# Agent skills mirrored from ~/Agent-Skills by setup, not project sources
+.agents/skills/
