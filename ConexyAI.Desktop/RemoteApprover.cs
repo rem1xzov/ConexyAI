@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using ConexyAI.Desktop.Tools;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 
 namespace ConexyAI.Desktop;
@@ -78,8 +79,20 @@ public sealed class RemoteApprover : ICommandApprover
         _approvals[requestId] = tcs; // до вызова: ответ может прийти раньше, чем вернётся Invoke
         try
         {
-            if (!await hub.InvokeAsync<bool>("RequestDeviceApproval", requestId, ctx.TaskId, title, details, where, sensitive, description, ct))
-                return false;
+            try
+            {
+                // SIGNALR_NO_OVERLOADS: описание идёт отдельным именем метода — перегрузки в хабе запрещены.
+                if (!await hub.InvokeAsync<bool>("RequestDeviceApprovalWithDescription",
+                        requestId, ctx.TaskId, title, details, where, sensitive, description, ct))
+                    return false;
+            }
+            catch (Exception ex) when (ex is HubException or InvalidOperationException && !ct.IsCancellationRequested)
+            {
+                // Старый сервер такого метода не знает ('Method does not exist') — просим без описания.
+                if (!await hub.InvokeAsync<bool>("RequestDeviceApproval", requestId, ctx.TaskId, title, details, where, sensitive, ct))
+                    return false;
+            }
+
             await using var reg = ct.Register(() => tcs.TrySetResult(false));
             return await tcs.Task;
         }

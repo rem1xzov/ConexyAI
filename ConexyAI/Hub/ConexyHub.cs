@@ -264,12 +264,13 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
 
     /// <summary>Устройство просит подтвердить действие через веб; решение придёт событием <c>DeviceApprovalResult</c>.</summary>
     public Task<bool> RequestDeviceApproval(Guid requestId, Guid taskId, string title, string details, string where, bool sensitive) =>
-        RequestDeviceApproval(requestId, taskId, title, details, where, sensitive, null);
+        RequestDeviceApprovalWithDescription(requestId, taskId, title, details, where, sensitive, null);
 
-    // BASH_DESCRIPTION: старые клиенты шлют шесть аргументов, новые — семь с человеческим описанием
-    // команды. Две перегрузки — чтобы обновление клиента и сервера не требовало синхронности.
-    /// <inheritdoc cref="RequestDeviceApproval(Guid, Guid, string, string, string, bool)"/>
-    public Task<bool> RequestDeviceApproval(Guid requestId, Guid taskId, string title, string details, string where, bool sensitive, string? description) =>
+    // SIGNALR_NO_OVERLOADS: SignalR не поддерживает перегрузки методов хаба — имя метода должно быть
+    // уникальным. Вторая перегрузка RequestDeviceApproval с описанием ломала разрешение методов хаба,
+    // поэтому описание идёт отдельным именем, а шестиаргументный вызов остаётся для старых клиентов.
+    /// <summary>То же, но с человеческим описанием команды (показывается в карточке подтверждения).</summary>
+    public Task<bool> RequestDeviceApprovalWithDescription(Guid requestId, Guid taskId, string title, string details, string where, bool sensitive, string? description) =>
         _deviceRemote.RequestApprovalAsync(CallerId(), Context.ConnectionId, requestId, taskId, title, details, where, sensitive, Context.ConnectionAborted, description);
 
     /// <summary>Устройство задаёт вопрос ask_user через веб; ответ придёт событием <c>DeviceQuestionAnswer</c>.</summary>
