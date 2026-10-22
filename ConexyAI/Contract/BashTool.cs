@@ -8,6 +8,11 @@ public class BashToolRequest
     [JsonPropertyName("command")]
     public required string Command { get; set; }
 
+    // BASH_DESCRIPTION: как в Claude Code — модель объясняет НАМЕРЕНИЕ простыми словами,
+    // и именно его читает пользователь в подтверждении (а не строку с флагами).
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
+
     [JsonPropertyName("timeout_seconds")]
     public int? TimeoutSeconds { get; set; }
 

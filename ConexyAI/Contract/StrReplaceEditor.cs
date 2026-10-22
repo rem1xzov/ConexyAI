@@ -59,6 +59,10 @@ public class ToolActionEvent
     public required string Status { get; set; } // "started" | "completed" | "failed" | "pending_confirmation" | "rejected"
     public string? Summary { get; set; }
 
+    // BASH_DESCRIPTION: человеческое описание шага ("Собираю проект"). Карточка подтверждения
+    // показывает его над командой — пользователь подтверждает намерение, а не набор флагов.
+    public string? Description { get; set; }
+
     // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
     /// <summary>Absolute working directory (populated for dangerous bash commands).</summary>
     public string? WorkingDirectory { get; set; }

@@ -4228,6 +4228,16 @@ html[data-plain-code='true'] .markdown strong.chat-term {
   position: relative;
 }
 
+/* BASH_DESCRIPTION: намерение шага — читается как обычный текст, не как код: пользователь
+   подтверждает именно его, а команда ниже остаётся точной и копируемой. */
+.cmd-card__intent {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: 0.9;
+}
+
 .cmd-card__command {
   margin: 0;
   /* Right padding leaves room for the copy button so long lines never run under it. */

@@ -159,6 +159,8 @@ export interface TurnToolBlock {
   status: TurnToolStatus;
   output?: string;
   summary?: string;
+  /** BASH_DESCRIPTION: человеческое описание шага — над командой в карточке подтверждения. */
+  description?: string;
   workingDirectory?: string;
   /** Set for a command that needs the user's decision: the buttons render inside this block. */
   actionId?: string;

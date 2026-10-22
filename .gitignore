@@ -27,3 +27,10 @@ publish/
 
 # Agent skills mirrored from ~/Agent-Skills by setup, not project sources
 .agents/skills/
+
+# Agent eval runs (reports are local; project copies are ~600 MB each)
+eval-results/
+eval-run*.log
+
+# Agent run logs (local only)
+*.log

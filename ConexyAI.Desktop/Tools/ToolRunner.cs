@@ -74,7 +74,9 @@ public sealed class ToolRunner
                 return await AskUserAsync(args, ct);
             if (PlanMode && PlanBlockReason(tool, args) is { } blocked)
                 return ToolResult.Fail(blocked);
-            if (_readGuard.Refuse(tool, args) is { } readRefusal)
+            // EDIT_AFTER_READ + BASH_FILE_OPS: проверки до выполнения — правка непрочитанного файла
+            // и файловые операции через оболочку отклоняются с точным следующим шагом.
+            if (_readGuard.Refuse(tool, args, FileExists) is { } readRefusal)
                 return ToolResult.Fail(readRefusal);
 
             _log(Describe(tool, args));
@@ -177,6 +179,19 @@ public sealed class ToolRunner
             || tool.EndsWith("attachment", StringComparison.Ordinal) || tool.EndsWith("drive_download", StringComparison.Ordinal))
             return why;
         return null;
+    }
+
+    /// <summary>Есть ли файл уже сейчас: новый файл можно создать без предварительного чтения.</summary>
+    private bool FileExists(string path)
+    {
+        try
+        {
+            return File.Exists(_guard.Resolve(path));
+        }
+        catch (Exception ex) when (ex is ToolException or IOException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
     }
 
     private ToolResult ProjectRules(ToolArgs args)

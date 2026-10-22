@@ -97,20 +97,31 @@ internal static class AgentLoopGuardTests
         return Task.CompletedTask;
     }
 
-    // LOOP_GUARD: агент читал один файл десятки раз подряд разными кусками и не вносил правок.
+    // LOOP_GUARD: агент читал одни и те же куски файла без правок. Но пагинация — штатный способ
+    // прочитать большой файл: на реальном прогоне агент не смог дочитать index.html, потому что
+    // третий offset считался «тем же объектом».
     private static Task ReadTargetAsync()
     {
         var guard = new AgentLoopGuard();
-        for (var i = 1; i <= AgentLoopGuard.ReadTargetThreshold; i++)
+        // Разные страницы одного файла — разная информация: это не петля.
+        for (var i = 0; i < 3; i++)
         {
-            var args = $"{{\"path\":\"MainForm.cs\",\"view_range\":[{i},{i + 100}]}}";
-            Assert(guard.Refuse("file_read", args) is null, $"read #{i} must be allowed");
-            guard.Record("file_read", args, $"chunk {i}");
+            var page = $"{{\"path\":\"MainForm.cs\",\"offset\":{i * 100},\"limit\":100}}";
+            Assert(guard.Refuse("file_read", page) is null, $"page #{i + 1} must be allowed");
+            Assert(guard.IsNewReadTarget("file_read", page), $"page #{i + 1} is new information");
+            guard.Record("file_read", page, $"chunk {i}");
         }
 
-        // Другой кусок того же файла — тот же объект: новые данные ничего не дают.
-        Assert(guard.Refuse("file_read", """{"path":"MainForm.cs","view_range":[5,500]}""") == AgentLoopGuard.ReadTargetRefusal,
-            "another range of the same file must be refused");
+        // Одна и та же страница снова и снова — вот это петля.
+        const string first = """{"path":"MainForm.cs","offset":0,"limit":100}""";
+        Assert(!guard.IsNewReadTarget("file_read", first), "the same page is not new");
+        for (var i = 1; i < AgentLoopGuard.ReadTargetThreshold; i++)
+        {
+            Assert(guard.Refuse("file_read", first) is null, $"repeat #{i} is still allowed");
+            guard.Record("file_read", first, "chunk 0");
+        }
+        Assert(guard.Refuse("file_read", first) == AgentLoopGuard.ReadTargetRefusal,
+            "the third identical read is refused");
 
         // Другой файл — другой объект.
         Assert(guard.Refuse("file_read", """{"path":"TrayIcon.cs"}""") is null, "a different file is allowed");

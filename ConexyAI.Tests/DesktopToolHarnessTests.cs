@@ -84,6 +84,8 @@ internal static class DesktopToolHarnessTests
         await h.Ok("glob", new { pattern = "**/*.txt" }, o => o.Contains("a.txt"));
 
         await h.Ok("str_replace_editor", new { command = "create", path = "b.txt", file_text = "x\ny\n" });
+        // EDIT_AFTER_READ: правка существующего файла требует предварительного чтения.
+        await h.Ok("str_replace_editor", new { command = "view", path = "b.txt" });
         await h.Ok("str_replace_editor", new { command = "str_replace", path = "b.txt", old_str = "y", new_str = "z" });
         await h.Ok("str_replace_editor", new { command = "insert", path = "b.txt", insert_line = 0, new_str = "top" });
         await h.Ok("str_replace_editor", new { command = "view", path = "b.txt" }, o => o.Contains("top") && o.Contains("z"));
@@ -161,10 +163,13 @@ internal static class DesktopToolHarnessTests
         var writeScript = ToolArgs.Parse("""{"command":"$p='a.txt'; Set-Content $p 'x'"}""");
         Assert(!ReadLoopGuard.IsRead("bash", writeScript), "a script that writes is an action");
 
-        // То же самое через оболочку: `cat a.txt` — тоже чтение.
-        for (var i = 0; i < ConexyAI.Desktop.Tools.ReadLoopGuard.TargetLimit; i++)
-            await h.Ok("bash", new { command = OperatingSystem.IsWindows() ? "Get-Content a.txt" : "cat a.txt" });
-        await h.Fail("bash", new { command = OperatingSystem.IsWindows() ? "Get-Content a.txt" : "cat a.txt" });
+        // BASH_FILE_OPS: читать файлы через оболочку больше не нужно — отказ ровно один раз.
+        var shellRead = OperatingSystem.IsWindows() ? "Get-Content a.txt" : "cat a.txt";
+        await h.Fail("bash", new { command = shellRead });
+        // Повтор той же команды выполняется — но счётчик повторов чтения так же ловит петлю.
+        await h.Ok("bash", new { command = shellRead });
+        await h.Ok("bash", new { command = shellRead });
+        await h.Fail("bash", new { command = shellRead });
 
         // grep по конкретному файлу должен искать, а не возвращать «0 файлов».
         await h.Ok("grep", new { pattern = "changed", path = "a.txt" }, o => o.Contains("a.txt"));

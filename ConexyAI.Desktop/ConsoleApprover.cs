@@ -26,8 +26,17 @@ public sealed class ConsoleApprover : ICommandApprover
     public Task<bool> ApproveAsync(string command, string workingDirectory, CancellationToken ct) =>
         ApproveAsync("Bash", command, workingDirectory, ct);
 
-    public async Task<bool> ApproveAsync(string title, string command, string workingDirectory, CancellationToken ct)
+    // BASH_DESCRIPTION: описание показывается отдельной строкой — пользователь читает намерение,
+    // а команда ниже остаётся точной и копируемой.
+    public Task<bool> ApproveCommandAsync(string command, string? description, string workingDirectory, CancellationToken ct) =>
+        ApproveAsync("Bash", command, workingDirectory, ct, description);
+
+    public Task<bool> ApproveAsync(string title, string command, string workingDirectory, CancellationToken ct) =>
+        ApproveAsync(title, command, workingDirectory, ct, null);
+
+    private async Task<bool> ApproveAsync(string title, string command, string workingDirectory, CancellationToken ct, string? description)
     {
+        var note = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
         if (_auto)
             return true;
 
@@ -45,10 +54,10 @@ public sealed class ConsoleApprover : ICommandApprover
                 return true;
 
             if (!Ui.Ansi)
-                return await AskPlainAsync(command, workingDirectory, ct);
+                return await AskPlainAsync(command, workingDirectory, ct, note);
 
             var remember = isCommand && ProjectRoot is not null ? PermissionStore.SuggestRule(command) : null;
-            var choice = await Ui.ConfirmAsync(title, command, workingDirectory, ct, rememberRule: remember);
+            var choice = await Ui.ConfirmAsync(title, command, workingDirectory, ct, rememberRule: remember, description: note);
             if (choice == 1)
                 _auto = true;
             if (choice == 3 && remember is not null)
@@ -116,10 +125,12 @@ public sealed class ConsoleApprover : ICommandApprover
         }
     }
 
-    private async Task<bool> AskPlainAsync(string command, string workingDirectory, CancellationToken ct, bool allowAuto = true)
+    private async Task<bool> AskPlainAsync(string command, string workingDirectory, CancellationToken ct, string? description = null, bool allowAuto = true)
     {
         Console.WriteLine();
         Console.WriteLine($"Агент хочет выполнить команду в {workingDirectory}:");
+        if (description is not null)
+            Console.WriteLine("  " + description);
         Console.WriteLine("  " + command);
         Console.Write("Разрешить? [y]да / [n]нет / [a]да, и дальше без вопросов: ");
 

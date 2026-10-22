@@ -133,8 +133,9 @@ public class ConexyBashService : IConexyBashService
         // sweeper'ом после 10 минут простоя.
         var statePath = _sandboxSessions.GetOrCreateStatePath(sessionId);
         var result = await _sandbox.RunAsync(command, workingDir, timeout, ct, statePath);
-        // TEST_RUNNER: тестовому прогону нужен весь вывод, а не head+tail — иначе упавшие тесты теряются.
-        var (text, truncated) = rawOutput ? TruncateRaw(result.Output) : TruncateOutput(result.Output);
+        // BASH_COMPRESS: ANSI/баннеры снимаются всегда; сборка и тесты отдаются как «итог + окно
+        // вокруг ошибки», тестовому прогону (run_tests) — почти весь вывод.
+        var (text, truncated) = BashOutputCompressor.Compress(result.Output, command, rawOutput);
 
         return new BashToolResult
         {
@@ -145,37 +146,6 @@ public class ConexyBashService : IConexyBashService
             WasTimedOut = result.WasTimedOut,
             ErrorType = result.ErrorType
         };
-    }
-
-    private static (string text, bool truncated) TruncateOutput(string raw)
-    {
-        var lines = raw.Split('\n');
-        const int headLines = 40;
-        const int tailLines = 40;
-
-        if (lines.Length <= headLines + tailLines)
-            return (raw, false);
-
-        var head = lines.Take(headLines);
-        var tail = lines.Skip(lines.Length - tailLines);
-        var omitted = lines.Length - headLines - tailLines;
-
-        var result = string.Join('\n', head)
-            + $"\n[... truncated {omitted} lines ...]\n"
-            + string.Join('\n', tail);
-
-        return (result, true);
-    }
-
-    // TEST_RUNNER: для тестов сохраняем почти весь вывод (сводка в конце, падения в середине), обрезая
-    // только по очень большому лимиту символов.
-    private const int MaxRawOutputChars = 400_000;
-
-    private static (string text, bool truncated) TruncateRaw(string raw)
-    {
-        if (raw.Length <= MaxRawOutputChars) return (raw, false);
-        var half = MaxRawOutputChars / 2;
-        return (raw[..half] + "\n[... output truncated ...]\n" + raw[^half..], true);
     }
 
     /// <summary>Command cards should never receive a multi-hundred-KB blob.</summary>
@@ -227,6 +197,7 @@ public class ConexyBashService : IConexyBashService
             Path = "",
             Status = status,
             Summary = summary,
+            Description = request.Description,
             WorkingDirectory = workspacePath,
             Output = output,
             PendingActionId = request.PendingActionId,

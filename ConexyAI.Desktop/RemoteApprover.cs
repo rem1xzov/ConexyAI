@@ -56,10 +56,20 @@ public sealed class RemoteApprover : ICommandApprover
         return RequestAsync(title, details, workingDirectory, sensitive: false, ct);
     }
 
+    // BASH_DESCRIPTION: описание едет на сайт отдельным полем — в карточке оно над командой.
+    public Task<bool> ApproveCommandAsync(string command, string? description, string workingDirectory, CancellationToken ct)
+    {
+        if (ToolCallContext.Current is { } ctx
+            && PermissionStore.Load().Match(ctx.ProjectRoot, command) is not null)
+            return Task.FromResult(true);
+        return RequestAsync("Bash", command, workingDirectory, sensitive: false, ct, description);
+    }
+
     public Task<bool> ApproveSensitiveAsync(string title, string details, string where, CancellationToken ct) =>
         RequestAsync(title, details, where, sensitive: true, ct);
 
-    private async Task<bool> RequestAsync(string title, string details, string where, bool sensitive, CancellationToken ct)
+    private async Task<bool> RequestAsync(string title, string details, string where, bool sensitive, CancellationToken ct,
+        string? description = null)
     {
         if (_hub is not { State: HubConnectionState.Connected } hub || ToolCallContext.Current is not { } ctx)
             return false;
@@ -68,7 +78,7 @@ public sealed class RemoteApprover : ICommandApprover
         _approvals[requestId] = tcs; // до вызова: ответ может прийти раньше, чем вернётся Invoke
         try
         {
-            if (!await hub.InvokeAsync<bool>("RequestDeviceApproval", requestId, ctx.TaskId, title, details, where, sensitive, ct))
+            if (!await hub.InvokeAsync<bool>("RequestDeviceApproval", requestId, ctx.TaskId, title, details, where, sensitive, description, ct))
                 return false;
             await using var reg = ct.Register(() => tcs.TrySetResult(false));
             return await tcs.Task;
@@ -122,6 +132,9 @@ public sealed class RoutingApprover(ICommandApprover? console, RemoteApprover re
 
     public Task<bool> ApproveAsync(string title, string details, string workingDirectory, CancellationToken ct) =>
         Target.ApproveAsync(title, details, workingDirectory, ct);
+
+    public Task<bool> ApproveCommandAsync(string command, string? description, string workingDirectory, CancellationToken ct) =>
+        Target.ApproveCommandAsync(command, description, workingDirectory, ct);
 
     public Task<bool> ApproveSensitiveAsync(string title, string details, string where, CancellationToken ct) =>
         Target.ApproveSensitiveAsync(title, details, where, ct);

@@ -7,6 +7,7 @@ using ConexyAI.Contract;
 using ConexyAI.Model;
 using ConexyAI.Service;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -36,6 +37,9 @@ internal static class AgentEval
             foreach (var t in tasks) Console.WriteLine($"{t.Id,-28} {t.Title}");
             return 0;
         }
+        // ADHOC: прогон на настоящем проекте снаружи (——dir/——prompt). Задачи eval для него не нужны.
+        if (opts.Dir is { Length: > 0 })
+            return await RunAdHocAsync(opts);
         if (tasks.Count == 0)
         {
             Console.Error.WriteLine("Нет задач под фильтр --only.");
@@ -135,6 +139,227 @@ internal static class AgentEval
         await File.WriteAllTextAsync(Path.Combine(outDir, "report.md"), report);
         Console.WriteLine("\n" + report);
         return 0;
+    }
+
+    // ------------------------------------------------------------------ ad-hoc run on a real project
+
+    // ADHOC: тот же раннер, устав и инструменты, что в продукте, но на копии настоящего проекта.
+    // Нужно, чтобы мерить поведение на реальной задаче (сколько bash, правок, токенов, дошёл ли до сборки).
+    //   dotnet run --project ConexyAI.Tests -- eval --dir <путь> --prompt "..." --timeout-min 30 --out <папка>
+    private static async Task<int> RunAdHocAsync(EvalOptions opts)
+    {
+        var repoRoot = FindRepoRoot();
+        var ai = LoadUpstream(repoRoot);
+        if (string.IsNullOrWhiteSpace(ai.DeepSeek.ApiKey))
+        {
+            Console.Error.WriteLine("Ключ не задан: AiUpstream:DeepSeek:ApiKey в ConexyAI/appsettings.json или переменная AiUpstream__DeepSeek__ApiKey.");
+            return 2;
+        }
+
+        var source = Path.GetFullPath(opts.Dir!);
+        if (!Directory.Exists(source))
+        {
+            Console.Error.WriteLine($"Папка не найдена: {source}");
+            return 2;
+        }
+
+        var prompt = opts.Prompt;
+        if (string.IsNullOrWhiteSpace(prompt) && opts.PromptFile is { Length: > 0 } promptFile && File.Exists(promptFile))
+            prompt = await File.ReadAllTextAsync(promptFile);
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            Console.Error.WriteLine("Нужен --prompt \"текст\" или --prompt-file путь.");
+            return 2;
+        }
+
+        var outDir = opts.Out ?? Path.Combine(repoRoot, "eval-results", "adhoc-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+        Directory.CreateDirectory(Path.Combine(outDir, "transcripts"));
+        var workspaceRoot = Path.Combine(outDir, "workspace");
+        var chatId = Guid.NewGuid();
+        var dir = Path.Combine(workspaceRoot, chatId.ToString("N"));
+
+        Console.WriteLine($"Проект: {source}");
+        Console.WriteLine($"Копия для прогона: {dir}");
+        CopyProject(source, dir);
+        Console.WriteLine("Копия готова.\n");
+
+        var hub = new RecordingHubContext();
+        var workspace = new ConexyWorkspaceService(
+            Options.Create(new WorkspaceOptions { RootPath = workspaceRoot }),
+            NullLogger<ConexyWorkspaceService>.Instance);
+
+        var realLlm = new ConexyLlmClient(new HttpClient(), NullLogger<ConexyLlmClient>.Instance, Options.Create(ai), hub);
+        var llm = new EvalLlm(realLlm);
+        var bash = new EvalHostBash(workspace, maxTimeoutSeconds: 600);
+        var editor = new ConexyEditorService(
+            workspace, new ConexyEditorStateService(), new WorkspacePathValidator(workspace), hub,
+            NullLogger<ConexyEditorService>.Instance);
+        var todo = new ConexyTodoService(hub, NullLogger<ConexyTodoService>.Instance);
+        var approval = new EvalApproval();
+
+        // AGENT_SKILLS: в продукте скиллы лежат в БД; на стенде берём их из папки проекта, чтобы
+        // проверить, как агент следует присланному скиллу (read_skill).
+        var skillsDir = Directory.Exists(Path.Combine(repoRoot, "ConexyAI", ".agents", "skills"))
+            ? Path.Combine(repoRoot, "ConexyAI", ".agents", "skills")
+            : Path.Combine(repoRoot, ".agents", "skills");
+        IServiceScopeFactory? scopeFactory = null;
+        if (Directory.Exists(skillsDir))
+        {
+            var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+            services.AddSingleton<ISkillService>(new FolderSkillService(skillsDir));
+            // ORCHESTRA: на стенде нет фабрики настоящих помощников — ведущий получает их отчёт-заглушку
+            // вместо исключения, и прогон продолжается.
+            services.AddSingleton<IConexyAgentRunner>(new NoWorkerRunner());
+            scopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+        }
+
+        var runner = new ConexyAgentRunner(
+            workspace,
+            new UnavailableVisionService(),
+            llm,
+            githubService: null!,
+            editorService: editor,
+            bashService: bash,
+            todoService: todo,
+            webSearchService: null!,
+            hub,
+            dangerousCommandClassifier: approval,
+            commandApproval: approval,
+            pendingActionService: null!,
+            new FakeSubscriptionService(),
+            new StaticConversationService(),
+            NullLogger<ConexyAgentRunner>.Instance,
+            documentService: null!,
+            Options.Create(new AgentOptions
+            {
+                MaxIterations = 60,
+                AuditTimeoutSeconds = 45,
+                AuditEnabled = false,
+                MaxSelfCorrectionAttempts = 5,
+            }),
+            webPageFetcher: null!,
+            chatSearch: null!,
+            scopeFactory: scopeFactory,
+            // TEST_RUNNER: без него агент, которому велено прогнать тесты, получает «run_tests недоступен»
+            // и тратит шаги на обход — стенд должен повторять продукт.
+            testRunnerService: new ConexyTestRunnerService(workspace));
+
+        var job = new ConexyJob(Guid.NewGuid(), chatId, Guid.NewGuid(), ConexyModelType.ConexyCoder, prompt);
+        var context = new ConversationContext(job.TaskId, job.ChatId, job.UserId, runner.GetSystemPrompt(job.ModelType), prompt);
+
+        var before = SnapshotSources(dir);
+        var stopwatch = Stopwatch.StartNew();
+        string? answer = null;
+        string? error = null;
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(opts.TaskTimeoutMinutes));
+        try
+        {
+            answer = await runner.RunLoopAsync(job, context, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            error = $"таймаут {opts.TaskTimeoutMinutes} мин";
+        }
+        catch (Exception ex)
+        {
+            error = ex.GetType().Name + ": " + ex.Message;
+        }
+        stopwatch.Stop();
+
+        var after = SnapshotSources(dir);
+        var changes = Diff(before, after);
+        var totalTokens = llm.Cached + llm.Uncached + llm.Output + llm.TotalOnly;
+
+        Console.WriteLine($"\n=== Результат за {stopwatch.Elapsed.TotalSeconds:0} с ===");
+        Console.WriteLine($"шагов модели: {llm.StreamCalls} · вызовов аудита: {llm.SendCalls}");
+        Console.WriteLine($"токены: вход из кэша {llm.Cached:N0} · вход {llm.Uncached:N0} · выход {llm.Output:N0} · всего {totalTokens:N0}");
+        Console.WriteLine($"инструменты: {string.Join(", ", llm.ToolCalls.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key}×{kv.Value}"))}");
+        Console.WriteLine($"bash-команд: {bash.Commands.Count} (отклонено стендом: {bash.Denied})");
+        Console.WriteLine($"изменено файлов: {changes.Count}, изменённых строк: {changes.Sum(c => c.Lines)}");
+        foreach (var c in changes) Console.WriteLine($"  {c.Kind} {c.Path} ({c.Lines} стр.)");
+        if (error is not null) Console.WriteLine($"\nОШИБКА: {error}");
+        Console.WriteLine($"\nФинальный ответ:\n{answer}");
+
+        await File.WriteAllTextAsync(
+            Path.Combine(outDir, "transcripts", "adhoc.json"),
+            JsonSerializer.Serialize(new
+            {
+                source,
+                project = dir,
+                prompt,
+                finalAnswer = answer,
+                error,
+                seconds = stopwatch.Elapsed.TotalSeconds,
+                steps = llm.StreamCalls,
+                tokens = new { cached = llm.Cached, uncached = llm.Uncached, output = llm.Output, total = totalTokens },
+                toolCalls = llm.ToolCalls,
+                bashCommands = bash.Commands,
+                changes,
+                messages = llm.LastMessages,
+            }, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            }));
+
+        await File.WriteAllTextAsync(Path.Combine(outDir, "report.md"),
+            $"# Ad-hoc прогон агента\n\n" +
+            $"- Проект: `{source}`\n- Копия: `{dir}`\n- Время: {stopwatch.Elapsed.TotalSeconds:0} с\n" +
+            $"- Шагов: {llm.StreamCalls} · токенов всего: {totalTokens:N0}\n" +
+            $"- bash-команд: {bash.Commands.Count} · отказов стенда: {bash.Denied}\n" +
+            $"- Изменено файлов: {changes.Count}, строк: {changes.Sum(c => c.Lines)}\n" +
+            (error is null ? string.Empty : $"- Ошибка: {error}\n") +
+            "\n## Инструменты\n\n" +
+            string.Join("\n", llm.ToolCalls.OrderByDescending(kv => kv.Value).Select(kv => $"- {kv.Key}: {kv.Value}")) +
+            "\n\n## Изменения\n\n" +
+            string.Join("\n", changes.Select(c => $"- {c.Kind} `{c.Path}` ({c.Lines} стр.)")) +
+            $"\n\n## Финальный ответ\n\n{answer}\n");
+
+        Console.WriteLine($"\nОтчёт: {Path.Combine(outDir, "report.md")}");
+        return 0;
+    }
+
+    // Копия проекта для прогона: артефакты сборки и .git не нужны — агент должен работать с исходниками.
+    private static readonly string[] CopySkipDirs = { "bin", "obj", ".git", ".vs", "node_modules" };
+
+    private static void CopyProject(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.TopDirectoryOnly))
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: true);
+        foreach (var sub in Directory.EnumerateDirectories(source, "*", SearchOption.TopDirectoryOnly))
+        {
+            var name = Path.GetFileName(sub);
+            if (CopySkipDirs.Contains(name, StringComparer.OrdinalIgnoreCase))
+                continue;
+            CopyProject(sub, Path.Combine(destination, name));
+        }
+    }
+
+    // Тексты проекта для отчёта об изменениях: без bin/obj и без гигабайтных моделей.
+    private static readonly HashSet<string> SnapshotSkipDirs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "bin", "obj", ".git", ".vs", "node_modules", "models", "dist", ".next",
+    };
+
+    private static Dictionary<string, string> SnapshotSources(string dir)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!Directory.Exists(dir)) return map;
+        foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(dir, file).Replace('\\', '/');
+            if (rel.Split('/').Any(part => SnapshotSkipDirs.Contains(part))) continue;
+            try
+            {
+                if (new FileInfo(file).Length > 512 * 1024) continue;
+                map[rel] = File.ReadAllText(file);
+            }
+            catch (IOException)
+            {
+            }
+        }
+        return map;
     }
 
     private static async Task<EvalRun> RunOneAsync(EvalTask task, int runNo, AiUpstreamOptions ai, EvalOptions opts, string outDir)
@@ -449,6 +674,10 @@ internal sealed class EvalOptions
     public int Runs { get; init; } = 1;
     public int TaskTimeoutMinutes { get; init; } = 10;
     public string? Out { get; init; }
+    /// <summary>ADHOC: гонять настоящий проект из этой папки (копия делается рядом с отчётом).</summary>
+    public string? Dir { get; init; }
+    public string? Prompt { get; init; }
+    public string? PromptFile { get; init; }
     public HashSet<string> Only { get; init; } = new(StringComparer.Ordinal);
 
     public static EvalOptions Parse(string[] args)
@@ -467,6 +696,9 @@ internal sealed class EvalOptions
             Runs = int.TryParse(Value("--runs"), out var runs) && runs > 0 ? runs : 1,
             TaskTimeoutMinutes = int.TryParse(Value("--timeout-min"), out var t) && t > 0 ? t : 10,
             Out = Value("--out"),
+            Dir = Value("--dir"),
+            Prompt = Value("--prompt"),
+            PromptFile = Value("--prompt-file"),
             Only = (Value("--only") ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet(StringComparer.Ordinal),
         };
     }
@@ -655,11 +887,14 @@ internal sealed class EvalHostBash : IConexyBashService
 {
     private readonly IConexyWorkspaceService _workspace;
     private readonly string _bash;
+    // ADHOC: на настоящем проекте первая сборка/тесты не укладываются в 120 с — лимит задаёт вызывающий.
+    private readonly int _maxTimeoutSeconds;
 
-    public EvalHostBash(IConexyWorkspaceService workspace)
+    public EvalHostBash(IConexyWorkspaceService workspace, int maxTimeoutSeconds = 120)
     {
         _workspace = workspace;
         _bash = ResolveBash();
+        _maxTimeoutSeconds = Math.Max(5, maxTimeoutSeconds);
     }
 
     public List<string> Commands { get; } = new();
@@ -699,7 +934,7 @@ internal sealed class EvalHostBash : IConexyBashService
             };
         }
 
-        var timeout = TimeSpan.FromSeconds(Math.Clamp(request.TimeoutSeconds ?? 60, 5, 120));
+        var timeout = TimeSpan.FromSeconds(Math.Clamp(request.TimeoutSeconds ?? 60, 5, _maxTimeoutSeconds));
         var (exit, output) = await EvalProc.RunAsync(_bash, new[] { "-c", command }, dir, timeout, ct);
         var timedOut = exit == -2;
         var truncated = output.Length > 12_000;
@@ -1853,4 +2088,52 @@ internal static class EvalTasks
                 test('invalid', () => assert.throws(() => clamp(1, 5, 2), /INVALID_RANGE/));
                 """));
         });
+}
+
+// ====================================================================== ad-hoc: skills from a folder
+
+// ADHOC: в продукте скиллы лежат в БД пользователя. На стенде их берём из папки проекта
+// (ConexyAI/.agents/skills/*/SKILL.md), чтобы проверять, как агент следует выданному скиллу.
+internal sealed class FolderSkillService : ISkillService
+{
+    private readonly IReadOnlyList<(string Name, string Description, string Content)> _skills;
+
+    public FolderSkillService(string skillsDir)
+    {
+        var list = new List<(string, string, string)>();
+        foreach (var dir in Directory.EnumerateDirectories(skillsDir))
+        {
+            var file = Path.Combine(dir, "SKILL.md");
+            if (!File.Exists(file)) continue;
+            var parsed = SkillService.Parse(Path.GetFileName(dir) + ".md", File.ReadAllText(file));
+            list.Add((parsed.Name, parsed.Description, parsed.Content));
+        }
+        _skills = list;
+    }
+
+    public Task<IReadOnlyList<SkillSummary>> EnabledSummariesAsync(Guid userId, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<SkillSummary>>(_skills.Select(s => new SkillSummary(s.Name, s.Description)).ToList());
+
+    public Task<string?> ReadAsync(Guid userId, string name, CancellationToken ct = default) =>
+        Task.FromResult(_skills.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase)) is { Content: { } content }
+            ? content
+            : null);
+
+    public Task<IReadOnlyList<SkillDto>> ListAsync(Guid userId, CancellationToken ct = default) => throw new NotSupportedException();
+    public Task<SkillDto> UpsertFromFileAsync(Guid userId, string fileName, string text, CancellationToken ct = default) => throw new NotSupportedException();
+    public Task<bool> DeleteAsync(Guid userId, Guid id, CancellationToken ct = default) => throw new NotSupportedException();
+    public Task<SkillDto?> SetEnabledAsync(Guid userId, Guid id, bool enabled, CancellationToken ct = default) => throw new NotSupportedException();
+}
+
+internal sealed class NoWorkerRunner : IConexyAgentRunner
+{
+    public Task<string> RunLoopAsync(ConexyJob job, ConversationContext context, CancellationToken ct = default) =>
+        Task.FromResult(string.Empty);
+
+    public string GetSystemPrompt(ConexyModelType modelType) => string.Empty;
+
+    public Task<string> RunWorkerAsync(ConexyJob job, AgentIdentity identity, string brief, CancellationToken ct = default) =>
+        Task.FromResult("(на стенде нет настоящих агентов-помощников — работай сам)");
+
+    public string PartialOutput => string.Empty;
 }

@@ -135,6 +135,9 @@ public class PendingActionEvent
     // каждому агенту ОТДЕЛЬНО: авто-аппрув одного помощника не должен одобрять команды остальных.
     public string? AgentId { get; set; }
     public string? AgentRole { get; set; }
+
+    // BASH_DESCRIPTION: что делает команда простыми словами — показывается над командой в карточке.
+    public string? Description { get; set; }
 }
 
 // OFFICE_FORMATS: добавлено 2026-09-23 — "download the answer as .docx/.xlsx/.pptx".

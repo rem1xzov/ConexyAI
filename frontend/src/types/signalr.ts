@@ -36,6 +36,8 @@ export interface ToolActionEvent {
   path: string; // empty for bash
   status: 'started' | 'completed' | 'failed' | 'pending_confirmation' | 'rejected';
   summary?: string;
+  // BASH_DESCRIPTION: что делает команда простыми словами (модель обязана это заполнить).
+  description?: string;
   // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
   workingDirectory?: string;
   output?: string;
@@ -57,6 +59,8 @@ export interface PendingActionPayload {
   workingDirectory: string;
   status: string;
   createdAt: string;
+  // BASH_DESCRIPTION: человеческое описание команды (устройство присылает его вместе с подтверждением).
+  description?: string;
   // COMMAND_CONFIRM: добавлено 2026-09-20
   isDangerous?: boolean;
   // ORCHESTRA: чей агент просит подтверждение (решается по каждому агенту отдельно).

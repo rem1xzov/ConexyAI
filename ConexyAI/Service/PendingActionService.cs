@@ -50,7 +50,8 @@ public interface IPendingActionService
         string command,
         string workingDirectory,
         bool isDangerous,
-        CancellationToken ct);
+        CancellationToken ct,
+        string? description = null);
 
     /// <summary>
     /// Resolves the waiter for <paramref name="actionId"/> with the user's decision. When
@@ -108,7 +109,8 @@ public class PendingActionService : IPendingActionService
         string command,
         string workingDirectory,
         bool isDangerous,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? description = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var repository = scope.ServiceProvider.GetRequiredService<IPendingActionRepository>();
@@ -164,6 +166,7 @@ public class PendingActionService : IPendingActionService
                 Status = "Pending",
                 CreatedAt = DateTime.UtcNow,
                 IsDangerous = isDangerous,
+                Description = description,
                 AgentId = AgentExecutionContext.AgentId,
                 AgentRole = AgentExecutionContext.AgentRole
             }, waitToken);

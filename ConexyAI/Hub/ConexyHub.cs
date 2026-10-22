@@ -264,7 +264,13 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
 
     /// <summary>Устройство просит подтвердить действие через веб; решение придёт событием <c>DeviceApprovalResult</c>.</summary>
     public Task<bool> RequestDeviceApproval(Guid requestId, Guid taskId, string title, string details, string where, bool sensitive) =>
-        _deviceRemote.RequestApprovalAsync(CallerId(), Context.ConnectionId, requestId, taskId, title, details, where, sensitive, Context.ConnectionAborted);
+        RequestDeviceApproval(requestId, taskId, title, details, where, sensitive, null);
+
+    // BASH_DESCRIPTION: старые клиенты шлют шесть аргументов, новые — семь с человеческим описанием
+    // команды. Две перегрузки — чтобы обновление клиента и сервера не требовало синхронности.
+    /// <inheritdoc cref="RequestDeviceApproval(Guid, Guid, string, string, string, bool)"/>
+    public Task<bool> RequestDeviceApproval(Guid requestId, Guid taskId, string title, string details, string where, bool sensitive, string? description) =>
+        _deviceRemote.RequestApprovalAsync(CallerId(), Context.ConnectionId, requestId, taskId, title, details, where, sensitive, Context.ConnectionAborted, description);
 
     /// <summary>Устройство задаёт вопрос ask_user через веб; ответ придёт событием <c>DeviceQuestionAnswer</c>.</summary>
     public Task<bool> RequestDeviceQuestion(Guid requestId, Guid taskId, string question, string[] options) =>

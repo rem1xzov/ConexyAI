@@ -42,6 +42,8 @@ export function CommandConfirmCard({ events, onDecision }: CommandConfirmCardPro
   const actionId = first.pendingActionId;
   const output = completed?.output ?? '';
   const command = first.command ?? '';
+  // BASH_DESCRIPTION: намерение важнее флагов — показываем его отдельной строкой над командой.
+  const description = first.description?.trim() ?? '';
 
   // The authoritative outcome comes from the server; the local decision only fills the gap while
   // the command is in flight.
@@ -135,6 +137,8 @@ export function CommandConfirmCard({ events, onDecision }: CommandConfirmCardPro
           <span className="cmd-card__status-label">{statusLabel}</span>
         </span>
       </div>
+
+      {description && <p className="cmd-card__intent">{description}</p>}
 
       <div className="cmd-card__codewrap">
         <pre className="cmd-card__command">{command}</pre>

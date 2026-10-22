@@ -55,6 +55,7 @@ function toolBlockFrom(event: ToolActionEvent): TurnToolBlock {
     status: toolStatusFrom(event),
     output: event.output ?? undefined,
     summary: event.summary ?? undefined,
+    description: event.description ?? undefined,
     workingDirectory: event.workingDirectory ?? undefined,
     actionId: event.pendingActionId ?? undefined,
     isDangerous: event.isDangerous ?? undefined,
@@ -83,6 +84,7 @@ export function toolEventFromBlock(block: TurnToolBlock): ToolActionEvent {
               ? 'rejected'
               : 'started',
     summary: block.summary,
+    description: block.description,
     output: block.output,
     workingDirectory: block.workingDirectory,
     pendingActionId: block.actionId,
@@ -159,6 +161,7 @@ export function applyToolEvent(blocks: readonly TurnBlock[], event: ToolActionEv
       status: toolStatusFrom(event),
       output: event.output ?? block.output,
       summary: event.summary ?? block.summary,
+      description: event.description ?? block.description,
       actionId: event.pendingActionId ?? block.actionId,
       isDangerous: event.isDangerous ?? block.isDangerous,
       agentId: event.agentId ?? block.agentId,

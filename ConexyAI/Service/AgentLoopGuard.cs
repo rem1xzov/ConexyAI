@@ -119,6 +119,9 @@ public sealed partial class AgentLoopGuard
         "readallbytes", "get-item", "test-path", "resolve-path", "select-object", "measure-object",
         "out-string", "format-table", "format-list", "where-object", "sort-object", "convertto-json",
         "rg ", "grep", "cat ", "head ", "tail ", "wc ", "stat ", "ls ", "dir ",
+        // READ_VIA_SHELL: прогон на реальном проекте — агент читал код десятками `sed -n '1,60p'`, и ни один
+        // счётчик этого не видел: `sed` не было в списке. Чтение через оболочку — всё равно чтение.
+        "sed ", "awk ", "nl ",
     };
 
     private static readonly string[] ShellWriteTokens =
@@ -128,6 +131,8 @@ public sealed partial class AgentLoopGuard
         "::delete", "::move", "::copy", "start-process", "invoke-expression", "iex ", "dotnet ",
         "npm ", "yarn ", "pnpm ", "gradle ", "mvn ", "msbuild ", "git add", "git commit", "git push",
         "git checkout", "git reset", "git clean", "git stash", "del ", "erase ", "rmdir",
+        // `sed -i` правит файл на месте.
+        "sed -i", "sed --in-place",
     };
 
     private static string? ReadCommand(string argumentsJson)
@@ -167,6 +172,8 @@ public sealed partial class AgentLoopGuard
     private readonly int _windowSize;
     private readonly List<Call> _recent = new();
     private readonly Dictionary<string, int> _targets = new(StringComparer.Ordinal);
+    // READ_INSIST: объекты, по которым отказ уже выдан — повтор по тому же объекту и есть петля.
+    private readonly HashSet<string> _refusedReadTargets = new(StringComparer.Ordinal);
 
     public AgentLoopGuard(
         int repeatThreshold = RepeatThreshold,
@@ -204,7 +211,10 @@ public sealed partial class AgentLoopGuard
     {
         if (IsRead(tool, arguments) && _targets.GetValueOrDefault(Target(tool, arguments)) >= ReadTargetThreshold)
         {
-            Refusals++;
+            // READ_INSIST: первый отказ по этому объекту — просто подсказка, а не повод отключать
+            // инструменты. К остановке ведёт только НАСТОЯНИЕ: повторное чтение того же объекта.
+            if (!_refusedReadTargets.Add(Target(tool, arguments)))
+                Refusals++;
             return ReadTargetRefusal;
         }
 
@@ -317,7 +327,13 @@ public sealed partial class AgentLoopGuard
         return matching >= _repeatThreshold;
     }
 
-    /// <summary>Чтение — либо инструмент чтения, либо читающая команда оболочки.</summary>
+    /// <summary>Новый ли это объект чтения (ещё не читали в этом прогоне). Новый файл — прогресс, не петля.</summary>
+    public bool IsNewReadTarget(string tool, string arguments) =>
+        IsRead(tool, arguments) && !_targets.ContainsKey(Target(tool, arguments));
+
+    /// <summary>
+    /// Чтение — либо инструмент чтения, либо читающая команда оболочки.
+    /// </summary>
     public static bool IsRead(string tool, string arguments) =>
         ReadTools.Contains(tool) || IsShellTool(tool) && IsReadOnlyCommand(arguments);
 
@@ -340,9 +356,13 @@ public sealed partial class AgentLoopGuard
             if (doc.RootElement.ValueKind != JsonValueKind.Object)
                 return tool + "|" + arguments;
             var parts = new List<string>();
+            // READ_PAGING: у file_read пагинация — штатный способ читать большой файл, и разные
+            // страницы — разная информация. Без этого агент не мог прочитать index.html целиком
+            // (третий offset считался той же самой «петлёй»).
+            var keepPaging = tool is "file_read" or "file_read_bytes";
             foreach (var property in doc.RootElement.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
             {
-                if (PagingKeys.Contains(property.Name))
+                if (!keepPaging && PagingKeys.Contains(property.Name))
                     continue;
                 parts.Add(property.Name + "=" + property.Value.GetRawText());
             }

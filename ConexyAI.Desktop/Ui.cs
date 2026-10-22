@@ -1025,13 +1025,13 @@ public static partial class Ui
 
     /// <summary>Меню «Да / Да, всегда / Нет» со стрелками. Возвращает 0, 1 или 2; -1 — отмена.</summary>
     public static async Task<int> ConfirmAsync(string title, string command, string folder, CancellationToken ct,
-        bool allowAuto = true, string? rememberRule = null)
+        bool allowAuto = true, string? rememberRule = null, string? description = null)
     {
         lock (Gate)
             _confirming = true;
         try
         {
-            return await ConfirmCoreAsync(title, command, folder, ct, allowAuto, rememberRule);
+            return await ConfirmCoreAsync(title, command, folder, ct, allowAuto, rememberRule, description);
         }
         finally
         {
@@ -1047,7 +1047,7 @@ public static partial class Ui
         }
     }
 
-    private static async Task<int> ConfirmCoreAsync(string title, string command, string folder, CancellationToken ct, bool allowAuto, string? rememberRule)
+    private static async Task<int> ConfirmCoreAsync(string title, string command, string folder, CancellationToken ct, bool allowAuto, string? rememberRule, string? description)
     {
         StopSpinner();
         FlushText();
@@ -1060,6 +1060,13 @@ public static partial class Ui
         var width = Width();
         Console.WriteLine();
         Console.WriteLine(C(Yellow, $"╭─ {title} ") + C(Yellow, new string('─', Math.Max(0, width - 4 - title.Length))));
+        // BASH_DESCRIPTION: сначала «что это за шаг» по-человечески, потом сама команда.
+        if (!string.IsNullOrWhiteSpace(description))
+        {
+            foreach (var line in description.Split('\n'))
+                Console.WriteLine(C(Yellow, "│ ") + C(Dim, line.TrimEnd('\r')));
+            Console.WriteLine(C(Yellow, "│"));
+        }
         foreach (var line in command.Split('\n'))
             Console.WriteLine(C(Yellow, "│ ") + line.TrimEnd('\r'));
         Console.WriteLine(C(Yellow, "╰" + new string('─', width - 1)));

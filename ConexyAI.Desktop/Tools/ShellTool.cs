@@ -13,6 +13,13 @@ public interface ICommandApprover
     Task<bool> ApproveAsync(string title, string details, string workingDirectory, CancellationToken ct) =>
         ApproveAsync(details, workingDirectory, ct);
 
+    /// <summary>
+    /// BASH_DESCRIPTION: подтверждение команды вместе с человеческим описанием — пользователь видит,
+    /// ЧТО делает команда, а не только её флаги. По умолчанию описание игнорируется.
+    /// </summary>
+    Task<bool> ApproveCommandAsync(string command, string? description, string workingDirectory, CancellationToken ct) =>
+        ApproveAsync("Bash", command, workingDirectory, ct);
+
     /// <summary>Действие от имени пользователя во внешнем сервисе (отправка письма): спрашиваем всегда, даже в авто-режиме.</summary>
     Task<bool> ApproveSensitiveAsync(string title, string details, string where, CancellationToken ct) =>
         ApproveAsync(title, details, where, ct);
@@ -118,12 +125,15 @@ public sealed partial class ShellTool
     public async Task<ToolResult> RunAsync(ToolArgs args, string tool, CancellationToken ct)
     {
         var command = args.Required("command", tool);
+        // BASH_DESCRIPTION: модель обязана объяснить намерение; старые вызовы без описания не ломаем.
+        var description = args.Str("description")?.Trim();
         var timeout = Math.Clamp(args.Int("timeout_seconds") ?? DefaultTimeoutSeconds, 1, MaxTimeoutSeconds);
         // Оболочка новая на каждый вызов, `cd` не сохраняется — подпапка задаётся явно и не выходит за проект.
         var cwd = args.Str("cwd") is { Length: > 0 } dir ? _guard.Resolve(dir) : _guard.Root;
         if (!Directory.Exists(cwd))
             return ToolResult.Fail($"Папка '{args.Str("cwd")}' не найдена в проекте.");
-        var result = await ExecuteAsync(command, timeout, requireApproval: true, ct, useCmd: tool == "cmd_exec", workingDirectory: cwd);
+        var result = await ExecuteAsync(command, timeout, requireApproval: true, ct, useCmd: tool == "cmd_exec",
+            workingDirectory: cwd, description: description);
         // Если сама оболочка не запустилась — подсказываем модели обходной путь.
         if (result.IsError && result.Output.StartsWith("Не удалось запустить команду") && tool != "cmd_exec")
             return ToolResult.Fail(result.Output + "\nОбход: выполни ту же команду через cmd_exec, а для файлов используй file_read/grep/glob/apply_patch.");
@@ -170,14 +180,14 @@ public sealed partial class ShellTool
 
     private async Task<ToolResult> ExecuteAsync(
         string command, int timeoutSeconds, bool requireApproval, CancellationToken ct, bool useCmd = false, bool skipPolicy = false,
-        string? workingDirectory = null)
+        string? workingDirectory = null, string? description = null)
     {
         workingDirectory ??= _guard.Root;
         if (!skipPolicy && CommandPolicy.ForbiddenReason(command) is { } reason)
             return ToolResult.Fail(reason);
 
         if (requireApproval && !CommandPolicy.IsReadOnly(command)
-            && !await _approver.ApproveAsync(useCmd ? "cmd" : "Bash", command, workingDirectory, ct))
+            && !await _approver.ApproveCommandAsync(command, description, workingDirectory, ct))
             return ToolResult.Fail("Пользователь отклонил выполнение команды. Не повторяй её; предложи другой путь или спроси, что делать.");
 
         var psi = CreateShell(command, useCmd);
@@ -257,7 +267,8 @@ public sealed partial class ShellTool
         lock (sync) text = output.ToString().TrimEnd();
         if (!string.IsNullOrEmpty(ghToken))
             text = text.Replace(ghToken, "***");
-        text = Truncate(text);
+        // BASH_COMPRESS: ANSI и баннеры не нужны модели никогда, а от сборки — только итог и окно ошибки.
+        text = Compress(command, text);
 
         if (timedOut)
             return ToolResult.Fail($"{text}\n[Команда прервана по таймауту {timeoutSeconds} с]".TrimStart());
@@ -339,5 +350,56 @@ public sealed partial class ShellTool
             return text;
         var half = MaxOutputChars / 2;
         return text[..half] + $"\n[... вывод обрезан: {text.Length - MaxOutputChars} символов ...]\n" + text[^half..];
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"\x1B\[[0-9;?]*[ -/]*[@-~]")]
+    private static partial System.Text.RegularExpressions.Regex AnsiEscape();
+
+    [System.Text.RegularExpressions.GeneratedRegex(
+        @"\b(dotnet\s+(build|test|publish|restore)|msbuild|gradlew?|mvn|npm\s+(run\s+)?(build|test)|yarn\s+(build|test)|pnpm\s+(build|test)|cargo\s+(build|test|check)|go\s+(build|test)|pytest|jest|vitest|tsc|make)\b")]
+    private static partial System.Text.RegularExpressions.Regex BuildCommand();
+
+    [System.Text.RegularExpressions.GeneratedRegex(
+        @"\berror\b|\bfailed\b|\bFAIL(ED)?\b|Traceback|Unhandled exception|fatal error|Cannot find module|✗",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex ErrorLine();
+
+    [System.Text.RegularExpressions.GeneratedRegex(
+        @"^\s*(\d+\s+(Error|Warning)\(s\)|Build (succeeded|FAILED).*|Passed!.*|Failed!.*|Tests? (run|passed|failed).*|Test Run (Failed|Successful).*|Time Elapsed:.*)\s*$")]
+    private static partial System.Text.RegularExpressions.Regex SummaryLine();
+
+    /// <summary>
+    /// Вывод покомпактнее: снять ANSI, выбросить простыни пустых строк, а от сборки/тестов оставить
+    /// итог и по 2 строки контекста вокруг ошибок. Остальное — по краям.
+    /// </summary>
+    private static string Compress(string command, string raw)
+    {
+        if (string.IsNullOrEmpty(raw))
+            return raw;
+        var text = AnsiEscape().Replace(raw, string.Empty).Replace("\r\n", "\n").TrimEnd();
+        text = System.Text.RegularExpressions.Regex.Replace(text, "\n{3,}", "\n\n");
+
+        if (!BuildCommand().IsMatch(command.ToLowerInvariant()) || !ErrorLine().IsMatch(text))
+            return Truncate(text);
+
+        var lines = text.Split('\n');
+        var picked = new SortedSet<int>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (!ErrorLine().IsMatch(lines[i]))
+                continue;
+            for (var j = Math.Max(0, i - 2); j <= Math.Min(lines.Length - 1, i + 2); j++)
+                picked.Add(j);
+        }
+        if (picked.Count == 0)
+            return Truncate(text);
+
+        var body = string.Join('\n', picked.Select(i => lines[i]));
+        if (body.Length > 6_000)
+            body = body[..6_000] + "\n[... ошибки обрезаны ...]";
+        var summary = string.Join('\n', lines.Where(l => SummaryLine().IsMatch(l)).TakeLast(8));
+        return $"[вывод сжат: {lines.Length} строк → итог и окно вокруг ошибок]\n"
+               + (summary.Length > 0 ? summary + "\n\n" : string.Empty)
+               + body;
     }
 }

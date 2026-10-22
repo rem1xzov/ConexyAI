@@ -162,12 +162,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     // DESKTOP_AGENT: bash на ПК — не одноразовая песочница: другие лимиты и подпапка через cwd (cd между вызовами не сохраняется).
     private static readonly object DesktopBashSchema =
-        Function("bash", "Выполняет команду в оболочке ПК пользователя (на Windows — PowerShell, см. «Режим десктопа»). Для сборки, тестов, пакетных менеджеров и git. Каждый вызов — новая оболочка в корне проекта; для подпапки используй cwd, а не cd. Команды, кроме чтения, подтверждает пользователь. Долгие сервисы — через bg_start.",
+        Function("bash", "Выполняет команду в оболочке ПК пользователя (на Windows — PowerShell, см. «Режим десктопа»). Для сборки, тестов, пакетных менеджеров и git. Каждый вызов — новая оболочка в корне проекта; для подпапки используй cwd, а не cd. Команды, кроме чтения, подтверждает пользователь. Долгие сервисы — через bg_start. Код читай и правь инструментами file_read/grep/glob/apply_patch: чтение через оболочку (cat, head, tail, sed -n, awk, grep) и запись через неё (cat >, sed -i, Get-Content/Set-Content, Out-File) отклоняются с указанием нужного инструмента.",
             new { type = "object", properties = new {
                 command = new { type = "string", description = "Команда" },
+                // BASH_DESCRIPTION: как в Claude Code — пользователь подтверждает НАМЕРЕНИЕ, а не строку
+                // с флагами. Показывается в окне подтверждения на ПК и на сайте.
+                description = new { type = "string", description = "Что делает команда, простыми словами и в утвердительной форме: «Собираю проект», «Ставлю зависимости», «Коммичу изменения». Без пересказа флагов и путей — пользователь читает это, а не команду" },
                 cwd = new { type = "string", description = "Подпапка относительно корня проекта, например 'frontend' (необязательно)" },
                 timeout_seconds = new { type = "integer", description = "По умолчанию 600 (10 мин), макс. 3600. Для первой сборки со скачиванием зависимостей (Gradle, Maven, npm, Forge) ставь 1800–3600" }
-            }, required = new[] { "command" } });
+            }, required = new[] { "command", "description" } });
 
     private static readonly IReadOnlyList<object> DesktopToolSchemas = new List<object>
     {
@@ -378,6 +381,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private const string SpawnAgentsTool = "spawn_agents";
     /// <summary>Инструмент: сообщение другому агенту команды (передача задачи/артефакта).</summary>
     private const string TeamMessageTool = "team_message";
+    /// <summary>Фоновые помощники: забрать их отчёты, не дожидаясь их внутри spawn_agents.</summary>
+    private const string AgentsStatusTool = "agents_status";
     /// <summary>
     /// WEB_PARALLEL: страницы, запрошенные в одном ответе, читаются одновременно (только
     /// <c>fetch_web_page</c> — инструменты с побочными эффектами так не запускаются).
@@ -411,6 +416,78 @@ public class ConexyAgentRunner : IConexyAgentRunner
         foreach (var (id, result) in await Task.WhenAll(tasks))
             prefetched[id] = result;
         return prefetched;
+    }
+
+    // PARALLEL_READS: один ход часто несёт 3–5 чтений («посмотри эти файлы»), и раньше они шли строго
+    // по одному — на большом проекте это лишние шаги и токены. Читать параллельно безопасно: у этих
+    // инструментов нет побочных эффектов. В режиме десктопа — только последовательно: клиент ведёт
+    // своё состояние (read-guard, diff задачи) и не рассчитан на одновременные вызовы.
+    private static readonly HashSet<string> ParallelReadTools = new(StringComparer.Ordinal)
+    {
+        "file_read", "file_read_bytes", "grep", "glob", "workspace_list_files",
+    };
+
+    private const int MaxParallelReads = 4;
+
+    private async Task<Dictionary<string, ConexyToolResult>> PrefetchReadOnlyAsync(
+        List<LlmToolCall> calls, Guid taskId, Guid chatId, CancellationToken ct)
+    {
+        var prefetched = new Dictionary<string, ConexyToolResult>(StringComparer.Ordinal);
+        if (_job.UseDevice)
+            return prefetched;
+
+        var reads = calls
+            .Where(call => IsToolAllowed(call.Function.Name)
+                && (ParallelReadTools.Contains(call.Function.Name) || IsEditorView(call)))
+            .ToList();
+        if (reads.Count < 2)
+            return prefetched;
+
+        using var gate = new SemaphoreSlim(MaxParallelReads);
+        var tasks = reads.Select(async call =>
+        {
+            await gate.WaitAsync(ct);
+            try
+            {
+                var result = await DispatchToolAsync(taskId, chatId, call, ct);
+                return (call.Id, Result: result);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return (call.Id, Result: new ConexyToolResult(call.Id, $"Tool error ({call.Function.Name}): {ex.Message}", true));
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+
+        foreach (var (id, result) in await Task.WhenAll(tasks))
+            prefetched[id] = result;
+        return prefetched;
+    }
+
+    /// <summary>`str_replace_editor` с command=view только читает — его тоже можно параллелить.</summary>
+    private static bool IsEditorView(LlmToolCall call)
+    {
+        if (call.Function.Name != "str_replace_editor")
+            return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(call.Function.Arguments) ? "{}" : call.Function.Arguments);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("command", out var command)
+                   && command.ValueKind == JsonValueKind.String
+                   && command.GetString() == "view";
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     /// <summary>Сколько шагов даётся одному помощнику.</summary>
@@ -1025,7 +1102,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // перешёл к изменениям. Мягкий порог — напоминание, жёсткий — отказ в чтении, потолок — на весь прогон.
     private const int ReadStreakNudge = 6;
     private const int ReadStreakHardLimit = 10;
-    private const int ReadTotalLimit = 40;
+    // Изучение реального проекта — это десятки чтений разных файлов; потолок нужен только от бесконечного
+    // перечитывания. Шаги и так ограничены STEP_BUDGET.
+    private const int ReadTotalLimit = 80;
 
     // Сколько раз ОДИН инструмент должен упасть, чтобы мы сказали модели «он тут не работает».
     private const int ToolRetryWarningLimit = 3;
@@ -1268,6 +1347,25 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // не переносится (петля — свойство конкретной задачи).
         var loopGuard = new AgentLoopGuard();
 
+        // EDIT_AFTER_READ + BASH_FILE_OPS: тоже на прогон. Чтение живёт весь прогон (файл, прочитанный
+        // на шаге 1, можно править на шаге 20) — сбрасывается только отказ «файловые операции через bash».
+        // В режиме десктопа файлов на сервере нет: там ту же защиту держит клиент (ReadLoopGuard).
+        bool FileExistsInWorkspace(string path)
+        {
+            try
+            {
+                var root = _workspaceService.GetTaskWorkspacePathIfExists(chatId);
+                if (root is null)
+                    return false;
+                return File.Exists(Path.IsPathRooted(path) ? path : Path.Combine(root, path));
+            }
+            catch (Exception ex) when (ex is IOException or ArgumentException or NotSupportedException)
+            {
+                return false;
+            }
+        }
+        var editGuard = new EditAfterReadGuard(FileExistsInWorkspace);
+
         // TOKEN_BREAKER: остаток квоты на старте прогона. Раньше лимит проверялся ТОЛЬКО до запуска,
         // и внутри цикла зациклившийся агент выжигал миллионы токенов сверх тарифа (дефект M3:
         // лимит 200k, расход 7M за один запуск).
@@ -1447,7 +1545,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     continue;
                 }
 
-                var finalText = ExtractTextContent(responseMessage);
+                var finalText = StripToolMarkup(ExtractTextContent(responseMessage));
 
                 // ANTI_LIE: модель заявляет о GitHub-операции, которой не было — это не финал, а отказ:
                 // отправляем на доработку (сделай реально или скажи честно), а не завершаем с пассивной
@@ -1467,7 +1565,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
                 // WEB_FIRST: отрицание без поиска — не вывод, а догадка.
                 var webChecked = executedToolCounts.ContainsKey("web_search") || executedToolCounts.ContainsKey("fetch_web_page");
-                if (!webChecked && ClaimsSomethingDoesNotExist(finalText)
+                // TOOLS_OFF: если инструменты уже отключены или поиска нет в наборе, гнать модель
+                // «выполни web_search» — это требование невозможного: она в ответ печатает сырой формат вызова.
+                var webToolAvailable = _tools.Any(t => ToolName(t) is "web_search" or "fetch_web_page");
+                if (webToolAvailable && !finalAnswerForced && !webChecked && ClaimsSomethingDoesNotExist(finalText)
                     && webFirstPushbacks < MaxWebFirstPushbacks && step < stepLimit)
                 {
                     webFirstPushbacks++;
@@ -1503,7 +1604,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 var runtimeExpected = _profile.AuditsCode && changedFiles.Count > 0 &&
                                       (LooksLikeRunnableApp(changedFiles) || ClaimsRuntimeResult(finalText));
                 if (runtimeExpected && !runtimeCheckRan && buildHealth.AnyVerificationRan
-                    && runGateNudged < MaxRunGateNudges && step < stepLimit)
+                    && runGateNudged < MaxRunGateNudges && step < stepLimit && !finalAnswerForced)
                 {
                     runGateNudged++;
                     _logger.LogInformation(
@@ -1519,7 +1620,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // просить второй раз. Внешняя блокировка (нет файлов/доступа/ключей, шаг за пользователем)
                 // — белый список, такой ответ завершается нормально. На последнем шаге не бьём: бюджета
                 // на доработку уже нет, там сработает финальная приписка.
-                var incompleteWork = step < stepLimit ? DetectIncompleteWork(finalText) : null;
+                var incompleteWork = step < stepLimit && !finalAnswerForced ? DetectIncompleteWork(finalText) : null;
                 if (incompleteWork is not null && incompleteNudges < MaxIncompleteNudges)
                 {
                     incompleteNudges++;
@@ -1533,7 +1634,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
 
                 // NO_EDIT_GATE: ход закрывается без единой правки, хотя просили изменить код или ответ хвастается правками.
-                if (_profile.AuditsCode && changedFiles.Count == 0 && step < stepLimit
+                if (_profile.AuditsCode && changedFiles.Count == 0 && step < stepLimit && !finalAnswerForced
                     && noEditNudges < MaxNoEditNudges
                     && !HasHonestFailure(finalText)
                     && (LooksLikeEditDemand(job.Prompt) || ClaimsEdits(finalText)))
@@ -1692,11 +1793,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // No file modifications were made: the model's text is the whole answer.
                 if (changedFiles.Count == 0)
                 {
-                    return AppendNote(answer, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote));
+                    return await FinishAsync(AppendNote(answer, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote)));
                 }
 
                 // File changes were made: return the final report plus a summary card.
-                return BuildFinalReport(AppendNote(finalText, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote)), changedFiles, executedCommands);
+                // BACKGROUND_AGENTS: перед итогом даём фоновым помощникам шанс дописать файлы.
+                return await FinishAsync(BuildFinalReport(AppendNote(finalText, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote)), changedFiles, executedCommands));
             }
 
             // AGENT_TOOL_FAILURES: инструменты, упавшие именно в этом ходе (для одного сообщения
@@ -1748,6 +1850,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // одновременно. По очереди пять страниц — это пять сетевых ожиданий подряд, и
             // исследование растягивается на минуты.
             var prefetchedPages = await PrefetchWebPagesAsync(responseMessage.ToolCalls, taskId, chatId, ct);
+            var prefetchedReads = await PrefetchReadOnlyAsync(responseMessage.ToolCalls, taskId, chatId, ct);
 
             foreach (var toolCall in responseMessage.ToolCalls)
             {
@@ -1770,6 +1873,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
                 var refusal = planRefusal ?? teamRefusal ?? readRefusal
                     ?? (toolAllowed ? loopGuard.Refuse(toolName, toolCall.Function.Arguments) : null);
+
+                // EDIT_AFTER_READ + BASH_FILE_OPS: последний гейт перед выполнением. Правка непрочитанного
+                // файла и файловые операции через оболочку отклоняются с указанием точного инструмента.
+                if (toolAllowed && refusal is null)
+                    refusal = editGuard.Refuse(toolName, toolCall.Function.Arguments);
 
                 if (toolAllowed && refusal is null)
                 {
@@ -1804,6 +1912,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                                 true)
                             : prefetchedPages.TryGetValue(toolCall.Id, out var prefetched)
                                 ? prefetched
+                                : prefetchedReads.TryGetValue(toolCall.Id, out var prefetchedRead)
+                                    ? prefetchedRead
                                 : toolName == "take_screenshot"
                                     ? await HandleScreenshotAsync(chatId, toolCall, batchImages, group, ct)
                                     : toolName == "view_image"
@@ -1843,7 +1953,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // подтверждал и цикл держался бы вечно.
                 if (toolAllowed && refusal is null)
                 {
+                    // READ_PROGRESS: проверять надо ДО Record — он сам добавляет объект в _targets.
+                    var newReadTarget = isReadCall && loopGuard.IsNewReadTarget(toolName, toolCall.Function.Arguments);
                     loopGuard.Record(toolName, toolCall.Function.Arguments, result.Output);
+                    // EDIT_AFTER_READ: запоминаем именно успешное чтение — отказ в чтении не делает
+                    // файл «прочитанным» (иначе гейт подтверждал бы сам себя).
+                    if (!result.IsError)
+                        editGuard.Record(toolName, toolCall.Function.Arguments);
                     // TOOL_INTEGRITY: считаем именно РЕАЛЬНО доведённые до вызова инструменты.
                     executedToolCounts[toolName] = executedToolCounts.GetValueOrDefault(toolName) + 1;
                     // RUN_GATE: запуск засчитывается только по успешному вызову (и по выводу, где сервис
@@ -1855,7 +1971,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         productiveSteps++;
                     if (isReadCall)
                     {
-                        readOnlyStreak++;
+                        // READ_PROGRESS: чтение НОВОГО файла/страницы — это не топтание на месте.
+                        // Серия чтений без правок считается только по повторным чтениям — иначе агент,
+                        // изучающий проект из 8 файлов, упирался в бюджет до первой правки.
+                        if (newReadTarget)
+                            readOnlyStreak = 0;
+                        else
+                            readOnlyStreak++;
                         readOnlyTotal++;
                     }
                     else if (AgentLoopGuard.IsProgressTool(toolName, toolCall.Function.Arguments))
@@ -1924,7 +2046,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                                      && (toolName is "bash" or "terminal_exec" || (_job.UseDevice && DeviceCommandTools.Contains(toolName)));
                 // Отказ человека на ПК — его решение, а не сломанный инструмент.
                 var userDeclined = _job.UseDevice && IsUserDecline(result.Output);
-                if (result.IsError && !commandOutcome && !userDeclined)
+                // POLICY_REFUSAL: отказ гейта (петля, «не читай через bash», «сначала file_read») — это
+                // правило, а не поломка инструмента. Раньше три таких отказа подряд объявляли инструмент
+                // недоступным, и агент терял возможность работать им дальше.
+                var policyRefusal = refusal is not null;
+                if (result.IsError && !commandOutcome && !userDeclined && !policyRefusal)
                 {
                     totalToolFailures++;
                     consecutiveToolFailures++;
@@ -1938,7 +2064,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
 
                 // AGENT_HOOKS: on_error на реальном сбое инструмента (один раз на инструмент за ход).
-                if (result.IsError && hookedErrorTools.Add(toolName))
+                if (result.IsError && !policyRefusal && hookedErrorTools.Add(toolName))
                 {
                     var values = HookValues(chatId, "on_error");
                     values["tool"] = toolName;
@@ -2022,7 +2148,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     $"[Loop Guard] {loopGuard.Refusals} повтор(ов) без нового результата — инструменты отключены, прошу итог.",
                     ct);
                 await SendAgentStatusAsync(taskId, "thinking", "Подвожу итог…", ct: ct);
-                messages.Add(new ChatMessage("system", "[Loop Guard] " + AgentLoopGuard.LoopStopRefusal));
+                messages.Add(new ChatMessage("system",
+                    "[Loop Guard] " + AgentLoopGuard.LoopStopRefusal +
+                    " Инструменты отключены: не пиши вызовы инструментов и служебную разметку — только текст."));
             }
 
             // AGENT_TOOL_FAILURES: и жёсткая верхняя граница. Дальше модели не даётся шанса крутить
@@ -2049,7 +2177,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // SELF_CORRECTION: раньше красная сборка на этом пути бросала исключение — задача падала в
         // Failed, а всё, что модель уже написала, пропадало. Исчерпанный лимит шагов или бюджет
         // ошибок — не повод выбрасывать ответ: отдаём написанное и честно говорим, что ещё падает.
-        var accumulated = _streamedOutput.ToString().Trim();
+        var accumulated = StripToolMarkup(_streamedOutput.ToString().Trim());
         // P2_DEFINITION_OF_DONE: и на аварийном завершении приписка о проверке строится системой.
         var stillFailing = BuildVerificationNote(changedFiles.Count, buildHealth, selfCorrections, _profile.AuditsCode);
         // TOKEN_SOFT_LIMIT: изменено 2026-10-06 — прогон больше НЕ обрывается на лимите, поэтому
@@ -2075,16 +2203,24 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         if (accumulated.Length > 0)
         {
-            return AppendNote(accumulated, note);
+            return await FinishAsync(AppendNote(accumulated, note));
         }
 
-        return AppendNote(
+        return await FinishAsync(AppendNote(
             tokenBudgetExceeded
                 ? "Лимит токенов вашего тарифа исчерпан — дождитесь сброса лимита, чтобы продолжить."
                 : toolBudgetExhausted
                     ? "Не удалось завершить задачу: инструменты, которые нужны агенту, не работают в этом окружении. Запустите задачу заново после устранения ограничения."
                     : "Достигнут предел шагов для одной задачи. Продолжите или уточните задачу отдельным сообщением.",
-            note);
+            note));
+
+        // BACKGROUND_AGENTS: один выход для всех путей — сначала дожидаемся фоновых агентов
+        // (ограниченно), чтобы их работа не пропала вместе с закрытием прогона.
+        async Task<string> FinishAsync(string text)
+        {
+            await DrainTeamAsync(taskId);
+            return text;
+        }
     }
 
     /// <summary>A tool this run may call: the mode's profile, and never the chat search in incognito.</summary>
@@ -2184,7 +2320,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // ORCHESTRA: передача задач внутри команды — только ведущему и помощникам.
                 : tool == TeamMessageTool
                     ? _job.Orchestra && _profile.Mode is "coder" or "worker"
-                    : _profile.Allows(tool)) &&
+                    : tool == AgentsStatusTool
+                        ? _job.Orchestra && _profile.Mode == "coder"
+                        : _profile.Allows(tool)) &&
         // INCOGNITO_CHAT: an incognito turn must not read the user's other conversations, the same
         // rule the conversation service applies to memory and the cross-chat digest.
         !(tool == SearchUserChatsTool && _job.Incognito);
@@ -2832,19 +2970,42 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 scope = s.Scope
             }).ToArray()
         }, ct);
-        await group.SendAsync("OnLog", $"[Orchestra] Команда: {string.Join(", ", specs.Select(s => s.Role))}", ct);
-        await SendAgentStatusAsync(taskId, "thinking", "Вызываю субагентов: настраиваю роли и задания…", ct: ct);
+        await group.SendAsync("OnLog", $"[Orchestra] Команда в фоне: {string.Join(", ", specs.Select(s => s.Role))}", ct);
+        await SendAgentStatusAsync(taskId, "thinking", "Запустил субагентов в фоне — продолжаю сам…", ct: ct);
 
         var subJob = _job;
+        // BACKGROUND_AGENTS: ведущий НЕ ждёт команду. Раньше spawn_agents блокировал его на
+        // Task.WhenAll: пока четыре помощника читали проект, ведущий простаивал, а весь их текст
+        // всё равно попадал в его контекст одним куском. Теперь помощники работают в фоне, а отчёты
+        // забираются инструментом agents_status — по мере готовности.
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var run = new TeamRun(cts);
+        TeamRuns[taskId] = run;
 
-        async Task<(int Index, WorkerSpec Spec, string Text)> RunOneAsync(int index, WorkerSpec spec)
+        for (var i = 0; i < specs.Count; i++)
         {
+            var spec = specs[i];
+            var worker = new TeamWorker($"worker-{i + 1}", spec.Role);
+            run.Workers.Add(worker);
+            worker.Job = RunOneAsync(worker, spec, i);
+        }
+
+        return new ConexyToolResult(
+            toolCallId,
+            "Команда запущена в фоне: " + string.Join(", ", specs.Select(s => s.Role)) + ".\n" +
+            "Не жди их и не простаивай: делай свою часть работы (файлы вне их scope — твои). " +
+            "Отчёты забирай инструментом agents_status (wait_seconds до 120) перед итоговым ответом.",
+            false);
+
+        async Task RunOneAsync(TeamWorker worker, WorkerSpec spec, int index)
+        {
+            var token = cts.Token;
             using var scope = _scopeFactory.CreateScope();
             var runner = scope.ServiceProvider.GetRequiredService<IConexyAgentRunner>();
-            var identity = new AgentIdentity($"worker-{index + 1}", spec.Role, spec.Scope);
+            var identity = new AgentIdentity(worker.Id, spec.Role, spec.Scope);
             try
             {
-                await group.SendAsync("OnLog", $"[Orchestra] [{spec.Role}] {spec.Brief}", ct);
+                await group.SendAsync("OnLog", $"[Orchestra] [{spec.Role}] {spec.Brief}", token);
                 // ORCHESTRA: сразу сообщаем статус помощника, чтобы его карточка не выглядела пустой,
                 // пока идёт первый (медленный) вызов модели.
                 await group.SendAsync("OnAgentStatus", new
@@ -2854,8 +3015,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     file = (string?)null,
                     agentId = identity.Id,
                     agentRole = spec.Role
-                }, ct);
-                var text = await runner.RunWorkerAsync(subJob, identity, spec.Brief, ct);
+                }, token);
+                var text = await runner.RunWorkerAsync(subJob, identity, spec.Brief, token);
+                worker.Report = string.IsNullOrWhiteSpace(text) ? "(готово)" : text.Trim();
                 await group.SendAsync("OnAgentStatus", new
                 {
                     stage = "idle",
@@ -2863,11 +3025,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     file = (string?)null,
                     agentId = identity.Id,
                     agentRole = spec.Role
-                }, ct);
-                return (index, spec, string.IsNullOrWhiteSpace(text) ? "(готово)" : text.Trim());
+                }, token);
             }
             catch (OperationCanceledException)
             {
+                worker.Cancelled = true;
                 throw;
             }
             catch (Exception ex)
@@ -2875,35 +3037,93 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // Один упавший агент не должен ронять всю команду: ведущему сообщаем об этом
                 // как об обычном результате инструмента.
                 _logger.LogWarning(ex, "Orchestra: agent {Role} failed task={TaskId}", spec.Role, taskId);
-                return (index, spec, $"(агент {spec.Role} завершился с ошибкой: {ex.Message})");
+                worker.Failed = true;
+                worker.Report = $"(агент {spec.Role} завершился с ошибкой: {ex.Message})";
             }
         }
+    }
 
-        var results = await Task.WhenAll(specs.Select((spec, index) => RunOneAsync(index, spec)));
-
-        var builder = new StringBuilder();
-        builder.Append("Команда завершила работу. Отчёты агентов:\n");
-        foreach (var (_, spec, text) in results.OrderBy(r => r.Index))
+    // BACKGROUND_AGENTS: состояние команды для agents_status. Живёт до конца прогона.
+    private async Task<ConexyToolResult> AgentsStatusAsync(Guid taskId, JsonElement root, string toolCallId, CancellationToken ct)
+    {
+        if (!TeamRuns.TryGetValue(taskId, out var run))
         {
-            builder.Append("\n## ").Append(spec.Role).Append(" (scope: ").Append(string.Join(", ", spec.Scope)).Append(")\n");
-            builder.Append(text).Append('\n');
+            return new ConexyToolResult(
+                toolCallId,
+                "Команда не запускалась. Сначала вызови spawn_agents (только для работы 2+ агентов).",
+                true);
         }
 
-        var messages = board.ToArray();
-        if (messages.Length > 0)
+        var wait = Math.Clamp(GetInt(root, "wait_seconds", 0), 0, 120);
+        var all = Task.WhenAll(run.Workers.Select(w => w.Job ?? Task.CompletedTask));
+        if (wait > 0 && !all.IsCompleted)
+            await Task.WhenAny(all, Task.Delay(TimeSpan.FromSeconds(wait), ct));
+
+        var sb = new StringBuilder();
+        var running = 0;
+        foreach (var worker in run.Workers)
         {
-            builder.Append("\n## Сообщения между агентами\n");
-            foreach (var message in messages)
-                builder.Append('[').Append(message.From).Append(" → ").Append(message.To).Append("] ").Append(message.Text).Append('\n');
+            var finished = worker.Job is null || worker.Job.IsCompleted;
+            if (!finished) running++;
+            var state = worker.Cancelled
+                ? "остановлен"
+                : worker.Failed
+                    ? "ошибка"
+                    : finished ? "готово" : "работает";
+            sb.AppendLine($"## {worker.Role} ({worker.Id}): {state}");
+            if (worker.Report is { Length: > 0 } report)
+                sb.AppendLine(Truncate(report, 2_500));
+            sb.AppendLine();
         }
 
-        await group.SendAsync("OnLog", "[Orchestra] Команда закончила — собираю отчёты.", ct);
-        return new ConexyToolResult(toolCallId, builder.ToString(), false);
+        if (running > 0)
+            sb.Append($"Ещё работают: {running}. Не стой без дела — вернись к agents_status позже.");
+        return new ConexyToolResult(toolCallId, sb.ToString().TrimEnd(), false);
+    }
+
+    /// <summary>Дождаться фоновых агентов (не дольше 20 с), затем остановить тех, кто не успел.</summary>
+    private static async Task DrainTeamAsync(Guid taskId)
+    {
+        if (!TeamRuns.TryRemove(taskId, out var run))
+            return;
+        try
+        {
+            await Task.WhenAll(run.Workers.Select(w => w.Job ?? Task.CompletedTask))
+                .WaitAsync(TimeSpan.FromSeconds(20));
+        }
+        catch (Exception)
+        {
+            // Отменённые/упавшие помощники не должны ломать итоговый ответ ведущего.
+        }
+        finally
+        {
+            try { run.Cts.Cancel(); } catch (ObjectDisposedException) { }
+            run.Cts.Dispose();
+        }
     }
 
     // ORCHESTRA: доска сообщений команды на один прогон (taskId -> очередь). Живёт в памяти процесса;
     // очищается при сборке новой команды и не переживает прогон.
     private static readonly ConcurrentDictionary<Guid, ConcurrentQueue<TeamMessage>> TeamBoards = new();
+
+    // BACKGROUND_AGENTS: запущенные в фоне команды этого прогона.
+    private static readonly ConcurrentDictionary<Guid, TeamRun> TeamRuns = new();
+
+    private sealed class TeamRun(CancellationTokenSource cts)
+    {
+        public CancellationTokenSource Cts { get; } = cts;
+        public List<TeamWorker> Workers { get; } = new();
+    }
+
+    private sealed class TeamWorker(string id, string role)
+    {
+        public string Id { get; } = id;
+        public string Role { get; } = role;
+        public Task? Job { get; set; }
+        public string? Report { get; set; }
+        public bool Failed { get; set; }
+        public bool Cancelled { get; set; }
+    }
 
     private sealed record TeamMessage(string From, string To, string Text);
 
@@ -3227,6 +3447,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 case SpawnAgentsTool:
                 {
                     return await SpawnAgentsAsync(taskId, chatId, root, toolCall.Id, ct);
+                }
+
+                // BACKGROUND_AGENTS: отчёты фоновых помощников — по запросу, а не внутри spawn_agents.
+                case AgentsStatusTool:
+                {
+                    return await AgentsStatusAsync(taskId, root, toolCall.Id, ct);
                 }
 
                 // ORCHESTRA: передача сообщения/артефакта другому агенту команды.
@@ -4055,7 +4281,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // одинаковых карточек, а текст рассуждений терялся между ними.
         if (!_commandApproval.RequiresApproval(request.Command))
         {
-            await SendAgentStatusAsync(taskId, "executing", $"Выполняю команду: {request.Command}...", ct: ct);
+            await SendAgentStatusAsync(taskId, "executing", CommandLabel(request), ct: ct);
             var readOnly = await _bashService.ExecuteAsync(chatId, request, emitStartEvent: true, ct: ct);
             var readOnlyOutput = string.IsNullOrEmpty(readOnly.Output)
                 ? readOnly.ErrorType ?? "command failed"
@@ -4067,7 +4293,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // command executes straight away and shows up as an ordinary action row.
         if (_pendingActionService.IsTaskAutoApproved(taskId))
         {
-            await SendAgentStatusAsync(taskId, "executing", $"Выполняю команду: {request.Command}...", ct: ct);
+            await SendAgentStatusAsync(taskId, "executing", CommandLabel(request), ct: ct);
             var auto = await _bashService.ExecuteAsync(chatId, request, emitStartEvent: true, ct: ct);
             var autoOutput = string.IsNullOrEmpty(auto.Output)
                 ? auto.ErrorType ?? "command failed"
@@ -4089,6 +4315,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 Path = "",
                 Status = status,
                 Summary = summary,
+                Description = request.Description,
                 WorkingDirectory = workingDirectory,
                 Output = output,
                 PendingActionId = actionId,
@@ -4111,13 +4338,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
         }
 
         await SendAgentStatusAsync(taskId, "confirming", $"Ожидает подтверждения: {request.Command}", ct: ct);
-        await EmitAsync("pending_confirmation", $"Ожидает подтверждения: {request.Command}", token: ct);
+        await EmitAsync("pending_confirmation", request.Description ?? $"Ожидает подтверждения: {request.Command}", token: ct);
 
         bool approved;
         try
         {
             approved = await _pendingActionService.WaitForDecisionAsync(
-                actionId, _job.UserId, chatId, taskId, request.Command, workingDirectory, isDangerous, ct);
+                actionId, _job.UserId, chatId, taskId, request.Command, workingDirectory, isDangerous, ct,
+                description: request.Description);
         }
         catch (CommandConfirmationException)
         {
@@ -4153,6 +4381,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
             : res.Output;
         return new ConexyToolResult(toolCall.Id, output, !res.Success) { CommandExecuted = CommandRan(res) };
     }
+
+    // BASH_DESCRIPTION: плашка хода "выполняю…" тоже говорит по-человечески, а не показывает флаги.
+    private static string CommandLabel(BashToolRequest request) =>
+        string.IsNullOrWhiteSpace(request.Description)
+            ? $"Выполняю команду: {request.Command}..."
+            : $"{request.Description.TrimEnd('.', ' ')}...";
 
     // SELF_CORRECTION: добавлено 2026-09-24 — у команды есть код завершения (таймаут тоже считается:
     // зависший `npm test` в watch-режиме — это результат проверки). Недоступная песочница или
@@ -5236,6 +5470,23 @@ public class ConexyAgentRunner : IConexyAgentRunner
         }
     }
 
+    /// <summary>
+    /// RAW_TOOL_MARKUP: когда инструменты отключены, модель иногда дописывает в ответ сырой формат
+    /// вызова (`<||DSML|| invoke ...>`). Пользователь видит это как мусор в чате — режем всё от маркера до конца.
+    /// </summary>
+    public static string StripToolMarkup(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+        foreach (var marker in new[] { "<||DSML", "<｜｜DSML", "||DSML||", "｜｜DSML｜｜" })
+        {
+            var index = text.IndexOf(marker, StringComparison.Ordinal);
+            if (index >= 0)
+                return text[..index].TrimEnd();
+        }
+        return text;
+    }
+
     private static string ExtractTextContent(ChatMessage message)
     {
         return message.Content switch
@@ -5333,6 +5584,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 to = new { type = "string", description = "Роль получателя (или 'lead')." },
                 text = new { type = "string", description = "Текст сообщения или результат." }
             }, required = new[] { "to", "text" } }),
+        // BACKGROUND_AGENTS: помощники работают в фоне; ведущий забирает отчёты по мере готовности.
+        Function(AgentsStatusTool,
+            "Состояние команды, запущенной через spawn_agents, и отчёты готовых помощников. Помощники работают в фоне: вызови этот инструмент перед итоговым ответом (wait_seconds до 120 — подождать готовых), но не стой в ожидании постоянно.",
+            new { type = "object", properties = new {
+                wait_seconds = new { type = "integer", description = "Сколько секунд ждать незавершённых агентов (0–120, по умолчанию 0)." }
+            }, required = Array.Empty<string>() }),
         // BROWSER_AUTOMATION: DOM-автоматизация во встроенном браузере. Только Coder и только когда
         // Chromium доступен (см. ResolveToolsAsync). Модель работает селекторами и текстом,
         // а не координатами.
@@ -5441,11 +5698,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 path = new { type = "string", description = "Optional relative directory to search in (default: workspace root)" },
                 max_results = new { type = "integer", description = "Maximum files to return (default 200, max 2000)" }
             }, required = new[] { "pattern" } }),
-        Function("bash", "Run a shell command in the isolated session workspace (the working directory is the workspace root, so no cd is needed) with a timeout. Output longer than 80 lines is truncated (first 40 + last 40). Use for build, tests, package managers, git and file utilities.",
+        Function("bash", "Run a shell command in the isolated session workspace (the working directory is the workspace root, so no cd is needed) with a timeout. Output longer than 80 lines is truncated (first 40 + last 40). Use for build, tests, package managers, git and file utilities. To read and edit code use file_read/grep/glob/apply_patch — reading files through the shell (cat, head, tail, sed -n, awk, grep) and writing them (cat >, sed -i, Get-Content/Set-Content, Out-File) is refused with a pointer to the right tool.",
             new { type = "object", properties = new {
                 command = new { type = "string", description = "The shell command to run" },
+                // BASH_DESCRIPTION: человеческое описание показывается в подтверждении вместо разбора флагов.
+                description = new { type = "string", description = "What the command does, in plain words: 'Build the project', 'Install dependencies'. Do not restate flags or paths" },
                 timeout_seconds = new { type = "integer", description = "Optional timeout in seconds (default 60, max 300)" }
-            }, required = new[] { "command" } }),
+            }, required = new[] { "command", "description" } }),
         // TEST_RUNNER: добавлено 2026-10-04 — структурированный прогон тестов вместо чтения логов.
         Function("run_tests", "Run the project's tests and return a STRUCTURED report: pass/fail counts and, for every failure, its name, file:line and expected/actual — instead of raw logs. Prefer this over `bash: npm test / pytest / dotnet test`. The framework is auto-detected (npm test with jest/vitest/mocha, pytest, dotnet test, go test, cargo test, rspec, phpunit). Pass 'command' only to override with a custom command — it then needs the same confirmation as bash.",
             new { type = "object", properties = new {

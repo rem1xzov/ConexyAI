@@ -14,7 +14,7 @@ public interface IDeviceRemoteInteractionService
 {
     /// <summary>Проверяет запрос подтверждения и запускает ожидание решения в фоне. False — отказ.</summary>
     Task<bool> RequestApprovalAsync(Guid userId, string connectionId, Guid requestId, Guid taskId,
-        string? title, string? details, string? where, bool sensitive, CancellationToken ct);
+        string? title, string? details, string? where, bool sensitive, CancellationToken ct, string? description = null);
 
     /// <summary>Проверяет вопрос, показывает его в вебе (<c>OnDeviceQuestion</c>) и ждёт ответ в фоне.</summary>
     Task<bool> RequestQuestionAsync(Guid userId, string connectionId, Guid requestId, Guid taskId,
@@ -59,7 +59,7 @@ public sealed class DeviceRemoteInteractionService : IDeviceRemoteInteractionSer
     }
 
     public async Task<bool> RequestApprovalAsync(Guid userId, string connectionId, Guid requestId, Guid taskId,
-        string? title, string? details, string? where, bool sensitive, CancellationToken ct)
+        string? title, string? details, string? where, bool sensitive, CancellationToken ct, string? description = null)
     {
         var chatId = await ResolveOwnedTaskChatAsync(userId, connectionId, taskId, ct);
         if (chatId is null)
@@ -84,7 +84,8 @@ public sealed class DeviceRemoteInteractionService : IDeviceRemoteInteractionSer
                 // Чувствительное действие никогда не одобряется автоматически, даже при «разрешить всё».
                 approved = !sensitive && _pendingActions.IsTaskAutoApproved(taskId)
                     || await _pendingActions.WaitForDecisionAsync(
-                        requestId, userId, chatId.Value, taskId, command, workingDirectory, sensitive, CancellationToken.None);
+                        requestId, userId, chatId.Value, taskId, command, workingDirectory, sensitive, CancellationToken.None,
+                        description);
             }
             catch (Exception ex)
             {
