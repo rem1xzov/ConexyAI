@@ -9,6 +9,14 @@ interface CapacitorPlugins {
     addListener: (event: 'appUrlOpen', callback: (data: { url: string }) => void) => Promise<unknown> | unknown;
     getInfo: () => Promise<{ version: string; build: string }>;
   };
+  // APK_UPDATER: локальный нативный плагин приложения, на сайте его нет.
+  ApkUpdater?: {
+    downloadAndInstall: (options: { url: string }) => Promise<{ started: boolean }>;
+    addListener: (
+      event: 'updateFailed' | 'updateInstalling',
+      callback: (data: { reason?: string; ok?: boolean }) => void,
+    ) => Promise<unknown> | unknown;
+  };
 }
 
 interface CapacitorBridge {
@@ -20,7 +28,7 @@ interface CapacitorBridge {
 const APP_SCHEME = 'ru.conexy.app://auth';
 const MOBILE_LOGIN_URL = '/api/auth/mobile?redirect=ru.conexy.app://auth';
 const APK_ASSET = 'conexy-android.apk';
-const RELEASES_API = 'https://api.github.com/repos/rem1xzov/ConexyAI/releases/latest';
+const RELEASES_API = 'https://api.github.com/repos/rem1xzov/ConexyAI/releases?per_page=20';
 
 function bridge(): CapacitorBridge | undefined {
   return (window as unknown as { Capacitor?: CapacitorBridge }).Capacitor;
@@ -76,9 +84,9 @@ function isNewer(candidate: string, current: string): boolean {
 }
 
 /**
- * AUTO_UPDATE: как в десктопном клиенте — при запуске проверяем последний релиз на GitHub.
- * Тихая установка на Android запрещена, поэтому предлагаем скачать APK: дальше система
- * сама спросит разрешение на установку.
+ * AUTO_UPDATE: как в десктопном клиенте — при запуске ищем свежий релиз на GitHub.
+ * Приложение и десктоп выпускаются независимо, поэтому берём не просто последний релиз,
+ * а первый по времени, в котором есть APK: релиз только с exe — не наше обновление.
  */
 export async function checkMobileUpdate(): Promise<AppUpdate | null> {
   const app = bridge()?.Plugins?.App;
@@ -87,20 +95,55 @@ export async function checkMobileUpdate(): Promise<AppUpdate | null> {
     const info = await app.getInfo();
     const response = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
     if (!response.ok) return null;
-    const release = (await response.json()) as {
+    const releases = (await response.json()) as {
       tag_name?: string;
+      draft?: boolean;
       assets?: { name?: string; browser_download_url?: string }[];
-    };
-    const version = (release.tag_name ?? '').replace(/^v/, '');
-    const asset = release.assets?.find((item) => item.name === APK_ASSET);
-    if (!version || !asset?.browser_download_url || !isNewer(version, info.version)) return null;
-    return { version, url: asset.browser_download_url };
+    }[];
+    if (!Array.isArray(releases)) return null;
+    for (const release of releases) {
+      if (release.draft) continue;
+      const version = (release.tag_name ?? '').replace(/^v/, '');
+      const asset = release.assets?.find((item) => item.name === APK_ASSET);
+      if (!version || !asset?.browser_download_url) continue;
+      return isNewer(version, info.version) ? { version, url: asset.browser_download_url } : null;
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
-/** Полоса обновления: ненавязчивая, закрывается, открывает скачивание в системном браузере. */
+/** Полоса обновления: ненавязчивая, закрывается, ставит APK через нативный плагин. */
+/**
+ * APK_UPDATER: отдаём ссылку нативному плагину — он скачивает APK через DownloadManager
+ * (прогресс в шторке) и сам открывает системный установщик. Раньше здесь открывался Custom Tab,
+ * и Chrome бесконечно грузил страницу вместо установки файла.
+ */
+function installWithPlugin(
+  updater: NonNullable<CapacitorPlugins['ApkUpdater']>,
+  update: AppUpdate,
+  button: HTMLButtonElement,
+): void {
+  const idleLabel = button.textContent ?? 'Обновить';
+  button.disabled = true;
+  button.style.opacity = '0.7';
+  button.textContent = 'Загрузка…';
+
+  const reset = (label: string) => {
+    button.disabled = false;
+    button.style.opacity = '1';
+    button.textContent = label;
+  };
+
+  void updater.addListener('updateFailed', () => reset(idleLabel));
+
+  updater.downloadAndInstall({ url: update.url }).catch((error: unknown) => {
+    const code = (error as { code?: string } | undefined)?.code;
+    reset(code === 'INSTALL_PERMISSION_DENIED' ? 'Разрешить установку' : 'Повторить');
+  });
+}
+
 export function showUpdateBanner(update: AppUpdate): void {
   if (document.getElementById('conexy-update')) return;
 
@@ -127,6 +170,12 @@ export function showUpdateBanner(update: AppUpdate): void {
     'background:#0e7490', 'color:#fff', 'font:inherit', 'font-weight:600', 'cursor:pointer',
   ].join(';');
   button.addEventListener('click', () => {
+    const updater = bridge()?.Plugins?.ApkUpdater;
+    if (updater) {
+      installWithPlugin(updater, update, button);
+      return;
+    }
+    // Сайт и старые сборки: там нативного установщика нет, остаётся скачивание браузером.
     const browser = bridge()?.Plugins?.Browser;
     if (browser) void browser.open({ url: update.url });
     else window.location.href = update.url;

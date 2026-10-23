@@ -52,6 +52,8 @@
          в приложении недоступны (система даже не показывает запрос). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- APK_UPDATER: без этого применения система не даст открыть установщик APK обновления. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 </manifest>

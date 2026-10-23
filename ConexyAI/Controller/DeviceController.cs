@@ -26,9 +26,7 @@ public class DeviceController : ControllerBase
     private readonly IDeviceToolBridge _bridge;
     private readonly IDeviceTaskQueue _deviceQueue;
 
-    // Кэш номера последнего релиза: GitHub API не дёргаем на каждый запрос.
-    private static string? _cachedVersion;
-    private static DateTime _cachedAtUtc;
+    // Кэш номеров последних релизов: GitHub API не дёргаем на каждый запрос.
     private static readonly SemaphoreSlim VersionLock = new(1, 1);
 
     // Адрес по умолчанию — последний релиз на GitHub (образ собирается workflow desktop-release). Переопределяется
@@ -36,17 +34,19 @@ public class DeviceController : ControllerBase
     private const string DefaultDownloadUrl =
         "https://github.com/rem1xzov/ConexyAI/releases/latest/download/conexy-win-x64.exe";
 
-    // MOBILE_APP: APK лежит в том же релизе, что и exe. Прямая ссылка `releases/latest/download`
-    // работает только если в последнем релизе есть такой ассет — иначе 404, поэтому клиенту отдаём
-    // точную ссылку конкретного ассета.
+    private const string DesktopAssetName = "conexy-win-x64.exe";
+
+    // MOBILE_APP: у мобильного клиента свой релиз и свой номер версии. Десктоп и приложение
+    // обновляются независимо, поэтому берём не «последний релиз вообще», а последний,
+    // в котором есть нужный ассет: иначе релиз с одним APK ломал бы обновление ПК и наоборот.
     private const string MobileAssetName = "conexy-android.apk";
     private const string MobileFallbackUrl =
         "https://github.com/rem1xzov/ConexyAI/releases/latest/download/" + MobileAssetName;
 
-    // Один запрос к GitHub — два ответа: номер последнего релиза и ссылка на APK.
-    private sealed record LatestRelease(string? Version, string? MobileUrl);
-    private static LatestRelease? _cachedRelease;
-    private static DateTime _cachedReleaseAtUtc;
+    // Один запрос к GitHub — версии и ссылки обоих клиентов.
+    private sealed record LatestReleases(string? DesktopVersion, string? DesktopUrl, string? MobileVersion, string? MobileUrl);
+    private static LatestReleases? _cachedReleases;
+    private static DateTime _cachedReleasesAtUtc;
 
     public DeviceController(
         IDeviceKeyService keys,
@@ -71,13 +71,17 @@ public class DeviceController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> ClientInfo([FromQuery] string? platform, CancellationToken ct)
     {
-        var url = _configuration["Desktop:DownloadUrl"];
+        var releases = await LatestReleasesAsync(ct);
         var isMobile = string.Equals(platform, "android", StringComparison.OrdinalIgnoreCase);
+        var configured = _configuration["Desktop:DownloadUrl"];
+        var desktopUrl = string.IsNullOrWhiteSpace(configured)
+            ? releases.DesktopUrl ?? DefaultDownloadUrl
+            : configured;
         return Ok(new
         {
-            downloadUrl = isMobile ? await LatestMobileUrlAsync(ct) : string.IsNullOrWhiteSpace(url) ? DefaultDownloadUrl : url,
+            downloadUrl = isMobile ? releases.MobileUrl ?? MobileFallbackUrl : desktopUrl,
             platform = isMobile ? "android" : "windows-x64",
-            version = await LatestVersionAsync(ct),
+            version = isMobile ? releases.MobileVersion : releases.DesktopVersion,
             // GOOGLE_CONNECTOR: OAuth-клиент типа «Desktop app» для входа в Google из десктопа. Для таких клиентов
             // Google сам считает secret неконфиденциальным (он вшит в приложение, защита — PKCE), поэтому
             // отдаём его клиенту. Токены пользователя сервер не видит: они остаются на ПК.
@@ -88,73 +92,94 @@ public class DeviceController : ControllerBase
 
     private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    /// <summary>Ссылка на APK последнего релиза; при недоступности GitHub — стабильная ссылка-запас.</summary>
-    private async Task<string> LatestMobileUrlAsync(CancellationToken ct) =>
-        (await LatestReleaseAsync(ct)).MobileUrl ?? MobileFallbackUrl;
-
-    /// <summary>Тег последнего релиза клиента без «v» (например 0.1.5) или null, если GitHub недоступен.</summary>
-    private async Task<string?> LatestVersionAsync(CancellationToken ct) =>
-        (await LatestReleaseAsync(ct)).Version;
-
-    private async Task<LatestRelease> LatestReleaseAsync(CancellationToken ct)
+    private async Task<LatestReleases> LatestReleasesAsync(CancellationToken ct)
     {
-        var cached = _cachedRelease ?? new LatestRelease(_cachedVersion, null);
-        if (DateTime.UtcNow - _cachedAtUtc < TimeSpan.FromMinutes(10))
-            return cached;
+        if (_cachedReleases is not null && DateTime.UtcNow - _cachedReleasesAtUtc < TimeSpan.FromMinutes(10))
+            return _cachedReleases;
 
         await VersionLock.WaitAsync(ct);
         try
         {
-            if (DateTime.UtcNow - _cachedAtUtc < TimeSpan.FromMinutes(10))
-                return _cachedRelease ?? new LatestRelease(_cachedVersion, null);
+            if (_cachedReleases is not null && DateTime.UtcNow - _cachedReleasesAtUtc < TimeSpan.FromMinutes(10))
+                return _cachedReleases;
 
             try
             {
                 var http = _httpFactory.CreateClient();
                 http.Timeout = TimeSpan.FromSeconds(5);
                 using var request = new HttpRequestMessage(HttpMethod.Get,
-                    "https://api.github.com/repos/rem1xzov/ConexyAI/releases/latest");
+                    "https://api.github.com/repos/rem1xzov/ConexyAI/releases?per_page=20");
                 request.Headers.UserAgent.ParseAdd("ConexyAI-Server");
                 using var response = await http.SendAsync(request, ct);
                 if (response.IsSuccessStatusCode)
                 {
                     using var doc = await System.Text.Json.JsonDocument.ParseAsync(
                         await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
-                    string? version = null;
-                    if (doc.RootElement.TryGetProperty("tag_name", out var tag))
-                        version = tag.GetString()?.TrimStart('v', 'V');
-
-                    string? mobileUrl = null;
-                    if (doc.RootElement.TryGetProperty("assets", out var assets) && assets.ValueKind == System.Text.Json.JsonValueKind.Array)
-                    {
-                        foreach (var asset in assets.EnumerateArray())
-                        {
-                            if (asset.TryGetProperty("name", out var name) && name.GetString() == MobileAssetName
-                                && asset.TryGetProperty("browser_download_url", out var download))
-                            {
-                                mobileUrl = download.GetString();
-                                break;
-                            }
-                        }
-                    }
-
-                    _cachedVersion = version;
-                    _cachedRelease = new LatestRelease(version, mobileUrl);
+                    if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+                        _cachedReleases = ReadReleases(doc.RootElement);
                 }
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
             {
-                _logger.LogWarning("Could not read the latest desktop release: {Message}", ex.Message);
+                _logger.LogWarning("Could not read the latest releases: {Message}", ex.Message);
             }
 
             // При ошибке тоже запоминаем момент, чтобы не бить по GitHub каждый запрос.
-            _cachedAtUtc = DateTime.UtcNow;
-            return _cachedRelease ?? new LatestRelease(_cachedVersion, null);
+            _cachedReleasesAtUtc = DateTime.UtcNow;
+            return _cachedReleases ?? new LatestReleases(null, null, null, null);
         }
         finally
         {
             VersionLock.Release();
         }
+    }
+
+    // Релизы приходят от новых к старым: для каждого клиента запоминаем первый релиз с его ассетом.
+    private static LatestReleases ReadReleases(System.Text.Json.JsonElement releases)
+    {
+        string? desktopVersion = null, desktopUrl = null, mobileVersion = null, mobileUrl = null;
+        foreach (var release in releases.EnumerateArray())
+        {
+            if (release.ValueKind != System.Text.Json.JsonValueKind.Object)
+                continue;
+            if (release.TryGetProperty("draft", out var draft) && draft.ValueKind == System.Text.Json.JsonValueKind.True)
+                continue;
+            if (!release.TryGetProperty("tag_name", out var tag))
+                continue;
+            var version = tag.GetString()?.TrimStart('v', 'V');
+            if (string.IsNullOrWhiteSpace(version))
+                continue;
+            if (!release.TryGetProperty("assets", out var assets)
+                || assets.ValueKind != System.Text.Json.JsonValueKind.Array)
+                continue;
+
+            foreach (var asset in assets.EnumerateArray())
+            {
+                if (asset.ValueKind != System.Text.Json.JsonValueKind.Object
+                    || !asset.TryGetProperty("name", out var name)
+                    || !asset.TryGetProperty("browser_download_url", out var download))
+                    continue;
+                var url = download.GetString();
+                if (string.IsNullOrWhiteSpace(url))
+                    continue;
+                var assetName = name.GetString();
+                if (assetName == DesktopAssetName && desktopVersion is null)
+                {
+                    desktopVersion = version;
+                    desktopUrl = url;
+                }
+                else if (assetName == MobileAssetName && mobileVersion is null)
+                {
+                    mobileVersion = version;
+                    mobileUrl = url;
+                }
+            }
+
+            if (desktopVersion is not null && mobileVersion is not null)
+                break;
+        }
+
+        return new LatestReleases(desktopVersion, desktopUrl, mobileVersion, mobileUrl);
     }
 
     /// <summary>Выпускает ключ для десктопа. Открытый ключ в ответе показывается один раз.</summary>

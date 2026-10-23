@@ -2,6 +2,7 @@ package ru.conexy.app;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.os.Bundle;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebView;
@@ -25,6 +26,13 @@ public class MainActivity extends BridgeActivity {
     private static final int CAMERA_REQUEST = 4212;
 
     private PermissionRequest pendingRequest;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        // APK_UPDATER: локальный плагин живёт в приложении, поэтому регистрируется до создания Bridge.
+        registerPlugin(ApkUpdaterPlugin.class);
+        super.onCreate(savedInstanceState);
+    }
 
     @Override
     public void onStart() {
