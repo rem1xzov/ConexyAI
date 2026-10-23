@@ -4,13 +4,16 @@ import android.Manifest;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.webkit.PermissionRequest;
-import android.webkit.WebChromeClient;
 import android.webkit.WebView;
 
 import androidx.core.content.ContextCompat;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebChromeClient;
+import com.getcapacitor.WebViewListener;
 
 /**
  * MEDIA_PERMISSIONS: WebView по умолчанию не отдаёт getUserMedia ни за камеру, ни за микрофон,
@@ -19,6 +22,10 @@ import com.getcapacitor.BridgeWebChromeClient;
  *
  * <p>Разрешение Android запрашивается лениво, в момент первого getUserMedia: платформа сама
  * показывает диалог и не спрашивает о микрофоне тех, кто им не пользуется.
+ *
+ * <p>SAFE_AREA: Android 15 рисует WebView во весь экран (edge-to-edge), а env(safe-area-inset-*)
+ * внутри WebView на Android остаётся нулевым — шапка уезжала под статус-бар, а композер под
+ * полосу жестов. Отсюда отступы системных панелей уходят в CSS переменными --safe-*.
  */
 public class MainActivity extends BridgeActivity {
 
@@ -27,11 +34,46 @@ public class MainActivity extends BridgeActivity {
 
     private PermissionRequest pendingRequest;
 
+    private int safeTopPx;
+    private int safeBottomPx;
+    private int safeLeftPx;
+    private int safeRightPx;
+    private boolean insetsKnown;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         // APK_UPDATER: локальный плагин живёт в приложении, поэтому регистрируется до создания Bridge.
         registerPlugin(ApkUpdaterPlugin.class);
         super.onCreate(savedInstanceState);
+
+        WebView webView = getBridge().getWebView();
+        if (webView == null) {
+            return;
+        }
+
+        // SAFE_AREA: новая страница ещё не знает своих отступов — отдаём их после каждой загрузки.
+        getBridge().addWebViewListener(new WebViewListener() {
+            @Override
+            public void onPageLoaded(WebView view) {
+                pushSafeArea(view);
+            }
+        });
+
+        // SAFE_AREA: слушатель висит на WebView, а не на окне: он срабатывает после того, как
+        // Capacitor разместил WebView, и обновляется при повороте и показе/скрытии клавиатуры.
+        ViewCompat.setOnApplyWindowInsetsListener(webView, (view, windowInsets) -> {
+            Insets bars = windowInsets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+            safeTopPx = bars.top;
+            safeBottomPx = bars.bottom;
+            safeLeftPx = bars.left;
+            safeRightPx = bars.right;
+            insetsKnown = true;
+            pushSafeArea(webView);
+            // Insets не поглощаем: WebView рисуется во весь экран, отступы нам нужны только в CSS.
+            return windowInsets;
+        });
+        ViewCompat.requestApplyInsets(webView);
     }
 
     @Override
@@ -64,6 +106,21 @@ public class MainActivity extends BridgeActivity {
                 });
             }
         });
+    }
+
+    /** Отдаёт CSS отступы системных панелей в тех же px, в которых считает WebView. */
+    private void pushSafeArea(WebView webView) {
+        if (!insetsKnown) {
+            return;
+        }
+        float density = getResources().getDisplayMetrics().density;
+        String js = "(function(){var s=document.documentElement.style;"
+                + "s.setProperty('--safe-top','" + Math.round(safeTopPx / density) + "px');"
+                + "s.setProperty('--safe-bottom','" + Math.round(safeBottomPx / density) + "px');"
+                + "s.setProperty('--safe-left','" + Math.round(safeLeftPx / density) + "px');"
+                + "s.setProperty('--safe-right','" + Math.round(safeRightPx / density) + "px');"
+                + "})();";
+        webView.evaluateJavascript(js, null);
     }
 
     @Override

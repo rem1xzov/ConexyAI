@@ -67,6 +67,17 @@ Google запрещает OAuth внутри WebView («This browser or app may 
 совпадать с тегом релиза, куда вы кладёте APK. Десктопная версия живёт в
 `ConexyAI.Desktop/ConexyAI.Desktop.csproj` и поднимается отдельно.
 
+## Безопасные зоны
+
+Android 15 рисует WebView во весь экран (edge-to-edge), и `env(safe-area-inset-*)` внутри WebView
+остаётся нулевым: шапка уезжала под статус-бар, композер — под полосу жестов.
+
+Поэтому `MainActivity` отдаёт отступы системных панелей (`systemBars() | displayCutout()`)
+в CSS переменными `--safe-top`, `--safe-bottom`, `--safe-left`, `--safe-right` — инлайном на
+`<html>`, после каждой загрузки страницы и при каждом изменении insets. В браузере те же
+переменные определены в `:root` через `env()` (включается `viewport-fit=cover` в `index.html`),
+так что одна и та же вёрстка работает и на сайте.
+
 ## Иконки
 
 `make-icons.ps1` растеризует `frontend/public/conexyai.svg` через headless Chrome и

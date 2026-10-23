@@ -2,9 +2,11 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
+    <!-- SAFE_AREA: `viewport-fit=cover` включает env(safe-area-inset-*) — без него на телефоне
+         отступы системных панелей приходят нулевыми и шапка уезжает под статус-бар. -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover"
     />
 
     <!-- BRAND_SEO: название пишется одним словом — ConexyAI. Оно одинаково в title, og:*, JSON-LD
