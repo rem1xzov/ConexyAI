@@ -6,10 +6,22 @@ import { applyTheme, getStoredTheme } from './theme';
 import { applyDisplayPrefs } from './utils/displayPrefs';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ArtifactPanelHost } from './components/artifacts/ArtifactPanel';
+import { checkMobileUpdate, listenForMobileAuth, showUpdateBanner } from './utils/mobile';
 import './styles/index.css';
 
 applyTheme(getStoredTheme());
 applyDisplayPrefs();
+
+// MOBILE_HANDOFF: приложение вернулось из браузера с одноразовым кодом — перезагружаем SPA на
+// адрес с кодом, и useAuth обменяет его на сессию.
+listenForMobileAuth((code) => {
+  window.location.replace(`/?handoff=${encodeURIComponent(code)}`);
+});
+
+// AUTO_UPDATE: как в десктопном клиенте — проверка последнего релиза на старте.
+void checkMobileUpdate().then((update) => {
+  if (update) showUpdateBanner(update);
+});
 
 // GLOBAL_ERROR_BOUNDARY: добавлено 2026-09-23
 // Обёртка стоит на самом корне, а не внутри App: только так она ловит и ошибку самого App

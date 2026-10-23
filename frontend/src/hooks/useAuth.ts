@@ -5,6 +5,7 @@ import {
   forgotPassword as apiForgotPassword,
   getMe,
   getSession,
+  exchangeMobileHandoff,
   login as apiLogin,
   logout as apiLogout,
   resendVerificationCode as apiResendCode,
@@ -285,6 +286,27 @@ export function useAuth() {
     }
 
     const init = async () => {
+      // MOBILE_HANDOFF: приложение вернулось из системного браузера с одноразовым кодом.
+      // Меняем его на сессию и убираем код из адреса, чтобы он не осел в истории.
+      const handoff = new URLSearchParams(window.location.search).get('handoff');
+      if (handoff) {
+        try {
+          const exchanged = await exchangeMobileHandoff(handoff);
+          if (cancelled) return;
+          storeAuth(exchanged.token, exchanged.expiresAtUtc);
+          tokenRef.current = exchanged.token;
+          setToken(exchanged.token);
+          setAuthUnavailable(false);
+          setError(null);
+          setInitializing(false);
+          window.history.replaceState(null, '', window.location.pathname + window.location.hash);
+          return;
+        } catch (e) {
+          console.warn('[useAuth] mobile handoff failed', e);
+          window.history.replaceState(null, '', window.location.pathname + window.location.hash);
+        }
+      }
+
       const storedToken = readStoredToken();
 
       // GITHUB_OAUTH: добавлено 2026-09-19 — prefer the httpOnly session cookie.

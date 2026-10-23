@@ -58,6 +58,12 @@ export async function getSession(): Promise<DevTokenResponse> {
   return data;
 }
 
+// MOBILE_HANDOFF: приложение меняет одноразовый код из deep link на сессию.
+export async function exchangeMobileHandoff(code: string): Promise<DevTokenResponse> {
+  const { data } = await axios.post<DevTokenResponse>('/api/auth/handoff', { code });
+  return data;
+}
+
 // EMAIL_VERIFICATION: изменено 2026-09-24 — регистрация двухшаговая. Сервер запоминает выбранный
 // пароль, шлёт на адрес 6-значный код и НЕ выдаёт сессию: токен появляется только после confirmEmail.
 /** What `/api/auth/register` answers: the code was sent, there is no session yet. */

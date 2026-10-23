@@ -4,6 +4,7 @@ import type { VerificationChallenge } from '../api/conexyApi';
 // LEGAL_DOCS: добавлено 2026-09-25 — путь документа не дублируется строкой, а берётся из общего места.
 import { LEGAL_PATHS } from './legal/LegalPage';
 import { CloseIcon, EyeIcon, EyeOffIcon, GitHubIcon } from './Icons';
+import { isMobileApp, openMobileLogin } from '../utils/mobile';
 
 export type AuthMode = 'login' | 'register';
 
@@ -594,7 +595,17 @@ export function AuthModal({
           <GitHubIcon size={18} /> {t('auth.loginWithGithub')}
         </div>
       ) : (
-        <a className="auth-modal__github" href="/api/auth/github/login">
+        <a
+          className="auth-modal__github"
+          href="/api/auth/github/login"
+          onClick={(event) => {
+            // MOBILE_HANDOFF: в приложении OAuth идёт в системном браузере — Google не пускает
+            // вход внутрь WebView. Браузер вернёт сессию по ссылке ru.conexy.app://auth.
+            if (!isMobileApp()) return;
+            event.preventDefault();
+            void openMobileLogin();
+          }}
+        >
           <GitHubIcon size={18} /> {t('auth.loginWithGithub')}
         </a>
       )}

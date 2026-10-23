@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using ConexyAI.Configuration;
 using ConexyAI.Contract;
@@ -23,6 +24,14 @@ public class AuthController : ControllerBase
     private const string StateCookieName = "github_oauth_state";
     // GITHUB_OAUTH: добавлено 2026-09-19
     private const string AuthCookieName = "conexy_auth";
+
+    // MOBILE_HANDOFF: вход из Android-приложения. Google запрещает OAuth внутри WebView, поэтому
+    // логин идёт в системном браузере, а сессия возвращается приложению одноразовым кодом:
+    // браузер → ru.conexy.app://auth?code=… → приложение меняет код на JWT.
+    private const string MobileRedirectUri = "ru.conexy.app://auth";
+    private const string MobileRedirectCookie = "conexy_mobile_redirect";
+    private static readonly TimeSpan MobileHandoffTtl = TimeSpan.FromMinutes(2);
+    private static readonly ConcurrentDictionary<string, (TokenResponse Token, DateTime ExpiresUtc)> MobileHandoffs = new();
 
     private readonly ITokenService _tokenService;
     private readonly IWebHostEnvironment _environment;
@@ -90,7 +99,55 @@ public class AuthController : ControllerBase
     /// <summary>Starts the GitHub OAuth flow: sets a CSRF <c>state</c> cookie and redirects to GitHub.</summary>
     [HttpGet("github/login")]
     [EnableRateLimiting(AuthRateLimitPolicies.GitHubOAuth)]
-    public IActionResult GitHubLogin()
+    public IActionResult GitHubLogin() => StartGitHubLogin();
+
+    // MOBILE_HANDOFF: точка входа для приложения. Если пользователь уже вошёл на сайте в этом
+    // браузере — сессия отдаётся приложению сразу, без повторного OAuth.
+    /// <summary>Starts the login flow for the Android app and returns the session via a one-time code.</summary>
+    [HttpGet("mobile")]
+    [EnableRateLimiting(AuthRateLimitPolicies.GitHubOAuth)]
+    public async Task<IActionResult> MobileLogin([FromQuery] string? redirect, CancellationToken ct)
+    {
+        // MOBILE_REDIRECT: только наш собственный scheme — иначе это открытый редирект с токеном.
+        if (!string.Equals(redirect, MobileRedirectUri, StringComparison.Ordinal))
+            return BadRequest(new { error = "unsupported_redirect" });
+
+        if (Request.Cookies[AuthCookieName] is { Length: > 0 } cookie
+            && await ValidateCookieTokenAsync(cookie, ct) is { } session)
+        {
+            _logger.LogInformation("Mobile login: reusing the browser session for {UserId}.", session.Principal.FindFirst("sub")?.Value);
+            return MobileReturn(session.Response);
+        }
+
+        Response.Cookies.Append(MobileRedirectCookie, MobileRedirectUri, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = !_environment.IsDevelopment(),
+            SameSite = SameSiteMode.Lax,
+            IsEssential = true,
+            MaxAge = TimeSpan.FromMinutes(10)
+        });
+
+        return StartGitHubLogin();
+    }
+
+    // MOBILE_HANDOFF: обмен одноразового кода на сессию. Код живёт две минуты и удаляется при
+    // первом использовании, поэтому перехват deep link не даёт долговременного доступа.
+    /// <summary>Exchanges the one-time handoff code from the app link for a JWT.</summary>
+    [HttpPost("handoff")]
+    [EnableRateLimiting(AuthRateLimitPolicies.GitHubOAuth)]
+    public IActionResult ExchangeHandoff([FromBody] MobileHandoffRequest? request)
+    {
+        if (request?.Code is not { Length: > 0 } code || !MobileHandoffs.TryRemove(code, out var entry))
+            return BadRequest(new { error = "code_expired" });
+
+        if (entry.ExpiresUtc < DateTime.UtcNow)
+            return BadRequest(new { error = "code_expired" });
+
+        return Ok(entry.Token);
+    }
+
+    private IActionResult StartGitHubLogin()
     {
         var state = GenerateState();
 
@@ -149,6 +206,14 @@ public class AuthController : ControllerBase
             // (not a URL fragment), so a repeated callback can no longer clobber it. The SPA
             // reads it back through GET /api/auth/session and stores it in localStorage.
             SetAuthCookie(token);
+
+            // MOBILE_HANDOFF: вход начали из приложения — вернём сессию туда, а не на сайт.
+            if (Request.Cookies[MobileRedirectCookie] == MobileRedirectUri)
+            {
+                Response.Cookies.Delete(MobileRedirectCookie);
+                _logger.LogInformation("GitHub callback success: handing the session back to the app.");
+                return MobileReturn(token);
+            }
 
             var redirectUrl = $"{frontendBase}/";
             _logger.LogInformation("GitHub callback success: set httpOnly cookie and redirecting to '{RedirectUrl}'.", redirectUrl);
@@ -497,8 +562,41 @@ public class AuthController : ControllerBase
         return callback.GetLeftPart(UriPartial.Authority);
     }
 
+    /// <summary>Creates a one-time code and returns a tiny page that sends the app its deep link.</summary>
+    /// <remarks>
+    /// MOBILE_RETURN: именно страница, а не 302 на custom scheme — браузеры по-разному относятся
+    /// к редиректу на незнакомую схему без жеста пользователя. Здесь есть и автоматический переход,
+    /// и кнопка, если автопереход заблокирован.
+    /// </remarks>
+    private IActionResult MobileReturn(TokenResponse token)
+    {
+        var code = Guid.NewGuid().ToString("N");
+        MobileHandoffs[code] = (token, DateTime.UtcNow.Add(MobileHandoffTtl));
+
+        var now = DateTime.UtcNow;
+        foreach (var stale in MobileHandoffs.Where(pair => pair.Value.ExpiresUtc < now).Select(pair => pair.Key).ToList())
+            MobileHandoffs.TryRemove(stale, out _);
+
+        var link = $"{MobileRedirectUri}?code={Uri.EscapeDataString(code)}";
+        Response.Headers.CacheControl = "no-store";
+        return Content(
+            "<!DOCTYPE html><html lang=\"ru\"><head><meta charset=\"utf-8\">" +
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
+            "<title>ConexyAI</title></head>" +
+            "<body style=\"margin:0;height:100vh;display:flex;flex-direction:column;gap:16px;align-items:center;" +
+            "justify-content:center;background:#0a0a0a;color:#f2f4f8;font:16px/1.5 -apple-system,Segoe UI,Roboto,sans-serif\">" +
+            "<p style=\"margin:0\">Возвращаемся в приложение…</p>" +
+            $"<a style=\"color:#4fd1bd\" href=\"{link}\">Открыть ConexyAI</a>" +
+            $"<script>window.location.replace({System.Text.Json.JsonSerializer.Serialize(link)});</script>" +
+            "</body></html>",
+            "text/html; charset=utf-8");
+    }
+
     private RedirectResult RedirectToFrontendError(string frontendBase, string message)
     {
         return Redirect($"{frontendBase}/?auth=error&message={Uri.EscapeDataString(message)}");
     }
 }
+
+// MOBILE_HANDOFF: тело запроса приложения — одноразовый код из deep link.
+public record MobileHandoffRequest(string? Code);
