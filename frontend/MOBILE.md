@@ -72,11 +72,16 @@ Google запрещает OAuth внутри WebView («This browser or app may 
 Android 15 рисует WebView во весь экран (edge-to-edge), и `env(safe-area-inset-*)` внутри WebView
 остаётся нулевым: шапка уезжала под статус-бар, композер — под полосу жестов.
 
-Поэтому `MainActivity` отдаёт отступы системных панелей (`systemBars() | displayCutout()`)
-в CSS переменными `--safe-top`, `--safe-bottom`, `--safe-left`, `--safe-right` — инлайном на
-`<html>`, после каждой загрузки страницы и при каждом изменении insets. В браузере те же
-переменные определены в `:root` через `env()` (включается `viewport-fit=cover` в `index.html`),
-так что одна и та же вёрстка работает и на сайте.
+Поэтому `MainActivity` отдаёт отступы системных панелей (`systemBars() | displayCutout()`) и высоту
+клавиатуры (`ime()`) в CSS переменными `--safe-top`, `--safe-bottom`, `--safe-left`,
+`--safe-right`, `--kb-native` и `--window-height` — инлайном на `<html>`, после каждой загрузки
+страницы и при каждом изменении insets. В браузере те же переменные определены в `:root` через
+`env()`, так что одна и та же вёрстка работает и на сайте.
+
+`viewport-fit=cover` в `index.html` намеренно НЕ включён: с ним WebView перестаёт сжиматься под
+клавиатурой, и композер прячется за ней. Высота `.app` — минимум из видимой области
+(`--app-height` из `visualViewport`) и `--window-height - --kb-native`, поэтому работает и когда
+клавиатуру сжимает сам WebView, и когда она приходит только инсетами.
 
 ## Иконки
 

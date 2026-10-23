@@ -38,6 +38,7 @@ public class MainActivity extends BridgeActivity {
     private int safeBottomPx;
     private int safeLeftPx;
     private int safeRightPx;
+    private int keyboardPx;
     private boolean insetsKnown;
 
     @Override
@@ -68,8 +69,13 @@ public class MainActivity extends BridgeActivity {
             safeBottomPx = bars.bottom;
             safeLeftPx = bars.left;
             safeRightPx = bars.right;
+            // KEYBOARD: экранная клавиатура. Если WebView уже сжат системой, эти отступы нулевые,
+            // и CSS берёт видимую высоту из visualViewport — обе оценки сходятся в min().
+            keyboardPx = windowInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
             insetsKnown = true;
             pushSafeArea(webView);
+            // Высота WebView могла ещe не пересчитаться в этом кадре — повторяем после раскладки.
+            webView.post(() -> pushSafeArea(webView));
             // Insets не поглощаем: WebView рисуется во весь экран, отступы нам нужны только в CSS.
             return windowInsets;
         });
@@ -119,6 +125,8 @@ public class MainActivity extends BridgeActivity {
                 + "s.setProperty('--safe-bottom','" + Math.round(safeBottomPx / density) + "px');"
                 + "s.setProperty('--safe-left','" + Math.round(safeLeftPx / density) + "px');"
                 + "s.setProperty('--safe-right','" + Math.round(safeRightPx / density) + "px');"
+                + "s.setProperty('--kb-native','" + Math.round(keyboardPx / density) + "px');"
+                + "s.setProperty('--window-height','" + Math.round(webView.getHeight() / density) + "px');"
                 + "})();";
         webView.evaluateJavascript(js, null);
     }
