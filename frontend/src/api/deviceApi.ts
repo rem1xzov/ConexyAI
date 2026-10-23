@@ -88,3 +88,17 @@ export async function runQueuedTaskInSandbox(taskId: string): Promise<void> {
 export async function cancelQueuedTask(taskId: string): Promise<void> {
   await http.delete(`/device/queue/${encodeURIComponent(taskId)}`);
 }
+
+// MOBILE_APP: приложение для Android. Версия и ссылка на APK приходят из последнего релиза
+// на GitHub, где лежит ассет conexy-android.apk.
+export interface MobileClientInfo {
+  downloadUrl: string;
+  platform: string;
+  /** Версия APK (тег последнего релиза), null — неизвестна. */
+  version: string | null;
+}
+
+export async function getMobileClientInfo(): Promise<MobileClientInfo> {
+  const { data } = await http.get<MobileClientInfo>('/device/client?platform=android');
+  return data;
+}

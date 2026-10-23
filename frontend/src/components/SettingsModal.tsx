@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Theme } from '../theme';
 import {
@@ -20,6 +20,8 @@ import {
 } from '../api/userApi';
 import {
   getDesktopClientInfo,
+  // MOBILE_APP: ссылка на APK из последнего релиза
+  getMobileClientInfo,
   // WEB_DEVICE: добавлено 2026-10-18
   getDeviceStatus,
   runQueuedTaskInSandbox,
@@ -40,7 +42,7 @@ import type { SubscriptionUsage, McpServerInput } from '../types/api';
 // LEGAL_DOCS: добавлено 2026-09-25 — правовые документы доступны всегда, в том числе из настроек.
 import { LEGAL_PATHS } from './legal/LegalPage';
 
-export type SettingsSection = 'general' | 'limits' | 'personalization' | 'memory' | 'github' | 'mcp' | 'desktop';
+export type SettingsSection = 'general' | 'limits' | 'personalization' | 'memory' | 'github' | 'mcp' | 'desktop' | 'app';
 
 interface SettingsModalProps {
   theme: Theme;
@@ -77,7 +79,16 @@ const SECTIONS: { value: SettingsSection; key: string }[] = [
   { value: 'github', key: 'settings.githubTab' },
   { value: 'mcp', key: 'settings.mcpTab' },
   { value: 'desktop', key: 'settings.desktopTab' },
+  { value: 'app', key: 'settings.appTab' },
 ];
+
+// MOBILE_APP: на телефоне раздел «Десктоп» бессмыслен (там exe для Windows), и вместо него
+// показывается «Приложение» со ссылкой на APK. На ПК — наоборот.
+const DESKTOP_UNSUITABLE = '(pointer: coarse), (max-width: 820px)';
+
+function desktopTabRelevant(): boolean {
+  return typeof window.matchMedia === 'function' ? !window.matchMedia(DESKTOP_UNSUITABLE).matches : true;
+}
 
 function statusOf(e: unknown): number | undefined {
   return (e as { response?: { status?: number } })?.response?.status;
@@ -998,6 +1009,56 @@ function DeviceStatusSection({ active }: { active: boolean }) {
   );
 }
 
+// MOBILE_APP: раздел телефона — вместо «Десктопа» на мобилках. Здесь лежит свежий APK:
+// ссылка берётся с сервера, а версия — из последнего релиза на GitHub.
+function AppSection({ active }: { active: boolean }) {
+  const { t } = useTranslation();
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [version, setVersion] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const requestedRef = useRef(false);
+
+  useEffect(() => {
+    if (!active || requestedRef.current) return;
+    requestedRef.current = true;
+    getMobileClientInfo()
+      .then((info) => {
+        setDownloadUrl(info.downloadUrl);
+        setVersion(info.version);
+      })
+      .catch(() => setError(t('settings.desktopError')));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+
+  return (
+    <div className="settings-panel">
+      <div className="settings-modal__section">
+        <div className="settings-modal__label">{t('settings.appTitle')}</div>
+        <p className="settings-github__hint">{t('settings.appHint')}</p>
+        <ol className="desktop-steps">
+          <li>{t('settings.appStep1')}</li>
+          <li>{t('settings.appStep2')}</li>
+          <li>{t('settings.appStep3')}</li>
+          <li>{t('settings.appStep4')}</li>
+        </ol>
+        {downloadUrl && (
+          <a className="dialog-btn dialog-btn--primary" href={downloadUrl} rel="noopener noreferrer">
+            {t('settings.appDownload')}
+            {version ? ` · v${version}` : ''}
+          </a>
+        )}
+        {version && (
+          <p className="settings-github__hint">
+            {t('settings.appVersion')}: <strong>v{version}</strong>
+          </p>
+        )}
+        <p className="settings-github__hint">{t('settings.appUpdateHint')}</p>
+        {error && <span className="settings-github__error">{error}</span>}
+      </div>
+    </div>
+  );
+}
+
 function McpSection() {
   const { t } = useTranslation();
   const [servers, setServers] = useState<McpServerInput[]>([]);
@@ -1129,6 +1190,12 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const { t } = useTranslation();
   const [section, setSection] = useState<SettingsSection>(initialSection);
+  // MOBILE_APP: на телефоне показываем «Приложение» вместо «Десктоп» (и наоборот на ПК).
+  const showDesktopTab = useMemo(() => desktopTabRelevant(), []);
+  const visibleSections = useMemo(
+    () => SECTIONS.filter((s) => (s.value === 'desktop' ? showDesktopTab : s.value === 'app' ? !showDesktopTab : true)),
+    [showDesktopTab],
+  );
   const [prefsDirty, setPrefsDirty] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
 
@@ -1159,7 +1226,7 @@ export function SettingsModal({
           </div>
 
           <div className="settings-modal__segmented settings-tabs" role="tablist">
-            {SECTIONS.map((s) => (
+            {visibleSections.map((s) => (
               <button
                 key={s.value}
                 role="tab"
@@ -1254,6 +1321,10 @@ export function SettingsModal({
 
             <div hidden={section !== 'desktop'}>
               <DesktopSection active={section === 'desktop'} />
+            </div>
+
+            <div hidden={section !== 'app'}>
+              <AppSection active={section === 'app'} />
             </div>
           </div>
         </div>

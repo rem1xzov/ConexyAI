@@ -14,6 +14,7 @@ import {
 import { useIsMobile, useMediaQuery } from '../hooks/useMediaQuery';
 // VOICE_DUP_FIX: склейка распознанного текста по перекрытию (см. utils/voiceTranscript).
 import { mergeTranscript } from '../utils/voiceTranscript';
+import { isMobileApp } from '../utils/mobile';
 import { ModelPicker } from './ModelPicker';
 import { SkillsDialog } from './SkillsDialog';
 import { VoiceWaveIcon, MicIcon, PlusIcon, SendIcon, StopIcon, UploadIcon, PhotoIcon, CameraIcon, CodeIcon, CloseIcon, LightbulbIcon } from './Icons';
@@ -526,7 +527,8 @@ export function InputBar({
       case 'insecure':
         return t('input.micInsecure');
       case 'denied':
-        return t('input.micDenied');
+        // MOBILE_APP: в приложении разрешения живут в настройках Android, а не браузера.
+        return isMobileApp() ? t('input.micDeniedApp') : t('input.micDenied');
       case 'no-device':
         return t('input.micNoDevice');
       case 'busy':

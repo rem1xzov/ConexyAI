@@ -6,7 +6,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
  * Первая версия грузит прод-сайт (`server.url`), а не локальные ассеты: так cookie сессии,
  * авторизация, SignalR и загрузка файлов остаются same-origin, и сервер менять не нужно.
  * Локальные ассеты (мгновенный старт, работа без сети на старте) включаются, когда в CORS
- * сервера появится origin приложения — см. `frontend/android/README-MOBILE.md`.
+ * сервера появится origin приложения — см. `frontend/MOBILE.md`.
  */
 const config: CapacitorConfig = {
   appId: 'ru.conexy.app',
@@ -23,9 +23,6 @@ const config: CapacitorConfig = {
   android: {
     allowMixedContent: false,
     webContentsDebuggingEnabled: false,
-    // EDGE_TO_EDGE: Android 15 рисует приложение под статус-баром и полосой навигации —
-    // низ с полем ввода и верх с шапкой уезжали за экран. force оставляет системные отступы.
-    adjustMarginsForEdgeToEdge: 'force',
   },
   plugins: {
     SplashScreen: {

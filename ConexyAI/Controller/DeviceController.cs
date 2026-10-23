@@ -36,6 +36,18 @@ public class DeviceController : ControllerBase
     private const string DefaultDownloadUrl =
         "https://github.com/rem1xzov/ConexyAI/releases/latest/download/conexy-win-x64.exe";
 
+    // MOBILE_APP: APK лежит в том же релизе, что и exe. Прямая ссылка `releases/latest/download`
+    // работает только если в последнем релизе есть такой ассет — иначе 404, поэтому клиенту отдаём
+    // точную ссылку конкретного ассета.
+    private const string MobileAssetName = "conexy-android.apk";
+    private const string MobileFallbackUrl =
+        "https://github.com/rem1xzov/ConexyAI/releases/latest/download/" + MobileAssetName;
+
+    // Один запрос к GitHub — два ответа: номер последнего релиза и ссылка на APK.
+    private sealed record LatestRelease(string? Version, string? MobileUrl);
+    private static LatestRelease? _cachedRelease;
+    private static DateTime _cachedReleaseAtUtc;
+
     public DeviceController(
         IDeviceKeyService keys,
         IUserIntegrationsService integrations,
@@ -54,16 +66,17 @@ public class DeviceController : ControllerBase
         _configuration = configuration;
     }
 
-    /// <summary>Ссылка на скачивание десктопного клиента (публичная информация).</summary>
+    /// <summary>Ссылка на скачивание клиента: exe для ПК или APK для телефона (`?platform=android`).</summary>
     [HttpGet("client")]
     [AllowAnonymous]
-    public async Task<IActionResult> ClientInfo(CancellationToken ct)
+    public async Task<IActionResult> ClientInfo([FromQuery] string? platform, CancellationToken ct)
     {
         var url = _configuration["Desktop:DownloadUrl"];
+        var isMobile = string.Equals(platform, "android", StringComparison.OrdinalIgnoreCase);
         return Ok(new
         {
-            downloadUrl = string.IsNullOrWhiteSpace(url) ? DefaultDownloadUrl : url,
-            platform = "windows-x64",
+            downloadUrl = isMobile ? await LatestMobileUrlAsync(ct) : string.IsNullOrWhiteSpace(url) ? DefaultDownloadUrl : url,
+            platform = isMobile ? "android" : "windows-x64",
             version = await LatestVersionAsync(ct),
             // GOOGLE_CONNECTOR: OAuth-клиент типа «Desktop app» для входа в Google из десктопа. Для таких клиентов
             // Google сам считает secret неконфиденциальным (он вшит в приложение, защита — PKCE), поэтому
@@ -75,17 +88,25 @@ public class DeviceController : ControllerBase
 
     private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    /// <summary>Ссылка на APK последнего релиза; при недоступности GitHub — стабильная ссылка-запас.</summary>
+    private async Task<string> LatestMobileUrlAsync(CancellationToken ct) =>
+        (await LatestReleaseAsync(ct)).MobileUrl ?? MobileFallbackUrl;
+
     /// <summary>Тег последнего релиза клиента без «v» (например 0.1.5) или null, если GitHub недоступен.</summary>
-    private async Task<string?> LatestVersionAsync(CancellationToken ct)
+    private async Task<string?> LatestVersionAsync(CancellationToken ct) =>
+        (await LatestReleaseAsync(ct)).Version;
+
+    private async Task<LatestRelease> LatestReleaseAsync(CancellationToken ct)
     {
+        var cached = _cachedRelease ?? new LatestRelease(_cachedVersion, null);
         if (DateTime.UtcNow - _cachedAtUtc < TimeSpan.FromMinutes(10))
-            return _cachedVersion;
+            return cached;
 
         await VersionLock.WaitAsync(ct);
         try
         {
             if (DateTime.UtcNow - _cachedAtUtc < TimeSpan.FromMinutes(10))
-                return _cachedVersion;
+                return _cachedRelease ?? new LatestRelease(_cachedVersion, null);
 
             try
             {
@@ -99,9 +120,26 @@ public class DeviceController : ControllerBase
                 {
                     using var doc = await System.Text.Json.JsonDocument.ParseAsync(
                         await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
-                    _cachedVersion = doc.RootElement.TryGetProperty("tag_name", out var tag)
-                        ? tag.GetString()?.TrimStart('v', 'V')
-                        : null;
+                    string? version = null;
+                    if (doc.RootElement.TryGetProperty("tag_name", out var tag))
+                        version = tag.GetString()?.TrimStart('v', 'V');
+
+                    string? mobileUrl = null;
+                    if (doc.RootElement.TryGetProperty("assets", out var assets) && assets.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        foreach (var asset in assets.EnumerateArray())
+                        {
+                            if (asset.TryGetProperty("name", out var name) && name.GetString() == MobileAssetName
+                                && asset.TryGetProperty("browser_download_url", out var download))
+                            {
+                                mobileUrl = download.GetString();
+                                break;
+                            }
+                        }
+                    }
+
+                    _cachedVersion = version;
+                    _cachedRelease = new LatestRelease(version, mobileUrl);
                 }
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
@@ -111,7 +149,7 @@ public class DeviceController : ControllerBase
 
             // При ошибке тоже запоминаем момент, чтобы не бить по GitHub каждый запрос.
             _cachedAtUtc = DateTime.UtcNow;
-            return _cachedVersion;
+            return _cachedRelease ?? new LatestRelease(_cachedVersion, null);
         }
         finally
         {
