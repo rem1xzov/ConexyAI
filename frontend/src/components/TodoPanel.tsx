@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TodoItem } from '../types/signalr';
 
@@ -18,7 +19,7 @@ interface TodoPanelProps {
   todos: TodoItem[];
 }
 
-export function TodoPanel({ todos }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ todos }: TodoPanelProps) {
   const { t } = useTranslation();
   if (todos.length === 0) return null;
 
@@ -42,4 +43,4 @@ export function TodoPanel({ todos }: TodoPanelProps) {
       </ul>
     </div>
   );
-}
+});

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDownIcon, LightbulbIcon } from './Icons';
 
@@ -20,7 +20,7 @@ interface ThinkingStepProps {
   running: boolean;
 }
 
-export function ThinkingStep({ text, running }: ThinkingStepProps) {
+export const ThinkingStep = memo(function ThinkingStep({ text, running }: ThinkingStepProps) {
   const { t } = useTranslation();
   // Open while the step is live, collapse once it is over — unless the user toggled it themselves,
   // in which case their choice wins for the rest of this step's life (tracked with a ref so the
@@ -60,4 +60,4 @@ export function ThinkingStep({ text, running }: ThinkingStepProps) {
       {open && <div className="think-step__body">{body}</div>}
     </div>
   );
-}
+});

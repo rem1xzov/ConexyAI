@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
 import { CheckIcon, ChevronDownIcon, CloseIcon, CopyIcon } from './Icons';
@@ -27,7 +27,7 @@ interface CommandConfirmCardProps {
 
 type LocalDecision = 'none' | 'approving' | 'denying' | 'failed';
 
-export function CommandConfirmCard({ events, onDecision }: CommandConfirmCardProps) {
+function CommandConfirmCardBase({ events, onDecision }: CommandConfirmCardProps) {
   const { t } = useTranslation();
   const [allowAll, setAllowAll] = useState(false);
   const [showOutput, setShowOutput] = useState(false);
@@ -208,3 +208,27 @@ export function CommandConfirmCard({ events, onDecision }: CommandConfirmCardPro
     </div>
   );
 }
+
+// MOBILE_PAINT: карточка команды живёт в ленте, которую перерисовывают на каждый кадр стрима.
+// Сравниваем по содержимому: родитель создаёт новый массив событий и новый объект события,
+// но пока команда, статус и вывод те же — перерисовывать нечего.
+export const CommandConfirmCard = memo(CommandConfirmCardBase, (a, b) => {
+  if (a.onDecision !== b.onDecision || a.events.length !== b.events.length) return false;
+  for (let i = 0; i < a.events.length; i++) {
+    const x = a.events[i];
+    const y = b.events[i];
+    if (
+      x.status !== y.status ||
+      x.command !== y.command ||
+      x.output !== y.output ||
+      x.summary !== y.summary ||
+      x.description !== y.description ||
+      x.pendingActionId !== y.pendingActionId ||
+      x.isDangerous !== y.isDangerous ||
+      x.workingDirectory !== y.workingDirectory
+    ) {
+      return false;
+    }
+  }
+  return true;
+});

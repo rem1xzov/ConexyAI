@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ChevronDownIcon,
@@ -75,7 +75,10 @@ function statusMark(state: ActionState) {
   }
 }
 
-export function ActionStepLine({
+// MOBILE_PAINT: строка инструмента перерисовывается на каждый кадр стрима только потому, что её
+// пересоздаёт родитель. Пропсы здесь — примитивы (блок не менялся), поэтому memo убирает
+// десятки лишних перерисовок в ленте из сотни шагов.
+export const ActionStepLine = memo(function ActionStepLine({
   kind,
   label,
   path,
@@ -139,4 +142,4 @@ export function ActionStepLine({
       {expandable && open && <pre className="action-line__body">{detail}</pre>}
     </div>
   );
-}
+});
