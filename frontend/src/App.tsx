@@ -39,6 +39,8 @@ import { MenuIcon, PanelRightCloseIcon, PanelRightOpenIcon, GhostIcon } from './
 // LOGO_SWEEP / CLAUDE_LAYOUT: добавлено 2026-09-20
 import { ConexyLogo } from './components/ConexyLogo';
 import { ChatLayout, type ChatQuickChip } from './components/ChatLayout';
+// CURSOR_TRAIL: след из фирменных стрелок за курсором на пустом стартовом экране (только ПК).
+import { CursorTrail } from './components/CursorTrail';
 // GUEST_HERO: добавлено 2026-09-20
 import { GuestHero } from './components/GuestHero';
 // LEGAL_DOCS: добавлено 2026-09-25 — публичные правовые документы (`#/privacy`, `#/offer`, `#/refund`).
@@ -3131,6 +3133,10 @@ export default function App() {
       )}
 
       <main className="main" ref={mainRef}>
+        {/* CURSOR_TRAIL: только пустой стартовый экран и только на ПК — компонент сам проверяет
+            точный указатель и reduced-motion. Живёт внутри .main, чтобы не попасть под его
+            backdrop-filter: иначе метки смазывались бы вместе с фоном. */}
+        {stageEmpty && !isMobile && <CursorTrail />}
         <div className={isAgent ? 'main__body main__body--ide' : 'main__body'}>
           <div
             className={`${isAgent && !ideCollapsed && !isMobile ? 'ide-chat' : 'ide-chat--single'} chat-drop-target`}
