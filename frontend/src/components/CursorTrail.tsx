@@ -1,35 +1,42 @@
 import { useEffect, useRef } from 'react';
 
 /**
- * CURSOR_TRAIL: на пустом стартовом экране за курсором остаются метки фирменного знака — две
- * стрелки, как на openai.com/codex. Только ПК: тач-устройства, узкие экраны и
- * `prefers-reduced-motion` эффект не получают.
+ * CURSOR_TRAIL: волна из фирменных стрелок, идущая ровно за курсором на пустом стартовом экране
+ * (как фон на openai.com/codex). Только ПК: тач, узкие экраны и `prefers-reduced-motion` эффект
+ * не получают.
  *
- * Рисуем на canvas, а не узлами DOM: метка появляется на каждые ~16 px движения мыши, и десятки
- * анимируемых элементов заставляли бы React перерисовывать дерево десятки раз в секунду.
- * Слой лежит ПОД контентом (как .glass-aura), поэтому след не перекрывает композер и текст.
+ * Ключевые решения:
+ * - Координаты вычитают положение самого канваса (`getBoundingClientRect`). Канвас живёт внутри
+ *   `.main` (чтобы не попасть под его backdrop-filter), а события мыши приходят в координатах
+ *   окна — без вычета след уезжал вправо на ширину сайдбара.
+ * - Рисуем в canvas, а не DOM: метка появляется каждые несколько пикселей пути, десятки
+ *   анимируемых узлов заставляли бы React перерисовываться десятки раз в секунду.
+ * - Каждая метка «плывёт» поперёк движения по синусу — за курсором остаётся не пунктир, а волна.
  */
-
-/** Ширина одной стрелки в CSS-пикселях; остальная геометрия — из viewBox логотипа (440×315). */
-const MARK_WIDTH = 20;
+const MARK_WIDTH = 14;
 const LOGO_UNIT = MARK_WIDTH / 440;
 const CHEVRON_HEIGHT = 145 * LOGO_UNIT;
 const CHEVRON_STEP = 170 * LOGO_UNIT;
-/** Логотип шире, чем выше: центрируем знак на курсоре, а не вешаем его над точкой. */
+/** Логотип выше, чем кажется: центрируем знак на точке, а не вешаем его над курсором. */
 const VERTICAL_CENTER = (145 * LOGO_UNIT - CHEVRON_STEP) / 2;
-const STROKE = 66 * LOGO_UNIT;
+const STROKE = 62 * LOGO_UNIT;
 
-const LIFETIME_MS = 850;
-/** Через сколько пикселей пути появляется следующая метка. */
-const SPAWN_DISTANCE = 16;
-const MAX_MARKS = 44;
-const PEAK_ALPHA = 0.55;
+const LIFETIME_MS = 700;
+/** Через сколько пикселей пути появляется следующая метка — плотная лента, а не пунктир. */
+const SPAWN_DISTANCE = 7;
+const MAX_MARKS = 90;
+/** Едва видный след: волна читается как фон, а не как элемент интерфейса. */
+const PEAK_ALPHA = 0.22;
+/** Размах поперечной волны в пикселях. */
+const WAVE_AMPLITUDE = 3.2;
 
 interface Mark {
   x: number;
   y: number;
   angle: number;
   born: number;
+  /** Сдвиг фазы: соседние метки колеблются не синхронно, получается бегущая волна. */
+  phase: number;
 }
 
 function readAccent(): string {
@@ -43,7 +50,6 @@ export function CursorTrail() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    // Тач, маленький экран и «меньше движения» — без эффекта вовсе.
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     if (!window.matchMedia('(pointer: fine)').matches) return;
 
@@ -57,22 +63,23 @@ export function CursorTrail() {
     const marks: Mark[] = [];
 
     const resize = () => {
+      const rect = canvas.getBoundingClientRect();
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      width = window.innerWidth;
-      height = window.innerHeight;
+      width = Math.max(1, Math.round(rect.width));
+      height = Math.max(1, Math.round(rect.height));
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       marks.length = 0;
     };
 
-    const paintMark = (mark: Mark, alpha: number, scale: number) => {
+    const paintMark = (mark: Mark, alpha: number, scale: number, wobble: number) => {
       ctx.save();
       ctx.translate(mark.x, mark.y + VERTICAL_CENTER);
       // Стрелка «смотрит» туда, куда едет курсор: у знака остриё вверх, отсюда +90°.
       ctx.rotate(mark.angle);
+      // Поперёк движения — синусоида: хвост идёт волной.
+      ctx.translate(wobble, 0);
       ctx.scale(scale, scale);
       ctx.globalAlpha = alpha;
       ctx.strokeStyle = accent;
@@ -101,27 +108,29 @@ export function CursorTrail() {
           continue;
         }
         const fade = 1 - age;
-        paintMark(mark, PEAK_ALPHA * fade * fade, 1 - age * 0.3);
+        // Затухание к концу хвоста + бегущая поперечная волна, гаснущая вместе с меткой.
+        const wobble = Math.sin(age * 7 + mark.phase) * WAVE_AMPLITUDE * fade;
+        paintMark(mark, PEAK_ALPHA * fade * fade, 0.85 + 0.25 * fade, wobble);
       }
       if (marks.length > 0) raf = window.requestAnimationFrame(tick);
     };
 
-    /** Метки вдоль отрезка пути: быстрый рывок мыши не оставляет дыр в следе. */
-    const spawnLine = (fromX: number, fromY: number, toX: number, toY: number) => {
+    /** Метки вдоль отрезка пути: быстрый рывок мыши не оставляет дыр в волне. */
+    const spawnLine = (fromX: number, fromY: number, toX: number, toY: number, now: number) => {
       const dx = toX - fromX;
       const dy = toY - fromY;
       const distance = Math.hypot(dx, dy);
       if (distance < 1) return;
       const angle = Math.atan2(dy, dx) + Math.PI / 2;
-      const steps = Math.min(4, Math.max(1, Math.floor(distance / SPAWN_DISTANCE)));
-      const now = performance.now();
+      const steps = Math.min(8, Math.max(1, Math.floor(distance / SPAWN_DISTANCE)));
       for (let i = 1; i <= steps; i++) {
         const t = i / steps;
         marks.push({
           x: fromX + dx * t,
           y: fromY + dy * t,
           angle,
-          born: now + i * 6,
+          born: now + i * 4,
+          phase: (marks.length + i) * 0.55,
         });
       }
       while (marks.length > MAX_MARKS) marks.shift();
@@ -132,39 +141,51 @@ export function CursorTrail() {
     let lastY = 0;
 
     const onMove = (event: PointerEvent) => {
-      // На тач-экране и стилусе следа нет — только мышь.
+      // На тач-экране и стилусе волны нет — только мышь.
       if (event.pointerType !== 'mouse') return;
-      const x = event.clientX;
-      const y = event.clientY;
+      // Канвас лежит внутри .main, поэтому координаты окна переводим в его собственные.
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
       if (lastX === null) {
         lastX = x;
         lastY = y;
         return;
       }
       if (Math.hypot(x - lastX, y - lastY) < SPAWN_DISTANCE) return;
-      spawnLine(lastX, lastY, x, y);
+      spawnLine(lastX, lastY, x, y, performance.now());
       lastX = x;
       lastY = y;
     };
 
-    // Тема и инкогнито меняют --accent: след не должен остаться в старой палитре.
-    const observer = new MutationObserver(() => {
+    const onLeave = () => {
+      lastX = null;
+    };
+
+    // Тема и инкогнито меняют --accent: волна не должна остаться в старой палитре.
+    const themeObserver = new MutationObserver(() => {
       accent = readAccent();
     });
+    // Ширина панели меняется при сворачивании сайдбара — размер холста должен следовать за ней.
+    const sizeObserver = new ResizeObserver(resize);
 
     resize();
+    sizeObserver.observe(canvas);
     window.addEventListener('resize', resize);
     window.addEventListener('pointermove', onMove, { passive: true });
-    observer.observe(document.documentElement, {
+    document.addEventListener('pointerleave', onLeave);
+    themeObserver.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['data-theme', 'data-incognito'],
     });
 
     return () => {
       if (raf) window.cancelAnimationFrame(raf);
+      sizeObserver.disconnect();
       window.removeEventListener('resize', resize);
       window.removeEventListener('pointermove', onMove);
-      observer.disconnect();
+      document.removeEventListener('pointerleave', onLeave);
+      themeObserver.disconnect();
       marks.length = 0;
     };
   }, []);
