@@ -51,6 +51,7 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent integrity: a claimed GitHub action that never ran is sent back", AntiLieAsync);
         // INCOMPLETE_WORK: добавлено 2026-10-14 — ответ с признанием несделанной работы не завершает ход.
         TestRegistry.Add("agent incomplete-work: 'could but did not' is sent back, an external blocker finishes", IncompleteWorkGateAsync);
+        TestRegistry.Add("agent stall: 'tools disabled' is not an external blocker", ToolDisabledStallAsync);
         TestRegistry.Add("agent rules: CONEXY.md / .conexy/rules.md are injected right after the system prompt", ProjectRulesInjectedAsync);
         TestRegistry.Add("agent vision: screenshot targets stay in the chat workspace or on public hosts (H9)", ScreenshotPolicyAsync);
         TestRegistry.Add("agent vision: the screenshot image follows all tool results of the turn (L9)", ScreenshotImageAfterToolResultsAsync);
@@ -770,6 +771,33 @@ internal static class AgentCapabilityTests
         finally
         {
             DeleteDir(blockerRoot);
+        }
+    }
+
+    /// <summary>
+    /// AGENT_STALL: агент объявлял инструменты «отключёнными» и заканчивал ход просьбой прислать
+    /// «продолжай». Равнозначные инструменты есть всегда, поэтому такой ответ — не внешняя блокировка,
+    /// а несделанная работа: система обязана вернуть его на доработку.
+    /// </summary>
+    private static async Task ToolDisabledStallAsync()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var llm = new ScriptLlm(
+                Text("Инструменты отключены после сбоя apply_patch — выполнить пункты нечем. Это внешняя блокировка. Скажи «продолжай»."),
+                Text("Готово: дописал тесты и прогнал сборку."));
+            var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(), todo: new FakeTodoService());
+
+            await runner.RunLoopAsync(job, context, Guard());
+
+            Assert(llm.Requests.Count >= 2, $"a 'tools disabled' answer must be sent back, requests={llm.Requests.Count}");
+            Assert((llm.Requests[1].Last().Text ?? "").Contains("[Incomplete Work]"),
+                "the gate must ask the model to switch tools and finish, not accept the fake blocker");
+        }
+        finally
+        {
+            DeleteDir(root);
         }
     }
 

@@ -689,7 +689,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // PLAN_FINISH_GATE: агент писал план, но пытается завершить ход, когда в нём ещё есть pending/
     // in_progress — это не финал, а «могу, но не сделал». Возвращаем продолжить (ограниченно), иначе
     // агент заканчивал ответом-отпиской, а пользователю приходилось просить ещё раз.
-    private const int MaxPlanFinishNudges = 3;
+    private const int MaxPlanFinishNudges = 6;
     private const string PlanIncompletePrompt =
         "[Plan Incomplete] Не заканчивай ход, пока твой же план (`todo_write`) не выполнен. " +
         "Продолжай и доведи каждый пункт до конца; завершить можно только когда все пункты `completed`, " +
@@ -962,7 +962,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // (ограниченно), а если упёрся в РЕАЛЬНУЮ внешнюю блокировку — он обязан назвать её прямо,
     // и тогда ответ проходит. Маркеры узкие и отрицательные (урок ANTI_LIE: широкие слова вроде
     // «могу» давали ложные срабатывания на нормальном тексте).
-    private const int MaxIncompleteNudges = 2;
+    private const int MaxIncompleteNudges = 4;
     private static readonly string[] IncompleteWorkMarkers =
     {
         "не сделал", "не сделано", "не сделана", "не сделаны",
@@ -977,7 +977,23 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // AGENT_STALL: агент заканчивал ход обещанием «скажи делай — следующим ходом сделаю».
         "скажи делай", "скажи «делай»", "скажи делать", "если скажешь", "если разрешишь",
         "следующим ходом", "в следующем ходе", "готов сделать", "дай команду", "жду твоего",
+        // AGENT_STALL: те же просьбы другими словами — «отправь новое сообщение», «продолжай»,
+        // «следующим сообщением». Без них большой прогон заканчивался и ждал пользователя.
+        "«продолжай", "продолжай», «отправь новое сообщение", "отправьте новое сообщение",
+        "отправь любое", "следующим сообщением", "начни новый ход", "начните новый ход",
+        "что нужно от тебя", "жду от тебя", "инструменты снова доступны",
         "did not implement", "not implemented", "not wired up", "not connected",
+    };
+
+    // AGENT_STALL: агент объявлял инструменты «отключёнными» после пары ошибок и на этом заканчивал ход
+    // («инструменты отключены — довести нечем»). Это НЕ внешняя блокировка: у правки, чтения и
+    // терминала всегда есть равнозначные инструменты, поэтому такой ответ возвращается на доработку
+    // ДО проверки белого списка внешних блокировок.
+    private static readonly string[] FakeToolBlockerMarkers =
+    {
+        "инструмент отключ", "инструменты отключ", "инструмент недоступ", "инструменты недоступ",
+        "инструмент не работает", "инструменты не работают", "tool disabled", "tools disabled",
+        "tools are disabled", "не могу править файлы", "не могу изменить файлы", "нечем править",
     };
 
     // INCOMPLETE_WORK: честно названная ВНЕШНЯЯ блокировка — ответ проходит без возврата. Так мы
@@ -2511,10 +2527,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
     /// them and finishes the task without them.
     /// </summary>
     private static string ToolUnavailablePrompt(IReadOnlyCollection<string> tools) =>
-        "[Tool Unavailable] These tools failed and will keep failing in this environment: " +
+        "[Tool Switch] Эти вызовы несколько раз вернули ошибку: " +
         string.Join(", ", tools) +
-        ". Do NOT call them again. Continue with the remaining tools; if the failed step was optional " +
-        "(for example a visual verification), skip it and state that limitation explicitly in your final answer.";
+        ". Это НЕ признак нерабочего окружения и НЕ повод закончить ход: работа остаётся за тобой. " +
+        "Перейди на равнозначный инструмент и измени сам вызов: правка файла — `file_patch` или " +
+        "`str_replace_editor` (новый файл — `file_write`); чтение — `file_read`, `grep`, `glob`; " +
+        "терминал — `bash` или `cmd_exec`; тесты — `run_tests`. Не повторяй тот же вызов с теми же " +
+        "аргументами. Запрещено писать пользователю, что инструменты отключены или недоступны, и просить " +
+        "прислать «продолжай» — доделай задачу в этом ходе.";
 
     // SELF_CORRECTION: добавлено 2026-09-24
     /// <summary>
@@ -2618,6 +2638,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
             return null;
         if (string.IsNullOrWhiteSpace(finalText))
             return null;
+
+        // AGENT_STALL: «инструменты отключены» — не внешняя блокировка, а признание, что агент сдался.
+        // Проверяем это ДО белого списка: иначе слова «недоступ»/«блокир» в том же абзаце пропускали ответ.
+        if (FakeToolBlockerMarkers.Any(m => finalText.Contains(m, StringComparison.OrdinalIgnoreCase)))
+            return "инструмент недоступен";
 
         // Явно названная внешняя блокировка — это честный финал, а не отписка.
         if (ExternalBlockerMarkers.Any(m => finalText.Contains(m, StringComparison.OrdinalIgnoreCase)))
