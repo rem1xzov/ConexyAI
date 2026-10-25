@@ -81,11 +81,6 @@ const PLANS: Plan[] = [
   },
 ];
 
-// ANNUAL_ULTRA: годовой Ultra — 29 900 ₽ за 12 месяцев вместо 2 990 ₽ × 12 = 35 880 ₽, то есть −17%.
-// Процент считаем из цен, а не пишем числом: при правке любой из них подпись «выгоднее» останется правдой.
-const ANNUAL_PRICE_RUB = 29_900;
-const ANNUAL_MONTHS = 12;
-
 // TOKEN_TOPUP: докупка токенов — разовая. Цена одна (300 ₽ за 5 000 000 токенов), реальную сумму
 // берёт сервер из каталога планов (см. PaymentPlansOptions).
 const TOKEN_PRICE_RUB = 300;
@@ -125,11 +120,6 @@ interface UpgradeModalProps {
 export function UpgradeModal({ limitInfo, onClose, onBuy, busy = false, usage, onReset }: UpgradeModalProps) {
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? i18n.language;
-
-  const topPlan = PLANS[PLANS.length - 1];
-  const annualFullPrice = topPlan.priceRub * ANNUAL_MONTHS;
-  const annualDiscountPct = Math.round((1 - ANNUAL_PRICE_RUB / annualFullPrice) * 100);
-  const annualMonthlyPrice = Math.round(ANNUAL_PRICE_RUB / ANNUAL_MONTHS);
 
   // COWORK_BUDGET: «нужен платный тариф» — не то же самое, что «бюджет кончился», и баннер должен
   // говорить именно это, иначе пользователь пойдёт ждать сброса лимита вместо смены тарифа.
@@ -209,53 +199,8 @@ export function UpgradeModal({ limitInfo, onClose, onBuy, busy = false, usage, o
           ))}
         </div>
 
-        {/* ANNUAL_ULTRA: годовой тариф Ultra — тот же набор, что у ProMax, со скидкой и повышенными
-            лимитами. Продаётся только на год; набор и поток оплаты как у прежнего годового ProMax. */}
-        <div className="upgrade-annual">
-          <div className="upgrade-annual__head">
-            <div className="upgrade-annual__title">{t('upgrade.annualTitle')}</div>
-            <span className="upgrade-annual__badge">{t('upgrade.annualBadge', { percent: annualDiscountPct })}</span>
-            {/* ANNUAL_ULTRA: плашка о том, что у Ultra лимиты выше, чем у ProMax. Конкретные числа
-                здесь НЕ приводим — они живут в конфиге тарифов. */}
-            <span className="upgrade-annual__limits">{t('upgrade.annualUltraLimits')}</span>
-          </div>
-          <div className="upgrade-annual__prices">
-            <span className="upgrade-annual__price">{t('upgrade.perYear', { price: formatRub(ANNUAL_PRICE_RUB, lang) })}</span>
-            <span className="upgrade-annual__was">{formatRub(annualFullPrice, lang)}</span>
-            <span className="upgrade-annual__monthly">
-              {t('upgrade.annualMonthly', { price: formatRub(annualMonthlyPrice, lang) })}
-            </span>
-          </div>
-          <div className="upgrade-annual__note">
-            {t('upgrade.annualSave', {
-              full: formatRub(annualFullPrice, lang),
-              save: formatRub(annualFullPrice - ANNUAL_PRICE_RUB, lang),
-            })}
-          </div>
-          <ul className="upgrade-plan__features">
-            <li className="upgrade-plan__feature">
-              <CheckIcon size={14} /> {t('upgrade.annualIncludes')}
-            </li>
-            <li className="upgrade-plan__feature">
-              <CheckIcon size={14} /> {t('upgrade.features.orchestra')}
-            </li>
-            <li className="upgrade-plan__feature">
-              <CheckIcon size={14} /> {t('upgrade.features.coworkAvailable')}
-            </li>
-          </ul>
-          <button
-            className="dialog-btn dialog-btn--primary upgrade-plan__cta"
-            onClick={() => onBuy('ProMaxAnnual')}
-            disabled={busy}
-            type="button"
-          >
-            {t('upgrade.buyAnnual')}
-          </button>
-        </div>
-
-        {/* TOKEN_TOPUP: добавлено 2026-10-06 — разовая докупка токенов, отдельно для Coder и
-            Cowork. Токены зачисляются сразу и складываются с лимитом тарифа; покупать можно
-            повторно (каждая покупка — ещё +1 000 000). */}
+        {/* TOKEN_TOPUP: добавлено 2026-10-06 — разовая докупка токенов. Годового тарифа больше нет:
+            продаём только месячные тарифы и токены. */}
         <div className="upgrade-tokens">
           <div className="upgrade-tokens__head">
             <div className="upgrade-tokens__title">{t('upgrade.tokensTitle')}</div>

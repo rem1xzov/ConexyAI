@@ -20,7 +20,7 @@ public class PaymentEntity
 
     public Guid UserId { get; set; }
 
-    /// <summary>Идентификатор плана из каталога (Pro, ProMaxAnnual, …).</summary>
+    /// <summary>Идентификатор плана из каталога (Go, Pro, ProMax, Ultra, TokenCoder).</summary>
     public string PlanId { get; set; } = string.Empty;
 
     /// <summary>Выдаваемый тариф (Go/Pro/ProMax/Ultra) — снимок на момент покупки.</summary>

@@ -10,8 +10,7 @@ public enum SubscriptionTier
     Go = 1,
     Pro = 2,
     ProMax = 3,
-    // ANNUAL_ULTRA: добавлено 2026-10-01 — годовой тариф с самыми большими лимитами (прежний
-    // «ProMaxAnnual» теперь выдаёт именно Ultra, а не ProMax).
+    // ULTRA: добавлено 2026-10-01 — тариф с самыми большими лимитами, продаётся помесячно.
     Ultra = 4,
     // ADMIN_UNLIMITED: добавлено 2026-09-19 — synthetic tier for admins (unlimited).
     Admin = 5

@@ -12,7 +12,7 @@ public class PaymentPlansOptions
 {
     public const string SectionName = "PaymentPlans";
 
-    /// <summary>Каталог: ключ — идентификатор плана (Pro, ProMaxAnnual, …).</summary>
+    /// <summary>Каталог: ключ — идентификатор плана (Go, Pro, ProMax, Ultra, TokenCoder).</summary>
     public Dictionary<string, PaymentPlan> Plans { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>План по идентификатору или <c>null</c>, если такого нет.</summary>

@@ -4,7 +4,7 @@ import type { CreatePaymentResponse, PaymentStatusResponse } from '../types/api'
 // YOOKASSA: добавлено 2026-09-27
 /**
  * Платежи за тарифы. Сумма берётся на сервере из каталога планов, поэтому клиент присылает только
- * идентификатор плана (Pro / ProMax / ProMaxAnnual / Go) — подделать цену нельзя.
+ * идентификатор плана (Go / Pro / ProMax / Ultra / TokenCoder) — подделать цену нельзя.
  */
 
 /** Создаёт платёж и отдаёт ссылку на оплату в ЮKassa. */
