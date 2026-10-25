@@ -3133,10 +3133,6 @@ export default function App() {
       )}
 
       <main className="main" ref={mainRef}>
-        {/* CURSOR_TRAIL: только пустой стартовый экран и только на ПК — компонент сам проверяет
-            точный указатель и reduced-motion. Живёт внутри .main, чтобы не попасть под его
-            backdrop-filter: иначе метки смазывались бы вместе с фоном. */}
-        {stageEmpty && !isMobile && <CursorTrail />}
         <div className={isAgent ? 'main__body main__body--ide' : 'main__body'}>
           <div
             className={`${isAgent && !ideCollapsed && !isMobile ? 'ide-chat' : 'ide-chat--single'} chat-drop-target`}
@@ -3384,6 +3380,11 @@ export default function App() {
             (Coder и Cowork); в обычном чате, Pro и Учениках она не показывается. */}
         {isAgent && <StatusBar agentStatus={agentStatus} activity={agentActivity} cursor={cursorInfo} />}
       </main>
+
+      {/* CURSOR_TRAIL: только пустой стартовый экран и только на ПК — компонент сам проверяет
+          точный указатель и reduced-motion. Стоит после .main, чтобы волна покрывала весь экран
+          (а не только область без сайдбара) и не попадала под backdrop-filter панели. */}
+      {stageEmpty && !isMobile && <CursorTrail />}
 
       {toast && <div className="toast">{toast}</div>}
       {authError && <div className="toast toast--error">{authError}</div>}

@@ -21,14 +21,14 @@ const CHEVRON_STEP = 170 * LOGO_UNIT;
 const VERTICAL_CENTER = (145 * LOGO_UNIT - CHEVRON_STEP) / 2;
 const STROKE = 62 * LOGO_UNIT;
 
-const LIFETIME_MS = 700;
-/** Через сколько пикселей пути появляется следующая метка — плотная лента, а не пунктир. */
-const SPAWN_DISTANCE = 7;
-const MAX_MARKS = 90;
+const LIFETIME_MS = 650;
+/** Через сколько пикселей пути появляется следующая метка: редкие значки, без плотного ковра. */
+const SPAWN_DISTANCE = 22;
+const MAX_MARKS = 26;
 /** Едва видный след: волна читается как фон, а не как элемент интерфейса. */
 const PEAK_ALPHA = 0.22;
 /** Размах поперечной волны в пикселях. */
-const WAVE_AMPLITUDE = 3.2;
+const WAVE_AMPLITUDE = 5;
 
 interface Mark {
   x: number;
@@ -109,7 +109,7 @@ export function CursorTrail() {
         }
         const fade = 1 - age;
         // Затухание к концу хвоста + бегущая поперечная волна, гаснущая вместе с меткой.
-        const wobble = Math.sin(age * 7 + mark.phase) * WAVE_AMPLITUDE * fade;
+        const wobble = Math.sin(age * 5.5 + mark.phase) * WAVE_AMPLITUDE * fade;
         paintMark(mark, PEAK_ALPHA * fade * fade, 0.85 + 0.25 * fade, wobble);
       }
       if (marks.length > 0) raf = window.requestAnimationFrame(tick);
@@ -130,7 +130,7 @@ export function CursorTrail() {
           y: fromY + dy * t,
           angle,
           born: now + i * 4,
-          phase: (marks.length + i) * 0.55,
+          phase: (marks.length + i) * 0.8,
         });
       }
       while (marks.length > MAX_MARKS) marks.shift();
