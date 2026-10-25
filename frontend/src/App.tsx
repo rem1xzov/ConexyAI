@@ -21,6 +21,8 @@ import { useFileDropZone, usePreventWindowFileDrop } from './hooks/useFileDrop';
 // MOBILE_DRAWER / MOBILE_KEYBOARD: добавлено 2026-09-24
 import { useDrawerSwipe } from './hooks/useDrawerSwipe';
 import { useKeyboardInset } from './hooks/useKeyboardInset';
+// MOBILE_BACK: системная кнопка «назад» в Android-приложении.
+import { isMobileApp, listenForAppBack, minimizeApp } from './utils/mobile';
 import { Sidebar } from './components/Sidebar';
 import { ChatFeed } from './components/ChatFeed';
 // SHARE_PUBLIC: публичная страница чата открывается по #/shared/<token> без входа в аккаунт.
@@ -2948,6 +2950,47 @@ export default function App() {
     enabled: isMobile,
     onKeyboardClosed: () => setComposerFocused(false),
   });
+
+  // MOBILE_BACK: в приложении системная «назад» по умолчанию закрывала его целиком — даже с
+  // открытым меню, настройками или тарифами. Сначала закрываем верхний слой и только с главного
+  // экрана сворачиваем приложение, как принято на Android. Подписка одна: актуальные состояния
+  // читаем из ref, чтобы не перерегистрировать слушатель на каждое изменение.
+  const backLayersRef = useRef({ sidebarOpen, settingsOpen, supportOpen, upgradeOpen });
+  backLayersRef.current = { sidebarOpen, settingsOpen, supportOpen, upgradeOpen };
+
+  useEffect(() => {
+    if (!isMobileApp()) return;
+    let disposed = false;
+    let handle: { remove: () => Promise<void> } | null = null;
+    void listenForAppBack(() => {
+      const layers = backLayersRef.current;
+      if (layers.sidebarOpen) {
+        setSidebarOpen(false);
+        return;
+      }
+      if (layers.settingsOpen) {
+        setSettingsOpen(false);
+        return;
+      }
+      if (layers.supportOpen) {
+        setSupportOpen(false);
+        return;
+      }
+      if (layers.upgradeOpen) {
+        setUpgradeOpen(false);
+        return;
+      }
+      void minimizeApp();
+    }).then((registered) => {
+      if (!registered) return;
+      if (disposed) void registered.remove();
+      else handle = registered;
+    });
+    return () => {
+      disposed = true;
+      if (handle) void handle.remove();
+    };
+  }, []);
 
   // MOBILE_KEYBOARD: открытие ящика со списком чатов должно гасить экранную клавиатуру. Тап по
   // кнопке-гамбургеру не снимает фокус с контрола ввода, поэтому клавиатура висела поверх списка.

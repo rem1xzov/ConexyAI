@@ -60,6 +60,24 @@ export function nativeSpeech(): NativeSpeech | null {
 }
 
 /**
+ * MOBILE_BACK: системная кнопка «назад». Без подписки Capacitor закрывает приложение целиком,
+ * даже когда открыто меню, настройки или окно тарифов.
+ */
+export async function listenForAppBack(onBack: () => void): Promise<{ remove: () => Promise<void> } | null> {
+  const app = bridge()?.Plugins?.App as unknown as
+    | { addListener: (event: string, callback: () => void) => Promise<{ remove: () => Promise<void> }> }
+    | undefined;
+  if (!app) return null;
+  return app.addListener('backButton', onBack);
+}
+
+/** MOBILE_BACK: свернуть приложение (Android) вместо жёсткого выхода с главного экрана. */
+export async function minimizeApp(): Promise<void> {
+  const app = bridge()?.Plugins?.App as unknown as { minimizeApp?: () => Promise<void> } | undefined;
+  await app?.minimizeApp?.();
+}
+
+/**
  * MOBILE_HANDOFF: OAuth открывается в системном браузере. Google запрещает вход внутри WebView
  * («This browser or app may not be secure»), поэтому GitHub→Google в приложении не работал.
  * Браузер сам вернёт сессию приложению через `ru.conexy.app://auth`.
