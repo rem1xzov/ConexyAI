@@ -4,16 +4,18 @@ using ConexyAI.Service.Prompts;
 // CONTENT_POLICY: добавлено 2026-09-29
 // TOKEN_ECONOMY: изменено 2026-10-06 — политика разделена: базовая (всем режимам) и кризисная
 // (только режимы живого диалога). Агенты Coder/Cowork получают только базовую часть.
+// CENSORSHIP_OFF: изменено 2026-10-26 — своих запретов у сервиса больше нет, кроме политики:
+// остальное оставлено провайдеру модели.
 /// <summary>
-/// Контент-политика: базовая часть (свобода на взрослые и острые темы + жёсткие изъятия) идёт всем
-/// режимам, кризисный блок с телефонами — только режимам живого диалога. Проверяем обе.
+/// Контент-политика: базовая часть (свобода на взрослые и острые темы + единственное изъятие —
+/// политика) идёт всем режимам, кризисный блок с телефонами — только режимам живого диалога.
 /// </summary>
 internal static class ContentPolicyPromptTests
 {
     [ModuleInitializer]
     internal static void Register()
     {
-        TestRegistry.Add("content policy: free speech with hard limits", FreeSpeechWithLimitsAsync);
+        TestRegistry.Add("content policy: free speech with a politics-only limit", FreeSpeechWithLimitsAsync);
         TestRegistry.Add("content policy: crisis support and helplines", CrisisSupportAsync);
         TestRegistry.Add("content policy: the crisis block is separate from the core rules", CrisisIsSeparateAsync);
     }
@@ -27,11 +29,12 @@ internal static class ContentPolicyPromptTests
         // Freedom: keeps the model from blanket refusals.
         Assert(text.Contains("без ханжества"), "the model must be told to drop prudishness");
         Assert(text.Contains("18+"), "adult topics must be allowed");
-        // Limits.
-        Assert(text.Contains("Преступления") && text.Contains("наказуемы"), "crimes must be warned against");
-        Assert(text.Contains("взрывчат"), "weapon/explosive instructions must be banned");
-        Assert(text.Contains("наркотик"), "drugs must be off-limits");
+        // CENSORSHIP_OFF: всё, кроме политики, решает провайдер.
+        Assert(text.Contains("провайдер"), "the provider owns the remaining limits");
         Assert(text.Contains("Политика") && text.Contains("не участвуешь в политических дискуссиях"), "politics must be refused with a clear line");
+        Assert(!text.Contains("Преступления"), "the service must not keep its own crime rules");
+        Assert(!text.Contains("взрывчат"), "the service must not keep weapon rules");
+        Assert(!text.Contains("наркотик"), "the service must not keep drug rules");
         // TOKEN_ECONOMY: кризисные телефоны больше НЕ в базовой части — они в отдельном фрагменте.
         Assert(!text.Contains("Телефоны доверия"), "the core policy must not carry the helpline list");
         return Task.CompletedTask;
@@ -63,12 +66,14 @@ internal static class ContentPolicyPromptTests
             "the short audience line must still name an admin");
         Assert(PromptFragments.AudienceLine(false, "Free").Contains("Free"),
             "the short audience line must still name the tier");
-        // AGENT_SAFETY: у агента вместо полной политики — одна строка; проверяем, что она закрывает
-        // именно то, что должна (изготовление оружия/наркотиков и помощь с преступлением).
-        Assert(PromptFragments.AgentSafetyLine.Contains("оружия") && PromptFragments.AgentSafetyLine.Contains("наркотиков"),
-            "the agent safety line must ban weapon and drug instructions");
-        Assert(PromptFragments.AgentSafetyLine.Contains("преступлен"),
-            "the agent safety line must refuse help with crimes");
+        // AGENT_SAFETY: у агента вместо полной политики — одна строка; своих запретов сверх
+        // политики провайдера в ней нет (CENSORSHIP_OFF).
+        Assert(PromptFragments.AgentSafetyLine.Contains("Политическ"),
+            "the agent safety line keeps the politics rule");
+        Assert(PromptFragments.AgentSafetyLine.Contains("провайдер"),
+            "the agent safety line defers everything else to the provider");
+        Assert(!PromptFragments.AgentSafetyLine.Contains("оружия") && !PromptFragments.AgentSafetyLine.Contains("наркотиков"),
+            "the agent safety line must not carry its own censorship");
         return Task.CompletedTask;
     }
 }
