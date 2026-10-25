@@ -739,6 +739,12 @@ namespace ConexyAI.Migrations
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTime>("AgentDailyResetAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("AgentTokensToday")
+                        .HasColumnType("bigint");
+
                     b.Property<long>("AgentTokensUsed")
                         .HasColumnType("bigint");
 
@@ -753,6 +759,9 @@ namespace ConexyAI.Migrations
 
                     b.Property<long>("CoworkCachedTokens")
                         .HasColumnType("bigint");
+
+                    b.Property<int>("CoworkRequestsUsed")
+                        .HasColumnType("integer");
 
                     b.Property<long>("CoworkTokensUsed")
                         .HasColumnType("bigint");

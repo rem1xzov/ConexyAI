@@ -185,7 +185,7 @@ internal static class SupportTests
     private static (SupportService Service, FakeSupportLlm Llm, RecordingSupportHub Hub, Guid UserId) NewService()
     {
         var dbName = "support_" + Guid.NewGuid().ToString("N");
-        var context = new DbConexy(new DbContextOptionsBuilder<DbConexy>().UseInMemoryDatabase(dbName).Options);
+        var context = new DbConexy(new DbContextOptionsBuilder<DbConexy>().UseTestDatabase(dbName).Options);
         var userId = Guid.NewGuid();
         context.Users.Add(new User { Id = userId, Email = $"{userId:N}@example.com", EmailConfirmed = true });
         context.SaveChanges();

@@ -377,7 +377,7 @@ internal static class AgentCapabilityTests
     private static async Task ChatSearchIsScopedAsync()
     {
         var options = new DbContextOptionsBuilder<DbConexy>()
-            .UseInMemoryDatabase("chat_search_" + Guid.NewGuid().ToString("N"))
+            .UseTestDatabase("chat_search_" + Guid.NewGuid().ToString("N"))
             .Options;
         await using var db = new DbConexy(options);
         var seed = await SeedChatsAsync(db);

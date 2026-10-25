@@ -141,7 +141,7 @@ void Assert(bool condition, string message)
 DbConexy CreateContext(string dbName)
 {
     var options = new DbContextOptionsBuilder<DbConexy>()
-        .UseInMemoryDatabase(dbName)
+        .UseTestDatabase(dbName)
         .Options;
     return new DbConexy(options);
 }
@@ -1597,7 +1597,7 @@ async Task TestWorkerStartupClosesOrphanedTasksAsync()
     var databaseRoot = new Microsoft.EntityFrameworkCore.Storage.InMemoryDatabaseRoot();
     var dbName = "orphans_" + Guid.NewGuid().ToString("N");
     var services = new ServiceCollection();
-    services.AddDbContext<DbConexy>(o => o.UseInMemoryDatabase(dbName, databaseRoot));
+    services.AddDbContext<DbConexy>(o => o.UseTestDatabase(dbName, databaseRoot));
     services.AddScoped<IConexyRepository, ConexyRepository>();
     await using var provider = services.BuildServiceProvider();
 

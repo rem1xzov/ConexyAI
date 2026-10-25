@@ -188,7 +188,7 @@ internal static class PaymentTests
     }
 
     private static DbConexy NewContext(string dbName) =>
-        new(new DbContextOptionsBuilder<DbConexy>().UseInMemoryDatabase(dbName).Options);
+        new(new DbContextOptionsBuilder<DbConexy>().UseTestDatabase(dbName).Options);
 
     private static PaymentService NewService(DbConexy context, IYooKassaClient client) =>
         new(

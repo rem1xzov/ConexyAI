@@ -24,7 +24,7 @@ interface Plan {
   highlight?: boolean;
 }
 
-// SUBSCRIPTION_TIERS: изменено 2026-09-26 — четыре тарифа (Free/Go/Pro/ProMax) и годовой Ultra.
+// SUBSCRIPTION_TIERS: изменено 2026-10-27 — пять тарифов (Free/Go/Pro/ProMax/Ultra) и годовой Ultra.
 // Числа ЗДЕСЬ только для показа: реальные лимиты считает бэкенд по appsettings.json
 // (SubscriptionLimits), поэтому при правке лимитов нужно обновить и эти подписи.
 const PLANS: Plan[] = [
@@ -44,7 +44,7 @@ const PLANS: Plan[] = [
     priceRub: 590,
     ctaKey: 'upgrade.buyGo',
     featureKeys: ['upgrade.features.go1', 'upgrade.features.go2', 'upgrade.features.go3'],
-    coworkKey: 'upgrade.features.coworkAvailable',
+    coworkKey: 'upgrade.features.coworkGo',
     coworkLocked: false,
     orchestraLocked: true,
   },
@@ -55,7 +55,7 @@ const PLANS: Plan[] = [
     ctaKey: 'upgrade.buyPro',
     highlight: true,
     featureKeys: ['upgrade.features.pro1', 'upgrade.features.pro2', 'upgrade.features.pro3'],
-    coworkKey: 'upgrade.features.coworkAvailable',
+    coworkKey: 'upgrade.features.coworkPro',
     coworkLocked: false,
     orchestraLocked: true,
   },
@@ -65,20 +65,31 @@ const PLANS: Plan[] = [
     priceRub: 1590,
     ctaKey: 'upgrade.buyProMax',
     featureKeys: ['upgrade.features.proMax1', 'upgrade.features.proMax2', 'upgrade.features.proMax3'],
-    coworkKey: 'upgrade.features.coworkAvailable',
+    coworkKey: 'upgrade.features.coworkProMax',
+    coworkLocked: false,
+    orchestraLocked: false,
+  },
+  {
+    id: 'Ultra',
+    name: 'Ultra',
+    priceRub: 2990,
+    ctaKey: 'upgrade.buyUltra',
+    featureKeys: ['upgrade.features.ultra1', 'upgrade.features.ultra2', 'upgrade.features.ultra3'],
+    coworkKey: 'upgrade.features.coworkUltra',
     coworkLocked: false,
     orchestraLocked: false,
   },
 ];
 
-// ANNUAL_ULTRA: годовой Ultra — 16 990 ₽ за 12 месяцев вместо 1 590 ₽ × 12 = 19 080 ₽, то есть −11%.
+// ANNUAL_ULTRA: годовой Ultra — 29 900 ₽ за 12 месяцев вместо 2 990 ₽ × 12 = 35 880 ₽, то есть −17%.
 // Процент считаем из цен, а не пишем числом: при правке любой из них подпись «выгоднее» останется правдой.
-const ANNUAL_PRICE_RUB = 16_990;
+const ANNUAL_PRICE_RUB = 29_900;
 const ANNUAL_MONTHS = 12;
 
-// TOKEN_TOPUP: докупка токенов — разовая и отдельно для Coder и Cowork. Цена одна (199 ₽ за
-// 1 000 000 токенов), реальную сумму берёт сервер из каталога планов (см. PaymentPlansOptions).
-const TOKEN_PRICE_RUB = 199;
+// TOKEN_TOPUP: докупка токенов — разовая. Цена одна (300 ₽ за 5 000 000 токенов), реальную сумму
+// берёт сервер из каталога планов (см. PaymentPlansOptions).
+const TOKEN_PRICE_RUB = 300;
+const TOKEN_AMOUNT = '5 000 000';
 
 // I18N_FORMAT: добавлено 2026-09-24 — цена форматируется Intl по языку интерфейса («990 ₽» / «₽990»),
 // а «/мес» берётся из перевода, а не зашит по-русски.
@@ -115,14 +126,19 @@ export function UpgradeModal({ limitInfo, onClose, onBuy, busy = false, usage, o
   const { t, i18n } = useTranslation();
   const lang = i18n.resolvedLanguage ?? i18n.language;
 
-  const proMax = PLANS[PLANS.length - 1];
-  const annualFullPrice = proMax.priceRub * ANNUAL_MONTHS;
+  const topPlan = PLANS[PLANS.length - 1];
+  const annualFullPrice = topPlan.priceRub * ANNUAL_MONTHS;
   const annualDiscountPct = Math.round((1 - ANNUAL_PRICE_RUB / annualFullPrice) * 100);
   const annualMonthlyPrice = Math.round(ANNUAL_PRICE_RUB / ANNUAL_MONTHS);
 
   // COWORK_BUDGET: «нужен платный тариф» — не то же самое, что «бюджет кончился», и баннер должен
   // говорить именно это, иначе пользователь пойдёт ждать сброса лимита вместо смены тарифа.
-  const banner = limitInfo?.limit === 'cowork_plan' ? t('upgrade.coworkNeedsPlan') : t('upgrade.limitExceeded');
+  const banner =
+    limitInfo?.limit === 'cowork_plan'
+      ? t('upgrade.coworkNeedsPlan')
+      : limitInfo?.limit === 'agent_daily'
+        ? t('upgrade.dailyLimit')
+        : t('upgrade.limitExceeded');
 
   return (
     <div className="dialog-overlay" role="dialog" aria-modal="true" onMouseDown={onClose}>
@@ -252,15 +268,7 @@ export function UpgradeModal({ limitInfo, onClose, onBuy, busy = false, usage, o
               disabled={busy}
               type="button"
             >
-              {t('upgrade.buyTokensCoder', { price: formatRub(TOKEN_PRICE_RUB, lang) })}
-            </button>
-            <button
-              className="dialog-btn upgrade-tokens__cta"
-              onClick={() => onBuy('TokenCowork')}
-              disabled={busy}
-              type="button"
-            >
-              {t('upgrade.buyTokensCowork', { price: formatRub(TOKEN_PRICE_RUB, lang) })}
+              {t('upgrade.buyTokensCoder', { price: formatRub(TOKEN_PRICE_RUB, lang), amount: TOKEN_AMOUNT })}
             </button>
           </div>
         </div>

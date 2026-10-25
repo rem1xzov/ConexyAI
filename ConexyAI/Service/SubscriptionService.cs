@@ -37,6 +37,8 @@ public class SubscriptionService : ISubscriptionService
     // «режим не входит в тариф» или «бюджет на этот период израсходован».
     private const string CoworkPlanLimit = "cowork_plan";
     private const string CoworkBudgetLimit = "cowork";
+    // DAILY_CAP: отдельный код причины, чтобы UI объяснил «дневной потолок», а не «купи тариф».
+    private const string AgentDailyLimit = "agent_daily";
 
     private readonly IUsageRepository _repository;
     // ADMIN_UNLIMITED: добавлено 2026-09-19
@@ -92,8 +94,8 @@ public class SubscriptionService : ISubscriptionService
             counter.ProRequestsUsed, limits.ProRequestsPerWindow, counter.ProWindowResetAt,
             // TOKEN_TOPUP: «использовано» = расход по тарифу (окно) + расход купленного (бессрочно).
             counter.AgentTokensUsed + counter.CoderTopUpUsed, AgentBudget(limits, user), counter.AgentWindowResetAt,
-            // COWORK_BUDGET: отдельный пул; 0 в лимите — режим не входит в тариф.
-            counter.CoworkTokensUsed + counter.CoworkTopUpUsed, CoworkBudget(limits, user), counter.CoworkWindowResetAt,
+            // COWORK_REQUESTS: у Cowork теперь лимит запросов, а не токенов; 0 — режим не входит в тариф.
+            counter.CoworkRequestsUsed, limits.CoworkRequestsPerWindow, counter.CoworkWindowResetAt,
             // CACHE_STATS: сырой объём из кэша + процент скидки — только для показа.
             counter.CoderCachedTokens, counter.CoworkCachedTokens, CacheHitDiscountPercent(),
             // LIMIT_RESET: акция сброса доступна только активному Pro+ и пока не израсходована.
@@ -134,11 +136,14 @@ public class SubscriptionService : ISubscriptionService
         var limits = GetTierLimits(counter.Tier);
         counter.FlashRequestsUsed = 0;
         counter.ProRequestsUsed = 0;
+        counter.CoworkRequestsUsed = 0;
         counter.AgentTokensUsed = 0;
+        counter.AgentTokensToday = 0;
         counter.CoworkTokensUsed = 0;
         counter.FlashWindowResetAt = now.AddDays(limits.FlashWindowDays);
         counter.ProWindowResetAt = now.AddDays(limits.ProWindowDays);
         counter.AgentWindowResetAt = now.AddDays(limits.AgentWindowDays);
+        counter.AgentDailyResetAt = now.AddDays(1);
         counter.CoworkWindowResetAt = now.AddDays(limits.CoworkWindowDays);
         // Показные счётчики кэша — тоже часть «расхода за период».
         counter.CoderCachedTokens = 0;
@@ -168,9 +173,7 @@ public class SubscriptionService : ISubscriptionService
         // TOKEN_TOPUP: докупленные токены расширяют лимит пула (см. AgentBudget/CoworkBudget), а
         // «использовано» включает расход и тарифа (окно), и купленного (бессрочно).
         var agentBudget = AgentBudget(limits, user);
-        var coworkBudget = CoworkBudget(limits, user);
         var agentUsed = counter.AgentTokensUsed + counter.CoderTopUpUsed;
-        var coworkUsed = counter.CoworkTokensUsed + counter.CoworkTopUpUsed;
 
         switch (modelType)
         {
@@ -196,15 +199,28 @@ public class SubscriptionService : ISubscriptionService
             // «Не входит в тариф» — только когда купленного вообще не было; если покупали и израсходовали,
             // открывается уже бюджетная причина, чтобы пользователь увидел «докупи», а не «возьми тариф».
             case ConexyModelType.ConexyCowork:
-                if (!limits.CoworkEnabled && (user?.CoworkTokenTopUp ?? 0L) <= 0)
+                var coworkTopUpLeft = (user?.CoworkTokenTopUp ?? 0L) - counter.CoworkTopUpUsed;
+                if (!limits.CoworkEnabled)
+                {
+                    // Legacy: токены Cowork, купленные до перехода на запросы, продолжают открывать режим.
+                    if (coworkTopUpLeft > 0)
+                        return new UsageDecision(UsageDecisionKind.Allowed);
                     return new UsageDecision(UsageDecisionKind.LimitExceeded, CoworkPlanLimit, DateTime.UtcNow);
-                if (coworkUsed >= coworkBudget)
+                }
+                if (limits.CoworkRequestsPerWindow > 0
+                    && counter.CoworkRequestsUsed >= limits.CoworkRequestsPerWindow)
                     return new UsageDecision(UsageDecisionKind.LimitExceeded, CoworkBudgetLimit, counter.CoworkWindowResetAt);
                 return new UsageDecision(UsageDecisionKind.Allowed);
 
             case ConexyModelType.ConexyCoder:
                 if (agentUsed >= agentBudget)
                     return new UsageDecision(UsageDecisionKind.LimitExceeded, "agent", counter.AgentWindowResetAt);
+                // DAILY_CAP: недельный бюджет ещё есть, но на сегодня уже всё. Купленные токены
+                // дневной потолок не держат — за них человек заплатил отдельно.
+                var topUpLeft = (user?.CoderTokenTopUp ?? 0L) - counter.CoderTopUpUsed;
+                if (limits.AgentDailyTokenBudget > 0 && counter.AgentTokensToday >= limits.AgentDailyTokenBudget
+                    && topUpLeft <= 0)
+                    return new UsageDecision(UsageDecisionKind.LimitExceeded, AgentDailyLimit, counter.AgentDailyResetAt);
                 return new UsageDecision(UsageDecisionKind.Allowed);
 
             default:
@@ -224,6 +240,8 @@ public class SubscriptionService : ISubscriptionService
             counter.ProRequestsUsed++;
         else if (modelType == ConexyModelType.ConexyV1Flash)
             counter.FlashRequestsUsed++;
+        else if (modelType == ConexyModelType.ConexyCowork)
+            counter.CoworkRequestsUsed++;
         await _repository.UpsertAsync(counter, ct);
     }
 
@@ -251,11 +269,12 @@ public class SubscriptionService : ISubscriptionService
         // COWORK_BUDGET: Cowork платит из своего пула, Coder — из агентского.
         if (modelType == ConexyModelType.ConexyCowork)
         {
+            // COWORK_REQUESTS: лимит теперь по запросам, поэтому токены Cowork считаем только
+            // для показа (кэш и сырой расход) — на доступ они больше не влияют.
             var (toTier, toTopUp) = unlimited ? (billed, 0L) : Split(billed, limits.CoworkTokenBudget, counter.CoworkTokensUsed,
                 user?.CoworkTokenTopUp ?? 0L, counter.CoworkTopUpUsed);
             counter.CoworkTokensUsed += toTier;
             counter.CoworkTopUpUsed += toTopUp;
-            // CACHE_STATS: сырой объём из кэша — только для показа пользователю.
             counter.CoworkCachedTokens += usage.CachedInput;
         }
         else
@@ -265,6 +284,8 @@ public class SubscriptionService : ISubscriptionService
             counter.AgentTokensUsed += toTier;
             counter.CoderTopUpUsed += toTopUp;
             counter.CoderCachedTokens += usage.CachedInput;
+            // DAILY_CAP: дневной потолок считает только расход по тарифу — купленные токены его не держат.
+            counter.AgentTokensToday += toTier;
         }
 
         await _repository.UpsertAsync(counter, ct);
@@ -332,7 +353,9 @@ public class SubscriptionService : ISubscriptionService
             counter.Tier = tier;
             counter.FlashRequestsUsed = 0;
             counter.ProRequestsUsed = 0;
+            counter.CoworkRequestsUsed = 0;
             counter.AgentTokensUsed = 0;
+            counter.AgentTokensToday = 0;
             counter.CoworkTokensUsed = 0;
             // CACHE_STATS: показный объём из кэша тоже начинается заново.
             counter.CoderCachedTokens = 0;
@@ -340,6 +363,7 @@ public class SubscriptionService : ISubscriptionService
             counter.FlashWindowResetAt = now.AddDays(limits.FlashWindowDays);
             counter.ProWindowResetAt = now.AddDays(limits.ProWindowDays);
             counter.AgentWindowResetAt = now.AddDays(limits.AgentWindowDays);
+            counter.AgentDailyResetAt = now.AddDays(1);
             counter.CoworkWindowResetAt = now.AddDays(limits.CoworkWindowDays);
             await _repository.UpsertAsync(counter, ct);
             return counter;
@@ -365,9 +389,17 @@ public class SubscriptionService : ISubscriptionService
             counter.AgentWindowResetAt = now.AddDays(limits.AgentWindowDays);
             changed = true;
         }
-        // COWORK_BUDGET: своё окно у Cowork.
+        // DAILY_CAP: суточное окно тикает независимо от недельного — оно короткое.
+        if (now >= counter.AgentDailyResetAt)
+        {
+            counter.AgentTokensToday = 0;
+            counter.AgentDailyResetAt = now.AddDays(1);
+            changed = true;
+        }
+        // COWORK_REQUESTS: своё окно у Cowork.
         if (now >= counter.CoworkWindowResetAt)
         {
+            counter.CoworkRequestsUsed = 0;
             counter.CoworkTokensUsed = 0;
             counter.CoworkCachedTokens = 0;
             counter.CoworkWindowResetAt = now.AddDays(limits.CoworkWindowDays);
@@ -392,11 +424,14 @@ public class SubscriptionService : ISubscriptionService
             Tier = tier,
             FlashRequestsUsed = 0,
             ProRequestsUsed = 0,
+            CoworkRequestsUsed = 0,
             AgentTokensUsed = 0,
+            AgentTokensToday = 0,
             CoworkTokensUsed = 0,
             FlashWindowResetAt = now.AddDays(limits.FlashWindowDays),
             ProWindowResetAt = now.AddDays(limits.ProWindowDays),
             AgentWindowResetAt = now.AddDays(limits.AgentWindowDays),
+            AgentDailyResetAt = now.AddDays(1),
             CoworkWindowResetAt = now.AddDays(limits.CoworkWindowDays)
         };
     }
@@ -420,9 +455,6 @@ public class SubscriptionService : ISubscriptionService
     private static long AgentBudget(TierLimits limits, User? user) =>
         limits.AgentTokenBudget + (user?.CoderTokenTopUp ?? 0L);
 
-    private static long CoworkBudget(TierLimits limits, User? user) =>
-        limits.CoworkTokenBudget + (user?.CoworkTokenTopUp ?? 0L);
-
     private TierLimits GetTierLimits(SubscriptionTier tier) => tier switch
     {
         // TIER_GO: добавлено 2026-09-26
@@ -443,7 +475,7 @@ public class SubscriptionService : ISubscriptionService
             counter.FlashRequestsUsed, long.MaxValue, counter.FlashWindowResetAt,
             counter.ProRequestsUsed, long.MaxValue, counter.ProWindowResetAt,
             counter.AgentTokensUsed, long.MaxValue, counter.AgentWindowResetAt,
-            counter.CoworkTokensUsed, long.MaxValue, counter.CoworkWindowResetAt,
+            counter.CoworkRequestsUsed, long.MaxValue, counter.CoworkWindowResetAt,
             counter.CoderCachedTokens, counter.CoworkCachedTokens, CacheHitDiscountPercent(),
             // LIMIT_RESET: у админа кнопка сброса есть — как у платных, но возобновляется раз в месяц.
             AdminResetAvailable(user, DateTime.UtcNow));

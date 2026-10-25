@@ -626,7 +626,7 @@ internal static class DocumentTests
 
     private static (DbConexy Context, DocumentService Service, string Directory) CreateDocumentService(IDocumentRepository? repository = null)
     {
-        var context = new DbConexy(new DbContextOptionsBuilder<DbConexy>().UseInMemoryDatabase("docs_" + Guid.NewGuid().ToString("N")).Options);
+        var context = new DbConexy(new DbContextOptionsBuilder<DbConexy>().UseTestDatabase("docs_" + Guid.NewGuid().ToString("N")).Options);
         var directory = Path.Combine(Path.GetTempPath(), "conexy_docs_" + Guid.NewGuid().ToString("N"));
         var options = Options.Create(new RagOptions { DocumentsDirectory = directory, ChunkSize = 800, ChunkOverlap = 120 });
         return (context, new DocumentService(repository ?? new DocumentRepository(context), options), directory);

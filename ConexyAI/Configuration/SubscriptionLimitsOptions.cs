@@ -38,14 +38,20 @@ public class TierLimits
     public int FlashRequestsPerWindow { get; set; }
     public int ProRequestsPerWindow { get; set; }
 
+    // COWORK_REQUESTS: с 2026-10-27 Cowork ограничен ЗАПРОСАМИ, а не токенами: исследовательский
+    // прогон — это единица работы, и считать его токенами пользователю непонятно.
+    public int CoworkRequestsPerWindow { get; set; }
+
     /// <summary>Token budget of the coding agent (<c>conexy-coder</c>) per window.</summary>
     public int AgentTokenBudget { get; set; }
 
-    // COWORK_BUDGET: добавлено 2026-09-26
-    /// <summary>
-    /// Token budget of Cowork (<c>conexy-cowork</c>) per window — a pool of its own, separate from
-    /// <see cref="AgentTokenBudget"/>.
-    /// </summary>
+    // DAILY_CAP: добавлено 2026-10-27 — дневной потолок агентских токенов. Недельный бюджет сам по
+    // себе не мешает выжечь его за час; потолок не даёт «сжечь свои лимиты» в один присест.
+    // 0 — дневного потолка нет (так живёт Free: там защита — месячное окно).
+    public int AgentDailyTokenBudget { get; set; }
+
+    // COWORK_BUDGET: остаётся только ради уже купленных токенов и показа кэша; лимитом больше не служит.
+    // <summary>Legacy: budget of the old token-based Cowork pool.</summary>
     public int CoworkTokenBudget { get; set; }
 
     /// <summary>

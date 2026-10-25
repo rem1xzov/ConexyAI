@@ -50,7 +50,7 @@ internal static class UserIntegrationsTests
     private static async Task ServiceRoundTripAsync()
     {
         var dbName = "integrations_" + Guid.NewGuid().ToString("N");
-        var context = new DbConexy(new DbContextOptionsBuilder<DbConexy>().UseInMemoryDatabase(dbName).Options);
+        var context = new DbConexy(new DbContextOptionsBuilder<DbConexy>().UseTestDatabase(dbName).Options);
         var userId = Guid.NewGuid();
         context.Users.Add(new User { Id = userId, Email = $"{userId:N}@example.com", EmailConfirmed = true });
         await context.SaveChangesAsync();

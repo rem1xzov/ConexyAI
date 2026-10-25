@@ -88,6 +88,7 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
       limit: usage.agentLimit,
       resetsAt: usage.agentResetsAt,
       cached: usage.agentCachedTokens,
+      requests: false,
     },
     // COWORK_BUDGET: строка появляется только там, где режим реально входит в тариф (limit > 0).
     ...(usage.coworkLimit > 0
@@ -97,6 +98,8 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
           limit: usage.coworkLimit,
           resetsAt: usage.coworkResetsAt,
           cached: usage.coworkCachedTokens,
+          // COWORK_REQUESTS: у Cowork теперь запросы, а не токены — подпись должна это говорить.
+          requests: true,
         }]
       : []),
   ];
@@ -155,7 +158,9 @@ export function UsageIndicator({ usage }: UsageIndicatorProps) {
                 <div className="usage-indicator__row-head">
                   <span className="usage-indicator__label">{r.label}</span>
                   <span className="usage-indicator__value">
-                    {formatCount(r.used)} / {formatLimit(r.limit)}
+                    {r.requests
+                      ? t('usage.requests', { used: formatCount(r.used), limit: formatLimit(r.limit) })
+                      : `${formatCount(r.used)} / ${formatLimit(r.limit)}`}
                   </span>
                 </div>
                 <div className="usage-indicator__bar">

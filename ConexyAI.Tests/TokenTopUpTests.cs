@@ -119,7 +119,8 @@ internal static class TokenTopUpTests
         var pro = await subscription.GetUsageAsync(userId);
         Assert(pro.Tier == "Pro", $"the tier must read Pro, got {pro.Tier}");
         Assert(pro.AgentLimit == 2_000_000 + 1_000_000, $"Pro limit = 2M + 1M credit, got {pro.AgentLimit}");
-        Assert(pro.CoworkLimit == 1_000_000, $"only the tier budget applies to Cowork, got {pro.CoworkLimit}");
+        // COWORK_REQUESTS: Cowork считается запросами, поэтому кредит Coder на него не влияет.
+        Assert(pro.CoworkLimit == 0, $"a Coder credit must not change the Cowork request limit, got {pro.CoworkLimit}");
     }
 
     // TOKEN_TOPUP: изменено 2026-10-06 — покупка Cowork-токенов открывает режим на Free, а когда они
@@ -146,13 +147,11 @@ internal static class TokenTopUpTests
 
         Assert((await subscription.CheckBeforeRunAsync(userId, ConexyModelType.ConexyCowork)).Kind == UsageDecisionKind.Allowed,
             "bought Cowork tokens must open the mode on Free");
-        var usage = await subscription.GetUsageAsync(userId);
-        Assert(usage.CoworkLimit == 1_000_000, $"the cowork limit must be the purchased amount, got {usage.CoworkLimit}");
 
-        // Расходуем всё купленное — режим снова закрыт.
+        // Расходуем всё купленное — режим снова закрыт (в тарифе Cowork нет, счётчик запросов не при чём).
         await subscription.RecordAgentTokensAsync(userId, ConexyModelType.ConexyCowork, new LlmTokenUsage(UncachedInput: 1_000_000));
         var spent = await subscription.CheckBeforeRunAsync(userId, ConexyModelType.ConexyCowork);
-        Assert(spent.Kind == UsageDecisionKind.LimitExceeded && spent.LimitName == "cowork",
+        Assert(spent.Kind == UsageDecisionKind.LimitExceeded && spent.LimitName == "cowork_plan",
             $"Cowork must close once the purchased tokens are spent, got {spent.Kind}/{spent.LimitName}");
 
         // Сброс окна НЕ возвращает купленное: расход купленных не привязан к окну тарифа.
@@ -160,8 +159,10 @@ internal static class TokenTopUpTests
         counter.CoworkWindowResetAt = DateTime.UtcNow.AddDays(-1);
         await context.SaveChangesAsync();
 
-        var afterReset = await subscription.GetUsageAsync(userId);
-        Assert(afterReset.CoworkUsed == 1_000_000, $"the purchased spend must survive a window reset, got {afterReset.CoworkUsed}");
+        _ = await subscription.GetUsageAsync(userId);
+        var afterResetCounter = await context.UserUsageCounters.FirstAsync(c => c.UserId == userId);
+        Assert(afterResetCounter.CoworkTopUpUsed == 1_000_000,
+            $"the purchased spend must survive a window reset, got {afterResetCounter.CoworkTopUpUsed}");
         Assert((await subscription.CheckBeforeRunAsync(userId, ConexyModelType.ConexyCowork)).Kind == UsageDecisionKind.LimitExceeded,
             "a window reset must not hand back spent purchased tokens");
     }
@@ -186,7 +187,7 @@ internal static class TokenTopUpTests
     }
 
     private static DbConexy NewContext(string dbName) =>
-        new(new DbContextOptionsBuilder<DbConexy>().UseInMemoryDatabase(dbName).Options);
+        new(new DbContextOptionsBuilder<DbConexy>().UseTestDatabase(dbName).Options);
 
     private static PaymentService NewPaymentService(DbConexy context, string status) =>
         new(

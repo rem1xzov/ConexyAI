@@ -15,7 +15,13 @@ public class UserUsageCounterEntity
 
     public int FlashRequestsUsed { get; set; }
     public int ProRequestsUsed { get; set; }
+    // COWORK_REQUESTS: добавлено 2026-10-27 — Cowork теперь считается запросами.
+    public int CoworkRequestsUsed { get; set; }
     public long AgentTokensUsed { get; set; }
+
+    // DAILY_CAP: расход агентских токенов за текущие сутки и метка их сброса.
+    public long AgentTokensToday { get; set; }
+    public DateTime AgentDailyResetAt { get; set; }
 
     // COWORK_BUDGET: добавлено 2026-09-26 — отдельный счётчик Cowork, чтобы исследовательские
     // прогоны не съедали бюджет агента-кодера и наоборот.

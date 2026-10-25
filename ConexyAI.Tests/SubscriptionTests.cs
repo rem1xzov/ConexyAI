@@ -23,7 +23,8 @@ internal static class SubscriptionTests
     internal static void Register()
     {
         TestRegistry.Add("subs TIER_SYNC: the counter follows the user's tier, its limits and windows", TierSyncAsync);
-        TestRegistry.Add("subs COWORK: paid plans only, with a token budget of its own", CoworkAsync);
+        TestRegistry.Add("subs COWORK: paid plans only, counted in requests", CoworkAsync);
+        TestRegistry.Add("subs DAILY: the daily agent cap stops a single-day burn, purchased tokens bypass it", AgentDailyCapAsync);
         TestRegistry.Add("subs ADMIN: admins are unlimited but their usage is tracked", AdminAsync);
         TestRegistry.Add("subs BILLING: cache hits are cheap and output is priced up (weighted tokens)", BillingAsync);
         TestRegistry.Add("subs LIMIT_RESET: Pro+ resets every pool once, others cannot", LimitResetAsync);
@@ -41,30 +42,32 @@ internal static class SubscriptionTests
 
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddDbContext<DbConexy>(o => o.UseInMemoryDatabase(dbName, root));
+        services.AddDbContext<DbConexy>(o => o.UseTestDatabase(dbName, root));
         services.AddScoped<IUsageRepository, UsageRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.Configure<SubscriptionLimitsOptions>(o =>
         {
             // Числа те же, что в appsettings.json, но заданы здесь явно: этот тест проверяет ЛОГИКУ
             // лимитов, а не то, что кто-то не переписал конфиг.
-            o.Free = Limits(100, 20, 300 * K, 0, coworkEnabled: false, agentWindowDays: 30);
-            o.Go = Limits(150, 50, 2_000 * K, 2_000 * K, coworkEnabled: true);
-            o.Pro = Limits(250, 150, 3_000 * K, 3_000 * K, coworkEnabled: true);
-            o.ProMax = Limits(300, 200, 5_000 * K, 5_000 * K, coworkEnabled: true);
-            o.Ultra = Limits(300, 200, 5_500 * K, 5_500 * K, coworkEnabled: true);
+            o.Free = Limits(100, 20, 300 * K, coworkRequests: 0, coworkEnabled: false, agentWindowDays: 30);
+            o.Go = Limits(150, 50, 2_000 * K, coworkRequests: 10, coworkEnabled: true);
+            o.Pro = Limits(250, 150, 3_000 * K, coworkRequests: 2, coworkEnabled: true, agentDaily: 1_000);
+            o.ProMax = Limits(300, 200, 5_000 * K, coworkRequests: 200, coworkEnabled: true);
+            o.Ultra = Limits(300, 200, 5_500 * K, coworkRequests: 300, coworkEnabled: true);
         });
         services.AddScoped<ISubscriptionService, SubscriptionService>();
         return services.BuildServiceProvider();
     }
 
     private static TierLimits Limits(
-        int flash, int pro, int agent, int cowork, bool coworkEnabled, int agentWindowDays = 7) => new()
+        int flash, int pro, int agent, int coworkRequests, bool coworkEnabled, int agentWindowDays = 7, int agentDaily = 0) => new()
     {
         FlashRequestsPerWindow = flash,
         ProRequestsPerWindow = pro,
         AgentTokenBudget = agent,
-        CoworkTokenBudget = cowork,
+        AgentDailyTokenBudget = agentDaily,
+        // COWORK_REQUESTS: с 2026-10-27 Cowork ограничен запросами, токены больше не лимит.
+        CoworkRequestsPerWindow = coworkRequests,
         CoworkEnabled = coworkEnabled,
         FlashWindowDays = 7,
         ProWindowDays = 7,
@@ -98,7 +101,7 @@ internal static class SubscriptionTests
         var proMaxUsage = await subs.GetUsageAsync(proMax);
         Assert(proMaxUsage.Tier == "ProMax", $"the counter must adopt the user's tier, got {proMaxUsage.Tier}");
         Assert(proMaxUsage.AgentLimit == 5_000 * K, $"ProMax agent budget must be 5M, got {proMaxUsage.AgentLimit}");
-        Assert(proMaxUsage.CoworkLimit == 5_000 * K, $"ProMax cowork budget must equal the agent budget, got {proMaxUsage.CoworkLimit}");
+        Assert(proMaxUsage.CoworkLimit == 200, $"ProMax cowork limit is counted in requests, got {proMaxUsage.CoworkLimit}");
         Assert(proMaxUsage.FlashLimit == 300 && proMaxUsage.ProLimit == 200,
             "the flash/pro request limits must stay as they were");
 
@@ -106,14 +109,14 @@ internal static class SubscriptionTests
         var ultra = await AddUserAsync(sp, SubscriptionTier.Ultra);
         var ultraUsage = await subs.GetUsageAsync(ultra);
         Assert(ultraUsage.Tier == "Ultra", $"Ultra must be a tier of its own, got {ultraUsage.Tier}");
-        Assert(ultraUsage.AgentLimit == 5_500 * K && ultraUsage.CoworkLimit == 5_500 * K, "Ultra token budgets");
+        Assert(ultraUsage.AgentLimit == 5_500 * K && ultraUsage.CoworkLimit == 300, "Ultra limits");
 
         // Go: свои числа запросов и токенов.
         var go = await AddUserAsync(sp, SubscriptionTier.Go);
         var goUsage = await subs.GetUsageAsync(go);
         Assert(goUsage.Tier == "Go", $"Go must be a tier of its own, got {goUsage.Tier}");
         Assert(goUsage.FlashLimit == 150 && goUsage.ProLimit == 50, "Go request limits");
-        Assert(goUsage.AgentLimit == 2_000 * K && goUsage.CoworkLimit == 2_000 * K, "Go token budgets");
+        Assert(goUsage.AgentLimit == 2_000 * K && goUsage.CoworkLimit == 10, "Go limits");
 
         // Смена тарифа (как после оплаты): счётчик переезжает, старый расход не переносится.
         await subs.RecordRequestAsync(go, ConexyModelType.ConexyV1Flash);
@@ -155,21 +158,47 @@ internal static class SubscriptionTests
         Assert((await subs.CheckBeforeRunAsync(pro, ConexyModelType.ConexyCowork)).Kind == UsageDecisionKind.Allowed,
             "Cowork must be allowed on a paid plan");
 
-        // Токены Cowork идут в свой пул и не трогают бюджет агента. Записываем ровно бюджет Pro (3M):
-        // пул не превышает лимит, поэтому именно это значение и должно оказаться в счётчике.
-        await subs.RecordAgentTokensAsync(pro, ConexyModelType.ConexyCowork, new LlmTokenUsage(UncachedInput: 3_000 * K));
+        // COWORK_REQUESTS: Cowork теперь считает запросы и не трогает бюджет агента.
+        await subs.RecordRequestAsync(pro, ConexyModelType.ConexyCowork);
+        await subs.RecordRequestAsync(pro, ConexyModelType.ConexyCowork);
         var usage = await subs.GetUsageAsync(pro);
-        Assert(usage.CoworkUsed == 3_000 * K, $"cowork tokens must land in the cowork pool, got {usage.CoworkUsed}");
+        Assert(usage.CoworkUsed == 2, $"cowork requests must land in the cowork counter, got {usage.CoworkUsed}");
         Assert(usage.AgentUsed == 0, $"cowork must not spend the agent budget, got {usage.AgentUsed}");
 
-        // Исчерпанный бюджет Cowork: своя причина и дата сброса.
+        // Исчерпанный лимит Cowork: своя причина и дата сброса.
         var spent = await subs.CheckBeforeRunAsync(pro, ConexyModelType.ConexyCowork);
         Assert(spent.Kind == UsageDecisionKind.LimitExceeded && spent.LimitName == "cowork" && spent.ResetsAt is not null,
-            $"an exhausted cowork budget must report itself, got {spent.LimitName}");
+            $"an exhausted cowork limit must report itself, got {spent.LimitName}");
 
         // Агент-кодер того же пользователя продолжает работать: пулы независимы.
         Assert((await subs.CheckBeforeRunAsync(pro, ConexyModelType.ConexyCoder)).Kind == UsageDecisionKind.Allowed,
-            "the coding agent must be unaffected by the cowork budget");
+            "the coding agent must be unaffected by the cowork limit");
+    }
+
+    /// <summary>
+    /// DAILY_CAP: недельный бюджет ещё есть, но суточный потолок уже закрыт — запуск блокируется со
+    /// своей причиной «agent_daily». Купленные токены дневной потолок не держат.
+    /// </summary>
+    private static async Task AgentDailyCapAsync()
+    {
+        await using var provider = BuildServices();
+        await using var scope = provider.CreateAsyncScope();
+        var sp = scope.ServiceProvider;
+        var subs = sp.GetRequiredService<ISubscriptionService>();
+
+        var userId = await AddUserAsync(sp, SubscriptionTier.Pro);
+
+        // Суточный потолок в тесте — 1 000 токенов (в конфиге теста он задан ниже через Limits).
+        await subs.RecordAgentTokensAsync(userId, ConexyModelType.ConexyCoder, new LlmTokenUsage(UncachedInput: 1_000));
+
+        var blocked = await subs.CheckBeforeRunAsync(userId, ConexyModelType.ConexyCoder);
+        Assert(blocked.Kind == UsageDecisionKind.LimitExceeded && blocked.LimitName == "agent_daily"
+               && blocked.ResetsAt is not null,
+            $"the daily cap must report itself, got {blocked.Kind}/{blocked.LimitName}");
+
+        // Дневной потолок не должен мешать чату: он про агента.
+        Assert((await subs.CheckBeforeRunAsync(userId, ConexyModelType.ConexyV1Flash)).Kind == UsageDecisionKind.Allowed,
+            "the daily agent cap must not affect chat models");
     }
 
     // ADMIN_UNLIMITED: с 2026-10-01 расход админа учитывается (для кружка), но ни на что не влияет.

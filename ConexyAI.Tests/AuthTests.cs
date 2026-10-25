@@ -872,7 +872,7 @@ internal static class AuthTests
         var dbName = "auth_" + Guid.NewGuid().ToString("N");
         var root = new InMemoryDatabaseRoot();
         services.AddLogging();
-        services.AddDbContext<DbConexy>(o => o.UseInMemoryDatabase(dbName, root));
+        services.AddDbContext<DbConexy>(o => o.UseTestDatabase(dbName, root));
         services.Configure<JwtOptions>(ConfigureJwt);
         services.Configure<AdminAccountsOptions>(o => ConfigureAdmins(o, admins));
         // LEGAL_DOCS: добавлено 2026-09-26 — реквизиты оператора приходят из конфигурации

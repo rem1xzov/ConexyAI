@@ -44,7 +44,7 @@ internal static class SkillTests
 
     private static async Task StoreAsync()
     {
-        var context = new DbConexy(new DbContextOptionsBuilder<DbConexy>().UseInMemoryDatabase("skills_" + Guid.NewGuid().ToString("N")).Options);
+        var context = new DbConexy(new DbContextOptionsBuilder<DbConexy>().UseTestDatabase("skills_" + Guid.NewGuid().ToString("N")).Options);
         var me = Guid.NewGuid();
         var other = Guid.NewGuid();
         context.Users.Add(new User { Id = me, Email = "me@example.com", EmailConfirmed = true });

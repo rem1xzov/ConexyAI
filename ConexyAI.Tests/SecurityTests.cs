@@ -84,7 +84,7 @@ internal static class SecurityTests
     // ---- helpers ----
 
     private static DbConexy Db(string name) =>
-        new(new DbContextOptionsBuilder<DbConexy>().UseInMemoryDatabase(name).Options);
+        new(new DbContextOptionsBuilder<DbConexy>().UseTestDatabase(name).Options);
 
     private static string TempRoot()
     {
