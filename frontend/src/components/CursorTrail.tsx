@@ -1,47 +1,48 @@
 import { useEffect, useRef } from 'react';
 
 /**
- * CURSOR_TRAIL: волна из фирменных стрелок, идущая ровно за курсором на пустом стартовом экране
- * (как фон на openai.com/codex). Только ПК: тач, узкие экраны и `prefers-reduced-motion` эффект
- * не получают.
+ * CURSOR_TRAIL: короткоживущий след из мелких частиц за курсором на пустом стартовом экране.
  *
- * Ключевые решения:
- * - Координаты вычитают положение самого канваса (`getBoundingClientRect`). Канвас живёт внутри
- *   `.main` (чтобы не попасть под его backdrop-filter), а события мыши приходят в координатах
- *   окна — без вычета след уезжал вправо на ширину сайдбара.
- * - Рисуем в canvas, а не DOM: метка появляется каждые несколько пикселей пути, десятки
- *   анимируемых узлов заставляли бы React перерисовываться десятки раз в секунду.
- * - Каждая метка «плывёт» поперёк движения по синусу — за курсором остаётся не пунктир, а волна.
+ * Почему так, а не иначе (решения из спецификации, все они про производительность):
+ * - `<canvas>`, а не 90 DOM-узлов: один слой, layout не пересчитывается каждый кадр;
+ * - `requestAnimationFrame` живёт только пока есть частицы — на пустом экране кадров нет;
+ * - спавн по расстоянию и антидребезгу по времени, иначе на медленном движении частицы
+ *   сбивались бы в одну кучу;
+ * - цвета берутся из CSS-переменных (`--accent`, `--muted`), палитра не дублируется в JS;
+ * - `devicePixelRatio` ограничен 2: выше — лишняя нагрузка без видимой разницы;
+ * - след только на ПК (точный указатель) и не включается при `prefers-reduced-motion`.
+ *
+ * Слой стоит последним ребёнком `.app` (после `.main`) с `z-index: 1`: он покрывает весь экран,
+ * включая сайдбар, но остаётся НИЖЕ модалок (они в том же стековом контексте с z-index 100+).
  */
-const MARK_WIDTH = 14;
-const LOGO_UNIT = MARK_WIDTH / 440;
-const CHEVRON_HEIGHT = 145 * LOGO_UNIT;
-const CHEVRON_STEP = 170 * LOGO_UNIT;
-/** Логотип выше, чем кажется: центрируем знак на точке, а не вешаем его над курсором. */
-const VERTICAL_CENTER = (145 * LOGO_UNIT - CHEVRON_STEP) / 2;
-const STROKE = 62 * LOGO_UNIT;
 
-const LIFETIME_MS = 650;
-/** Через сколько пикселей пути появляется следующая метка: редкие значки, без плотного ковра. */
-const SPAWN_DISTANCE = 22;
-const MAX_MARKS = 26;
-/** Едва видный след: волна читается как фон, а не как элемент интерфейса. */
-const PEAK_ALPHA = 0.22;
-/** Размах поперечной волны в пикселях. */
-const WAVE_AMPLITUDE = 5;
+type ParticleType = 'capsule' | 'cross' | 'molecule' | 'dot';
 
-interface Mark {
+interface Particle {
   x: number;
   y: number;
-  angle: number;
-  born: number;
-  /** Сдвиг фазы: соседние метки колеблются не синхронно, получается бегущая волна. */
-  phase: number;
+  vx: number;
+  vy: number;
+  size: number;
+  rot: number;
+  spin: number;
+  life: number;
+  ttl: number;
+  type: ParticleType;
+  color: string;
+  alpha: number;
 }
 
-function readAccent(): string {
-  const value = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-  return value || '#c68bd4';
+const MAX_PARTICLES = 90;
+/** Пикселей между частицами. */
+const SPAWN_DISTANCE = 14;
+/** Антидребезг, мс: клик и дрожь руки не дают комок частиц в одной точке. */
+const SPAWN_INTERVAL = 32;
+const DPR_CAP = 2;
+
+function cssColor(name: string, fallback: string): string {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
 }
 
 export function CursorTrail() {
@@ -50,143 +51,212 @@ export function CursorTrail() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (reduce.matches) return;
+    // Только точный указатель: на телефоне и планшете эффекта нет.
     if (!window.matchMedia('(pointer: fine)').matches) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    let accent = readAccent();
-    let width = 0;
-    let height = 0;
-    let raf = 0;
-    const marks: Mark[] = [];
+    let accent = cssColor('--accent', '#c68bd4');
+    let muted = cssColor('--muted', '#a79bae');
 
-    const resize = () => {
-      const rect = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      width = Math.max(1, Math.round(rect.width));
-      height = Math.max(1, Math.round(rect.height));
-      canvas.width = Math.round(width * dpr);
-      canvas.height = Math.round(height * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      marks.length = 0;
-    };
-
-    const paintMark = (mark: Mark, alpha: number, scale: number, wobble: number) => {
-      ctx.save();
-      ctx.translate(mark.x, mark.y + VERTICAL_CENTER);
-      // Стрелка «смотрит» туда, куда едет курсор: у знака остриё вверх, отсюда +90°.
-      ctx.rotate(mark.angle);
-      // Поперёк движения — синусоида: хвост идёт волной.
-      ctx.translate(wobble, 0);
-      ctx.scale(scale, scale);
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = accent;
-      ctx.lineWidth = STROKE;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      for (let i = 0; i < 2; i++) {
-        const base = i * CHEVRON_STEP;
-        ctx.beginPath();
-        ctx.moveTo(-MARK_WIDTH / 2, base);
-        ctx.lineTo(0, base - CHEVRON_HEIGHT);
-        ctx.lineTo(MARK_WIDTH / 2, base);
-        ctx.stroke();
-      }
-      ctx.restore();
-    };
-
-    const tick = (now: number) => {
-      raf = 0;
-      ctx.clearRect(0, 0, width, height);
-      for (let i = marks.length - 1; i >= 0; i--) {
-        const mark = marks[i];
-        const age = (now - mark.born) / LIFETIME_MS;
-        if (age >= 1) {
-          marks.splice(i, 1);
-          continue;
-        }
-        const fade = 1 - age;
-        // Затухание к концу хвоста + бегущая поперечная волна, гаснущая вместе с меткой.
-        const wobble = Math.sin(age * 5.5 + mark.phase) * WAVE_AMPLITUDE * fade;
-        paintMark(mark, PEAK_ALPHA * fade * fade, 0.85 + 0.25 * fade, wobble);
-      }
-      if (marks.length > 0) raf = window.requestAnimationFrame(tick);
-    };
-
-    /** Метки вдоль отрезка пути: быстрый рывок мыши не оставляет дыр в волне. */
-    const spawnLine = (fromX: number, fromY: number, toX: number, toY: number, now: number) => {
-      const dx = toX - fromX;
-      const dy = toY - fromY;
-      const distance = Math.hypot(dx, dy);
-      if (distance < 1) return;
-      const angle = Math.atan2(dy, dx) + Math.PI / 2;
-      const steps = Math.min(8, Math.max(1, Math.floor(distance / SPAWN_DISTANCE)));
-      for (let i = 1; i <= steps; i++) {
-        const t = i / steps;
-        marks.push({
-          x: fromX + dx * t,
-          y: fromY + dy * t,
-          angle,
-          born: now + i * 4,
-          phase: (marks.length + i) * 0.8,
-        });
-      }
-      while (marks.length > MAX_MARKS) marks.shift();
-      if (!raf) raf = window.requestAnimationFrame(tick);
-    };
-
+    const particles: Particle[] = [];
+    let dpr = 1;
+    let w = 0;
+    let h = 0;
+    let rafId = 0;
+    let lastSpawn = 0;
     let lastX: number | null = null;
     let lastY = 0;
 
-    const onMove = (event: PointerEvent) => {
-      // На тач-экране и стилусе волны нет — только мышь.
-      if (event.pointerType !== 'mouse') return;
-      // Канвас лежит внутри .main, поэтому координаты окна переводим в его собственные.
-      const rect = canvas.getBoundingClientRect();
-      const x = event.clientX - rect.left;
-      const y = event.clientY - rect.top;
-      if (lastX === null) {
-        lastX = x;
-        lastY = y;
+    const resize = () => {
+      dpr = Math.min(window.devicePixelRatio || 1, DPR_CAP);
+      w = window.innerWidth;
+      h = window.innerHeight;
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+
+    const pickType = (): ParticleType => {
+      const r = Math.random();
+      if (r < 0.34) return 'capsule';
+      if (r < 0.58) return 'cross';
+      if (r < 0.78) return 'molecule';
+      return 'dot';
+    };
+
+    const spawn = (x: number, y: number) => {
+      if (particles.length >= MAX_PARTICLES) return;
+      particles.push({
+        x,
+        y,
+        vx: (Math.random() - 0.5) * 0.35,
+        vy: -0.15 - Math.random() * 0.35,
+        size: 3 + Math.random() * 6,
+        rot: Math.random() * Math.PI * 2,
+        spin: (Math.random() - 0.5) * 0.02,
+        life: 0,
+        ttl: 700 + Math.random() * 400,
+        type: pickType(),
+        color: Math.random() < 0.6 ? accent : muted,
+        alpha: 0.1 + Math.random() * 0.25,
+      });
+    };
+
+    /** `roundRect` есть не везде (Chrome 99+, Safari 16+): без него — тот же контур через arcTo. */
+    const capsulePath = (size: number, r: number) => {
+      if (typeof ctx.roundRect === 'function') {
+        ctx.roundRect(-size, -r, size * 2, r * 2, r);
         return;
       }
-      if (Math.hypot(x - lastX, y - lastY) < SPAWN_DISTANCE) return;
-      spawnLine(lastX, lastY, x, y, performance.now());
+      ctx.moveTo(-size + r, -r);
+      ctx.arcTo(size, -r, size, r, r);
+      ctx.arcTo(size, r, -size, r, r);
+      ctx.arcTo(-size, r, -size, -r, r);
+      ctx.arcTo(-size, -r, -size + r, -r, r);
+      ctx.closePath();
+    };
+
+    const drawCapsule = (p: Particle) => {
+      const r = p.size * 0.5;
+      ctx.beginPath();
+      capsulePath(p.size, r);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, -r);
+      ctx.lineTo(0, r);
+      ctx.stroke();
+    };
+
+    const drawCross = (p: Particle) => {
+      const t = p.size * 0.34;
+      ctx.beginPath();
+      ctx.rect(-t / 2, -p.size, t, p.size * 2);
+      ctx.rect(-p.size, -t / 2, p.size * 2, t);
+      ctx.fill();
+    };
+
+    const drawMolecule = (p: Particle) => {
+      const r = p.size * 0.28;
+      const points: [number, number][] = [
+        [-p.size, 0],
+        [p.size * 0.6, -p.size * 0.7],
+        [p.size * 0.6, p.size * 0.7],
+      ];
+      ctx.beginPath();
+      ctx.moveTo(points[0][0], points[0][1]);
+      ctx.lineTo(points[1][0], points[1][1]);
+      ctx.lineTo(points[2][0], points[2][1]);
+      ctx.closePath();
+      ctx.stroke();
+      for (const [px, py] of points) {
+        ctx.beginPath();
+        ctx.arc(px, py, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    };
+
+    const drawDot = (p: Particle) => {
+      ctx.beginPath();
+      ctx.arc(0, 0, p.size * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+    };
+
+    const frame = () => {
+      rafId = 0;
+      // clearRect, а не полупрозрачный fillRect: второй копил бы шлейф и непрозрачность.
+      ctx.clearRect(0, 0, w, h);
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.life += 16;
+        if (p.life >= p.ttl) {
+          particles.splice(i, 1);
+          continue;
+        }
+
+        p.x += p.vx;
+        p.y += p.vy;
+        p.rot += p.spin;
+
+        const fade = 1 - p.life / p.ttl;
+        // save/restore на каждую частицу обязательны: rotate и globalAlpha иначе протекают.
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.globalAlpha = p.alpha * fade;
+        ctx.strokeStyle = p.color;
+        ctx.fillStyle = p.color;
+        ctx.lineWidth = 1.2;
+
+        if (p.type === 'capsule') drawCapsule(p);
+        else if (p.type === 'cross') drawCross(p);
+        else if (p.type === 'molecule') drawMolecule(p);
+        else drawDot(p);
+
+        ctx.restore();
+      }
+      if (particles.length > 0) rafId = window.requestAnimationFrame(frame);
+    };
+
+    const onMove = (event: PointerEvent) => {
+      // Только мышь: тач и стилус след не оставляют.
+      if (event.pointerType !== 'mouse') return;
+      const x = event.clientX;
+      const y = event.clientY;
+      const now = performance.now();
+      if (now - lastSpawn < SPAWN_INTERVAL) return;
+
+      if (lastX !== null && Math.hypot(x - lastX, y - lastY) < SPAWN_DISTANCE) return;
       lastX = x;
       lastY = y;
+      lastSpawn = now;
+      spawn(x, y);
+      if (!rafId) rafId = window.requestAnimationFrame(frame);
     };
 
-    const onLeave = () => {
-      lastX = null;
+    const onVisibility = () => {
+      if (!document.hidden) return;
+      particles.length = 0;
+      if (rafId) {
+        window.cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+      ctx.clearRect(0, 0, w, h);
     };
 
-    // Тема и инкогнито меняют --accent: волна не должна остаться в старой палитре.
+    // Тема и инкогнито меняют палитру: след не должен оставаться в старой.
     const themeObserver = new MutationObserver(() => {
-      accent = readAccent();
+      accent = cssColor('--accent', '#c68bd4');
+      muted = cssColor('--muted', '#a79bae');
     });
-    // Ширина панели меняется при сворачивании сайдбара — размер холста должен следовать за ней.
-    const sizeObserver = new ResizeObserver(resize);
+
+    let resizeTimer = 0;
+    const onResize = () => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(resize, 150);
+    };
 
     resize();
-    sizeObserver.observe(canvas);
-    window.addEventListener('resize', resize);
     window.addEventListener('pointermove', onMove, { passive: true });
-    document.addEventListener('pointerleave', onLeave);
+    window.addEventListener('resize', onResize);
+    document.addEventListener('visibilitychange', onVisibility);
     themeObserver.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['data-theme', 'data-incognito'],
     });
 
     return () => {
-      if (raf) window.cancelAnimationFrame(raf);
-      sizeObserver.disconnect();
-      window.removeEventListener('resize', resize);
+      window.clearTimeout(resizeTimer);
+      if (rafId) window.cancelAnimationFrame(rafId);
       window.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerleave', onLeave);
+      window.removeEventListener('resize', onResize);
+      document.removeEventListener('visibilitychange', onVisibility);
       themeObserver.disconnect();
-      marks.length = 0;
+      particles.length = 0;
     };
   }, []);
 
