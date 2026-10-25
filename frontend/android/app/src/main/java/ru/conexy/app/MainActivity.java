@@ -43,8 +43,9 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        // APK_UPDATER: локальный плагин живёт в приложении, поэтому регистрируется до создания Bridge.
+        // APK_UPDATER / VOICE_INPUT: локальные плагины регистрируются до создания Bridge.
         registerPlugin(ApkUpdaterPlugin.class);
+        registerPlugin(SpeechInputPlugin.class);
         super.onCreate(savedInstanceState);
 
         WebView webView = getBridge().getWebView();

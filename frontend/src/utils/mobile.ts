@@ -17,6 +17,16 @@ interface CapacitorPlugins {
       callback: (data: { reason?: string; ok?: boolean }) => void,
     ) => Promise<unknown> | unknown;
   };
+  // VOICE_INPUT: нативное распознавание речи для Android (в WebView нет Web Speech API).
+  SpeechInput?: {
+    start: (options?: { lang?: string }) => Promise<void>;
+    stop: () => Promise<void>;
+    cancel: () => Promise<void>;
+    addListener: (
+      event: 'result' | 'error' | 'end',
+      callback: (data: { text?: string; isFinal?: boolean; code?: string }) => void,
+    ) => Promise<{ remove: () => Promise<void> }> | { remove: () => Promise<void> };
+  };
 }
 
 interface CapacitorBridge {
@@ -37,6 +47,16 @@ function bridge(): CapacitorBridge | undefined {
 /** True only inside the Android shell (the website itself reports false). */
 export function isMobileApp(): boolean {
   return Boolean(bridge()?.isNativePlatform?.());
+}
+
+/**
+ * VOICE_INPUT: в Android WebView нет `SpeechRecognition`, поэтому в приложении распознаёт
+ * нативный Android. На сайте возвращает null — там работает браузерное API.
+ */
+export type NativeSpeech = NonNullable<CapacitorPlugins['SpeechInput']>;
+
+export function nativeSpeech(): NativeSpeech | null {
+  return bridge()?.Plugins?.SpeechInput ?? null;
 }
 
 /**

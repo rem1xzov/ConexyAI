@@ -14,7 +14,7 @@ import {
 import { useIsMobile, useMediaQuery } from '../hooks/useMediaQuery';
 // VOICE_DUP_FIX: склейка распознанного текста по перекрытию (см. utils/voiceTranscript).
 import { mergeTranscript } from '../utils/voiceTranscript';
-import { isMobileApp } from '../utils/mobile';
+import { isMobileApp, nativeSpeech } from '../utils/mobile';
 import { ModelPicker } from './ModelPicker';
 import { SkillsDialog } from './SkillsDialog';
 import { VoiceWaveIcon, MicIcon, PlusIcon, SendIcon, StopIcon, UploadIcon, PhotoIcon, CameraIcon, CodeIcon, CloseIcon, LightbulbIcon } from './Icons';
@@ -177,6 +177,9 @@ export function InputBar({
   // an endless start/stop loop that would keep the button "active" while nothing records.
   const emptySessionsRef = useRef(0);
   const sessionHasResultRef = useRef(false);
+  // VOICE_INPUT: активная нативная сессия Android (в WebView нет Web Speech API) и её подписки.
+  const nativeRef = useRef<ReturnType<typeof nativeSpeech>>(null);
+  const nativeListenersRef = useRef<Array<{ remove: () => Promise<void> | void }>>([]);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -207,6 +210,13 @@ export function InputBar({
         } catch {
           // already stopped
         }
+      }
+      // VOICE_INPUT: нативный распознаватель тоже не должен пережить композер.
+      const native = nativeRef.current;
+      nativeRef.current = null;
+      if (native) {
+        clearNativeListeners();
+        void native.cancel().catch(() => {});
       }
     },
     [],
@@ -562,13 +572,34 @@ export function InputBar({
     setMicError(micErrorText(kind));
   }
 
-  function stopRecognition() {
+  function stopRecognition(graceful = true) {
     listeningRef.current = false;
     setIsRecording(false);
     if (restartTimerRef.current !== null) {
       window.clearTimeout(restartTimerRef.current);
       restartTimerRef.current = null;
     }
+
+    // VOICE_INPUT: нативная сессия. При обычном выключении даём распознавателю договорить
+    // (stop → onResults), при ошибке — рвём сразу.
+    const native = nativeRef.current;
+    if (native) {
+      if (graceful) {
+        void native.stop().catch(() => {});
+        window.setTimeout(() => {
+          if (nativeRef.current === native) {
+            nativeRef.current = null;
+            clearNativeListeners();
+            void native.cancel().catch(() => {});
+          }
+        }, 1200);
+      } else {
+        nativeRef.current = null;
+        clearNativeListeners();
+        void native.cancel().catch(() => {});
+      }
+    }
+
     const recognition = recognitionRef.current;
     recognitionRef.current = null;
     if (recognition) {
@@ -583,6 +614,131 @@ export function InputBar({
     // VOICE_DUP_FIX: запись завершена — переносим текст сессии (включая последний хвост) в транскрипт.
     commitSession();
     applyTranscript();
+  }
+
+  function clearNativeListeners() {
+    const handles = nativeListenersRef.current;
+    nativeListenersRef.current = [];
+    for (const handle of handles) {
+      try {
+        void handle.remove();
+      } catch {
+        // подписка уже снята
+      }
+    }
+  }
+
+  /**
+   * VOICE_INPUT: голосовой ввод в приложении. Android распознаёт речь сам (`SpeechRecognizer`),
+   * а мы держим ту же логику сессий, что и для браузерного API: склейка по перекрытию, перенос
+   * текста сессии в общий транскрипт и автоперезапуск после паузы в речи.
+   */
+  async function startNativeSession(plugin: NonNullable<ReturnType<typeof nativeSpeech>>) {
+    baseTextRef.current = value.trim();
+    committedRef.current = '';
+    sessionFinalRef.current = '';
+    interimRef.current = '';
+    emptySessionsRef.current = 0;
+    sessionHasResultRef.current = false;
+    listeningRef.current = true;
+
+    clearNativeListeners();
+    nativeRef.current = plugin;
+
+    const onResult = (data: { text?: string; isFinal?: boolean }) => {
+      if (nativeRef.current !== plugin) return;
+      const text = (data.text ?? '').trim();
+      if (!text) return;
+      if (listeningRef.current) {
+        sessionHasResultRef.current = true;
+        emptySessionsRef.current = 0;
+      }
+      if (data.isFinal) {
+        sessionFinalRef.current = mergeTranscript(sessionFinalRef.current, text);
+        interimRef.current = '';
+      } else {
+        interimRef.current = text;
+      }
+      applyTranscript();
+    };
+
+    const onError = (data: { code?: string }) => {
+      if (nativeRef.current !== plugin) return;
+      const code = data.code ?? 'failed';
+      switch (code) {
+        case 'no-speech':
+        case 'aborted':
+          // Перезапуск сделает обработчик end.
+          return;
+        case 'permission':
+          stopRecognition(false);
+          reportMicError({ name: 'NotAllowedError' });
+          return;
+        case 'busy':
+          stopRecognition(false);
+          reportMicError({ name: 'NotReadableError' });
+          return;
+        case 'network':
+          stopRecognition(false);
+          reportMicError('network');
+          return;
+        default:
+          stopRecognition(false);
+          reportMicError(code);
+          return;
+      }
+    };
+
+    const onEnd = () => {
+      if (nativeRef.current !== plugin) return;
+      commitSession();
+      applyTranscript();
+
+      if (!listeningRef.current) {
+        nativeRef.current = null;
+        clearNativeListeners();
+        return;
+      }
+
+      // Сессия, не давшая ни слова, значит распознаватель здесь не работает — не крутим цикл.
+      if (!sessionHasResultRef.current) {
+        emptySessionsRef.current += 1;
+        if (emptySessionsRef.current > 5) {
+          stopRecognition(false);
+          setMicError(micErrorText('failed'));
+          return;
+        }
+      }
+      sessionHasResultRef.current = false;
+
+      restartTimerRef.current = window.setTimeout(() => {
+        restartTimerRef.current = null;
+        if (!listeningRef.current || nativeRef.current !== plugin) return;
+        void plugin.start({ lang: 'ru-RU' }).catch((error) => {
+          stopRecognition(false);
+          reportMicError(error);
+        });
+      }, 250);
+    };
+
+    const handles = await Promise.all([
+      plugin.addListener('result', onResult),
+      plugin.addListener('error', onError),
+      plugin.addListener('end', onEnd),
+    ]);
+    if (nativeRef.current !== plugin) {
+      for (const handle of handles) void handle.remove();
+      return;
+    }
+    nativeListenersRef.current = handles;
+
+    try {
+      await plugin.start({ lang: 'ru-RU' });
+      setIsRecording(true);
+    } catch (error) {
+      stopRecognition(false);
+      reportMicError(error);
+    }
   }
 
   async function handleMicClick() {
@@ -603,6 +759,14 @@ export function InputBar({
     if (listeningRef.current) {
       console.info('[Voice] stopping on user request');
       stopRecognition();
+      return;
+    }
+
+    // VOICE_INPUT: в Android WebView нет Web Speech API — там распознаёт нативный Android,
+    // поэтому проверки ниже (secure context, SpeechRecognition) относятся только к браузеру.
+    const native = nativeSpeech();
+    if (native) {
+      await startNativeSession(native);
       return;
     }
 
