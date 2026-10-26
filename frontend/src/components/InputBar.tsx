@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConexyModel, ReasoningEffort, SendOutcome, TaskAttachment } from '../types/api';
 import {
@@ -222,19 +222,46 @@ export function InputBar({
     [],
   );
 
+  // COMPOSER_SMOOTH: браузеры с `field-sizing: content` (Chrome/Android WebView 123+) растягивают поле сами: без
+  // JS-измерений на каждую букву, а значит без прыжков и фризов на длинном тексте. JS остаётся
+  // запасным путём (Safari).
+  const nativeAutosize =
+    typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('field-sizing', 'content');
+
+  // COMPOSER_EXPANDED: как в Gemini — когда текст стал многострочным, поле занимает всю ширину, а
+  // кнопки уходят в нижний ряд. Расширенный вид снимается только когда поле пусто: в широком
+  // режиме текст переносится реже, и без гистерезаса раскладка мигала бы туда-сюда.
+  const [expanded, setExpanded] = useState(false);
+
   function resizeTextarea() {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    const el = textareaRef.current;
+    if (!el) return;
+    if (nativeAutosize) {
+      // Высоту держит браузер; старый inline-размер бы перебил field-sizing.
+      if (el.style.height) el.style.height = '';
+      return;
     }
+    // Одно измерение за изменение текста (раньше было четыре) и без потери позиции прокрутки.
+    const scroll = el.scrollTop;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+    el.scrollTop = scroll;
   }
 
   // COMPOSER_EDIT / GROWING_COMPOSER: подгоняем высоту по ЛЮБОМУ изменению текста, включая
-  // программную подстановку (правка сообщения) — иначе длинный текст оставался в одну строку и
-  // его было не видно ни на телефоне, ни на ПК. Обработчик onChange зовёт то же самое, но он не
-  // срабатывает при setValue, поэтому нужен именно эффект по value.
-  useEffect(() => {
+  // программную подстановку (правка сообщения). Лейаут-эффект, а не обычный: высота меняется ДО
+  // отрисовки кадра, поэтому нет мигания старой высоты. Единственное место, где мы меряем.
+  useLayoutEffect(() => {
     resizeTextarea();
+    const el = textareaRef.current;
+    if (!el) return;
+    if (value.length === 0) {
+      setExpanded(false);
+      return;
+    }
+    // Одна строка ≈ 36 px (padding + line-height); две и более — уже «многострочный» текст.
+    if (el.scrollHeight > 48) setExpanded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
   // COMPOSER_EDIT: открыть выбранное сообщение прямо в поле ввода и поставить курсор в конец.
@@ -987,7 +1014,9 @@ export function InputBar({
         </div>
       )}
 
-      <div className={`inputbar ${attachments.length > 0 ? 'inputbar--attachments' : ''} ${editTarget ? 'inputbar--editing' : ''}`}>
+      <div
+        className={`inputbar ${attachments.length > 0 ? 'inputbar--attachments' : ''} ${editTarget ? 'inputbar--editing' : ''} ${expanded ? 'inputbar--expanded' : ''}`}
+      >
         {/* ATTACHMENT_UPLOAD: превью живёт ВНУТРИ композера (как в Gemini), а не отдельной полосой
             над ним: так видно, что фото прикреплено к сообщению, а не висит само по себе. */}
         {attachments.length > 0 && (
@@ -1132,8 +1161,8 @@ export function InputBar({
           placeholder={t('input.placeholder')}
           value={value}
           onChange={(e) => {
+            // Высоту подгоняет лейаут-эффект по value — второй вызов здесь был лишним reflow.
             setValue(e.target.value);
-            resizeTextarea();
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}

@@ -1163,6 +1163,13 @@ body {
      а не зажато в одну строку. Ниже — скролл внутри поля. */
   max-height: min(60vh, 420px);
   overflow-y: auto;
+  /* COMPOSER_SMOOTH: браузер растягивает поле сам (Chrome / Android WebView 123+) — без измерения высоты
+     в JS на каждый символ. Без поддержки свойство игнорируется, и работает JS-запас в InputBar.
+     min-width: 0 обязателен: без него flex-элемент с content-размером растягивал бы ряд. */
+  field-sizing: content;
+  min-width: 0;
+  /* Прокрутка внутри поля не передаётся странице: палец на длинном тексте не дёргает весь макет. */
+  overscroll-behavior: contain;
   /* COMPOSER_NO_SCROLLBAR: у поля ввода не должно быть ВИДИМОЙ полосы прокрутки. Глобальный
      `::-webkit-scrollbar` ниже отключает авто-скрытие оверлея — на Android полоса висит всегда
      и выглядит как лишняя вертикальная чёрточка перед микрофоном. Прокрутка пальцем работает. */
@@ -7888,6 +7895,27 @@ html[data-plain-code='true'] .markdown strong.chat-term {
     font-size: 16px;
     /* COMPOSER_ACTIONS_BOTTOM: одна строка ≈ высоте круглых кнопок (36px). */
     padding: 7px 2px;
+    /* COMPOSER_CAP: потолок считается от ВИДИМОЙ высоты (--app-height уже учитывает клавиатуру), а не
+       от 60vh: vh — это экран БЕЗ клавиатуры, поэтому поле вырастало выше видимой области и
+       текст уходил под клавиатуру. Как в Gemini: ~6 строк, дальше текст прокручивается внутри. */
+    max-height: min(calc(var(--app-height, 100dvh) * 0.36), 170px);
+  }
+
+  /* COMPOSER_EXPANDED: многострочный текст — поле на всю ширину, кнопки (+, микрофон, отправить) —
+     отдельным нижним рядом, как в Gemini. Раньше кнопки стояли слева и справа от текста и
+     съедали колонку: слова рвались по «нача-лось». */
+  .inputbar--expanded .inputbar__row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .inputbar--expanded .inputbar__textarea {
+    order: -1;
+    flex: 1 1 100%;
+    width: 100%;
+    padding: 4px 4px 2px;
+  }
+  .inputbar--expanded .mic-btn {
+    margin-left: auto;
   }
   .inputbar__textarea::placeholder {
     white-space: nowrap;
