@@ -7882,6 +7882,26 @@ html[data-plain-code='true'] .markdown strong.chat-term {
   .inputbar-thumb__loading {
     width: 96px;
   }
+  /* COMPOSER_ATTACHMENTS: превью вложений — один ряд с горизонтальной прокруткой, как в Gemini. Раньше
+     они переносились в несколько рядов: четыре фото занимали больше 200 px, и вместе с полем
+     текста композер не помещался над клавиатурой. */
+  .inputbar__attachments {
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+  .inputbar__attachments::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+  /* С вложениями места под текст меньше: вычитаем ленту (~110 px) из общего потолка, но не меньше
+     двух строк. Весь композер остаётся в пределах видимой области. */
+  .inputbar--attachments .inputbar__textarea {
+    max-height: max(64px, calc(var(--app-height, 100dvh) * 0.36 - 110px));
+  }
   .inputbar-thumb__media,
   .inputbar-thumb__loading {
     height: 72px;
