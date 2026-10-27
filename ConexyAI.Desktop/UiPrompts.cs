@@ -12,16 +12,21 @@ public static partial class Ui
     private static async Task<int?> PickAsync(string[] options, CancellationToken ct, Func<char, int?>? hotkey = null)
     {
         var index = 0;
+        // MENU_WRAP: сколько ФИЗИЧЕСКИХ строк терминала занимает меню. Раньше перерисовка поднималась на
+        // options.Length, а длинный вариант терминал переносил на 2-3 строки сам — курсор оказывался ниже,
+        // и каждое нажатие стрелки оставляло копию меню (лесенка одинаковых строк).
+        var drawnLines = 0;
 
         void Draw(bool redraw)
         {
-            if (redraw)
-                Console.Write($"\x1b[{options.Length}A");
-            for (var i = 0; i < options.Length; i++)
-            {
-                var text = $"{i + 1}. {options[i]}";
-                Console.WriteLine("\x1b[2K" + (i == index ? C(Orange, "  › " + text) : "    " + text));
-            }
+            var layout = LayoutMenu(options, index);
+            if (redraw && drawnLines > 0)
+                Console.Write($"\r\x1b[{drawnLines}A");
+            foreach (var line in layout)
+                Console.WriteLine("\x1b[2K" + line);
+            // Если новая раскладка короче прежней (сузилось окно), стираем остаток ниже.
+            Console.Write("\x1b[J");
+            drawnLines = layout.Count;
         }
 
         Draw(false);
@@ -57,6 +62,88 @@ public static partial class Ui
         }
         return null;
     }
+
+    /// <summary>
+    /// Строки меню под текущую ширину окна. Каждый вариант переносится по словам, продолжение стоит под
+    /// текстом (а не под номером). Если меню не помещается по высоте, перенос отключается и каждый
+    /// вариант сокращается до одной строки: многострочное меню выше окна невозможно перерисовать на месте.
+    /// </summary>
+    private static List<string> LayoutMenu(string[] options, int selected)
+    {
+        var rows = 25;
+        try { rows = Console.WindowHeight; }
+        catch (IOException) { }
+        return LayoutMenu(options, selected, Width(), rows);
+    }
+
+    /// <summary>Та же раскладка для заданных размеров окна — отдельно, чтобы её можно было проверить тестом.</summary>
+    public static List<string> LayoutMenu(string[] options, int selected, int width, int rows)
+    {
+        var wrapped = new List<List<string>>(options.Length);
+        var total = 0;
+        for (var i = 0; i < options.Length; i++)
+        {
+            var prefix = 4 + $"{i + 1}. ".Length;
+            var parts = WrapPlain(Sanitize(options[i]), Math.Max(10, width - prefix));
+            wrapped.Add(parts);
+            total += parts.Count;
+        }
+
+        var fitsHeight = total <= Math.Max(options.Length, rows - 4);
+
+        var lines = new List<string>(total);
+        for (var i = 0; i < options.Length; i++)
+        {
+            var number = $"{i + 1}. ";
+            var indent = new string(' ', 4 + number.Length);
+            var parts = fitsHeight
+                ? wrapped[i]
+                : [CutLine(string.Join(' ', wrapped[i]), Math.Max(10, width - 4 - number.Length))];
+            for (var p = 0; p < parts.Count; p++)
+            {
+                var text = p == 0 ? (i == selected ? "  › " : "    ") + number + parts[p] : indent + parts[p];
+                lines.Add(i == selected ? C(Orange, text) : text);
+            }
+        }
+        return lines;
+    }
+
+    /// <summary>Перенос по словам до <paramref name="max"/> символов; слишком длинное слово рубится жёстко.</summary>
+    private static List<string> WrapPlain(string text, int max)
+    {
+        var result = new List<string>();
+        var line = new StringBuilder();
+        foreach (var raw in text.Split(['\r', '\n'], StringSplitOptions.None))
+        {
+            line.Clear();
+            foreach (var word in raw.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var w = word;
+                while (w.Length > max)
+                {
+                    if (line.Length > 0)
+                    {
+                        result.Add(line.ToString());
+                        line.Clear();
+                    }
+                    result.Add(w[..max]);
+                    w = w[max..];
+                }
+                if (line.Length > 0 && line.Length + 1 + w.Length > max)
+                {
+                    result.Add(line.ToString());
+                    line.Clear();
+                }
+                if (line.Length > 0) line.Append(' ');
+                line.Append(w);
+            }
+            result.Add(line.ToString());
+        }
+        return result.Count == 0 ? [string.Empty] : result;
+    }
+
+    private static string CutLine(string text, int max) =>
+        text.Length <= max ? text : text[..Math.Max(1, max - 1)] + "…";
 
     /// <summary>Рамка с заголовком и текстом, затем меню. Возвращает индекс или -1 (Esc/отмена).</summary>
     public static async Task<int> ChooseAsync(string title, string body, string[] options, CancellationToken ct)
@@ -128,8 +215,10 @@ public static partial class Ui
         var width = Width();
         Console.WriteLine();
         Console.WriteLine(C(color, $"╭─ {title} ") + C(color, new string('─', Math.Max(0, width - 4 - title.Length))));
-        foreach (var line in body.Split('\n'))
-            Console.WriteLine(C(color, "│ ") + line.TrimEnd('\r'));
+        // MENU_WRAP: длинная строка вопроса переносится по словам, и рамка "│ " стоит на КАЖДОЙ строке —
+        // раньше продолжение выпадало из рамки и шло от левого края.
+        foreach (var line in WrapPlain(Sanitize(body), Math.Max(10, width - 2)))
+            Console.WriteLine(C(color, "│ ") + line.TrimEnd());
         Console.WriteLine(C(color, "╰" + new string('─', width - 1)));
     }
 

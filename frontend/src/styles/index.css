@@ -4623,6 +4623,12 @@ html[data-plain-code='true'] .markdown strong.chat-term {
   align-items: flex-end;
   justify-content: center;
   flex: 0 1 auto;
+  /* STAGE_SHRINK: без min-height: 0 блок не сжимался ниже своего содержимого, и на коротком экране (телефон
+     с клавиатурой, низкое окно) приветствие и кнопки входа выталкивали композер за нижнюю крайность:
+     отправить сообщение было нельзя. Теперь обрезается верх приветствия (кнопки стоят внизу блока
+     и остаются), а композер всегда целиком на экране. */
+  min-height: 0;
+  overflow: hidden;
   padding: 0 0 18px;
   transition:
     flex-grow 0.35s cubic-bezier(0.4, 0, 0.2, 1),
@@ -5889,7 +5895,9 @@ html[data-plain-code='true'] .markdown strong.chat-term {
 
 /* ---------- ADMIN_PANEL: добавлено 2026-09-19 ---------- */
 .upgrade-modal {
-  width: min(720px, 94vw);
+  /* FIVE_PLANS: пять тарифов (Free/Go/Pro/ProMax/Ultra). В 720 px они делились на 4+1, и пятая карточка
+     одиноко повисала вторым рядом. Окно шире, чтобы все пять стояли в один ряд. */
+  width: min(1040px, 94vw);
   gap: 16px;
 }
 
@@ -5945,7 +5953,7 @@ html[data-plain-code='true'] .markdown strong.chat-term {
   display: grid;
   /* TIER_GO: тарифов стало четыре, поэтому число колонок не фиксируем: в широком окне они встанут
      в один ряд, в узком сами перенесутся по две. */
-  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 12px;
 }
 
