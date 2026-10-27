@@ -39,9 +39,11 @@ public static class Updater
             var info = await server.GetClientInfoAsync(cts.Token);
             if (info?.Version is null || info.DownloadUrl is null)
                 return null;
+            // 0.9.11 и 0.9.11.0 — одна версия: без нормализации Version считает «0.9.11.0» новее «0.9.11».
+            static Version Norm(Version v) => new(v.Major, v.Minor, Math.Max(v.Build, 0), Math.Max(v.Revision, 0));
             return Version.TryParse(info.Version, out var latest)
                    && Version.TryParse(Ui.Version, out var current)
-                   && latest > current
+                   && Norm(latest) > Norm(current)
                 ? info
                 : null;
         }
