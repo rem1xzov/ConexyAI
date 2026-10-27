@@ -48,7 +48,9 @@ public sealed class StdioMcpClient : IAsyncDisposable
             });
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(60)); // npx при первом запуске качает пакет
+            // npx при первом запуске качает пакет; mcp-remote ждёт входа в браузере — у таких серверов срок дольше.
+            var startup = _entry.StartupSeconds > 0 ? _entry.StartupSeconds : 60;
+            timeout.CancelAfter(TimeSpan.FromSeconds(startup));
             await RequestAsync("initialize", new JsonObject
             {
                 ["protocolVersion"] = "2025-03-26",
@@ -78,7 +80,8 @@ public sealed class StdioMcpClient : IAsyncDisposable
         {
             string err;
             lock (_stderr) err = _stderr.ToString().Trim();
-            Error = (ex is OperationCanceledException ? "не ответил за 60 с" : ex.Message)
+            var waited = _entry.StartupSeconds > 0 ? _entry.StartupSeconds : 60;
+            Error = (ex is OperationCanceledException ? $"не ответил за {waited} с" : ex.Message)
                     + (err.Length > 0 ? " · " + err.Split('\n').Last().Trim() : string.Empty);
             await DisposeAsync();
         }

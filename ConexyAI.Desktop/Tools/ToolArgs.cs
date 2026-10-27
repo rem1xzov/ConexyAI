@@ -55,6 +55,12 @@ public sealed class ToolArgs
         return result;
     }
 
+    /// <summary>Значение поля как есть (объект, массив, число …) — для параметров произвольной формы.</summary>
+    public JsonElement? Raw(string name) =>
+        _root.ValueKind == JsonValueKind.Object && _root.TryGetProperty(name, out var v) && v.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined)
+            ? v.Clone()
+            : null;
+
     public string[]? StrArray(string name)
     {
         if (_root.ValueKind != JsonValueKind.Object || !_root.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Array)

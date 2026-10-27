@@ -24,6 +24,14 @@ public sealed class McpServerEntry
     [JsonPropertyName("conexySecrets")]
     public Dictionary<string, string>? ProtectedSecrets { get; set; }
 
+    /// <summary>
+    /// Сколько секунд ждать запуска (0 — 60). У удалённых серверов через mcp-remote первый запуск ждёт входа в браузере —
+    /// человеку нужно больше минуты.
+    /// </summary>
+    [JsonPropertyName("conexyStartupSeconds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int StartupSeconds { get; set; }
+
     /// <summary>Из каталога (/mcp catalog) — для статуса в списке.</summary>
     [JsonPropertyName("conexyCatalog")]
     public string? CatalogId { get; set; }

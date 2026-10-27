@@ -20,6 +20,14 @@ public sealed record MailProvider(string Id, string Title, string ImapHost, stri
             "(Все настройки → Почтовые программы → «С сервера imap.yandex.ru по протоколу IMAP», способ — «Пароли приложений и OAuth-токены»)."),
         new("mailru", "Mail.ru", "imap.mail.ru", "smtp.mail.ru",
             "Настройки аккаунта Mail.ru → Безопасность → Пароли для внешних приложений → Добавить (доступ: полный, IMAP/SMTP)."),
+        new("rambler", "Рамблер/почта", "imap.rambler.ru", "smtp.rambler.ru",
+            "Рамблер/почта → Настройки → Почтовые программы → включите доступ по IMAP/SMTP; логином служит полный адрес, пароль — от ящика."),
+        new("timeweb", "Таймвеб (почта хостинга)", "imap.timeweb.ru", "smtp.timeweb.ru",
+            "Панель Timeweb → Почта → ваш ящик: используйте пароль ящика (IMAP SSL 993, SMTP SSL 465)."),
+        new("beget", "Бегет (почта хостинга)", "imap.beget.com", "smtp.beget.com",
+            "Панель Beget → Почта → ваш ящик: используйте пароль ящика (IMAP SSL 993, SMTP SSL 465)."),
+        new("regru", "Рег.ру (почта хостинга)", "mail.hosting.reg.ru", "mail.hosting.reg.ru",
+            "Панель Рег.ру → Почта → ваш ящик: используйте пароль ящика (IMAP SSL 993, SMTP SSL 465)."),
     ];
 
     public static MailProvider? Find(string id) =>
@@ -35,6 +43,7 @@ public sealed record MailProvider(string Id, string Title, string ImapHost, stri
         {
             "yandex.ru" or "ya.ru" or "yandex.com" or "yandex.by" or "yandex.kz" or "narod.ru" => Find("yandex"),
             "mail.ru" or "bk.ru" or "inbox.ru" or "list.ru" or "internet.ru" or "vk.com" => Find("mailru"),
+            "rambler.ru" or "lenta.ru" or "autorambler.ru" or "myrambler.ru" or "ro.ru" => Find("rambler"),
             _ => null,
         };
     }

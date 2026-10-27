@@ -3,8 +3,8 @@ using ConexyAI.Desktop.Tools;
 namespace ConexyAI.Desktop.Mcp;
 
 /// <summary>
-/// Все инструменты, которые десктоп предлагает агенту сверх файлов и терминала: встроенный Google и
-/// локальные MCP-серверы из mcp.json. Живёт весь сеанс (процессы MCP не перезапускаются на каждый ход).
+/// Все инструменты, которые десктоп предлагает агенту сверх файлов и терминала: встроенные Google, почта и сервисы
+/// РФ, а также локальные MCP-серверы из mcp.json. Живёт весь сеанс (процессы MCP не перезапускаются на каждый ход).
 /// </summary>
 public sealed class LocalTools : IAsyncDisposable
 {
@@ -18,6 +18,7 @@ public sealed class LocalTools : IAsyncDisposable
         _approver = approver;
         Google = new GoogleConnector(approver);
         Mail = new MailConnector(approver);
+        Services = new ServiceConnector(approver);
     }
 
     /// <summary>Лимит сервера на инструменты десктопа (DeviceToolSanitizer.MaxTools).</summary>
@@ -27,9 +28,21 @@ public sealed class LocalTools : IAsyncDisposable
 
     public MailConnector Mail { get; }
 
+    /// <summary>REST-сервисы РФ (Яндекс Диск, Telegram-бот, ВКонтакте, Битрикс24 …).</summary>
+    public ServiceConnector Services { get; }
+
+    /// <summary>Встроенные инструменты, которые всегда идут отдельными схемами.</summary>
+    private int BuiltinCount => Google.Tools.Count + Mail.Tools.Count + Services.Tools.Count;
+
+    private int McpToolCount => _servers.Values.Where(s => s.Error is null).Sum(s => s.Tools.Count);
+
     /// <summary>Сколько инструментов хотят показать агенту все подключённые сервисы (до обрезки по лимиту).</summary>
-    public int WantedToolCount => Google.Tools.Count + Mail.Tools.Count
-        + _servers.Values.Where(s => s.Error is null).Sum(s => s.Tools.Count);
+    public int WantedToolCount => BuiltinCount + McpToolCount;
+
+    /// <summary>
+    /// MCP-инструментов больше, чем помещается рядом со встроенными: вместо списка агент получает «найти» и «вызвать».
+    /// </summary>
+    public bool GatewayMode => McpToolCount > 0 && BuiltinCount + McpToolCount > MaxTools;
 
     public IReadOnlyCollection<StdioMcpClient> Servers => _servers.Values;
 
@@ -53,7 +66,7 @@ public sealed class LocalTools : IAsyncDisposable
         var started = new List<StdioMcpClient>();
         foreach (var (slug, entry) in wanted)
         {
-            if (slug is GoogleConnector.ServerSlug or MailConnector.ServerSlug || _servers.ContainsKey(slug))
+            if (IsReserved(slug) || _servers.ContainsKey(slug))
                 continue;
             var client = new StdioMcpClient(slug, entry);
             _servers[slug] = client;
@@ -64,22 +77,38 @@ public sealed class LocalTools : IAsyncDisposable
         var lines = started.Select(c => c.Error is null
             ? $"MCP «{c.Name}»: {c.Tools.Count} инструм."
             : $"MCP «{c.Name}» не запустился: {c.Error}").ToList();
-        if (LimitWarning() is { } warning)
-            lines.Add(warning);
+        if (GatewayMode)
+            lines.Add($"Инструментов {WantedToolCount} — больше лимита {MaxTools}: агент работает с MCP через поиск (local__{McpGateway.ServerSlug}__find) и видит все.");
         return lines;
     }
 
-    /// <summary>Предупреждение, если часть инструментов не влезет в лимит и агент их не увидит.</summary>
+    private static bool IsReserved(string slug) =>
+        slug is GoogleConnector.ServerSlug or MailConnector.ServerSlug or ServiceConnector.ServerSlug or McpGateway.ServerSlug;
+
+    /// <summary>Предупреждение, если часть инструментов не влезет в лимит. В режиме шлюза — не бывает: видны все.</summary>
     public string? LimitWarning() =>
-        WantedToolCount > MaxTools
+        !GatewayMode && WantedToolCount > MaxTools
             ? $"Инструментов {WantedToolCount}, агенту доступно не больше {MaxTools} — лишние не попадут. Отключите ненужные: /mcp remove <имя>"
             : null;
+
+    private List<GatewayTool> GatewayTools() =>
+        _servers.Values.Where(s => s.Error is null)
+            .SelectMany(s => s.Tools.Select(t => new GatewayTool(s.Name, t.Tool, t.Description, t.Schema)))
+            .ToList();
 
     /// <summary>Схемы для сервера (имена local__server__tool).</summary>
     public List<LocalToolSpec> Specs()
     {
         var specs = new List<LocalToolSpec>(Google.Tools);
         specs.AddRange(Mail.Tools);
+        specs.AddRange(Services.Tools);
+
+        if (GatewayMode)
+        {
+            specs.AddRange(McpGateway.Specs(GatewayTools()));
+            return specs.Take(MaxTools).ToList();
+        }
+
         foreach (var server in _servers.Values.Where(s => s.Error is null))
         {
             foreach (var (tool, description, schema) in server.Tools)
@@ -103,15 +132,44 @@ public sealed class LocalTools : IAsyncDisposable
             return await Google.CallAsync(tool, ToolArgs.Parse(argumentsJson), project, ct);
         if (server == MailConnector.ServerSlug)
             return await Mail.CallAsync(tool, ToolArgs.Parse(argumentsJson), project, ct);
+        if (server == ServiceConnector.ServerSlug)
+            return await Services.CallAsync(tool, ToolArgs.Parse(argumentsJson), ct);
+        if (server == McpGateway.ServerSlug)
+            return await CallGatewayAsync(tool, ToolArgs.Parse(argumentsJson), ct);
 
         if (!_servers.TryGetValue(server, out var client) || client.Error is not null)
             return ToolResult.Fail($"MCP-сервер «{server}» не запущен на ПК пользователя (/mcp — статус).");
         var original = client.Tools.FirstOrDefault(t => Sanitize(t.Tool) == tool).Tool ?? tool;
+        return await CallServerToolAsync(client, original, argumentsJson, ct);
+    }
 
+    private async Task<ToolResult> CallGatewayAsync(string tool, ToolArgs args, CancellationToken ct)
+    {
+        if (tool == "find")
+            return ToolResult.Ok(McpGateway.Find(GatewayTools(), args.Str("query"), args.Str("server"), args.Int("limit")));
+        if (tool != "call")
+            return ToolResult.Fail($"Неизвестный инструмент шлюза: {tool}");
+
+        var serverName = args.Required("server", "mcp call");
+        var toolName = args.Required("tool", "mcp call");
+        var slug = McpConfig.Slug(serverName);
+        if (!_servers.TryGetValue(slug, out var client) || client.Error is not null)
+            return ToolResult.Fail($"MCP-сервер «{serverName}» не запущен (есть: {string.Join(", ", _servers.Values.Where(s => s.Error is null).Select(s => s.Name))}).");
+        var original = client.Tools.FirstOrDefault(t => t.Tool.Equals(toolName, StringComparison.Ordinal)).Tool
+                       ?? client.Tools.FirstOrDefault(t => t.Tool.Equals(toolName, StringComparison.OrdinalIgnoreCase)).Tool;
+        if (original is null)
+            return ToolResult.Fail($"У сервера «{client.Name}» нет инструмента «{toolName}». Найдите нужный через local__{McpGateway.ServerSlug}__find.");
+
+        var arguments = args.Raw("arguments") is { ValueKind: System.Text.Json.JsonValueKind.Object } a ? a.GetRawText() : "{}";
+        return await CallServerToolAsync(client, original, arguments, ct);
+    }
+
+    private async Task<ToolResult> CallServerToolAsync(StdioMcpClient client, string original, string argumentsJson, CancellationToken ct)
+    {
         // Сторонний MCP-сервер может писать файлы, выполнять команды и ходить в сеть — как в Claude Desktop,
         // спрашиваем (в авто-режиме подтверждение пропускается).
         var preview = argumentsJson.Length > 400 ? argumentsJson[..400] + "…" : argumentsJson;
-        if (!await _approver.ApproveAsync($"MCP «{server}»", $"{original} {preview}".TrimEnd(), "ПК", ct))
+        if (!await _approver.ApproveAsync($"MCP «{client.Name}»", $"{original} {preview}".TrimEnd(), "ПК", ct))
             return ToolResult.Fail("Пользователь отклонил вызов инструмента. Не повторяй его; спроси, что делать.");
 
         try
@@ -123,7 +181,7 @@ public sealed class LocalTools : IAsyncDisposable
         }
         catch (InvalidOperationException ex)
         {
-            return ToolResult.Fail($"MCP «{server}»: {ex.Message}");
+            return ToolResult.Fail($"MCP «{client.Name}»: {ex.Message}");
         }
     }
 

@@ -628,8 +628,9 @@ static void PrintHelp()
             ("/daemon", "состояние, проекты и журнал"),
         ]),
         ("Подключения", [
+            ("/connect", "все сервисы в одном меню: поиск, разделы, статусы\n/connect <название> — подключить (Google, почта, Telegram, MAX, VK, Битрикс24, Figma, Slack, Notion …)\n/connect list · /connect remove <id>"),
             ("/google login|logout", "Gmail, Календарь, Диск; отправка — только с подтверждения, токены только на этом ПК"),
-            ("/mail login|logout", "Яндекс Почта или Mail.ru по паролю приложения; отправка — с подтверждения"),
+            ("/mail login|logout", "Яндекс, Mail.ru, Рамблер, Timeweb, Beget, Рег.ру по паролю приложения; отправка — с подтверждения"),
             ("/mcp", "локальные MCP-серверы\ncatalog — готовые (Playwright, Context7, Sentry, Supabase, Postgres, Notion, Figma)\nadd <id> — из каталога · add <имя> <команда> — свой\nremove <имя> · reload · config"),
             ("/skill", "скиллы агента (SKILL.md), общие с сайтом\nadd <файл|папка> · remove <имя> · on|off <имя>"),
         ]),
@@ -850,6 +851,9 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                     break;
                 case "/google":
                     await GoogleCommandAsync(server, local, arg);
+                    break;
+                case "/connect" or "/connections":
+                    await ConnectCommandAsync(server, local, arg);
                     break;
                 case "/mcp":
                     await McpCommandAsync(local, arg);
@@ -1183,6 +1187,274 @@ static async Task InstallFromCatalogAsync(LocalTools local, CatalogEntry entry)
         Ui.Info("  " + Ui.Muted(note));
 }
 
+// /connect: единое место подключения сервисов: меню по разделам, поиск, статусы, отключение.
+// За именем сервиса может стоять Google, почта, REST-коннектор или MCP-сервер — пользователю этого знать не нужно.
+static IReadOnlyList<ConnectItem> BuildConnectItems(LocalTools local) =>
+    ConnectCatalog.Build(local.Google.Connected, local.Mail.Connected, local.Services.IsConnected, McpConfig.Load());
+
+static async Task ConnectCommandAsync(ServerClient server, LocalTools local, string arg)
+{
+    var items = BuildConnectItems(local);
+    var parts = arg.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var verb = parts.FirstOrDefault()?.ToLowerInvariant();
+
+    if (verb is null)
+    {
+        await ConnectMenuAsync(server, local);
+        return;
+    }
+    if (verb == "list")
+    {
+        PrintConnectList(items);
+        return;
+    }
+    if (verb is "remove" or "rm" or "off" or "disconnect")
+    {
+        if (parts.Length < 2 || ConnectCatalog.Find(items, parts[1]) is not { } target)
+        {
+            Ui.Error("Укажите сервис: /connect remove <id> (список — /connect list)");
+            return;
+        }
+        await DisconnectItemAsync(server, local, target);
+        return;
+    }
+
+    var found = ConnectCatalog.Find(items, arg);
+    if (found is null)
+    {
+        var hits = ConnectCatalog.Search(items, arg).ToList();
+        if (hits.Count == 0)
+        {
+            Ui.Error($"Ничего не найдено по «{arg}». Весь список: /connect list, меню: /connect");
+            return;
+        }
+        found = hits.Count == 1
+            ? hits[0]
+            : await PickConnectItemAsync("Найдено", $"По запросу «{arg}». • — уже подключено.", hits);
+        if (found is null)
+            return;
+    }
+    await ConnectItemAsync(server, local, found);
+}
+
+static string ConnectLabel(ConnectItem item)
+{
+    var description = item.Description.Length > 70 ? item.Description[..69] + "…" : item.Description;
+    return $"{(item.Connected ? "●" : "○")} {item.Title}{(item.Vpn ? " · нужен VPN" : string.Empty)} — {description}";
+}
+
+static void PrintConnectList(IReadOnlyList<ConnectItem> items)
+{
+    Console.WriteLine(Ui.Bold("Подключения") + Ui.Muted(" · подключить: /connect <название или id> · отключить: /connect remove <id>"));
+    foreach (var category in ConnectCatalog.Categories(items))
+    {
+        Console.WriteLine();
+        Console.WriteLine("  " + Ui.Bold(Ui.Accent(category)));
+        foreach (var item in items.Where(i => i.Category == category))
+            Console.WriteLine($"  {(item.Connected ? Ui.Green_("●") : Ui.Muted("○"))} {Ui.Bold(item.Id),-18} {item.Title}" + (item.Vpn ? Ui.Muted(" · VPN") : string.Empty));
+    }
+    Console.WriteLine();
+    Ui.Info("  " + Ui.Muted("● подключено. Сервисы из раздела «РФ» работают без Node.js; ключи хранятся зашифрованными только на этом ПК."));
+}
+
+// Список по 9 штук: меню не прокручивается, и цифры 1–9 выбирают пункт напрямую.
+static async Task<ConnectItem?> PickConnectItemAsync(string title, string body, IReadOnlyList<ConnectItem> list)
+{
+    const int pageSize = 9;
+    const string next = "Ещё…";
+    const string previous = "← Назад по списку";
+    var offset = 0;
+    while (true)
+    {
+        var slice = list.Skip(offset).Take(pageSize).ToList();
+        var options = slice.Select(ConnectLabel).ToList();
+        if (offset + pageSize < list.Count)
+            options.Add(next);
+        if (offset > 0)
+            options.Add(previous);
+        var header = list.Count > pageSize ? $"{body} Показано {offset + 1}–{offset + slice.Count} из {list.Count}." : body;
+        var picked = await Ui.ChooseAsync(title, header, options.ToArray(), CancellationToken.None);
+        if (picked < 0)
+            return null;
+        if (picked < slice.Count)
+            return slice[picked];
+        offset = options[picked] == next ? offset + pageSize : Math.Max(0, offset - pageSize);
+    }
+}
+
+static async Task ConnectMenuAsync(ServerClient server, LocalTools local)
+{
+    while (true)
+    {
+        var items = BuildConnectItems(local);
+        var connected = items.Where(i => i.Connected && (i.Kind != ConnectKind.Service || ServiceConnector.NeedsLogin(ServiceCatalog.Find(i.Id)!))).ToList();
+        var categories = ConnectCatalog.Categories(items).ToList();
+
+        var options = new List<string> { "Найти по названию или теме…" };
+        var actions = new List<Func<Task<bool>>> { () => ConnectSearchAsync(server, local, items) };
+        if (connected.Count > 0)
+        {
+            options.Add($"Подключено ({connected.Count}) — управление");
+            actions.Add(async () =>
+            {
+                if (await PickConnectItemAsync("Подключено", "Выберите сервис, чтобы переподключить или отключить.", connected) is { } chosen)
+                    await ConnectItemAsync(server, local, chosen);
+                return true;
+            });
+        }
+        foreach (var category in categories)
+        {
+            var inCategory = items.Where(i => i.Category == category).ToList();
+            var on = inCategory.Count(i => i.Connected && (i.Kind != ConnectKind.Service || ServiceConnector.NeedsLogin(ServiceCatalog.Find(i.Id)!)));
+            options.Add($"{category} — {inCategory.Count}" + (on > 0 ? $" (подключено {on})" : string.Empty));
+            actions.Add(async () =>
+            {
+                if (await PickConnectItemAsync(category, "● — уже подключено. Выберите сервис.", inCategory) is { } chosen)
+                    await ConnectItemAsync(server, local, chosen);
+                return true;
+            });
+        }
+        options.Add("Готово");
+        var picked = await Ui.ChooseAsync("Подключения", "Выберите раздел или ищите по названию. Google, почта, сервисы РФ, мессенджеры и MCP — в одном месте.", options.ToArray(), CancellationToken.None);
+        if (picked < 0 || picked >= actions.Count)
+            return;
+        await actions[picked]();
+    }
+}
+
+static async Task<bool> ConnectSearchAsync(ServerClient server, LocalTools local, IReadOnlyList<ConnectItem> items)
+{
+    Console.Write("  Что нужно подключить? (название или тема, например «почта», «figma», «задачи»): ");
+    var query = (Console.ReadLine() ?? string.Empty).Trim();
+    if (query.Length == 0)
+        return true;
+    var hits = ConnectCatalog.Search(items, query).ToList();
+    if (hits.Count == 0)
+    {
+        Ui.Error($"Ничего не найдено по «{query}».");
+        return true;
+    }
+    if (await PickConnectItemAsync("Найдено", $"По запросу «{query}». ● — уже подключено.", hits) is { } chosen)
+        await ConnectItemAsync(server, local, chosen);
+    return true;
+}
+
+// Подключение одного сервиса. Уже подключённый — предлагаем переподключить или отключить.
+static async Task ConnectItemAsync(ServerClient server, LocalTools local, ConnectItem item)
+{
+    var needsLogin = item.Kind != ConnectKind.Service || ServiceConnector.NeedsLogin(ServiceCatalog.Find(item.Id)!);
+    if (!needsLogin)
+    {
+        Ui.Info($"  {item.Title} работает без ключей — просто попросите агента.");
+        return;
+    }
+    if (item.Connected)
+    {
+        var action = await Ui.ChooseAsync(item.Title, "Уже подключено.", ["Переподключить (новые ключи)", "Отключить", "Отмена"], CancellationToken.None);
+        if (action == 1)
+            await DisconnectItemAsync(server, local, item);
+        if (action != 0)
+            return;
+    }
+
+    switch (item.Kind)
+    {
+        case ConnectKind.Google:
+            await GoogleCommandAsync(server, local, "login");
+            break;
+        case ConnectKind.Mail:
+            await MailCommandAsync(local, "login");
+            break;
+        case ConnectKind.Service:
+            await ConnectServiceAsync(local, ServiceCatalog.Find(item.Id)!);
+            break;
+        case ConnectKind.Mcp:
+            if (McpCatalog.Find(item.Id) is { } entry)
+                await InstallFromCatalogAsync(local, entry);
+            break;
+    }
+}
+
+// REST-сервис без Node.js: спрашиваем ключи, проверяем безобидным запросом и сохраняем зашифрованно.
+static async Task ConnectServiceAsync(LocalTools local, ServiceDef def)
+{
+    Console.WriteLine(Ui.Bold(def.Title) + " — " + def.Description);
+    if (def.Note is { } note)
+        Ui.Info("  " + note);
+    var values = new Dictionary<string, string>();
+    foreach (var input in def.Inputs ?? [])
+    {
+        Ui.Info("  " + input.Help);
+        while (true)
+        {
+            Console.Write($"  {input.Prompt}: ");
+            var value = (input.Secret ? ReadSecret() : Console.ReadLine() ?? string.Empty).Trim();
+            if (value.Length == 0)
+            {
+                if (input.Optional)
+                    break;
+                Ui.Error("Без этого подключить нельзя — отменено.");
+                return;
+            }
+            if (input.Pattern is { } pattern && !System.Text.RegularExpressions.Regex.IsMatch(value, pattern))
+            {
+                Ui.Error("Непохоже на нужное значение — проверьте и введите ещё раз (пустой ввод — отмена).");
+                continue;
+            }
+            values[input.Name] = value;
+            break;
+        }
+    }
+
+    local.Services.SaveCredentials(def, values);
+    Ui.Info("  Проверяю…");
+    var (ok, message) = await local.Services.CheckAsync(def, CancellationToken.None);
+    if (ok)
+    {
+        Ui.Info("  " + Ui.Green_($"{def.Title} подключён") + Ui.Muted($" · {message}. Просто попросите агента."));
+        return;
+    }
+    local.Services.Remove(def.Id);
+    Ui.Error($"{def.Title}: ключ не принят — {message}");
+    Ui.Info("  Ключи не сохранены. Попробуйте ещё раз: /connect " + def.Id);
+}
+
+static async Task DisconnectItemAsync(ServerClient server, LocalTools local, ConnectItem item)
+{
+    switch (item.Kind)
+    {
+        case ConnectKind.Google:
+            await GoogleCommandAsync(server, local, "logout");
+            break;
+        case ConnectKind.Mail:
+            MailLogoutQuiet(local);
+            break;
+        case ConnectKind.Service:
+            Ui.Info(local.Services.Remove(item.Id) ? $"  {item.Title} отключён, ключи удалены с этого ПК." : $"  {item.Title} и так не подключён.");
+            break;
+        case ConnectKind.Mcp:
+            var cfg = McpConfig.Load();
+            var keys = cfg.Servers.Where(s => s.Key == item.Id || s.Value.CatalogId == item.Id).Select(s => s.Key).ToList();
+            if (keys.Count == 0)
+            {
+                Ui.Info($"  {item.Title} и так не подключён.");
+                break;
+            }
+            foreach (var key in keys)
+                cfg.Servers.Remove(key);
+            cfg.Save();
+            await local.StartAsync(CancellationToken.None);
+            Ui.Info($"  {item.Title} отключён.");
+            break;
+    }
+}
+
+static void MailLogoutQuiet(LocalTools local)
+{
+    local.Mail.Logout();
+    Ui.Info("  Почта отключена. Пароль приложения удалён с этого ПК.");
+}
+
 // /skill: скиллы агента (SKILL.md). Хранятся на сервере — те же, что на сайте («+» → «Скиллы»).
 static async Task SkillCommandAsync(ServerClient server, string root, string arg)
 {
@@ -1425,16 +1697,19 @@ static async Task MailCommandAsync(LocalTools local, string arg)
             var provider = (parts.Length > 1 ? MailProvider.Find(parts[1]) : null) ?? MailProvider.ForAddress(email);
             if (provider is null)
             {
-                Console.Write("  Почта на своём домене — чей сервис? [y] Яндекс 360 / [m] Mail.ru для бизнеса: ");
+                Console.Write("  Почта на своём домене — чей сервис? [y] Яндекс 360 / [m] Mail.ru для бизнеса / [t] Timeweb / [b] Beget / [r] Рег.ру: ");
                 provider = (Console.ReadLine() ?? string.Empty).Trim().ToLowerInvariant() switch
                 {
                     "y" or "н" or "yandex" => MailProvider.Find("yandex"),
                     "m" or "ь" or "mail" => MailProvider.Find("mailru"),
+                    "t" or "timeweb" => MailProvider.Find("timeweb"),
+                    "b" or "beget" => MailProvider.Find("beget"),
+                    "r" or "regru" => MailProvider.Find("regru"),
                     _ => null,
                 };
                 if (provider is null)
                 {
-                    Ui.Error("Пока поддерживаются Яндекс и Mail.ru. Для Gmail — /google login.");
+                    Ui.Error("Поддерживаются Яндекс, Mail.ru, Рамблер, Timeweb, Beget и Рег.ру. Для Gmail — /google login.");
                     break;
                 }
             }
