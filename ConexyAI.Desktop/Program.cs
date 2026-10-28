@@ -855,6 +855,9 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                 case "/connect" or "/connections":
                     await ConnectCommandAsync(server, local, arg);
                     break;
+                case "/mcp" when arg.Equals("catalog", StringComparison.OrdinalIgnoreCase):
+                    await ConnectMenuAsync(server, local);
+                    break;
                 case "/mcp":
                     await McpCommandAsync(local, arg);
                     break;

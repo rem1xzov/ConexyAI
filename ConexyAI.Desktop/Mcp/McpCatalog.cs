@@ -309,7 +309,7 @@ public static class McpCatalog
         // ── Бизнес и платежи ─────────────────────────────────────────────────
         Npx("stripe", "Stripe",
             "Платежи, клиенты, счета и подписки Stripe. Используйте ограниченный ключ (rk_…) с нужными правами.",
-            "@stripe/mcp@0.3.7", "Бизнес и платежи",
+            "@stripe/mcp@0.3.3", "Бизнес и платежи",
             args: ["--tools=all", "--api-key=${secret:STRIPE_SECRET_KEY}"],
             inputs: [new("STRIPE_SECRET_KEY", "Restricted key Stripe (rk_…)", "dashboard.stripe.com → Developers → API keys → Create restricted key (дайте только чтение, если не нужны платежи).")],
             note: "Агент может двигать деньги — выдавайте ключу минимум прав. " + ForeignNote),
