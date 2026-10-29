@@ -49,7 +49,9 @@ public record ConexyRequest(
     // если ПК офлайн ("fail" | "queue" | "sandbox"), и подтверждения/вопросы через веб.
     string? DeviceProjectId = null,
     string? DeviceOfflinePolicy = null,
-    bool RemoteApprovals = false
+    bool RemoteApprovals = false,
+    // PHONE_AGENT: добавлено 2026-10-29 — выполнять инструменты phone_* на подключённом телефоне.
+    bool UsePhone = false
 );
 
 // LOCAL_MCP: схема инструмента, которую прислал десктоп. Имя всегда local__<server>__<tool>.

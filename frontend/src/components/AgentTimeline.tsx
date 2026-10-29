@@ -9,6 +9,7 @@ import { ThinkingStep } from './ThinkingStep';
 import { TodoPanel } from './TodoPanel';
 import { AssistantContent } from './artifacts/AssistantContent';
 import { isTerminalToolStatus, toolEventFromBlock } from '../utils/turnBlocks';
+import { isPhoneToolName } from '../utils/phoneTool';
 
 // INTERLEAVED_STREAM: переписано 2026-09-24
 //
@@ -100,6 +101,21 @@ function describeAction(event: ToolActionEvent, t: Translate): ActionDescriptor 
   // CHAT_SEARCH: добавлено 2026-09-24 — поиск по прошлым диалогам пользователя (command = запрос).
   if (event.toolName === 'search_user_chats') {
     return { action: 'search', label: t('render.toolSearchChats', { query: command }) };
+  }
+
+  // PHONE_AGENT: инструменты телефона — понятная подпись вместо «phone_xxx …»; аргумент (пакет, путь) — хвостом.
+  if (isPhoneToolName(event.toolName)) {
+    const base = t(`phoneTool.${event.toolName}`, { defaultValue: event.summary || event.toolName });
+    const kind: ActionKind = /^phone_file_(list|mkdir)/.test(event.toolName)
+      ? 'list'
+      : /^phone_(file_read|image_view|screen_read|screenshot)/.test(event.toolName)
+        ? 'read_file'
+        : /^phone_(file_(write|copy|move|delete)|set_wallpaper)/.test(event.toolName)
+          ? 'edit_file'
+          : /^phone_(file_search|gallery|apps_list)/.test(event.toolName)
+            ? 'search'
+            : 'command';
+    return { action: kind, label: command ? `${base}: ${command}` : base };
   }
 
   if (event.toolName === 'bash' || event.toolName === 'terminal_exec') {

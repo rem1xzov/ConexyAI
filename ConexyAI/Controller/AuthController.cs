@@ -27,8 +27,8 @@ public class AuthController : ControllerBase
 
     // MOBILE_HANDOFF: вход из Android-приложения. Google запрещает OAuth внутри WebView, поэтому
     // логин идёт в системном браузере, а сессия возвращается приложению одноразовым кодом:
-    // браузер → ru.conexy.app://auth?code=… → приложение меняет код на JWT.
-    private const string MobileRedirectUri = "ru.conexy.app://auth";
+    // браузер → conexy.app://auth?code=… → приложение меняет код на JWT.
+    private const string MobileRedirectUri = "conexy.app://auth";
     private const string MobileRedirectCookie = "conexy_mobile_redirect";
     private static readonly TimeSpan MobileHandoffTtl = TimeSpan.FromMinutes(2);
     private static readonly ConcurrentDictionary<string, (TokenResponse Token, DateTime ExpiresUtc)> MobileHandoffs = new();

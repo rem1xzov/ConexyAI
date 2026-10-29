@@ -150,6 +150,10 @@ services:
       YooKassa__NotificationIpRanges: ${YOOKASSA_NOTIFICATION_IPS:-}
       YooKassa__ReturnUrlBase: ${YOOKASSA_RETURN_URL:-https://conexyai.ru/}
       GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      # PHONE_AGENT: push на телефон (FCM HTTP v1). ServiceAccountJson — содержимое JSON-ключа сервисного
+      # аккаунта ИЛИ путь к файлу в контейнере. Пусто = уведомления при закрытом приложении выключены.
+      Push__Fcm__ProjectId: ${FCM_PROJECT_ID:-}
+      Push__Fcm__ServiceAccountJson: ${FCM_SERVICE_ACCOUNT_JSON:-}
       ADMIN_ACCOUNTS: ${ADMIN_ACCOUNTS:-}
       WebSearch__JsonSeoApiKey: ${JSONSEO_API_KEY:-}
       WebSearch__JsonSeoEndpoint: ${JSONSEO_ENDPOINT:-https://jsonseo.ru/api/yandex}

@@ -42,6 +42,8 @@ public class ConexyService : IConexyService
     // WEB_DEVICE: добавлено 2026-10-18
     private readonly Device.IDeviceTaskQueue? _deviceQueue;
     private readonly Microsoft.AspNetCore.SignalR.IHubContext<ConexyAI.Hub.ConexyHub>? _hubContext;
+    // PHONE_AGENT: добавлено 2026-10-29
+    private readonly Phone.IPhoneToolBridge? _phoneBridge;
     private const int MaxRequestsPerWindow = 60;
     private static readonly TimeSpan WindowDuration = TimeSpan.FromMinutes(1);
 
@@ -59,8 +61,11 @@ public class ConexyService : IConexyService
         Device.IDeviceToolBridge? deviceBridge = null,
         // WEB_DEVICE: добавлено 2026-10-18 — очередь задач до подключения ПК (опционально — тесты).
         Device.IDeviceTaskQueue? deviceQueue = null,
-        Microsoft.AspNetCore.SignalR.IHubContext<ConexyAI.Hub.ConexyHub>? hubContext = null)
+        Microsoft.AspNetCore.SignalR.IHubContext<ConexyAI.Hub.ConexyHub>? hubContext = null,
+        // PHONE_AGENT: опциональный — тесты собирают сервис вручную.
+        Phone.IPhoneToolBridge? phoneBridge = null)
     {
+        _phoneBridge = phoneBridge;
         _deviceBridge = deviceBridge;
         _deviceQueue = deviceQueue;
         _hubContext = hubContext;
@@ -108,6 +113,17 @@ public class ConexyService : IConexyService
             {
                 throw new ArgumentException("DEVICE_PROJECT_NOT_FOUND: выбранный проект не найден на ПК.");
             }
+        }
+
+        // PHONE_AGENT: телефонный режим — только с реально подключённым телефоном ЭТОГО пользователя и не в «Учениках».
+        // Приложение шлёт флаг, как только плагин есть, а RegisterPhone может ещё не добежать — пару секунд
+        // ждём, потом тихо работаем как обычный чат (инструменты phone_* без телефона не выдаются).
+        if (request.UsePhone)
+        {
+            var students = request.StudentsMode || NormalizeKind(request.ChatKind) == "students";
+            if (students || _phoneBridge is null
+                || !await _phoneBridge.WaitForOnlineAsync(userId, TimeSpan.FromSeconds(3), ct))
+                request = request with { UsePhone = false };
         }
 
         // SUBSCRIPTION_TIERS: добавлено 2026-09-17
@@ -229,7 +245,8 @@ public class ConexyService : IConexyService
                             DeviceTools: request.UseDevice ? DeviceToolSanitizer.Clean(request.DeviceTools) : null,
                             // WEB_DEVICE: добавлено 2026-10-18
                             DeviceProjectId: request.UseDevice && !string.IsNullOrWhiteSpace(request.DeviceProjectId) ? request.DeviceProjectId.Trim() : null,
-                            RemoteApprovals: request.UseDevice && request.RemoteApprovals);
+                            RemoteApprovals: request.UseDevice && request.RemoteApprovals,
+                                                        UsePhone: request.UsePhone);
 
             // WEB_DEVICE: ПК офлайн и выбрано «ждать» — задача стоит в очереди устройства, резервация id и чата
             // сохраняется до отправки в работу или отмены (см. DeviceTaskQueue).

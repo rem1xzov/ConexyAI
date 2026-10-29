@@ -1,4 +1,4 @@
-package ru.conexy.app;
+package conexy.app;
 
 import android.app.DownloadManager;
 import android.app.Notification;

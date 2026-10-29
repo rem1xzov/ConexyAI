@@ -1,4 +1,4 @@
-package ru.conexy.app;
+package conexy.app;
 
 import android.Manifest;
 import android.content.Intent;

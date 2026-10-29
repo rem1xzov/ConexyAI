@@ -23,6 +23,16 @@ import { useDrawerSwipe } from './hooks/useDrawerSwipe';
 import { useKeyboardInset } from './hooks/useKeyboardInset';
 // MOBILE_BACK: системная кнопка «назад» в Android-приложении.
 import { isMobileApp, listenForAppBack, minimizeApp } from './utils/mobile';
+// PHONE_AGENT: агент телефона (нативный плагин PhoneAgent, только Android-приложение).
+import {
+  cancelPhoneNotification,
+  isPhoneOnboardingPending,
+  phoneAgentSignOut,
+  setPhoneAuth,
+  setPhoneNotificationHandler,
+  shouldUsePhone,
+} from './services/phoneAgent';
+import { PhoneSetupModal } from './components/PhoneSetupModal';
 import { Sidebar } from './components/Sidebar';
 import { ChatFeed } from './components/ChatFeed';
 // SHARE_PUBLIC: публичная страница чата открывается по #/shared/<token> без входа в аккаунт.
@@ -403,6 +413,8 @@ export default function App() {
   useEffect(() => {
     setAuthToken(token);
     signalrService.setToken(token);
+    // PHONE_AGENT: плагину — JWT для кнопок уведомления и регистрация push-токена (null — выход).
+    setPhoneAuth(token);
   }, [token]);
 
   // TURN_SCOPE: добавлено 2026-09-24 (H6/H7) — вместо одного глобального streamingRef: по контексту
@@ -448,7 +460,9 @@ export default function App() {
     clearGitHubToken();
     // MCP: то же для личных MCP-токенов.
     clearMcpServers();
-    void logout();
+    // PHONE_AGENT: push-токен снимаем, пока JWT ещё действует (logout отзывает токен).
+    const phoneSignOut = phoneAgentSignOut(token);
+    void phoneSignOut.finally(() => logout());
   }
 
   // ADMIN_PANEL: добавлено 2026-09-19
@@ -2501,6 +2515,8 @@ export default function App() {
         // чат учеников открылся в «Учениках», а не в общем чате.
         chatKind: live.sessions.find((s) => s.id === sessionId)?.kind ?? live.activeTab,
         regenerate: regenerate ? true : undefined,
+        // PHONE_AGENT: агент может работать с телефоном, если есть плагин и настройка включена.
+        usePhone: shouldUsePhone() ? true : undefined,
         // ORCHESTRA: флаг едет только для Coder; остальное решает сервер по тарифу.
         orchestra: live.orchestra && live.model === 'conexy-coder' ? true : undefined,
         // GITHUB_PAT_PER_USER: личный токен едет только для агентских режимов (у чата нет git-инструментов).
@@ -2823,6 +2839,8 @@ export default function App() {
     const taskId = live.pendingAction?.taskId ?? registryRef.current?.bySession(live.activeId)?.taskId ?? live.sessionTaskId;
     setPendingAction(null);
     if (approved && allowAll && taskId) setAllowAllTaskId(taskId);
+    // PHONE_AGENT: решение принято здесь — push-уведомление с кнопками больше не нужно.
+    cancelPhoneNotification({ actionId });
     try {
       const delivered = await signalrService.confirmAction(actionId, approved, allowAll);
       if (!delivered) {
@@ -2932,6 +2950,48 @@ export default function App() {
     if (isMobile) setSidebarOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route, sessions, isMobile]);
+
+  // PHONE_AGENT: тап по уведомлению открывает его чат — тем же путём, что и ссылка на чат: чат из списка
+  // или, если его там нет, один запрос к серверу. Обработчик живёт в ref, чтобы подписка была одна.
+  const openChatFromNotificationRef = useRef<(chatId: string) => void>(() => undefined);
+  openChatFromNotificationRef.current = (chatId: string) => {
+    if (!token) return;
+    const activate = (session: ChatSession) => {
+      setSettingsOpen(false);
+      setActiveId(session.id);
+      setActiveTab(session.kind ?? 'chat');
+      applySessionModel(session);
+      setIncognito(false);
+      if (isMobile) setSidebarOpen(false);
+    };
+    const lower = chatId.toLowerCase();
+    const known = sessionsRef.current.find((s) => s.id.toLowerCase() === lower);
+    if (known) {
+      activate(known);
+      return;
+    }
+    const userAtStart = storeUserRef.current;
+    void getChat(chatId)
+      .then((chat) => {
+        if (!chat || storeUserRef.current !== userAtStart) return;
+        const stub = sessionFromServer(chat, null, defaultTitle(kindFromServer(chat.kind), liveRef.current.t));
+        setSessions((prev) => (prev.some((s) => s.id.toLowerCase() === lower) ? prev : [...prev, stub]));
+        activate(stub);
+      })
+      .catch((e: unknown) => console.warn('[PhoneNotification] could not open the chat', { chatId, error: String(e) }));
+  };
+  useEffect(() => {
+    setPhoneNotificationHandler((target) => {
+      if (target.chatId) openChatFromNotificationRef.current(target.chatId);
+    });
+    return () => setPhoneNotificationHandler(null);
+  }, []);
+
+  // PHONE_AGENT: первый запуск нового APK — экран «ConexyAI Phone» с разрешениями (флаг в localStorage).
+  const [phoneSetupOpen, setPhoneSetupOpen] = useState(false);
+  useEffect(() => {
+    if (token && isPhoneOnboardingPending()) setPhoneSetupOpen(true);
+  }, [token]);
 
   // MOBILE_DRAWER: the sidebar is a drawer on phones, so it can be pulled out from the left edge and
   // pushed back with a swipe. The hook writes the transform straight to the DOM while dragging.
@@ -3458,6 +3518,8 @@ export default function App() {
 
       {/* SUPPORT: добавлено 2026-09-19 */}
       {supportOpen && <SupportChat onClose={() => setSupportOpen(false)} onToast={showToast} />}
+
+      {phoneSetupOpen && <PhoneSetupModal onClose={() => setPhoneSetupOpen(false)} />}
 
       {/* SETTINGS: добавлено 2026-09-19 */}
       {settingsOpen && (

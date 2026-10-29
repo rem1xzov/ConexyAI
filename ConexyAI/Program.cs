@@ -252,6 +252,24 @@ builder.Services.AddSingleton<ConexyAI.Service.Device.IDeviceToolBridge, ConexyA
 // WEB_DEVICE: добавлено 2026-10-18 — очередь задач до подключения ПК и подтверждения/вопросы устройства через веб.
 builder.Services.AddSingleton<ConexyAI.Service.Device.IDeviceTaskQueue, ConexyAI.Service.Device.DeviceTaskQueue>();
 builder.Services.AddSingleton<ConexyAI.Service.Device.IDeviceRemoteInteractionService, ConexyAI.Service.Device.DeviceRemoteInteractionService>();
+// PHONE_AGENT: добавлено 2026-10-29 — агент телефона: мост к приложению, подтверждения, push (FCM; без конфига — no-op).
+builder.Services.Configure<ConexyAI.Configuration.PushOptions>(builder.Configuration.GetSection(ConexyAI.Configuration.PushOptions.SectionName));
+builder.Services.AddHttpClient(ConexyAI.Service.Push.FcmPushService.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddSingleton<ConexyAI.Service.Push.IPushService>(sp =>
+{
+    var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ConexyAI.Configuration.PushOptions>>().Value;
+    if (options.Fcm.IsConfigured)
+    {
+        var fcm = ActivatorUtilities.CreateInstance<ConexyAI.Service.Push.FcmPushService>(sp);
+        if (fcm.IsConfigured)
+            return fcm;
+    }
+    return ActivatorUtilities.CreateInstance<ConexyAI.Service.Push.NoopPushService>(sp);
+});
+builder.Services.AddSingleton<ConexyAI.Service.Phone.IPhoneToolBridge, ConexyAI.Service.Phone.PhoneToolBridge>();
+builder.Services.AddSingleton<ConexyAI.Service.Phone.IPhoneApprovalService, ConexyAI.Service.Phone.PhoneApprovalService>();
+builder.Services.AddSingleton<ConexyAI.Service.Phone.IPhoneNotifier, ConexyAI.Service.Phone.PhoneNotifier>();
+builder.Services.AddScoped<IMobilePushTokenRepository, MobilePushTokenRepository>();
 builder.Services.AddScoped<IConexyBashService, ConexyBashService>();
 // TEST_RUNNER: добавлено 2026-10-04 — структурированный прогон тестов (run_tests).
 builder.Services.AddScoped<ITestRunnerService, ConexyTestRunnerService>();

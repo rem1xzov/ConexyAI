@@ -4,4 +4,7 @@
     <cache-path name="my_cache_images" path="." />
     <!-- APK_UPDATER: сюда DownloadManager кладёт скачанный APK, отсюда его забирает установщик. -->
     <external-files-path name="apk_updates" path="Download/" />
+    <!-- PHONE_AGENT: phone_share отдаёт файлы рабочей папки и выбранные фото. -->
+    <external-files-path name="agent_ext_files" path="." />
+    <files-path name="agent_files" path="." />
 </paths>

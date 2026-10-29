@@ -37,12 +37,20 @@ import { humanError } from '../utils/humanError';
 import { setPlainCode, usePlainCode } from '../utils/displayPrefs';
 import { ConfirmDialog } from './Dialog';
 import { CloseIcon, TrashIcon } from './Icons';
+// PHONE_AGENT: раздел «Телефон» — только в Android-приложении с плагином PhoneAgent.
+import {
+  isPhoneAgentAvailable,
+  sendTestPhoneNotification,
+  setPhoneAgentEnabled,
+  usePhoneAgentState,
+} from '../services/phoneAgent';
+import { PhonePermissionsList, PhoneSetupModal } from './PhoneSetupModal';
 // USAGE_LIMITS_SECTION: добавлено 2026-10-01 — лимиты Flash/Pro переехали из кольца в настройки.
 import type { SubscriptionUsage, McpServerInput } from '../types/api';
 // LEGAL_DOCS: добавлено 2026-09-25 — правовые документы доступны всегда, в том числе из настроек.
 import { LEGAL_PATHS } from './legal/LegalPage';
 
-export type SettingsSection = 'general' | 'limits' | 'personalization' | 'memory' | 'github' | 'mcp' | 'desktop' | 'app';
+export type SettingsSection = 'general' | 'limits' | 'personalization' | 'memory' | 'github' | 'mcp' | 'desktop' | 'app' | 'phone';
 
 interface SettingsModalProps {
   theme: Theme;
@@ -80,6 +88,7 @@ const SECTIONS: { value: SettingsSection; key: string }[] = [
   { value: 'mcp', key: 'settings.mcpTab' },
   { value: 'desktop', key: 'settings.desktopTab' },
   { value: 'app', key: 'settings.appTab' },
+  { value: 'phone', key: 'phone.tab' },
 ];
 
 // MOBILE_APP: на телефоне раздел «Десктоп» бессмыслен (там exe для Windows), и вместо него
@@ -1009,6 +1018,76 @@ function DeviceStatusSection({ active }: { active: boolean }) {
   );
 }
 
+// PHONE_AGENT: настройки «агента телефона»: переключатель, состояние связи, тест уведомлений, разрешения.
+function PhoneSection() {
+  const { t } = useTranslation();
+  const { enabled, registered, info } = usePhoneAgentState();
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [testResult, setTestResult] = useState<'ok' | 'failed' | null>(null);
+
+  async function testNotification() {
+    setTestResult(null);
+    const ok = await sendTestPhoneNotification(t('phone.testTitle'), t('phone.testBody'));
+    setTestResult(ok ? 'ok' : 'failed');
+  }
+
+  return (
+    <div className="settings-panel">
+      <div className="memory-toggle">
+        <div className="memory-toggle__text">
+          <div className="settings-field__label" id="phone-toggle-label">
+            {t('phone.toggle')}
+          </div>
+          <p className="settings-panel__intro">{t('phone.toggleHint')}</p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-labelledby="phone-toggle-label"
+          className={`settings-switch ${enabled ? 'settings-switch--on' : ''}`}
+          onClick={() => setPhoneAgentEnabled(!enabled)}
+        >
+          <span className="settings-switch__thumb" />
+        </button>
+      </div>
+
+      <div className="settings-modal__section">
+        <div className="settings-modal__label">{t('phone.statusTitle')}</div>
+        <dl className="phone-status">
+          <dt>{t('phone.server')}</dt>
+          <dd className={registered ? 'chat-ok' : 'chat-warn'}>
+            {registered ? t('phone.connected') : t('phone.disconnected')}
+          </dd>
+          <dt>{t('phone.device')}</dt>
+          <dd>{[info?.manufacturer, info?.model].filter(Boolean).join(' ') || '—'}</dd>
+          <dt>Android</dt>
+          <dd>{info?.androidVersion ? `${info.androidVersion}${info.sdk ? ` (API ${info.sdk})` : ''}` : '—'}</dd>
+          <dt>{t('phone.appVersion')}</dt>
+          <dd>{info?.appVersion ? `v${info.appVersion}` : '—'}</dd>
+        </dl>
+        <div className="phone-status__actions">
+          <button className="dialog-btn" type="button" onClick={() => void testNotification()}>
+            {t('phone.testNotification')}
+          </button>
+          <button className="dialog-btn" type="button" onClick={() => setSetupOpen(true)}>
+            {t('phone.openSetup')}
+          </button>
+        </div>
+        {testResult === 'ok' && <p className="settings-github__hint">{t('phone.testSent')}</p>}
+        {testResult === 'failed' && <span className="settings-github__error">{t('phone.testFailed')}</span>}
+      </div>
+
+      <div className="settings-modal__section">
+        <div className="settings-modal__label">{t('phone.permissionsTitle')}</div>
+        <PhonePermissionsList />
+      </div>
+
+      {setupOpen && <PhoneSetupModal onClose={() => setSetupOpen(false)} />}
+    </div>
+  );
+}
+
 // MOBILE_APP: раздел телефона — вместо «Десктопа» на мобилках. Здесь лежит свежий APK:
 // ссылка берётся с сервера, а версия — из последнего релиза на GitHub.
 function AppSection({ active }: { active: boolean }) {
@@ -1193,7 +1272,16 @@ export function SettingsModal({
   // MOBILE_APP: на телефоне показываем «Приложение» вместо «Десктоп» (и наоборот на ПК).
   const showDesktopTab = useMemo(() => desktopTabRelevant(), []);
   const visibleSections = useMemo(
-    () => SECTIONS.filter((s) => (s.value === 'desktop' ? showDesktopTab : s.value === 'app' ? !showDesktopTab : true)),
+    () =>
+      SECTIONS.filter((s) =>
+        s.value === 'desktop'
+          ? showDesktopTab
+          : s.value === 'app'
+            ? !showDesktopTab
+            : s.value === 'phone'
+              ? isPhoneAgentAvailable()
+              : true,
+      ),
     [showDesktopTab],
   );
   const [prefsDirty, setPrefsDirty] = useState(false);
@@ -1326,6 +1414,12 @@ export function SettingsModal({
             <div hidden={section !== 'app'}>
               <AppSection active={section === 'app'} />
             </div>
+
+            {isPhoneAgentAvailable() && (
+              <div hidden={section !== 'phone'}>
+                <PhoneSection />
+              </div>
+            )}
           </div>
         </div>
       </div>

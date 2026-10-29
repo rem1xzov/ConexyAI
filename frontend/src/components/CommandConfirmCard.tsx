@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
 import { CheckIcon, ChevronDownIcon, CloseIcon, CopyIcon } from './Icons';
+import { isPhoneToolName } from '../utils/phoneTool';
 
 // COMMAND_FEEDBACK: переписано 2026-09-22
 // AGENT_FEED_ZED: перерисовано 2026-09-23 — теперь это тот самый терминальный блок из референса:
@@ -41,7 +42,13 @@ function CommandConfirmCardBase({ events, onDecision }: CommandConfirmCardProps)
   const isDangerous = events.some((e) => e.isDangerous);
   const actionId = first.pendingActionId;
   const output = completed?.output ?? '';
-  const command = first.command ?? '';
+  // PHONE_AGENT: подтверждения телефонных действий приходят тем же событием и рисуются той же карточкой —
+  // меняется только заголовок («Удалить приложение» вместо «Запуск команды»).
+  const isPhone = isPhoneToolName(first.toolName);
+  const title = isPhone
+    ? t(`phoneTool.${first.toolName}`, { defaultValue: t('phoneTool.confirmTitle') })
+    : t('cmdConfirm.runCommand');
+  const command = first.command || (isPhone ? (first.summary ?? '') : '');
   // BASH_DESCRIPTION: намерение важнее флагов — показываем его отдельной строкой над командой.
   const description = first.description?.trim() ?? '';
 
@@ -127,10 +134,10 @@ function CommandConfirmCardBase({ events, onDecision }: CommandConfirmCardProps)
     <div
       className={`cmd-card cmd-confirm cmd-confirm--${status} ${isDangerous ? 'cmd-confirm--danger' : ''}`}
       role={canDecide ? 'group' : undefined}
-      aria-label={t('cmdConfirm.runCommand')}
+      aria-label={title}
     >
       <div className="cmd-card__head">
-        <span className="cmd-card__title">{t('cmdConfirm.runCommand')}</span>
+        <span className="cmd-card__title">{title}</span>
         {isDangerous && <span className="cmd-card__badge">{t('cmdConfirm.dangerous')}</span>}
         <span className="cmd-card__status">
           {statusMark}
@@ -218,6 +225,7 @@ export const CommandConfirmCard = memo(CommandConfirmCardBase, (a, b) => {
     const x = a.events[i];
     const y = b.events[i];
     if (
+      x.toolName !== y.toolName ||
       x.status !== y.status ||
       x.command !== y.command ||
       x.output !== y.output ||

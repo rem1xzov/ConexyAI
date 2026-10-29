@@ -55,6 +55,9 @@ public class DbConexy : Microsoft.EntityFrameworkCore.DbContext
     // DESKTOP_AGENT: добавлено 2026-10-15 — ключи десктопного клиента.
     public DbSet<DeviceApiKeyEntity> DeviceApiKeys => Set<DeviceApiKeyEntity>();
 
+    // PHONE_AGENT: добавлено 2026-10-29 — FCM-токены телефонов.
+    public DbSet<MobilePushTokenEntity> MobilePushTokens => Set<MobilePushTokenEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

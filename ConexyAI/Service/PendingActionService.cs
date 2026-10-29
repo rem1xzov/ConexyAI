@@ -53,6 +53,21 @@ public interface IPendingActionService
         CancellationToken ct,
         string? description = null);
 
+    // PHONE_AGENT: добавлено 2026-10-29 — то же ожидание с собственным таймаутом. Метод по умолчанию,
+    // чтобы существующие реализации (в т.ч. заглушки тестов) не ломались.
+    Task<bool> WaitForDecisionAsync(
+        Guid actionId,
+        Guid userId,
+        Guid chatId,
+        Guid taskId,
+        string command,
+        string workingDirectory,
+        bool isDangerous,
+        CancellationToken ct,
+        string? description,
+        TimeSpan? timeout) =>
+        WaitForDecisionAsync(actionId, userId, chatId, taskId, command, workingDirectory, isDangerous, ct, description);
+
     /// <summary>
     /// Resolves the waiter for <paramref name="actionId"/> with the user's decision. When
     /// <paramref name="approveAll"/> is set on an approval, every later command of the same
@@ -101,7 +116,7 @@ public class PendingActionService : IPendingActionService
         _logger = logger;
     }
 
-    public async Task<bool> WaitForDecisionAsync(
+    public Task<bool> WaitForDecisionAsync(
         Guid actionId,
         Guid userId,
         Guid chatId,
@@ -111,6 +126,19 @@ public class PendingActionService : IPendingActionService
         bool isDangerous,
         CancellationToken ct,
         string? description = null)
+        => WaitForDecisionAsync(actionId, userId, chatId, taskId, command, workingDirectory, isDangerous, ct, description, null);
+
+    public async Task<bool> WaitForDecisionAsync(
+        Guid actionId,
+        Guid userId,
+        Guid chatId,
+        Guid taskId,
+        string command,
+        string workingDirectory,
+        bool isDangerous,
+        CancellationToken ct,
+        string? description,
+        TimeSpan? timeout)
     {
         using var scope = _scopeFactory.CreateScope();
         var repository = scope.ServiceProvider.GetRequiredService<IPendingActionRepository>();
@@ -151,7 +179,7 @@ public class PendingActionService : IPendingActionService
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(ConfirmationTimeout);
+        timeoutCts.CancelAfter(timeout ?? ConfirmationTimeout);
         var waitToken = timeoutCts.Token;
 
         try
@@ -230,8 +258,20 @@ public class PendingActionService : IPendingActionService
             }
 
             var status = approved ? PendingActionStatus.Approved : PendingActionStatus.Rejected;
-            await MarkResolvedAsync(actionId, status, ct);
-            waiter.Tcs.TrySetResult(approved);
+            // Важно: ожидающий уже вынут из _waiters, поэтому сбой записи в БД не должен оставить агента
+            // без решения (он бы ждал до таймаута).
+            try
+            {
+                await MarkResolvedAsync(actionId, status, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Failed to mark pending action {ActionId} as {Status}.", actionId, status);
+            }
+            finally
+            {
+                waiter.Tcs.TrySetResult(approved);
+            }
             _logger.LogInformation(
                 "Command {ActionId} {Decision} (allowAll={AllowAll}).",
                 actionId,

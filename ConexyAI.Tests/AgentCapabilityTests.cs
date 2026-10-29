@@ -1278,7 +1278,7 @@ internal static class AgentCapabilityTests
 
     // ---------------------------------------------------------------- helpers
 
-    private static (ConexyAgentRunner Runner, ConexyJob Job, ConversationContext Context) CreateRunner(
+    internal static (ConexyAgentRunner Runner, ConexyJob Job, ConversationContext Context) CreateRunner(
         string workspaceRoot,
         ScriptLlm llm,
         IHubContext<ConexyHub> hub,
@@ -1295,7 +1295,11 @@ internal static class AgentCapabilityTests
         IMcpRegistry? mcp = null,
         string prompt = "Сделай задачу",
         ISubscriptionService? subscription = null,
-        IConexyTodoService? todo = null)
+        IConexyTodoService? todo = null,
+        bool usePhone = false,
+        ConexyAI.Service.Phone.IPhoneToolBridge? phoneBridge = null,
+        ConexyAI.Service.Phone.IPhoneApprovalService? phoneApprovals = null,
+        ConexyAI.Service.Phone.IPhoneNotifier? phoneNotifier = null)
     {
         var workspace = new ConexyWorkspaceService(
             Options.Create(new WorkspaceOptions { RootPath = workspaceRoot }),
@@ -1323,9 +1327,12 @@ internal static class AgentCapabilityTests
             fetcher!,
             chatSearch!,
             hooksService: hooks,
-            mcpRegistryFactory: mcp is null ? null : new FakeMcpRegistryFactory(mcp));
+            mcpRegistryFactory: mcp is null ? null : new FakeMcpRegistryFactory(mcp),
+            phoneBridge: phoneBridge,
+            phoneApprovals: phoneApprovals,
+            phoneNotifier: phoneNotifier);
 
-        var job = new ConexyJob(Guid.NewGuid(), chatId ?? Guid.NewGuid(), userId ?? Guid.NewGuid(), mode, prompt, Incognito: incognito);
+        var job = new ConexyJob(Guid.NewGuid(), chatId ?? Guid.NewGuid(), userId ?? Guid.NewGuid(), mode, prompt, Incognito: incognito, UsePhone: usePhone);
         var context = new ConversationContext(job.TaskId, job.ChatId, job.UserId, runner.GetSystemPrompt(mode), job.Prompt, Incognito: incognito);
         return (runner, job, context);
     }
@@ -1421,13 +1428,13 @@ internal static class AgentCapabilityTests
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
     }
 
-    private static (List<LlmToolCall>? Calls, string? Text) Turn(params LlmToolCall[] calls) => (calls.ToList(), null);
+    internal static (List<LlmToolCall>? Calls, string? Text) Turn(params LlmToolCall[] calls) => (calls.ToList(), null);
 
-    private static (List<LlmToolCall>? Calls, string? Text) Text(string text) => (null, text);
+    internal static (List<LlmToolCall>? Calls, string? Text) Text(string text) => (null, text);
 
-    private static LlmToolCall Call(string id, string name, string arguments) => new(id, "function", new LlmFunctionCall(name, arguments));
+    internal static LlmToolCall Call(string id, string name, string arguments) => new(id, "function", new LlmFunctionCall(name, arguments));
 
-    private static CancellationToken Guard() => new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token;
+    internal static CancellationToken Guard() => new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token;
 
     private static int CountOf(string text, string fragment)
     {
@@ -1437,14 +1444,14 @@ internal static class AgentCapabilityTests
         return count;
     }
 
-    private static string CreateTempRoot()
+    internal static string CreateTempRoot()
     {
         var path = Path.Combine(Path.GetTempPath(), "conexy_agent_caps_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
     }
 
-    private static void DeleteDir(string path)
+    internal static void DeleteDir(string path)
     {
         try
         {
@@ -1583,7 +1590,7 @@ internal static class AgentCapabilityTests
         }
     }
 
-    private sealed class ScriptLlm : IConexyLlmClient
+    internal sealed class ScriptLlm : IConexyLlmClient
     {
         private readonly List<(List<LlmToolCall>? Calls, string? Text)> _turns;
 

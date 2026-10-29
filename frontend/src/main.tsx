@@ -7,6 +7,7 @@ import { applyDisplayPrefs } from './utils/displayPrefs';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ArtifactPanelHost } from './components/artifacts/ArtifactPanel';
 import { checkMobileUpdate, listenForMobileAuth, showUpdateBanner } from './utils/mobile';
+import { startPhoneAgent } from './services/phoneAgent';
 import './styles/index.css';
 
 applyTheme(getStoredTheme());
@@ -17,6 +18,10 @@ applyDisplayPrefs();
 listenForMobileAuth((code) => {
   window.location.replace(`/?handoff=${encodeURIComponent(code)}`);
 });
+
+// PHONE_AGENT: мост к плагину PhoneAgent. Запускаем до монтирования App, чтобы не потерять тап по
+// уведомлению, открывший приложение с холодного старта. На сайте — no-op.
+startPhoneAgent();
 
 // AUTO_UPDATE: как в десктопном клиенте — проверка последнего релиза на старте.
 void checkMobileUpdate().then((update) => {

@@ -94,6 +94,8 @@ export interface ConexyRequest {
   remoteApprovals?: boolean;
   deviceProjectId?: string;
   deviceOfflinePolicy?: DeviceOfflinePolicy;
+  // PHONE_AGENT: агент может вызывать phone_* инструменты в этом Android-приложении.
+  usePhone?: boolean;
 }
 
 export interface ConexyResponse {

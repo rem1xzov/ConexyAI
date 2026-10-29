@@ -58,6 +58,25 @@ public class ConexyBackgroundWorker : BackgroundService
             info.Name);
     }
 
+    // PHONE_AGENT: добавлено 2026-10-29 — правила работы с телефоном + модель/версия Android из RegisterPhone.
+    // Телефон отключился до старта хода — блок пуст (инструменты тоже не выдаются).
+    private static string PhoneEnvironmentBlock(IServiceProvider services, ConexyJob job)
+    {
+        if (!job.UsePhone)
+            return string.Empty;
+        var info = services.GetService<Phone.IPhoneToolBridge>()?.GetInfo(job.UserId);
+        return info is null ? string.Empty : "\n\n" + Phone.PhonePrompts.Block(info);
+    }
+
+    private static string BuildPhoneChatSystemPrompt(IServiceProvider services, ConexyJob job) =>
+        Phone.PhonePrompts.ChatBase
+        + "\n\n" + Prompts.PromptFragments.RichFormatting
+        + (PhoneEnvironmentBlock(services, job) is { Length: > 0 } block ? block : "\n\n" + Phone.PhonePrompts.Charter)
+        + "\n\n" + Prompts.PromptFragments.ContentPolicy
+        + "\n\n" + Prompts.PromptFragments.ContentPolicyCrisis
+        + "\n\n" + Prompts.PromptFragments.ProductKnowledge
+        + "\n\n" + Prompts.PromptFragments.AudienceContext(job.IsAdmin, job.Tier);
+
     public ConexyBackgroundWorker(
         IConexyQueue queue,
         IConexyQueueGuard queueGuard,
@@ -232,7 +251,14 @@ public class ConexyBackgroundWorker : BackgroundService
 
             // COWORK_MODE: both agent modes go through the same runner; the runner picks the mode's
             // prompt and tools itself.
-            var isAgent = job.ModelType.IsAgent();
+            // PHONE_AGENT: чат (не «Ученики») с телефоном идёт через агентский цикл с профилем phone.
+            var phoneChat = job.UsePhone && !job.ModelType.IsAgent() && !job.StudentsMode;
+            var isAgent = job.ModelType.IsAgent() || phoneChat;
+            if (phoneChat)
+            {
+                // Не надо унаследовать «high» из запроса: чат-модели думают только по тумблеру (Pro).
+                job = job with { ReasoningEffort = job.ModelType == ConexyModelType.ConexyV1Pro && job.Thinking ? "high" : null };
+            }
 
             // USER_CONTEXT: добавлено 2026-09-27 — модель должна знать, кто с ней общается: админ или
             // обычный пользователь, какой у него тариф и доступен ли Cowork. Тариф берём из подписки;
@@ -273,12 +299,15 @@ public class ConexyBackgroundWorker : BackgroundService
                 // TOKEN_ECONOMY: агентские режимы (Coder/Cowork) идут автономным циклом и платят за каждый
                 // блок на КАЖДОМ шаге. ContentPolicy/ProductKnowledge им не нужны — вместо них только
                 // короткая строка про тариф пользователя (для честных ответов про лимиты).
-                SystemPrompt: (isAgent
+                SystemPrompt: (phoneChat
+                    ? BuildPhoneChatSystemPrompt(scope.ServiceProvider, job)
+                    : isAgent
                     ? (smallTalk ? PromptEconomy.SmallTalkAgentPrompt : runner.GetSystemPrompt(job.ModelType))
                         + "\n\n" + Prompts.PromptFragments.AgentSafetyLine
                         + (smallTalk ? string.Empty : "\n\n" + Prompts.PromptFragments.AgentWorkStyle)
                         + "\n\n" + Prompts.PromptFragments.AudienceLine(job.IsAdmin, job.Tier)
                         + DesktopEnvironmentBlock(scope.ServiceProvider, job)
+                        + PhoneEnvironmentBlock(scope.ServiceProvider, job)
                     : BuildChatSystemPrompt(job)
                         + "\n\n" + Prompts.PromptFragments.ContentPolicy
                         + "\n\n" + Prompts.PromptFragments.ContentPolicyCrisis
@@ -330,6 +359,10 @@ public class ConexyBackgroundWorker : BackgroundService
 
                     // WEB_DEVICE: добавлено 2026-10-18 — итоговый diff с ПК: в веб (OnDeviceDiff до OnCompleted) и в историю.
                     result += await Device.DeviceTurnDiff.CollectAsync(scope.ServiceProvider, _hubContext, job, _logger, taskToken);
+
+                    // PHONE_AGENT: ход чата через агентский цикл всё равно считается запросом чата.
+                    if (phoneChat)
+                        await subscriptionService.RecordRequestAsync(job.UserId, job.ModelType, taskToken);
                 }
                 else
                 {
@@ -364,6 +397,27 @@ public class ConexyBackgroundWorker : BackgroundService
                     TaskId = job.TaskId,
                     Result = storedResult
                 }, taskToken);
+
+                // PHONE_AGENT: «запустил задачу и выключил телефон»: push, если приложение не на экране.
+                // Без ожидания: сбой push не должен задерживать или ронять уже закрытую задачу.
+                var notifier = scope.ServiceProvider.GetService<Phone.IPhoneNotifier>();
+                if (notifier is not null)
+                {
+                    var notifyJob = job;
+                    var notifyText = result;
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await notifier.NotifyCompletedAsync(
+                                notifyJob.UserId, notifyJob.TaskId, notifyJob.ChatId, notifyText, notifyJob.Incognito, CancellationToken.None);
+                        }
+                        catch (Exception pushEx)
+                        {
+                            _logger.LogWarning("Completion push for task {TaskId} failed: {Error}.", notifyJob.TaskId, pushEx.GetType().Name);
+                        }
+                    }, CancellationToken.None);
+                }
             }
             catch (OperationCanceledException) when (workerToken.IsCancellationRequested)
             {

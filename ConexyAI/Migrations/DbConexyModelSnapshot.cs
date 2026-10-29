@@ -306,6 +306,41 @@ namespace ConexyAI.Migrations
                     b.ToTable("email_verification_codes", (string)null);
                 });
 
+            modelBuilder.Entity("ConexyAI.Entity.MobilePushTokenEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("LastSeenAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Token")
+                        .IsRequired()
+                        .HasMaxLength(4096)
+                        .HasColumnType("character varying(4096)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Token")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("mobile_push_tokens", (string)null);
+                });
+
             modelBuilder.Entity("ConexyAI.Entity.PaymentEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -848,6 +883,15 @@ namespace ConexyAI.Migrations
                         .IsRequired();
 
                     b.Navigation("Document");
+                });
+
+            modelBuilder.Entity("ConexyAI.Entity.MobilePushTokenEntity", b =>
+                {
+                    b.HasOne("ConexyAI.Entity.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("ConexyAI.Entity.PendingActionEntity", b =>

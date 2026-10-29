@@ -1,4 +1,4 @@
-package ru.conexy.app;
+package conexy.app;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
@@ -46,6 +46,8 @@ public class MainActivity extends BridgeActivity {
         // APK_UPDATER / VOICE_INPUT: локальные плагины регистрируются до создания Bridge.
         registerPlugin(ApkUpdaterPlugin.class);
         registerPlugin(SpeechInputPlugin.class);
+        // PHONE_AGENT: инструменты телефона, разрешения, уведомления и push.
+        registerPlugin(PhoneAgentPlugin.class);
         super.onCreate(savedInstanceState);
 
         WebView webView = getBridge().getWebView();
@@ -95,6 +97,15 @@ public class MainActivity extends BridgeActivity {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
                 runOnUiThread(() -> {
+                    // Второй запрос не должен затереть первый: тот остался бы без ответа.
+                    if (pendingRequest != null) {
+                        try {
+                            pendingRequest.deny();
+                        } catch (RuntimeException ignored) {
+                            // запрос уже неактуален
+                        }
+                        pendingRequest = null;
+                    }
                     for (String resource : request.getResources()) {
                         if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)
                                 && !hasPermission(Manifest.permission.RECORD_AUDIO)) {

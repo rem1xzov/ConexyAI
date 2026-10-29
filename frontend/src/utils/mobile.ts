@@ -32,16 +32,47 @@ interface CapacitorPlugins {
 interface CapacitorBridge {
   isNativePlatform?: () => boolean;
   getPlatform?: () => string;
+  isPluginAvailable?: (name: string) => boolean;
+  registerPlugin?: <T>(name: string) => T;
   Plugins?: CapacitorPlugins;
 }
 
-const APP_SCHEME = 'ru.conexy.app://auth';
-const MOBILE_LOGIN_URL = '/api/auth/mobile?redirect=ru.conexy.app://auth';
+const APP_SCHEME = 'conexy.app://auth';
+const MOBILE_LOGIN_URL = '/api/auth/mobile?redirect=conexy.app://auth';
 const APK_ASSET = 'conexy-android.apk';
 const RELEASES_API = 'https://api.github.com/repos/rem1xzov/ConexyAI/releases?per_page=20';
 
 function bridge(): CapacitorBridge | undefined {
   return (window as unknown as { Capacitor?: CapacitorBridge }).Capacitor;
+}
+
+const registeredPlugins = new Map<string, unknown>();
+
+/**
+ * PHONE_AGENT: доступ к локальному нативному плагину по имени (registerPlugin, как велит Capacitor).
+ * На сайте и в старых APK без плагина возвращает null — вызывающий код тогда ничего не делает.
+ */
+export function getNativePlugin<T>(name: string): T | null {
+  const cap = bridge();
+  if (!cap?.isNativePlatform?.()) return null;
+  if (registeredPlugins.has(name)) return registeredPlugins.get(name) as T;
+  let plugin: T | null = null;
+  if (cap.isPluginAvailable?.(name) && cap.registerPlugin) plugin = cap.registerPlugin<T>(name);
+  else {
+    const legacy = (cap.Plugins as Record<string, unknown> | undefined)?.[name];
+    plugin = (legacy as T | undefined) ?? null;
+  }
+  if (plugin) registeredPlugins.set(name, plugin);
+  return plugin;
+}
+
+/** Подписка на события приложения Capacitor (appStateChange и т. п.); null — оболочки нет. */
+export async function listenForAppState(onChange: (active: boolean) => void): Promise<{ remove: () => Promise<void> } | null> {
+  const app = bridge()?.Plugins?.App as unknown as
+    | { addListener: (event: string, callback: (state: { isActive: boolean }) => void) => Promise<{ remove: () => Promise<void> }> }
+    | undefined;
+  if (!app) return null;
+  return app.addListener('appStateChange', (state) => onChange(state.isActive));
 }
 
 /** True only inside the Android shell (the website itself reports false). */
@@ -80,7 +111,7 @@ export async function minimizeApp(): Promise<void> {
 /**
  * MOBILE_HANDOFF: OAuth открывается в системном браузере. Google запрещает вход внутри WebView
  * («This browser or app may not be secure»), поэтому GitHub→Google в приложении не работал.
- * Браузер сам вернёт сессию приложению через `ru.conexy.app://auth`.
+ * Браузер сам вернёт сессию приложению через `conexy.app://auth`.
  */
 export async function openMobileLogin(): Promise<boolean> {
   const browser = bridge()?.Plugins?.Browser;

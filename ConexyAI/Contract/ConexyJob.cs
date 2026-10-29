@@ -49,5 +49,7 @@ public record ConexyJob(
     // WEB_DEVICE: добавлено 2026-10-18 — проект на ПК (уходит устройству событием ToolProject) и признак
     // запуска из веба: подтверждения и вопросы устройства идут через веб (событие ToolRemote).
     string? DeviceProjectId = null,
-    bool RemoteApprovals = false
+    bool RemoteApprovals = false,
+    // PHONE_AGENT: добавлено 2026-10-29 — агент работает с телефоном пользователя (инструменты phone_*).
+    bool UsePhone = false
 );

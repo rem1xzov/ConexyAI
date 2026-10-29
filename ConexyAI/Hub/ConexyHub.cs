@@ -25,6 +25,9 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     // WEB_DEVICE: добавлено 2026-10-18
     private readonly ConexyAI.Service.Device.IDeviceTaskQueue _deviceQueue;
     private readonly ConexyAI.Service.Device.IDeviceRemoteInteractionService _deviceRemote;
+    // PHONE_AGENT: добавлено 2026-10-29
+    private readonly ConexyAI.Service.Phone.IPhoneToolBridge _phones;
+    private readonly ConexyAI.Service.Phone.IPhoneApprovalService _phoneApprovals;
 
     public ConexyHub(
         IIdeTerminalService terminalService,
@@ -37,8 +40,12 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
         ILogger<ConexyHub> logger,
         ConexyAI.Service.Device.IDeviceToolBridge devices,
         ConexyAI.Service.Device.IDeviceTaskQueue deviceQueue,
-        ConexyAI.Service.Device.IDeviceRemoteInteractionService deviceRemote)
+        ConexyAI.Service.Device.IDeviceRemoteInteractionService deviceRemote,
+        ConexyAI.Service.Phone.IPhoneToolBridge phones,
+        ConexyAI.Service.Phone.IPhoneApprovalService phoneApprovals)
     {
+        _phones = phones;
+        _phoneApprovals = phoneApprovals;
         _devices = devices;
         _deviceQueue = deviceQueue;
         _deviceRemote = deviceRemote;
@@ -67,6 +74,7 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     {
         _devices.Unregister(Context.ConnectionId);
         _deviceRemote.DropConnection(Context.ConnectionId);
+        _phones.Unregister(Context.ConnectionId);
         if (exception is null)
         {
             _logger.LogInformation("SignalR disconnected: {ConnectionId} (graceful).", Context.ConnectionId);
@@ -278,12 +286,33 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
         _deviceRemote.RequestQuestionAsync(CallerId(), Context.ConnectionId, requestId, taskId, question, options, Context.ConnectionAborted);
 
     /// <summary>Веб отвечает на вопрос устройства (null — без ответа).</summary>
-    public Task<bool> AnswerDeviceQuestion(Guid requestId, string? answer) =>
-        _deviceRemote.AnswerQuestionAsync(CallerId(), requestId, answer);
+    public async Task<bool> AnswerDeviceQuestion(Guid requestId, string? answer) =>
+        await _deviceRemote.AnswerQuestionAsync(CallerId(), requestId, answer)
+        // PHONE_AGENT: вопрос мог прийти от агента телефона (та же карточка в вебе).
+        || _phoneApprovals.AnswerQuestion(CallerId(), requestId, answer);
 
     /// <summary>The desktop client returns the result of a tool the server asked it to run.</summary>
     public Task<bool> ToolResult(Guid callId, string output, bool isError) =>
         Task.FromResult(_devices.Complete(Context.ConnectionId, callId, output ?? string.Empty, isError));
+
+    // ---- Phone agent (телефон пользователя) ----
+    // PHONE_AGENT: добавлено 2026-10-29 — контракт в frontend/PHONE_AGENT.md
+
+    /// <summary>The app announces the phone (after every (re)connect and permission change); phone_* tools run there.</summary>
+    public Task<bool> RegisterPhone(string infoJson) =>
+        Task.FromResult(_phones.Register(CallerId(), Context.ConnectionId, infoJson));
+
+    /// <summary>The app is on screen (true) or in the background (false): decides whether push is needed.</summary>
+    public Task SetPhoneForeground(bool foreground)
+    {
+        _phones.SetForeground(CallerId(), Context.ConnectionId, foreground);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>The phone returns the result of a phone_* tool (<c>callId</c> comes from the PhoneTool event).</summary>
+    public Task<bool> PhoneToolResult(string callId, string output, bool isError) =>
+        Task.FromResult(Guid.TryParse(callId, out var id)
+            && _phones.Complete(Context.ConnectionId, id, output ?? string.Empty, isError));
 
     private Guid CallerId() =>
         Context.User?.TryGetUserId(out var userId) == true

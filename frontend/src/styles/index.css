@@ -10637,3 +10637,81 @@ html[data-theme="light"]:not([data-incognito="true"]) .artifact-panel {
     contain-intrinsic-size: auto 44px;
   }
 }
+
+/* PHONE_AGENT: экран «ConexyAI Phone» и раздел настроек «Телефон». */
+.dialog-card.phone-setup {
+  width: min(520px, 94vw);
+  max-height: min(720px, 92vh);
+}
+.phone-setup__list {
+  overflow-y: auto;
+  min-height: 0;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+.phone-setup__actions {
+  position: sticky;
+  bottom: 0;
+}
+.phone-perms {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.phone-perm {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-hover);
+}
+.phone-perm__text {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.phone-perm__name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.phone-perm__why {
+  margin-top: 2px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.phone-perm__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.phone-perm__state--granted { color: var(--ok); }
+.phone-perm__state--denied { color: var(--danger); }
+.phone-perm__state--prompt { color: var(--warn); }
+.phone-perm__btn {
+  justify-self: end;
+  min-height: 36px;
+}
+.phone-status {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+.phone-status dt { color: var(--muted); }
+.phone-status dd { margin: 0; color: var(--text); }
+.phone-status__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}

@@ -2,6 +2,22 @@
 <resources>
     <string name="app_name">ConexyAI</string>
     <string name="title_activity_main">ConexyAI</string>
-    <string name="package_name">ru.conexy.app</string>
-    <string name="custom_url_scheme">ru.conexy.app</string>
+    <string name="package_name">conexy.app</string>
+    <string name="custom_url_scheme">conexy.app</string>
+
+    <!-- Агент телефона -->
+    <string name="accessibility_service_label">ConexyAI — агент телефона</string>
+    <string name="accessibility_service_description">Позволяет агенту ConexyAI читать содержимое экрана, нажимать кнопки, вводить текст и делать скриншоты по вашему запросу, чтобы управлять телефоном вместо вас. Данные экрана передаются только когда вы даёте агенту задачу.</string>
+
+    <string name="channel_tasks_name">Задачи агента</string>
+    <string name="channel_tasks_description">Подтверждения действий и запросы к телефону</string>
+    <string name="channel_done_name">Готовые задачи</string>
+    <string name="channel_done_description">Уведомления о завершении задач агента</string>
+    <string name="notif_allow">Разрешить</string>
+    <string name="notif_deny">Отклонить</string>
+    <string name="notif_action_failed">Не удалось отправить решение. Откройте ConexyAI.</string>
+
+    <string name="widget_photo_label">Фото ConexyAI</string>
+    <string name="widget_photo_description">Фото, которое выбрал агент ConexyAI</string>
+    <string name="widget_photo_empty">Фото не выбрано. Попросите агента ConexyAI поставить фото на экран.</string>
 </resources>

@@ -120,6 +120,10 @@ class SignalrService {
   private supportHandlers = new Set<(payload: SupportMessagePayload) => void>();
   // SESSION_REVOKED: одна обработка 401 за раз.
   private unauthorizedInFlight = false;
+  // PHONE_AGENT: подписчики на инструменты телефона и на каждое (пере)подключение хаба. Живут вне
+  // колбэков connect(): их ставит не App, а services/phoneAgent.ts, и disconnect() их не трогает.
+  private phoneToolHandlers = new Set<(payload: unknown) => void>();
+  private connectedListeners = new Set<() => void>();
 
   async connect(token: string, callbacks: SignalrCallbacks): Promise<void> {
     this.token = token;
@@ -417,6 +421,33 @@ class SignalrService {
 
   private notifyState(state: ConnectionStatus): void {
     this.stateListeners.forEach((cb) => cb(state));
+    if (state === 'connected') this.connectedListeners.forEach((cb) => cb());
+  }
+
+  /** PHONE_AGENT: событие `PhoneTool` сервера (вызов инструмента телефона). */
+  onPhoneTool(cb: (payload: unknown) => void): () => void {
+    this.phoneToolHandlers.add(cb);
+    return () => this.phoneToolHandlers.delete(cb);
+  }
+
+  /** PHONE_AGENT: вызывается после каждого успешного (пере)подключения хаба (и сразу, если уже подключён). */
+  onConnected(cb: () => void): () => void {
+    this.connectedListeners.add(cb);
+    if (this.connection?.state === signalR.HubConnectionState.Connected) cb();
+    return () => this.connectedListeners.delete(cb);
+  }
+
+  /** True, когда хаб прямо сейчас подключён. */
+  get isConnected(): boolean {
+    return this.connection?.state === signalR.HubConnectionState.Connected;
+  }
+
+  /** Вызов хаба без попытки поднимать соединение: false/ошибка, если хаб не подключён. */
+  async invokeIfConnected<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
+    if (!this.connection || this.connection.state !== signalR.HubConnectionState.Connected) {
+      throw new Error('Hub is not connected');
+    }
+    return await this.connection.invoke<T>(method, ...args);
   }
 
   /** Re-adds this (now-current) connection to every previously joined group. */
@@ -482,6 +513,8 @@ class SignalrService {
     // WEB_DEVICE: добавлено 2026-10-18
     this.connection.on('OnDeviceQuestion', (payload: DeviceQuestionPayload, scopeId?: string) => this.callbacks.onDeviceQuestion?.(payload, scopeId));
     this.connection.on('OnDeviceDiff', (payload: DeviceDiffPayload, scopeId?: string) => this.callbacks.onDeviceDiff?.(payload, scopeId));
+    // PHONE_AGENT: инструмент телефона. Разбор и ответ — в services/phoneAgent.ts.
+    this.connection.on('PhoneTool', (payload: unknown) => this.phoneToolHandlers.forEach((h) => h(payload)));
     // SUPPORT: добавлено 2026-09-19
     this.connection.on('OnSupportMessageReceived', (payload: SupportMessagePayload) => {
       this.callbacks.onSupportMessageReceived?.(payload);

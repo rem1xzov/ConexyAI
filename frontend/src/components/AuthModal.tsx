@@ -600,7 +600,7 @@ export function AuthModal({
           href="/api/auth/github/login"
           onClick={(event) => {
             // MOBILE_HANDOFF: в приложении OAuth идёт в системном браузере — Google не пускает
-            // вход внутрь WebView. Браузер вернёт сессию по ссылке ru.conexy.app://auth.
+            // вход внутрь WebView. Браузер вернёт сессию по ссылке conexy.app://auth.
             if (!isMobileApp()) return;
             event.preventDefault();
             void openMobileLogin();

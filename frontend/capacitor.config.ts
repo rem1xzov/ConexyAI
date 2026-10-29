@@ -9,7 +9,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
  * сервера появится origin приложения — см. `frontend/MOBILE.md`.
  */
 const config: CapacitorConfig = {
-  appId: 'ru.conexy.app',
+  appId: 'conexy.app',
   appName: 'ConexyAI',
   webDir: 'dist',
   server: {
