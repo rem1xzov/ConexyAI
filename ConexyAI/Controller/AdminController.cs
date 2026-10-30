@@ -240,7 +240,8 @@ public class AdminController : ControllerBase
         u.Email,
         u.GitHubUsername,
         u.CreatedAt,
-        u.SubscriptionTier.ToString(),
+        // TIER_DISPLAY: тариф с учётом срока — истёкшая подписка показывается как Free.
+        SubscriptionService.EffectiveTier(u, DateTime.UtcNow).ToString(),
         u.IsAdmin,
         IsSuperAdmin(u));
 }

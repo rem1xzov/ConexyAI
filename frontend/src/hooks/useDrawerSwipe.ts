@@ -23,26 +23,26 @@ export function isInOpenSwipeZone(clientX: number, viewportWidth: number): boole
 }
 
 /** px per ms: above this the release counts as a flick and wins over the finger's position. */
-export const FLICK_VELOCITY = 0.4;
+export const FLICK_VELOCITY = 0.5;
 /**
- * DRAWER_ACCIDENT: минимальный путь пальца, при котором открытие вообще рассматривается.
- *
- * Из-за широкой зоны старта (левая половина экрана) случайное горизонтальное движение при обычном
- * скролле выглядело как попытка открыть чаты. Теперь сдвиг на пару пикселей — это «палец задел
- * экран», и панель возвращается на место. Закрытие этим порогом не ограничено: закрыть можно
- * любым жестом, ошибиться тут не страшно.
+ * DRAWER_ACCIDENT: флик засчитывается, только если панель протянули хотя бы на этот путь (после мёртвой
+ * зоны): резкое, но короткое касание не должно распахивать меню.
  */
-export const MIN_OPEN_TRAVEL_PX = 30;
+export const MIN_FLICK_TRAVEL_PX = 45;
+/**
+ * DRAWER_ACCIDENT: мёртвая зона. Пока палец не ушёл по горизонтали дальше этого, экран стоит на месте.
+ * После захвата сдвиг считается от точки захвата, так что рывка на эти пиксели нет.
+ */
+export const DEADZONE_PX = 18;
+/** Vertical travel after which the touch is locked as a chat scroll. */
+export const VERTICAL_LOCK_PX = 8;
+/** |dx| must beat |dy| by this factor (tan 60°): the swipe is within 30° of horizontal. */
+export const HORIZONTAL_RATIO = 1.73;
 /** Fraction of the drawer width that must be travelled to open it, when starting closed. */
 export const OPEN_RATIO = 0.35;
 /** ...and to close it, when starting open: the mirror image, so 35% of the way back. */
 export const CLOSE_RATIO = 1 - OPEN_RATIO;
-/**
- * How far one axis must beat the other before the gesture is claimed by the drawer. Kept small on
- * purpose: the decision has to land on the first move or two, because once the browser has begun a
- * scroll it starts sending non-cancelable moves and the drag can no longer be taken back.
- */
-const AXIS_SLOP_PX = 3;
+
 /** A little over the 0.25s CSS transition: after this the inline styles are dropped. */
 const SETTLE_MS = 280;
 const EASE = 'cubic-bezier(0.22, 1, 0.36, 1)';
@@ -60,8 +60,8 @@ export function drawerProgress(startProgress: number, dx: number, width: number)
 }
 
 /**
- * Whether the drawer ends up open. A flick decides on its own; otherwise the position does, with
- * the threshold mirrored around the middle so closing needs the same 30% of travel as opening.
+ * Whether the drawer ends up open. A flick decides on its own (if it travelled far enough);
+ * otherwise the position does, with the threshold mirrored so closing needs the same 35% as opening.
  *
  * DRAWER_ACCIDENT: открытие требует осознанного жеста — короткий сдвиг панель не открывает.
  */
@@ -71,25 +71,45 @@ export function shouldDrawerOpen(
   velocity: number,
   travelPx = 0,
 ): boolean {
-  if (startProgress === 0 && Math.abs(travelPx) < MIN_OPEN_TRAVEL_PX) return false;
-  if (velocity > FLICK_VELOCITY) return true;
-  if (velocity < -FLICK_VELOCITY) return false;
+  const flick = Math.abs(travelPx) > MIN_FLICK_TRAVEL_PX;
+  if (flick && velocity > FLICK_VELOCITY) return true;
+  if (flick && velocity < -FLICK_VELOCITY) return false;
   return progress > (startProgress === 1 ? CLOSE_RATIO : OPEN_RATIO);
 }
 
 /**
- * Which axis a gesture belongs to, once it has moved far enough to tell. `null` means «ещё не ясно» —
- * the caller keeps the drag undecided and does not call `preventDefault` yet.
+ * Which axis a gesture belongs to, once it has moved far enough to tell. `null` means «ещё не ясно».
  *
- * The slop is small on purpose: the browser starts sending non-cancelable moves as soon as it commits
- * to a scroll, and from that point the drawer can no longer take the gesture over.
+ * DRAWER_ACCIDENT: вертикаль фиксируется рано и с запасом (любая диагональ — это чтение чата), а
+ * горизонталь — только после мёртвой зоны и в пределах 30° от горизонтали.
  */
 export function claimAxis(dx: number, dy: number): 'horizontal' | 'vertical' | null {
   const absX = Math.abs(dx);
   const absY = Math.abs(dy);
-  if (absX >= AXIS_SLOP_PX && absX > absY) return 'horizontal';
-  if (absY >= AXIS_SLOP_PX && absY > absX) return 'vertical';
+  if (absY > VERTICAL_LOCK_PX && absY >= absX * 0.6) return 'vertical';
+  if (absX > DEADZONE_PX && absX > absY * HORIZONTAL_RATIO) return 'horizontal';
   return null;
+}
+
+/** True while an undecided gesture already leans horizontal: its moves must stay cancelable. */
+function leansHorizontal(dx: number, dy: number): boolean {
+  return Math.abs(dx) >= 3 && Math.abs(dx) > Math.abs(dy) * HORIZONTAL_RATIO;
+}
+
+/**
+ * DRAWER_TABLE: касания, которые ящик не трогает вообще: таблицы, код, поля ввода, слайдеры и
+ * всё, что помечено `data-no-drawer-swipe`.
+ */
+const NO_DRAWER_SELECTOR = [
+  'table', 'pre', 'code', '.markdown__table', '.code-block',
+  'input', 'textarea', 'select', '[contenteditable=""]', '[contenteditable="true"]',
+  '[data-no-drawer-swipe]',
+].join(',');
+
+export function isNoDrawerTarget(target: EventTarget | null): boolean {
+  const el = target instanceof Element ? target : null;
+  if (!el) return false;
+  return el.closest(NO_DRAWER_SELECTOR) !== null || belongsToHorizontalScroller(el);
 }
 
 /**
@@ -106,7 +126,7 @@ export function belongsToHorizontalScroller(target: EventTarget | null): boolean
   let el = target instanceof HTMLElement ? target : null;
   while (el && el !== document.body) {
     const overflowX = window.getComputedStyle(el).overflowX;
-    if (/(auto|scroll)/.test(overflowX) && el.scrollWidth > el.clientWidth + 1) return true;
+    if (/(auto|scroll)/.test(overflowX) && el.scrollWidth > el.clientWidth + 2) return true;
     el = el.parentElement;
   }
   return false;
@@ -268,10 +288,10 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
       }
 
       const touch = e.touches[0];
-      // MOBILE_SWIPE_ZONE: opening starts from the left half of the screen; closing works from
-      // anywhere on the panel.
       const opening = !latest.current.open;
       if (opening && !isInOpenSwipeZone(touch.clientX, window.innerWidth)) return;
+      // DRAWER_TABLE: свайп по таблице, коду или полю ввода принадлежит им, а не ящику.
+      if (isNoDrawerTarget(e.target)) return;
 
       const now = performance.now();
       const width = drawerWidth();
@@ -290,7 +310,8 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
 
     const onTouchMove = (e: TouchEvent) => {
       const drag = dragRef.current;
-      if (!drag) return;
+      // DRAWER_ACCIDENT: a touch locked as a scroll stays a scroll until the finger lifts.
+      if (!drag || drag.axis === 'ignored') return;
       const touch = e.touches[0];
       if (!touch) return;
 
@@ -298,20 +319,27 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
       const dy = touch.clientY - drag.startY;
 
       if (drag.axis === 'undecided') {
-        // Claimed as early as possible: after the browser commits to its own scroll, `preventDefault`
-        // stops working and the panel would never follow the finger.
         const axis = claimAxis(dx, dy);
-        if (axis === 'horizontal') {
-          drag.axis = belongsToHorizontalScroller(e.target) ? 'ignored' : 'horizontal';
-        } else if (axis === 'vertical') {
-          drag.axis = 'ignored'; // a vertical scroll: leave it to the browser
+        if (axis === 'vertical') {
+          drag.axis = 'ignored'; // a chat scroll: leave it to the browser until touchend
+          return;
         }
-        if (drag.axis !== 'horizontal') return;
+        if (axis !== 'horizontal') {
+          // Inside the dead zone the screen stays put, but a horizontal-leaning move is still
+          // cancelled: once the browser commits to its own gesture, the drag can't be taken back.
+          if (leansHorizontal(dx, dy) && e.cancelable) e.preventDefault();
+          return;
+        }
+        // DRAWER_ACCIDENT: travel is measured from the capture point, so the panel starts at 0px
+        // instead of jumping by the dead zone.
+        drag.axis = 'horizontal';
+        drag.startX = touch.clientX;
+        drag.startedAt = performance.now();
       }
 
       // The drawer owns the gesture now: no page scroll, no browser back-swipe.
-      e.preventDefault();
-      const progress = drawerProgress(drag.startProgress, dx, drag.width);
+      if (e.cancelable) e.preventDefault();
+      const progress = drawerProgress(drag.startProgress, touch.clientX - drag.startX, drag.width);
       drag.offsetPx = progress * drag.width;
       drag.lastX = touch.clientX;
       drag.lastTime = performance.now();

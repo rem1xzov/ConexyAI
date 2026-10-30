@@ -438,7 +438,12 @@ public class SubscriptionService : ISubscriptionService
 
     // YOOKASSA: добавлено 2026-09-27
     /// <summary>Тариф с учётом срока оплаты: истёкший платный тариф считается Free.</summary>
-    private static SubscriptionTier EffectiveTier(User? user, DateTime now)
+    /// <remarks>
+    /// TIER_DISPLAY: публичный, потому что всё, что показывает тариф пользователю (профиль, админка),
+    /// обязано брать его отсюда, а не из сырого <see cref="User.SubscriptionTier"/>: поле в БД после
+    /// окончания срока не меняется, и виджет аккаунта продолжал показывать оплаченный тариф.
+    /// </remarks>
+    public static SubscriptionTier EffectiveTier(User? user, DateTime now)
     {
         if (user is null) return SubscriptionTier.Free;
         if (user.IsAdmin) return SubscriptionTier.Admin;

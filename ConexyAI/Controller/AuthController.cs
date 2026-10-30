@@ -456,7 +456,8 @@ public class AuthController : ControllerBase
         return Ok(new UserProfileDto(
             user.Email ?? string.Empty,
             displayName,
-            user.SubscriptionTier.ToString(),
+            // TIER_DISPLAY: тариф с учётом срока — истёкшая подписка показывается как Free.
+            SubscriptionService.EffectiveTier(user, DateTime.UtcNow).ToString(),
             // ADMIN_PANEL: добавлено 2026-09-19 — use the same claim the backend's admin checks use.
             // TOKEN_REVOCATION 2026-09-24: этот claim уже подменён значением из БД (OnTokenValidated).
             User.IsAdmin()));

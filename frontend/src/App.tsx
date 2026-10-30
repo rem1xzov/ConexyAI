@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
 import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, resetLimits, getTaskStatus, runTask, createChatShareLink, type VerificationChallenge } from './api/conexyApi';
@@ -482,6 +482,13 @@ export default function App() {
 
   // ORCHESTRA: добавлено 2026-09-28 — «Оркестр агентов» есть только на ProMax (админ — как ProMax).
   // Признак берём из снимка тарифа, который приходит с сервера, чтобы не дублировать правила тарифов.
+  // TIER_DISPLAY: профиль грузится один раз при входе, а снимок лимитов обновляется после каждого хода и
+  // уже учитывает срок оплаты. Иначе подписка, истёкшая при открытом приложении, висела бы в виджете.
+  const displayUser = useMemo(
+    () => (user && usage?.tier ? { ...user, tier: usage.tier } : user),
+    [user, usage?.tier],
+  );
+
   const orchestraAvailable = ['promax', 'ultra', 'admin'].includes(
     (usage?.tier ?? '').toLowerCase(),
   );
@@ -3161,7 +3168,7 @@ export default function App() {
         onPinSession={handlePinSession}
         onRenameSession={handleRenameSession}
         onDeleteSession={(id) => (id === activeId ? guardLeave(() => void handleDeleteSession(id)) : void handleDeleteSession(id))}
-        user={user}
+        user={displayUser}
         onLogin={() => setAuthModal('login')}
         onRegister={() => setAuthModal('register')}
         onLogout={handleLogout}

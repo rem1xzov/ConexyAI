@@ -68,7 +68,8 @@ function InlineText({ text }: { text: string }) {
 function TableBlock({ header, aligns, rows }: { header: string[]; aligns: TableAlign[]; rows: string[][] }) {
   return (
     // The wrapper is what scrolls horizontally: a wide table must never stretch the chat column.
-    <div className="markdown__table">
+    // DRAWER_TABLE: data-no-drawer-swipe — свайп по таблице никогда не открывает боковое меню.
+    <div className="markdown__table" data-no-drawer-swipe="true">
       <table>
         <thead>
           <tr>

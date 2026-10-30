@@ -2963,6 +2963,9 @@ body {
 .markdown__table {
   margin: 16px 0;
   overflow-x: auto;
+  /* DRAWER_TABLE: инерция горизонтального скролла не уходит наружу таблицы. */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
 }
 
 .markdown__table table {
