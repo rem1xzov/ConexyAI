@@ -7683,7 +7683,21 @@ html[data-plain-code='true'] .markdown strong.chat-term {
 /* ---------- MOBILE RESPONSIVE: добавлено 2026-09-19 ---------- */
 
 @media (max-width: 768px) {
-  /* Sidebar -> full-screen overlay opened via hamburger */
+  /* PUSH_DRAWER: ящик занимает 85% экрана и выталкивает чат вправо на свою ширину (как в DeepSeek).
+     Во время свайпа useDrawerSwipe пишет тот же сдвиг инлайном; здесь — покой открыт/закрыт. */
+  .app {
+    --drawer-w: min(85vw, 360px);
+  }
+  .main,
+  .mobile-menu-btn {
+    transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .app--drawer-open .main,
+  .app--drawer-open .mobile-menu-btn {
+    transform: translate3d(var(--drawer-w), 0, 0);
+  }
+
+  /* Sidebar -> drawer opened via hamburger or swipe */
   .sidebar,
   .sidebar--collapsed {
     position: fixed;
@@ -7694,20 +7708,20 @@ html[data-plain-code='true'] .markdown strong.chat-term {
     /* SAFE_AREA: панель full-screen, но её содержимое не должно лезть под статус-бар и жесты. */
     padding-top: calc(14px + var(--safe-top, 0px));
     padding-bottom: calc(14px + var(--safe-bottom, 0px));
-    width: 100%;
+    width: var(--drawer-w);
     min-width: 0;
     z-index: 200;
     background: var(--surface-solid);
-    transform: translateX(-100%);
-    transition: transform 0.25s ease;
-    border-right: none;
+    transform: translate3d(-100%, 0, 0);
+    transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
     /* MOBILE_DRAWER: the vertical scroll inside the panel stays with the browser; horizontal
        movement belongs to the swipe. (A horizontal scroller under the finger opts out again — see
        belongsToHorizontalScroller.) */
     touch-action: pan-y;
   }
   .sidebar:not(.sidebar--collapsed) {
-    transform: translateX(0);
+    transform: translate3d(0, 0, 0);
   }
   /* MOBILE_DRAWER: mounted even while closed, because the swipe fades it in proportionally to the
      finger's travel. Its resting opacity stays 1 — --bg-overlay is already translucent, so capping

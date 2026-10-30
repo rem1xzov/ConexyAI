@@ -1208,6 +1208,8 @@ export default function App() {
   // MOBILE_DRAWER: the drawer transform is written directly to these nodes during a swipe.
   const sidebarPanelRef = useRef<HTMLElement | null>(null);
   const sidebarBackdropRef = useRef<HTMLDivElement | null>(null);
+  // PUSH_DRAWER: the menu button floats outside <main>, so it is pushed separately.
+  const mobileMenuBtnRef = useRef<HTMLButtonElement | null>(null);
 
   // STREAM_SCOPE: добавлено 2026-09-24 (H6, C-1) — каждое событие маршрутизируется по scopeId в
   // СВОЙ ход; то, что сопоставить нельзя, отбрасывается, а не пишется в «текущее» сообщение.
@@ -3002,6 +3004,7 @@ export default function App() {
     onClose: () => setSidebarOpen(false),
     panelRef: sidebarPanelRef,
     backdropRef: sidebarBackdropRef,
+    pushRefs: [mainRef, mobileMenuBtnRef],
   });
 
   // MOBILE_KEYBOARD: keeps the composer above the on-screen keyboard where the viewport meta hint is
@@ -3135,7 +3138,7 @@ export default function App() {
       <div className="glass-aura" aria-hidden="true" />
       {incognitoActive && <div className="incognito-aura" aria-hidden="true" />}
       <ConnectionBanner />
-      <div className="app">
+      <div className={`app${isMobile && sidebarOpen ? ' app--drawer-open' : ''}`}>
       <Sidebar
         open={sidebarOpen}
         activeTab={activeTab}
@@ -3174,6 +3177,7 @@ export default function App() {
       {/* MOBILE: добавлено 2026-09-19 — floating hamburger + backdrop for the overlay sidebar. */}
       {isMobile && (
         <button
+          ref={mobileMenuBtnRef}
           className="mobile-menu-btn"
           onClick={() => setSidebarOpen(true)}
           aria-label={t('sidebar.menu')}

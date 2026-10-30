@@ -1,7 +1,10 @@
 import { useEffect, useRef, type RefObject } from 'react';
 
 /**
- * MOBILE_DRAWER: edge-swipe for the mobile chat drawer.
+ * MOBILE_DRAWER: swipe for the mobile chat drawer.
+ *
+ * PUSH_DRAWER: как в DeepSeek — панель не наезжает на чат, а выталкивает его вправо. Панель и
+ * узлы из `pushRefs` (экран чата, кнопка меню, затемнение) сдвигаются на один и тот же offset.
  *
  * The transform is written straight to the DOM node while the finger moves (never through React
  * state), so a drag costs no re-renders and stays on the compositor. React state is only touched
@@ -10,9 +13,9 @@ import { useEffect, useRef, type RefObject } from 'react';
 
 /**
  * Fraction of the viewport, measured from the left edge, where a swipe may start to open the drawer.
- * MOBILE_SWIPE_ZONE: это левая половина экрана, а не узкая полоса у края.
+ * MOBILE_SWIPE_ZONE: PUSH_DRAWER — весь экран: горизонтальный свайп в любом месте тянет ящик.
  */
-export const OPEN_SWIPE_ZONE_RATIO = 0.5;
+export const OPEN_SWIPE_ZONE_RATIO = 1;
 
 /** True when a gesture starting at `clientX` is allowed to open the drawer. */
 export function isInOpenSwipeZone(clientX: number, viewportWidth: number): boolean {
@@ -20,7 +23,7 @@ export function isInOpenSwipeZone(clientX: number, viewportWidth: number): boole
 }
 
 /** px per ms: above this the release counts as a flick and wins over the finger's position. */
-export const FLICK_VELOCITY = 0.5;
+export const FLICK_VELOCITY = 0.4;
 /**
  * DRAWER_ACCIDENT: минимальный путь пальца, при котором открытие вообще рассматривается.
  *
@@ -31,8 +34,8 @@ export const FLICK_VELOCITY = 0.5;
  */
 export const MIN_OPEN_TRAVEL_PX = 30;
 /** Fraction of the drawer width that must be travelled to open it, when starting closed. */
-export const OPEN_RATIO = 0.3;
-/** ...and to close it, when starting open: the mirror image, so 30% of the way back. */
+export const OPEN_RATIO = 0.35;
+/** ...and to close it, when starting open: the mirror image, so 35% of the way back. */
 export const CLOSE_RATIO = 1 - OPEN_RATIO;
 /**
  * How far one axis must beat the other before the gesture is claimed by the drawer. Kept small on
@@ -42,7 +45,7 @@ export const CLOSE_RATIO = 1 - OPEN_RATIO;
 const AXIS_SLOP_PX = 3;
 /** A little over the 0.25s CSS transition: after this the inline styles are dropped. */
 const SETTLE_MS = 280;
-const EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
+const EASE = 'cubic-bezier(0.22, 1, 0.36, 1)';
 /**
  * DRAWER_STUCK: если жест начался, но ни touchend, ни touchcancel не пришёл (системный жест
  * Android, палец ушёл за край экрана), панель оставалась в промежуточном положении, и её
@@ -131,6 +134,8 @@ interface DrawerSwipeOptions {
   onClose: () => void;
   panelRef: RefObject<HTMLElement | null>;
   backdropRef: RefObject<HTMLElement | null>;
+  /** PUSH_DRAWER: nodes that travel right together with the panel. */
+  pushRefs?: RefObject<HTMLElement | null>[];
 }
 
 export function useDrawerSwipe(options: DrawerSwipeOptions): void {
@@ -144,21 +149,32 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
   const watchdogTimer = useRef<number | null>(null);
 
   useEffect(() => {
-    // The panel is exactly viewport-wide in the mobile layout, but the offset is written in pixels
-    // on top of the CSS -100% anyway: the two never disagree, whatever the viewport is.
+    const drawerWidth = () => latest.current.panelRef.current?.offsetWidth || window.innerWidth;
+    const pushNodes = () =>
+      (latest.current.pushRefs ?? []).map((ref) => ref.current).filter((n): n is HTMLElement => !!n);
+
+    // The offset is written in pixels on top of the CSS -100%, so panel and pushed nodes always
+    // move by exactly the same amount, whatever the drawer width resolves to.
     const paint = (offsetPx: number, animate: boolean) => {
+      const x = Math.round(offsetPx);
+      const transition = animate ? `transform 0.28s ${EASE}` : 'none';
       const panel = latest.current.panelRef.current;
       if (panel) {
-        panel.style.transition = animate ? `transform 0.25s ${EASE}` : 'none';
+        panel.style.transition = transition;
         panel.style.willChange = 'transform';
-        panel.style.transform = `translateX(calc(-100% + ${Math.round(offsetPx)}px))`;
+        panel.style.transform = `translate3d(calc(-100% + ${x}px), 0, 0)`;
         // While the drawer is out from under its edge it must accept touches, even mid-drag.
         panel.style.pointerEvents = 'auto';
       }
+      for (const node of pushNodes()) {
+        node.style.transition = transition;
+        node.style.willChange = 'transform';
+        node.style.transform = `translate3d(${x}px, 0, 0)`;
+      }
       const backdrop = latest.current.backdropRef.current;
       if (backdrop) {
-        backdrop.style.transition = animate ? 'opacity 0.25s ease' : 'none';
-        backdrop.style.opacity = String(Math.min(1, Math.max(0, offsetPx / Math.max(window.innerWidth, 1))));
+        backdrop.style.transition = animate ? `opacity 0.28s ${EASE}, transform 0.28s ${EASE}` : 'none';
+        backdrop.style.opacity = String(Math.min(1, Math.max(0, offsetPx / Math.max(drawerWidth(), 1))));
       }
     };
 
@@ -170,6 +186,11 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
         panel.style.willChange = '';
         panel.style.pointerEvents = '';
       }
+      for (const node of pushNodes()) {
+        node.style.transition = '';
+        node.style.transform = '';
+        node.style.willChange = '';
+      }
       const backdrop = latest.current.backdropRef.current;
       if (backdrop) {
         backdrop.style.transition = '';
@@ -178,8 +199,7 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
     };
 
     const settle = (open: boolean) => {
-      const width = latest.current.panelRef.current?.offsetWidth || window.innerWidth;
-      paint(open ? width : 0, true);
+      paint(open ? drawerWidth() : 0, true);
       if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
       settleTimer.current = window.setTimeout(() => {
         settleTimer.current = null;
@@ -254,15 +274,16 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
       if (opening && !isInOpenSwipeZone(touch.clientX, window.innerWidth)) return;
 
       const now = performance.now();
+      const width = drawerWidth();
       dragRef.current = {
         startX: touch.clientX,
         startY: touch.clientY,
         startedAt: now,
         lastX: touch.clientX,
         lastTime: now,
-        width: window.innerWidth,
+        width,
         startProgress: opening ? 0 : 1,
-        offsetPx: opening ? 0 : window.innerWidth,
+        offsetPx: opening ? 0 : width,
         axis: 'undecided',
       };
     };
