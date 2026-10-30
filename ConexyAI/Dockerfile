@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 
 # ConexyAI backend (.NET 9). Multi-stage build:
 #   build  -> dotnet/sdk:9.0   (restore + publish)

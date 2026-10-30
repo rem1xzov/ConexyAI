@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 
 # ConexyAI frontend (React + Vite). Multi-stage build:
 #   build -> node:20-alpine (npm ci + vite build)
