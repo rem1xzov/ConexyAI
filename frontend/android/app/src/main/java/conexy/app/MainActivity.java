@@ -1,8 +1,10 @@
 package conexy.app;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.PermissionRequest;
 import android.webkit.WebView;
 
@@ -124,6 +126,39 @@ public class MainActivity extends BridgeActivity {
                 });
             }
         });
+    }
+
+    /**
+     * KEYBOARD_RESTORE: шторка уведомлений забирает фокус окна и прячет клавиатуру. Когда фокус
+     * вернулся, страница сама решает, печатал ли человек до этого (useKeyboardRestore), и возвращает
+     * фокус в композер. Программный focus() в WebView не всегда поднимает клавиатуру, поэтому
+     * после его просим IME явно.
+     */
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (!hasFocus) {
+            return;
+        }
+        WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+        if (webView == null) {
+            return;
+        }
+        webView.evaluateJavascript(
+                "(function(){try{return !!(window.__conexyRestoreKeyboard&&window.__conexyRestoreKeyboard());}catch(e){return false;}})()",
+                result -> {
+                    if (!"true".equals(result)) {
+                        return;
+                    }
+                    // Страница фокусирует поле через кадр + 30 мс — даём ей успеть.
+                    webView.postDelayed(() -> {
+                        webView.requestFocus();
+                        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                        if (imm != null) {
+                            imm.showSoftInput(webView, InputMethodManager.SHOW_IMPLICIT);
+                        }
+                    }, 120);
+                });
     }
 
     /** Отдаёт CSS отступы системных панелей в тех же px, в которых считает WebView. */

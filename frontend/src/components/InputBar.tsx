@@ -1156,6 +1156,11 @@ export function InputBar({
           // KEYBOARD_CLOSE: marks the field the keyboard handler is allowed to blur when the on-screen
           // keyboard is dismissed (a transcript message being edited is a textarea too).
           data-composer-input="true"
+          // T9_POPUP: на телефоне плашка орфографии WebView («легально / Удалить») ставится по
+          // координатам слова при открытой клавиатуре и не двигается, когда клавиатура прячется и
+          // композер уезжает вниз — она зависала посреди пустого экрана. Исправления остаются
+          // в строке подсказок самой клавиатуры (автозамена Gboard/Samsung работает как раньше).
+          spellCheck={!isMobile}
           rows={1}
           disabled={disabled}
           placeholder={t('input.placeholder')}

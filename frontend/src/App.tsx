@@ -21,6 +21,7 @@ import { useFileDropZone, usePreventWindowFileDrop } from './hooks/useFileDrop';
 // MOBILE_DRAWER / MOBILE_KEYBOARD: добавлено 2026-09-24
 import { useDrawerSwipe } from './hooks/useDrawerSwipe';
 import { useKeyboardInset } from './hooks/useKeyboardInset';
+import { useKeyboardRestore } from './hooks/useKeyboardRestore';
 // MOBILE_BACK: системная кнопка «назад» в Android-приложении.
 import { isMobileApp, listenForAppBack, minimizeApp } from './utils/mobile';
 // PHONE_AGENT: агент телефона (нативный плагин PhoneAgent, только Android-приложение).
@@ -3022,6 +3023,8 @@ export default function App() {
     enabled: isMobile,
     onKeyboardClosed: () => setComposerFocused(false),
   });
+  // KEYBOARD_RESTORE: клавиатура возвращается сама после шторки уведомлений.
+  useKeyboardRestore(isMobile);
 
   // MOBILE_BACK: в приложении системная «назад» по умолчанию закрывала его целиком — даже с
   // открытым меню, настройками или тарифами. Сначала закрываем верхний слой и только с главного
