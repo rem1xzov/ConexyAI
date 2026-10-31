@@ -189,7 +189,8 @@ final class PhonePermissions {
             case "overlay":
                 return Settings.canDrawOverlays(context) ? "granted" : "prompt";
             case "write_settings":
-                return Settings.System.canWrite(context) ? "granted" : "prompt";
+                // MIN_PERMISSIONS: WRITE_SETTINGS больше не объявлено в манифесте (ни один инструмент его не использует).
+                return "unavailable";
             default:
                 return "unavailable";
         }
@@ -283,9 +284,7 @@ final class PhonePermissions {
             case "overlay":
                 intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkgUri);
                 break;
-            case "write_settings":
-                intent = new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, pkgUri);
-                break;
+
             case "notifications":
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)

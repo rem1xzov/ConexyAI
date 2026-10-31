@@ -2,35 +2,58 @@ package conexy.app;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Build;
 
 import androidx.security.crypto.EncryptedSharedPreferences;
 import androidx.security.crypto.MasterKey;
 
 /**
- * JWT и адрес сервера для нативных кнопок уведомлений. Хранится в EncryptedSharedPreferences;
- * если Keystore на устройстве сломан — в приватных SharedPreferences приложения.
+ * JWT для нативных кнопок уведомлений. Хранится в EncryptedSharedPreferences; если Keystore на
+ * устройстве сломан — только в памяти процесса (NO_PLAINTEXT_TOKEN: на диск открытым текстом не пишем).
+ * Адрес сервера не хранится и из JS не принимается — см. {@link OriginGuard#SERVER_URL}.
  * Токен никогда не пишется в лог.
  */
 final class PhoneAuthStore {
-    private static final String PLAIN = "conexy_phone_auth_plain";
+    /** LEGACY_PLAINTEXT: старое открытое хранилище — удаляется при первом обращении. */
+    private static final String LEGACY_PLAIN = "conexy_phone_auth_plain";
     private static final String ENCRYPTED = "conexy_phone_auth";
     private static final String KEY_TOKEN = "token";
+    /** LEGACY_BASE_URL: раньше адрес приходил из JS; теперь только удаляется. */
     private static final String KEY_BASE_URL = "base_url";
 
     private PhoneAuthStore() {}
 
+    private static boolean initialized;
+    /** null — Keystore недоступен, работаем с {@link #memoryToken}. */
     private static SharedPreferences cached;
+    private static String memoryToken;
 
     /** Создание EncryptedSharedPreferences дорогое (Keystore) — делаем один раз; вызывать не с главного потока. */
     private static synchronized SharedPreferences prefs(Context context) {
-        if (cached == null) {
-            cached = create(context);
+        if (!initialized) {
+            initialized = true;
+            Context app = context.getApplicationContext();
+            dropLegacyPlain(app);
+            cached = create(app);
+            if (cached != null && cached.contains(KEY_BASE_URL)) {
+                cached.edit().remove(KEY_BASE_URL).commit();
+            }
         }
         return cached;
     }
 
-    private static SharedPreferences create(Context context) {
-        Context app = context.getApplicationContext();
+    private static void dropLegacyPlain(Context app) {
+        try {
+            app.getSharedPreferences(LEGACY_PLAIN, Context.MODE_PRIVATE).edit().clear().commit();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                app.deleteSharedPreferences(LEGACY_PLAIN);
+            }
+        } catch (Throwable ignored) {
+            // не критично: содержимое уже очищено
+        }
+    }
+
+    private static SharedPreferences create(Context app) {
         try {
             MasterKey key = new MasterKey.Builder(app)
                     .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
@@ -42,28 +65,30 @@ final class PhoneAuthStore {
                     EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                     EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM);
         } catch (Throwable error) {
-            return app.getSharedPreferences(PLAIN, Context.MODE_PRIVATE);
+            return null;
         }
     }
 
-    static synchronized void save(Context context, String token, String baseUrl) {
-        SharedPreferences.Editor editor = prefs(context).edit();
-        if (token == null || token.trim().isEmpty()) {
-            editor.remove(KEY_TOKEN);
-        } else {
-            editor.putString(KEY_TOKEN, token.trim());
+    /** token == null/пусто — выход: очищается всё. */
+    static synchronized void save(Context context, String token) {
+        SharedPreferences prefs = prefs(context);
+        String value = token == null || token.trim().isEmpty() ? null : token.trim();
+        memoryToken = prefs == null ? value : null;
+        if (prefs == null) {
+            return;
         }
-        if (baseUrl != null && !baseUrl.trim().isEmpty()) {
-            editor.putString(KEY_BASE_URL, baseUrl.trim());
+        SharedPreferences.Editor editor = prefs.edit();
+        if (value == null) {
+            editor.clear();
+        } else {
+            editor.putString(KEY_TOKEN, value);
+            editor.remove(KEY_BASE_URL);
         }
         editor.commit();
     }
 
     static synchronized String token(Context context) {
-        return prefs(context).getString(KEY_TOKEN, null);
-    }
-
-    static synchronized String baseUrl(Context context) {
-        return prefs(context).getString(KEY_BASE_URL, null);
+        SharedPreferences prefs = prefs(context);
+        return prefs == null ? memoryToken : prefs.getString(KEY_TOKEN, null);
     }
 }

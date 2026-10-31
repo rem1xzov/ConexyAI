@@ -16,7 +16,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Кнопки «Разрешить»/«Отклонить» в уведомлении: POST {baseUrl}/api/mobile/actions/{actionId}
+ * Кнопки «Разрешить»/«Отклонить» в уведомлении: POST https://conexyai.ru/api/mobile/actions/{actionId}
  * с Bearer-токеном из {@link PhoneAuthStore}. Токен в лог не попадает.
  */
 public class ActionReceiver extends BroadcastReceiver {
@@ -66,15 +66,12 @@ public class ActionReceiver extends BroadcastReceiver {
     /** @return HTTP-код или -1, если запрос не отправлен. */
     private static int post(Context context, String actionId, boolean approved) throws Exception {
         String token = PhoneAuthStore.token(context);
-        String baseUrl = PhoneAuthStore.baseUrl(context);
-        if (token == null || baseUrl == null) {
+        if (token == null) {
             return -1;
         }
-        while (baseUrl.endsWith("/")) {
-            baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
-        }
-        URL url = new URL(baseUrl + "/api/mobile/actions/" + Uri.encode(actionId));
-        if (!"https".equals(url.getProtocol()) && !"http".equals(url.getProtocol())) {
+        // SERVER_ORIGIN: токен уходит только на наш сервер и только по https.
+        URL url = new URL(OriginGuard.SERVER_URL + "/api/mobile/actions/" + Uri.encode(actionId));
+        if (!"https".equals(url.getProtocol())) {
             return -1;
         }
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();

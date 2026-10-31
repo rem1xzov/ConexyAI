@@ -10,6 +10,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.Signature;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
@@ -21,6 +24,7 @@ import androidx.activity.result.ActivityResult;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
+import androidx.core.content.pm.PackageInfoCompat;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -30,6 +34,11 @@ import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.io.File;
+import java.security.MessageDigest;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Locale;
+import java.util.Set;
 
 /**
  * APK_UPDATER: установка обновления «в одно касание».
@@ -49,6 +58,12 @@ public class ApkUpdaterPlugin extends Plugin {
     private static final String KEY_DOWNLOAD_ID = "download_id";
     private static final String CHANNEL_ID = "conexy_app_update";
     private static final int NOTIFICATION_ID = 7712;
+    /**
+     * APK_SOURCE_ALLOWLIST: скачиваем только релизы GitHub (и их CDN — цели редиректа). Переходы
+     * DownloadManager не контролируем, поэтому сам файл дополнительно проверяется в {@link #verifyApk}.
+     */
+    private static final Set<String> ALLOWED_HOSTS = new HashSet<>(Arrays.asList(
+            "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"));
 
     private BroadcastReceiver downloadReceiver;
 
@@ -90,9 +105,16 @@ public class ApkUpdaterPlugin extends Plugin {
 
     @PluginMethod
     public void downloadAndInstall(PluginCall call) {
+        if (!OriginGuard.check(this, call)) {
+            return;
+        }
         String url = call.getString("url");
         if (url == null || url.trim().isEmpty()) {
             call.reject("URL_REQUIRED", "Не передан адрес APK");
+            return;
+        }
+        if (!isAllowedUrl(url)) {
+            call.reject("Адрес APK вне разрешённых источников (только https GitHub)", "URL_NOT_ALLOWED");
             return;
         }
         if (!canInstallPackages()) {
@@ -125,6 +147,10 @@ public class ApkUpdaterPlugin extends Plugin {
     private void startDownload(PluginCall call, String url) {
         if (url == null) {
             call.reject("URL_REQUIRED", "Не передан адрес APK");
+            return;
+        }
+        if (!isAllowedUrl(url)) {
+            call.reject("Адрес APK вне разрешённых источников (только https GitHub)", "URL_NOT_ALLOWED");
             return;
         }
         try {
@@ -205,6 +231,14 @@ public class ApkUpdaterPlugin extends Plugin {
             notifyListeners("updateFailed", new JSObject().put("reason", "missing"));
             return;
         }
+        String problem = verifyApk(apk);
+        if (problem != null) {
+            Log.w(TAG, "APK отклонён: " + problem);
+            //noinspection ResultOfMethodCallIgnored
+            apk.delete();
+            notifyListeners("updateFailed", new JSObject().put("reason", "verification").put("message", problem));
+            return;
+        }
         try {
             Uri contentUri = FileProvider.getUriForFile(
                     getContext(), getContext().getPackageName() + ".fileprovider", apk);
@@ -258,6 +292,84 @@ public class ApkUpdaterPlugin extends Plugin {
         } catch (Exception error) {
             Log.w(TAG, "Не удалось показать уведомление об установке", error);
         }
+    }
+
+    static boolean isAllowedUrl(String url) {
+        try {
+            Uri uri = Uri.parse(url.trim());
+            String host = uri.getHost();
+            return "https".equalsIgnoreCase(uri.getScheme())
+                    && host != null
+                    && ALLOWED_HOSTS.contains(host.toLowerCase(Locale.ROOT))
+                    && (uri.getPort() == -1 || uri.getPort() == 443)
+                    && uri.getUserInfo() == null;
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    /**
+     * APK_VERIFY: перед установкой — тот же пакет, та же подпись, что у установленного приложения,
+     * и версия новее. Иначе подменённый файл открылся бы в системном установщике от имени приложения.
+     *
+     * @return описание проблемы или null, если APK можно устанавливать.
+     */
+    @SuppressWarnings("deprecation")
+    private String verifyApk(File apk) {
+        try {
+            Context context = getContext();
+            PackageManager pm = context.getPackageManager();
+            String ownPackage = context.getPackageName();
+            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    ? PackageManager.GET_SIGNING_CERTIFICATES
+                    : PackageManager.GET_SIGNATURES;
+
+            PackageInfo archive = pm.getPackageArchiveInfo(apk.getAbsolutePath(), flags);
+            if (archive == null) {
+                return "файл не является корректным APK";
+            }
+            if (!ownPackage.equals(archive.packageName)) {
+                return "чужой пакет: " + archive.packageName;
+            }
+            PackageInfo installed = pm.getPackageInfo(ownPackage, flags);
+            if (PackageInfoCompat.getLongVersionCode(archive) <= PackageInfoCompat.getLongVersionCode(installed)) {
+                return "версия не новее установленной";
+            }
+            Set<String> expected = signerDigests(installed);
+            Set<String> actual = signerDigests(archive);
+            if (expected.isEmpty() || !expected.equals(actual)) {
+                return "подпись не совпадает с установленным приложением";
+            }
+            return null;
+        } catch (Throwable error) {
+            return "не удалось проверить APK: " + error.getClass().getSimpleName();
+        }
+    }
+
+    /** SHA-256 текущих сертификатов подписи (с фолбэком на устаревший signatures до API 28). */
+    @SuppressWarnings("deprecation")
+    private static Set<String> signerDigests(PackageInfo info) throws Exception {
+        Signature[] signatures = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && info.signingInfo != null) {
+            signatures = info.signingInfo.getApkContentsSigners();
+        }
+        if (signatures == null || signatures.length == 0) {
+            signatures = info.signatures;
+        }
+        Set<String> digests = new HashSet<>();
+        if (signatures == null) {
+            return digests;
+        }
+        MessageDigest sha = MessageDigest.getInstance("SHA-256");
+        for (Signature signature : signatures) {
+            byte[] hash = sha.digest(signature.toByteArray());
+            StringBuilder hex = new StringBuilder();
+            for (byte b : hash) {
+                hex.append(String.format(Locale.ROOT, "%02x", b));
+            }
+            digests.add(hex.toString());
+        }
+        return digests;
     }
 
     private boolean canInstallPackages() {

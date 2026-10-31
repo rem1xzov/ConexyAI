@@ -16,9 +16,10 @@ const config: CapacitorConfig = {
     url: 'https://conexyai.ru',
     cleartext: false,
     androidScheme: 'https',
-    // OAUTH_IN_WEBVIEW: вход через GitHub уводит на github.com. Без этого списка WebView отдаёт
-    // чужой домен системному браузеру — сессия остаётся там, и приложение возвращается неавторизованным.
-    allowNavigation: ['conexyai.ru', 'www.conexyai.ru', 'github.com', '*.github.com'],
+    // BRIDGE_ORIGIN_GUARD: только наш домен. Хосты из этого списка получают нативный мост, поэтому
+    // github.com здесь нет: OAuth идёт в системном браузере с возвратом по conexy.app://auth,
+    // а APK обновлений качает DownloadManager (ApkUpdater) — WebView туда не переходит.
+    allowNavigation: ['conexyai.ru', 'www.conexyai.ru'],
   },
   android: {
     allowMixedContent: false,

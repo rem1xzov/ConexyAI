@@ -1,10 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- FILEPROVIDER_SCOPE: только папки, которые реально отдаются наружу. Корни хранилищ (".") не
+     открываем: иначе любой выданный URI мог указывать на произвольный файл приложения/карты. -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="my_images" path="." />
-    <cache-path name="my_cache_images" path="." />
     <!-- APK_UPDATER: сюда DownloadManager кладёт скачанный APK, отсюда его забирает установщик. -->
     <external-files-path name="apk_updates" path="Download/" />
-    <!-- PHONE_AGENT: phone_share отдаёт файлы рабочей папки и выбранные фото. -->
-    <external-files-path name="agent_ext_files" path="." />
-    <files-path name="agent_files" path="." />
+    <!-- CAMERA_CAPTURE: <input capture> в WebView (BridgeWebChromeClient) пишет снимок сюда. -->
+    <external-files-path name="camera_captures" path="Pictures/" />
+    <!-- PHONE_AGENT: phone_share — рабочая папка агента (без «доступа ко всем файлам»). -->
+    <external-files-path name="agent_workspace" path="workspace/" />
+    <files-path name="agent_workspace_internal" path="workspace/" />
+    <!-- PHONE_AGENT: phone_share — выбранные фото и фото виджета. -->
+    <files-path name="agent_picked" path="picked/" />
+    <files-path name="agent_widgets" path="widgets/" />
+    <!-- PHONE_AGENT: phone_share — копии файлов из остальных мест (см. PhoneToolsFiles.shareUri). -->
+    <cache-path name="agent_share" path="share/" />
 </paths>

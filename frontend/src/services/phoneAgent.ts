@@ -68,7 +68,10 @@ interface PhoneAgentPlugin {
   permissions: () => Promise<{ permissions: PhonePermissions }>;
   requestPermission: (options: { permission: string }) => Promise<{ state: string }>;
   requestAll: () => Promise<{ permissions: PhonePermissions }>;
-  setAuth: (options: { token: string | null; baseUrl: string }) => Promise<unknown>;
+  // SERVER_ORIGIN: адрес сервера зашит в плагине, baseUrl больше не передаётся.
+  setAuth: (options: { token: string | null }) => Promise<unknown>;
+  /** NATIVE_AGENT_SWITCH: нативная копия выключателя; в старых APK метода нет. */
+  setEnabled?: (options: { enabled: boolean }) => Promise<unknown>;
   getPushToken: () => Promise<{ token: string | null }>;
   showNotification: (options: {
     id?: number;
@@ -127,7 +130,15 @@ export function setPhoneAgentEnabled(value: boolean): void {
   } catch {
     // хранилище может быть недоступно
   }
+  syncNativeEnabled();
   emit();
+}
+
+/** NATIVE_AGENT_SWITCH: плагин сам отказывает в execute, когда агент выключен, — держим флаг в синхроне. */
+function syncNativeEnabled(): void {
+  const native = plugin();
+  if (!native?.setEnabled) return;
+  void Promise.resolve(native.setEnabled({ enabled })).catch(() => undefined);
 }
 
 /** Слать ли `usePhone: true` в запросе задачи. */
@@ -385,7 +396,7 @@ export function setPhoneAuth(token: string | null): void {
   const native = plugin();
   if (!native) return;
   currentAuth = token;
-  void Promise.resolve(native.setAuth({ token, baseUrl: window.location.origin })).catch(() => undefined);
+  void Promise.resolve(native.setAuth({ token })).catch(() => undefined);
   if (token) void syncPushToken();
   else registeredPushKey = null;
 }
@@ -407,7 +418,7 @@ export async function phoneAgentSignOut(token: string | null): Promise<void> {
   registeredPushKey = null;
   currentAuth = null;
   patchState({ registered: false });
-  void Promise.resolve(native.setAuth({ token: null, baseUrl: window.location.origin })).catch(() => undefined);
+  void Promise.resolve(native.setAuth({ token: null })).catch(() => undefined);
 }
 
 // ── нажатие на уведомление ────────────────────────────────────────────────────────────────────
@@ -443,6 +454,8 @@ export function startPhoneAgent(): void {
   if (!native) return;
   started = true;
   patchState({ available: true });
+  // NATIVE_AGENT_SWITCH: миграция — переносим текущую настройку из localStorage в плагин при каждом старте.
+  syncNativeEnabled();
 
   const listen = (event: string, callback: (data: never) => void) => {
     try {

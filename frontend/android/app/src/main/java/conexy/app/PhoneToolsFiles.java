@@ -680,6 +680,48 @@ final class PhoneToolsFiles {
 
     // ---------------------------------------------------------------- share / clipboard
 
+    /** Файлы в папке шаринга старше этого удаляются: получатель уже давно их прочитал. */
+    private static final long SHARE_TTL_MS = 60L * 60_000;
+
+    /**
+     * FILEPROVIDER_SCOPE: FileProvider отдаёт только узкий набор папок (res/xml/file_paths.xml). Файл из
+     * другого места (общее хранилище при «доступе ко всем файлам», кэш) сначала копируется в
+     * cache/share/ — так получатель видит только этот файл, а не весь корень хранилища.
+     */
+    private static Uri shareUri(Context context, File file) throws IOException {
+        String authority = context.getPackageName() + ".fileprovider";
+        try {
+            return FileProvider.getUriForFile(context, authority, file);
+        } catch (IllegalArgumentException outsideProviderPaths) {
+            if (file.length() > COPY_MAX_BYTES) {
+                throw new IOException("Файл слишком большой для шаринга");
+            }
+            File dir = new File(context.getCacheDir(), "share");
+            File[] old = dir.listFiles();
+            if (old != null) {
+                long now = System.currentTimeMillis();
+                for (File stale : old) {
+                    if (now - stale.lastModified() > SHARE_TTL_MS) {
+                        deleteRecursive(stale, new int[1]);
+                    }
+                }
+            }
+            File slot = new File(dir, Long.toString(System.nanoTime()));
+            if (!slot.mkdirs()) {
+                throw new IOException("Не удалось подготовить файл для шаринга");
+            }
+            File copy = new File(slot, file.getName());
+            try (InputStream in = new FileInputStream(file); OutputStream out = new FileOutputStream(copy)) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, read);
+                }
+            }
+            return FileProvider.getUriForFile(context, authority, copy);
+        }
+    }
+
     static ToolResult share(Context context, JSONObject args) {
         String path = PhoneFmt.str(args, "path");
         String text = PhoneFmt.str(args, "text");
@@ -694,7 +736,7 @@ final class PhoneToolsFiles {
                 if (!file.isFile()) {
                     return ToolResult.err("Файл не найден: " + file.getPath());
                 }
-                Uri uri = FileProvider.getUriForFile(context, context.getPackageName() + ".fileprovider", file);
+                Uri uri = shareUri(context, file);
                 String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension(file.getName()));
                 send.setType(mime != null ? mime : "application/octet-stream");
                 send.putExtra(Intent.EXTRA_STREAM, uri);

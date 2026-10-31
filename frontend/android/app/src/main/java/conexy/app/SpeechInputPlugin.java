@@ -43,6 +43,10 @@ public class SpeechInputPlugin extends Plugin {
 
     @PluginMethod
     public void start(PluginCall call) {
+        // BRIDGE_ORIGIN_GUARD: микрофон — только для страницы нашего сервера.
+        if (!OriginGuard.check(this, call)) {
+            return;
+        }
         if (getPermissionState("microphone") != PermissionState.GRANTED) {
             requestPermissionForAlias("microphone", call, "microphonePermission");
             return;

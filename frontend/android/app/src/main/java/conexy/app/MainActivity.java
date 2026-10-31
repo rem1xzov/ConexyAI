@@ -119,6 +119,13 @@ public class MainActivity extends BridgeActivity {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
                 runOnUiThread(() -> {
+                    // MEDIA_ORIGIN_GUARD: камеру и микрофон отдаём только нашему сайту (в т.ч. iframe чужого
+                    // домена или случайный переход не должны получить доступ).
+                    android.net.Uri origin = request.getOrigin();
+                    if (origin == null || !OriginGuard.isTrustedUrl(origin.toString())) {
+                        request.deny();
+                        return;
+                    }
                     // Второй запрос не должен затереть первый: тот остался бы без ответа.
                     if (pendingRequest != null) {
                         try {

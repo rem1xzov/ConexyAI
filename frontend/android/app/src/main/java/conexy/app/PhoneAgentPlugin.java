@@ -45,6 +45,12 @@ public class PhoneAgentPlugin extends Plugin {
     private static final String TAG = "PhoneAgent";
     private static final String PREFS = "conexy_phone_agent";
     private static final String KEY_PUSH_TOKEN = "push_token";
+    /**
+     * NATIVE_AGENT_SWITCH: выключатель «Агент телефона» хранится нативно — проверка только в JS обходилась
+     * прямым вызовом execute. Ключа нет (старый веб-клиент ещё не вызывал setEnabled) — считаем
+     * включённым, как и дефолт в JS; новый клиент синхронизирует флаг при старте.
+     */
+    private static final String KEY_AGENT_ENABLED = "agent_enabled";
 
     private static volatile WeakReference<PhoneAgentPlugin> live;
 
@@ -234,6 +240,13 @@ public class PhoneAgentPlugin extends Plugin {
 
     @PluginMethod
     public void execute(final PluginCall call) {
+        if (!OriginGuard.check(this, call)) {
+            return;
+        }
+        if (!isAgentEnabled()) {
+            resolveTool(call, ToolResult.err("Агент телефона выключен в настройках приложения"));
+            return;
+        }
         try {
             executeInner(call);
         } catch (Throwable error) {
@@ -483,8 +496,30 @@ public class PhoneAgentPlugin extends Plugin {
 
     // ---------------------------------------------------------------- JS-методы
 
+    private boolean isAgentEnabled() {
+        return getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_AGENT_ENABLED, true);
+    }
+
+    @PluginMethod
+    public void setEnabled(PluginCall call) {
+        if (!OriginGuard.check(this, call)) {
+            return;
+        }
+        Boolean value = call.getBoolean("enabled");
+        if (value == null) {
+            call.reject("Не передан enabled", "ENABLED_REQUIRED");
+            return;
+        }
+        getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_AGENT_ENABLED, value).apply();
+        call.resolve(new JSObject().put("enabled", value.booleanValue()));
+    }
+
     @PluginMethod
     public void info(PluginCall call) {
+        if (!OriginGuard.check(this, call)) {
+            return;
+        }
         try {
             call.resolve(new JSObject(PhoneToolsSystem.infoObject(getContext()).toString()));
         } catch (JSONException error) {
@@ -494,6 +529,9 @@ public class PhoneAgentPlugin extends Plugin {
 
     @PluginMethod
     public void permissions(final PluginCall call) {
+        if (!OriginGuard.check(this, call)) {
+            return;
+        }
         arm(call, 30_000, () -> settle(call, new JSObject()));
         safeBackground(() -> {
             JSObject payload;
@@ -508,6 +546,9 @@ public class PhoneAgentPlugin extends Plugin {
 
     @PluginMethod
     public void requestPermission(final PluginCall call) {
+        if (!OriginGuard.check(this, call)) {
+            return;
+        }
         final String id = call.getString("permission", "");
         arm(call, USER_TIMEOUT_MS + 30_000, () -> settle(call, new JSObject().put("state", requester.state(id))));
         requester.request(id, state -> {
@@ -518,6 +559,9 @@ public class PhoneAgentPlugin extends Plugin {
 
     @PluginMethod
     public void requestAll(final PluginCall call) {
+        if (!OriginGuard.check(this, call)) {
+            return;
+        }
         arm(call, REQUEST_ALL_TIMEOUT_MS, () -> settle(call, permissionsPayload(requester.all())));
         requester.requestAll(permissions -> {
             safeBackground(this::checkPermissionsChanged);
@@ -527,14 +571,17 @@ public class PhoneAgentPlugin extends Plugin {
 
     @PluginMethod
     public void setAuth(final PluginCall call) {
+        if (!OriginGuard.check(this, call)) {
+            return;
+        }
+        // SERVER_ORIGIN: baseUrl из JS игнорируем — иначе токен можно было увести на чужой сервер.
         final String token = call.getString("token");
-        final String baseUrl = call.getString("baseUrl");
         final Context context = getContext();
         // EncryptedSharedPreferences/Keystore на главном потоке даёт рывки/ANR.
         arm(call, 20_000, () -> settle(call, new JSObject()));
         safeBackground(() -> {
             try {
-                PhoneAuthStore.save(context, token, baseUrl);
+                PhoneAuthStore.save(context, token);
             } catch (Throwable error) {
                 Log.w(TAG, "Не удалось сохранить auth: " + error.getClass().getSimpleName());
             }
@@ -544,6 +591,9 @@ public class PhoneAgentPlugin extends Plugin {
 
     @PluginMethod
     public void getPushToken(final PluginCall call) {
+        if (!OriginGuard.check(this, call)) {
+            return;
+        }
         final Context context = getContext();
         try {
             if (FirebaseApp.getApps(context).isEmpty()) {
@@ -578,14 +628,23 @@ public class PhoneAgentPlugin extends Plugin {
 
     @PluginMethod
     public void showNotification(PluginCall call) {
+        if (!OriginGuard.check(this, call)) {
+            return;
+        }
         Integer id = call.getInt("id");
+        // NO_JS_CONFIRM: уведомления с кнопками «Разрешить/Отклонить» приходят только из FCM
+        // (PhoneFirebaseService). Из JS — только информационные, чтобы нельзя было подделать запрос.
+        String type = call.getString("type", "completed");
+        if ("confirm".equals(type)) {
+            type = "completed";
+        }
         NotificationHelper.show(
                 getContext(),
                 id,
-                call.getString("type", "completed"),
+                type,
                 call.getString("title", ""),
                 call.getString("body", ""),
-                call.getString("actionId"),
+                null,
                 call.getString("taskId"),
                 call.getString("chatId"),
                 Boolean.TRUE.equals(call.getBoolean("dangerous", false)));
@@ -594,12 +653,18 @@ public class PhoneAgentPlugin extends Plugin {
 
     @PluginMethod
     public void cancelNotification(PluginCall call) {
+        if (!OriginGuard.check(this, call)) {
+            return;
+        }
         NotificationHelper.cancel(getContext(), call.getString("actionId"), call.getString("taskId"));
         call.resolve();
     }
 
     @PluginMethod
     public void getLaunchNotification(PluginCall call) {
+        if (!OriginGuard.check(this, call)) {
+            return;
+        }
         JSObject data = launchNotification;
         launchNotification = null;
         call.resolve(data == null ? new JSObject() : data);
