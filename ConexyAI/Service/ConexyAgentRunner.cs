@@ -62,6 +62,16 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly IMcpRegistryFactory? _mcpRegistryFactory;
     private AgentHooks? _hooks;
     private int _hookRuns;
+    // WEB_DEAD_LINKS: адреса, которые в этом прогоне уже не открылись (адрес -> причина), и счётчики
+    // интернет-обращений за прогон. Агент открывал один и тот же мёртвый сайт раз за разом, а старый
+    // гард этого не видел: текст ошибки менялся, а бюджет поиска сбрасывался каждый ход.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _failedWebUrls = new(StringComparer.Ordinal);
+    private int _failedWebFetches;
+    private int _webCallsThisRun;
+    /// <summary>После стольких неоткрывшихся страниц за прогон чтение страниц отключается.</summary>
+    private const int MaxFailedWebFetchesPerRun = 6;
+    /// <summary>Всего интернет-обращений (поиск + чтение) за один прогон.</summary>
+    private const int MaxWebCallsPerRun = 40;
     private ConexyJob _job = null!;
     // DESKTOP_AGENT: добавлено 2026-10-15
     private readonly IDeviceToolBridge? _deviceBridge;
@@ -407,6 +417,26 @@ public class ConexyAgentRunner : IConexyAgentRunner
     /// WEB_PARALLEL: страницы, запрошенные в одном ответе, читаются одновременно (только
     /// <c>fetch_web_page</c> — инструменты с побочными эффектами так не запускаются).
     /// </summary>
+    /// <summary>WEB_DEAD_LINKS: отказ, когда интернет-бюджет всего прогона исчерпан; иначе списывает одно обращение.</summary>
+    private string? WebRunBudgetRefusal() =>
+        Interlocked.Increment(ref _webCallsThisRun) > MaxWebCallsPerRun
+            ? "Лимит интернет-запросов на эту задачу исчерпан. Больше не ищи и не открывай страницы — " +
+              "собери ответ из уже найденного и укажи, что осталось непроверенным."
+            : null;
+
+    /// <summary>Один и тот же адрес в разной записи (регистр хоста, #якорь, хвостовой слэш, без схемы).</summary>
+    internal static string NormalizeWebUrl(string url)
+    {
+        var raw = url.Trim();
+        if (!raw.Contains("://", StringComparison.Ordinal))
+            raw = "https://" + raw;
+        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri))
+            return raw.ToLowerInvariant();
+        var path = uri.AbsolutePath.TrimEnd('/');
+        var host = uri.Host.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? uri.Host[4..] : uri.Host;
+        return (host + path + uri.Query).ToLowerInvariant();
+    }
+
     private async Task<Dictionary<string, ConexyToolResult>> PrefetchWebPagesAsync(
         List<LlmToolCall> calls, Guid taskId, Guid chatId, CancellationToken ct)
     {
@@ -1255,6 +1285,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     {
         _job = job;
         _profile = ProfileFor(job);
+        _failedWebUrls.Clear();
+        _failedWebFetches = 0;
+        _webCallsThisRun = 0;
         _phoneOffline = false;
         // ORCHESTRA: ведущий агент — единственный, кому разрешён инструмент spawn_agents.
         _agent = AgentIdentity.Lead;
@@ -3915,6 +3948,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     var request = JsonSerializer.Deserialize<WebSearchRequest>(toolCall.Function.Arguments);
                     if (request is null || string.IsNullOrWhiteSpace(request.Query))
                         return new ConexyToolResult(toolCall.Id, "web_search requires a 'query'.", true);
+                    if (WebRunBudgetRefusal() is { } searchRefusal)
+                        return new ConexyToolResult(toolCall.Id, searchRefusal, false);
 
                     await SendAgentStatusAsync(taskId, "searching", $"Ищу в интернете: {request.Query}...", ct: ct);
                     // TOOL_PILLS: добавлено 2026-09-20 — web_search does not go through the
@@ -3943,6 +3978,23 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         ? parsed
                         : null;
 
+                    // WEB_DEAD_LINKS: уже не открывшийся адрес не дёргаем снова — сразу отвечаем модели.
+                    var urlKey = NormalizeWebUrl(url);
+                    if (_failedWebUrls.TryGetValue(urlKey, out var earlierError))
+                        return new ConexyToolResult(
+                            toolCall.Id,
+                            $"Эта страница уже не открылась в этом запуске ({earlierError}). Не открывай её снова: " +
+                            "возьми другой источник из выдачи или ответь по тому, что уже найдено.",
+                            false);
+                    if (Volatile.Read(ref _failedWebFetches) >= MaxFailedWebFetchesPerRun)
+                        return new ConexyToolResult(
+                            toolCall.Id,
+                            "Слишком много страниц не открылось в этом запуске — чтение страниц отключено. " +
+                            "Ответь по уже найденным данным (в том числе по сниппетам поиска) и честно скажи, что не удалось проверить.",
+                            false);
+                    if (WebRunBudgetRefusal() is { } fetchRefusal)
+                        return new ConexyToolResult(toolCall.Id, fetchRefusal, false);
+
                     await SendAgentStatusAsync(taskId, "searching", $"Читаю страницу: {ShortUrl(url)}...", ct: ct);
                     await SendToolActionAsync(taskId, FetchWebPageTool.Name, url, "started", $"Читаю страницу: {ShortUrl(url)}", null, ct);
 
@@ -3955,6 +4007,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         page.Success ? page.Title ?? "Страница прочитана" : page.Error,
                         page.Output,
                         ct);
+
+                    if (!page.Success)
+                    {
+                        _failedWebUrls[urlKey] = page.Error ?? "ошибка";
+                        Interlocked.Increment(ref _failedWebFetches);
+                    }
 
                     // A page that answered 404, is a PDF or points at a private address is a normal
                     // outcome of reading the web — only a network failure counts as a failing tool, so

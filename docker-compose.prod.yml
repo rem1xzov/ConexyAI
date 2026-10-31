@@ -155,6 +155,8 @@ services:
       Push__Fcm__ProjectId: ${FCM_PROJECT_ID:-}
       Push__Fcm__ServiceAccountJson: ${FCM_SERVICE_ACCOUNT_JSON:-}
       ADMIN_ACCOUNTS: ${ADMIN_ACCOUNTS:-}
+      # DEEPSEEK_SEARCH: поиск и чтение страниц идут через DeepSeek (ключ DEEPSEEK_API_KEY). `jsonseo` вернёт старый поиск.
+      WebSearch__Provider: ${WEB_SEARCH_PROVIDER:-deepseek}
       WebSearch__JsonSeoApiKey: ${JSONSEO_API_KEY:-}
       WebSearch__JsonSeoEndpoint: ${JSONSEO_ENDPOINT:-https://jsonseo.ru/api/yandex}
       SpeechKit__ApiKey: ${SPEECHKIT_API_KEY:-}

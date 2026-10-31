@@ -779,6 +779,25 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
+  // USAGE_SYNC: счётчики на сервере общие для сайта, приложения и десктопа, но сайт перечитывал их
+  // только после своих ответов — расход с десктопа не был виден до перезагрузки. Теперь обновляем
+  // при возврате в окно и раз в минуту, пока вкладка видна.
+  useEffect(() => {
+    if (!token) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshUsage();
+    };
+    const timer = window.setInterval(onVisible, 60_000);
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
   // BUGFIX_PERF: добавлено 2026-09-21
   // MessageBubble is memoised, which only helps if the callbacks it receives keep one identity
   // for the whole session. The handlers below therefore read the mutable inputs through this

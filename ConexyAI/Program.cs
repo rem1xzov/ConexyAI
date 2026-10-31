@@ -362,13 +362,26 @@ builder.Services.AddHttpClient<IConexyLlmClient, ConexyLlmClient>();
 // MCP: отдельный HttpClient для удалённых MCP-серверов; фабрика создаёт реестр на прогон (с личными серверами пользователя).
 builder.Services.AddHttpClient("mcp", client => client.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddSingleton<IMcpRegistryFactory, McpRegistryFactory>();
-builder.Services.AddHttpClient<IWebSearchService, JsonSeoSearchService>();
+// DEEPSEEK_SEARCH: поиск и чтение страниц идут через встроенный Search/Fetch API DeepSeek (тот же ключ).
+// WebSearch:Provider=jsonseo возвращает прежний поиск через JSON SEO.
+var useJsonSeo = string.Equals(builder.Configuration["WebSearch:Provider"], "jsonseo", StringComparison.OrdinalIgnoreCase);
+if (useJsonSeo)
+    builder.Services.AddHttpClient<IWebSearchService, JsonSeoSearchService>();
+else
+    builder.Services.AddHttpClient<IWebSearchService, ConexyAI.Service.Web.DeepSeekSearchService>();
 // AGENT_WEB_TOOLS: добавлено 2026-09-24 — начало блока агентских инструментов (ws/be-agent).
 // SSRF-гард (DNS-резолвер как шов для тестов) нужен fetch_web_page и take_screenshot; у
 // WebPageFetcher свой SocketsHttpHandler с пиннингом проверенного IP, поэтому не AddHttpClient.
 builder.Services.AddSingleton<ConexyAI.Service.Web.IHostAddressResolver, ConexyAI.Service.Web.DnsHostAddressResolver>();
 builder.Services.AddSingleton<ConexyAI.Service.Web.PublicUrlGuard>();
-builder.Services.AddSingleton<ConexyAI.Service.Web.IWebPageFetcher, ConexyAI.Service.Web.WebPageFetcher>();
+builder.Services.AddSingleton<ConexyAI.Service.Web.WebPageFetcher>();
+if (useJsonSeo)
+    builder.Services.AddSingleton<ConexyAI.Service.Web.IWebPageFetcher>(sp => sp.GetRequiredService<ConexyAI.Service.Web.WebPageFetcher>());
+else
+{
+    builder.Services.AddHttpClient(nameof(ConexyAI.Service.Web.DeepSeekPageFetcher));
+    builder.Services.AddSingleton<ConexyAI.Service.Web.IWebPageFetcher, ConexyAI.Service.Web.DeepSeekPageFetcher>();
+}
 // SEARCH_USER_CHATS: поиск по прошлым чатам пользователя для search_user_chats (только чтение).
 builder.Services.AddScoped<IChatSearchRepository, ChatSearchRepository>();
 // AGENT_WEB_TOOLS: конец блока.
