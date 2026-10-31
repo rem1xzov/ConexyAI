@@ -21,10 +21,15 @@ public sealed class PcTools : IDisposable
     private readonly PathGuard _guard;
     private readonly ICommandApprover _approver;
     private readonly ShellTool _shell;
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
+    // HTTP_REDIRECTS: редиректы следуем вручную — иначе разрешённый хост (или localhost) пересылал бы запрос
+    // с данными на любой другой хост без вопроса.
+    private const int MaxRedirects = 5;
+    private readonly HttpClient _http = new(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false }) { Timeout = TimeSpan.FromSeconds(30) };
 
-    // Папки, чтение которых пользователь уже разрешил в этой сессии (вложенные — тоже).
-    private readonly HashSet<string> _readableRoots = new(StringComparer.OrdinalIgnoreCase);
+    // READ_GRANTS: разрешение на чтение вне проекта — ровно на тот файл (или список той папки), что видел
+    // пользователь. Раньше одно «да» открывало всю папку с подпапками (например, весь профиль).
+    private readonly HashSet<string> _readableFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _listableDirs = new(StringComparer.OrdinalIgnoreCase);
     // Внешние хосты, запросы к которым пользователь уже разрешил в этой сессии.
     private readonly HashSet<string> _allowedHosts = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Background> _background = new();
@@ -164,35 +169,60 @@ public sealed class PcTools : IDisposable
             return ToolResult.Fail("Нужен абсолютный http(s) URL, например http://localhost:5000/health.");
 
         var method = (args.Str("method") ?? "GET").ToUpperInvariant();
-        // К localhost — свободно (проверка своих сервисов). Во внешний интернет — с подтверждением хоста:
-        // иначе письмо/документ с внедрённой инструкцией может вывести данные с ПК без ведома пользователя.
-        if (!uri.IsLoopback)
-        {
-            bool known;
-            lock (_allowedHosts) known = _allowedHosts.Contains(uri.Host);
-            if (!known)
-            {
-                await Require("HTTP-запрос в интернет", $"{method} {url}\n(разрешение действует на {uri.Host} до конца сессии)", ct);
-                lock (_allowedHosts) _allowedHosts.Add(uri.Host);
-            }
-        }
+        await EnsureHostAllowed(uri, "HTTP-запрос в интернет", $"{method} {url}", ct);
 
-        using var request = new HttpRequestMessage(new HttpMethod(method), uri);
         var headers = args.Dict("headers");
-        if (args.Str("body") is { } body)
-            request.Content = new StringContent(body, Encoding.UTF8,
-                headers.TryGetValue("Content-Type", out var type) ? type : "application/json");
-        foreach (var (name, value) in headers)
+        var body = args.Str("body");
+        HttpRequestMessage Build(Uri target, string verb, bool withBody, bool sameHost)
         {
-            if (name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
-                continue;
-            request.Headers.TryAddWithoutValidation(name, value);
+            var request = new HttpRequestMessage(new HttpMethod(verb), target);
+            if (withBody && body is not null)
+                request.Content = new StringContent(body, Encoding.UTF8,
+                    headers.TryGetValue("Content-Type", out var type) ? type : "application/json");
+            foreach (var (name, value) in headers)
+            {
+                if (name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                // Учётные данные на другой хост при редиректе не передаём (как браузеры и curl).
+                if (!sameHost && (name.Equals("Authorization", StringComparison.OrdinalIgnoreCase)
+                                  || name.Equals("Cookie", StringComparison.OrdinalIgnoreCase)
+                                  || name.Equals("Proxy-Authorization", StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                request.Headers.TryAddWithoutValidation(name, value);
+            }
+            return request;
         }
 
         var watch = Stopwatch.StartNew();
         try
         {
-            using var response = await _http.SendAsync(request, ct);
+            var current = uri;
+            var verb = method;
+            var withBody = true;
+            HttpResponseMessage response;
+            for (var hop = 0; ; hop++)
+            {
+                using (var request = Build(current, verb, withBody, current.Host.Equals(uri.Host, StringComparison.OrdinalIgnoreCase)))
+                    response = await _http.SendAsync(request, ct);
+                var code = (int)response.StatusCode;
+                if (code is not (301 or 302 or 303 or 307 or 308) || response.Headers.Location is not { } location)
+                    break;
+                response.Dispose();
+                if (hop >= MaxRedirects)
+                    return ToolResult.Fail($"Слишком много редиректов (> {MaxRedirects}).");
+                var next = location.IsAbsoluteUri ? location : new Uri(current, location);
+                if (next.Scheme is not ("http" or "https"))
+                    return ToolResult.Fail($"Редирект на неподдерживаемый адрес: {next}");
+                // Каждый новый хост — по той же политике, что и первый запрос.
+                await EnsureHostAllowed(next, "HTTP-редирект в интернет", $"{verb} {next}\n(редирект с {current.Host})", ct);
+                if (code == 303 || code is 301 or 302 && verb == "POST")
+                {
+                    verb = "GET";
+                    withBody = false;
+                }
+                current = next;
+            }
+            using var responseScope = response;
             var text = await response.Content.ReadAsStringAsync(ct);
             var sb = new StringBuilder();
             sb.AppendLine($"HTTP {(int)response.StatusCode} {response.ReasonPhrase} · {watch.ElapsedMilliseconds} мс");
@@ -210,6 +240,22 @@ public sealed class PcTools : IDisposable
         {
             return ToolResult.Fail("Таймаут 30 с — сервис не ответил.");
         }
+    }
+
+    /// <summary>
+    /// К localhost — свободно (проверка своих сервисов). Во внешний интернет — с подтверждением хоста:
+    /// иначе письмо/документ с внедрённой инструкцией может вывести данные с ПК без ведома пользователя.
+    /// </summary>
+    private async Task EnsureHostAllowed(Uri uri, string title, string details, CancellationToken ct)
+    {
+        if (uri.IsLoopback)
+            return;
+        bool known;
+        lock (_allowedHosts) known = _allowedHosts.Contains(uri.Host);
+        if (known)
+            return;
+        await Require(title, $"{details}\n(разрешение действует на {uri.Host} до конца сессии)", ct);
+        lock (_allowedHosts) _allowedHosts.Add(uri.Host);
     }
 
     // ── Скриншот страницы в браузере ПК ─────────────────────────────────────
@@ -245,6 +291,14 @@ public sealed class PcTools : IDisposable
             if (!File.Exists(file))
                 return ToolResult.Fail($"Файл не найден: {url}");
             url = new Uri(file).AbsoluteUri;
+        }
+        else
+        {
+            // SCREENSHOT_HOSTS: открытие внешнего URL в браузере — тот же канал утечки, что и http_request
+            // (данные в query-строке). Редиректы и подресурсы страницы браузер грузит сам — их не контролируем.
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var pageUri))
+                return ToolResult.Fail("Некорректный URL.");
+            await EnsureHostAllowed(pageUri, "Скриншот страницы из интернета", url, ct);
         }
 
         var browser = FindBrowser();
@@ -307,24 +361,61 @@ public sealed class PcTools : IDisposable
     private bool IsInsideProject(string full) =>
         full.Equals(_guard.Root, Cmp) || full.StartsWith(_guard.Root + Path.DirectorySeparatorChar, Cmp);
 
+    /// <summary>
+    /// Реальный путь: ссылки/junction в любом сегменте разворачиваются (как в PathGuard), чтобы «безобидная»
+    /// ссылка не вела в ~/.ssh и разрешение не выдавалось на имя ссылки.
+    /// </summary>
+    private static string RealPath(string full)
+    {
+        var root = Path.GetPathRoot(full) ?? string.Empty;
+        var current = root;
+        foreach (var part in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, part);
+            FileSystemInfo info = Directory.Exists(current) ? new DirectoryInfo(current) : new FileInfo(current);
+            if (!info.Exists || info.LinkTarget is null)
+                continue;
+            if (info.ResolveLinkTarget(returnFinalTarget: true) is { } target)
+                current = Path.GetFullPath(target.FullName);
+        }
+        return Path.TrimEndingDirectorySeparator(current.Length == 0 ? full : current);
+    }
+
+    private static bool IsBroadRoot(string path)
+    {
+        var trimmed = Path.TrimEndingDirectorySeparator(path);
+        var profile = Path.TrimEndingDirectorySeparator(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        return Path.GetPathRoot(path) is { } driveRoot && Path.TrimEndingDirectorySeparator(driveRoot).Equals(trimmed, Cmp)
+               || trimmed.Equals(profile, Cmp)
+               || trimmed.Equals(Path.GetDirectoryName(profile) ?? string.Empty, Cmp);
+    }
+
     private async Task EnsureReadable(string full, bool isDirectory, CancellationToken ct)
     {
-        if (IsInsideProject(full))
+        var real = RealPath(full);
+        if (IsInsideProject(full) && IsInsideProject(real))
             return;
         // Ключи и секреты не читаем ни с каким подтверждением.
-        if (CommandPolicy.ForbiddenReason(full) is not null)
+        if (CommandPolicy.ForbiddenReason(full) is not null || CommandPolicy.SecretPathReason(real + Path.DirectorySeparatorChar) is not null)
             throw new ToolException("Чтение этого места запрещено политикой (ключи, учётные данные).");
 
-        var folder = isDirectory ? full : Path.GetDirectoryName(full) ?? full;
-        lock (_readableRoots)
+        var grants = isDirectory ? _listableDirs : _readableFiles;
+        lock (grants)
         {
-            if (_readableRoots.Any(r => folder.Equals(r, Cmp) || folder.StartsWith(r + Path.DirectorySeparatorChar, Cmp)))
+            if (grants.Contains(real))
                 return;
         }
 
-        await Require("Чтение вне проекта", $"{full}\n(разрешение действует на папку {folder} до конца сессии)", ct);
-        lock (_readableRoots)
-            _readableRoots.Add(folder);
+        // Корень диска и профиль пользователя не запоминаем: спрашиваем каждый раз.
+        var remember = !(isDirectory && IsBroadRoot(real));
+        var scope = !remember ? "только этот раз"
+            : isDirectory ? "на список этой папки до конца сессии (не на файлы в ней)"
+            : "на этот файл до конца сессии";
+        var shown = real.Equals(full, Cmp) ? full : $"{full}\n→ {real}";
+        await Require("Чтение вне проекта", $"{shown}\n(разрешение действует {scope})", ct);
+        if (remember)
+            lock (grants)
+                grants.Add(real);
     }
 
     public async Task<ToolResult> ListDirAsync(ToolArgs args, CancellationToken ct)
@@ -402,7 +493,8 @@ public sealed class PcTools : IDisposable
         var isDir = Directory.Exists(source);
         if (!isDir && !File.Exists(source))
             return ToolResult.Fail($"Не найдено: {source}");
-        if (CommandPolicy.ForbiddenReason(source) is not null)
+        if (CommandPolicy.ForbiddenReason(source) is not null
+            || CommandPolicy.SecretPathReason(RealPath(source) + Path.DirectorySeparatorChar) is not null)
             return ToolResult.Fail("Копирование этого места запрещено политикой (ключи, учётные данные).");
 
         await Require("Копирование в проект", $"{source}\n→ {_guard.Relative(destination)}", ct);

@@ -89,8 +89,8 @@ public sealed class McpConfig
 
     public void Save()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(this, Options));
+        // UNIX_0600: в mcp.json токены серверов (на Linux/macOS — лишь base64), читать их может только владелец.
+        ClientConfig.WriteOwnerOnly(FilePath, JsonSerializer.Serialize(this, Options));
     }
 
     /// <summary>Имя сервера в имени инструмента: латиница в нижнем регистре, цифры и «_».</summary>

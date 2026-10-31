@@ -23,7 +23,11 @@ public sealed class PathGuard
         Root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         // WORKSPACE_GUARD: даже если корень пришёл из старого projects.json или cwd процесса — системная
         // папка не становится рабочей. Иначе «осмотр» даёт дамп system32, а модель считает это работой.
-        UnsafeReason = Workspace.WhyUnsafe(Root);
+        UnsafeReason = Workspace.WhyUnsafe(Root)
+                       // SECRET_PATHS: папка с ключами (~/.ssh, настройки ConexyAI, профиль браузера) не становится рабочей.
+                       ?? (CommandPolicy.SecretPathReason(Root + Path.DirectorySeparatorChar) is not null
+                           ? "это папка с ключами/учётными данными"
+                           : null);
     }
 
     /// <summary>Почему корень не годится как рабочая папка (null — годится).</summary>

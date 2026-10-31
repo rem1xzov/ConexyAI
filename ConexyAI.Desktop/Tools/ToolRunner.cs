@@ -16,6 +16,9 @@ public sealed class ToolRunner
     private readonly ICommandApprover _approver;
     // LOOP_GUARD: счётчик чтений без правок — заслон работает даже со старой версией сервера.
     private readonly ReadLoopGuard _readGuard = new();
+    // BUILD_FILES_GUARD: агент менял файлы сборки/тестов — run_tests/get_diagnostics только с подтверждения.
+    private volatile bool _buildFilesTouched;
+    private string _buildFingerprint;
 
     /// <summary>Контрольные точки файлов за ходы агента (/rewind).</summary>
     public Checkpoints Checkpoints { get; } = new();
@@ -41,7 +44,10 @@ public sealed class ToolRunner
             if (ToolCallContext.Current is not { Remote: true })
                 Checkpoints.BeforeWrite(path);
             TaskChanges.BeforeWrite(path);
+            if (ProjectCommands.IsBuildDefinition(path, _guard.Root))
+                _buildFilesTouched = true;
         };
+        _buildFingerprint = ProjectCommands.Fingerprint(_guard.Root);
         _files = new FileTools(_guard);
         _search = new SearchTools(_guard);
         _editor = new EditorTool(_guard, _files);
@@ -72,14 +78,19 @@ public sealed class ToolRunner
                     : ToolResult.Fail("turn_diff: неизвестна задача.");
             if (tool == "ask_user")
                 return await AskUserAsync(args, ct);
-            if (PlanMode && PlanBlockReason(tool, args) is { } blocked)
+            if (PlanMode && PlanBlockReason(tool, args, _guard.Root) is { } blocked)
                 return ToolResult.Fail(blocked);
             // EDIT_AFTER_READ + BASH_FILE_OPS: проверки до выполнения — правка непрочитанного файла
             // и файловые операции через оболочку отклоняются с точным следующим шагом.
             if (_readGuard.Refuse(tool, args, FileExists) is { } readRefusal)
                 return ToolResult.Fail(readRefusal);
 
-            _log(Describe(tool, args));
+            // REMOTE_APPROVAL_POLICY: имя инструмента нужно approver'у демона (install_software и т.п. с сайта нельзя).
+            if (ToolCallContext.Current is { } call)
+                ToolCallContext.Current = call with { Tool = tool };
+
+            // DAEMON_LOG_MASK: в журнал демона не пишем токены из команд и URL.
+            _log(SecretMask.Mask(Describe(tool, args)));
 
             // LOCAL_MCP: Google и локальные MCP-серверы.
             if (tool.StartsWith("local__", StringComparison.Ordinal))
@@ -114,8 +125,8 @@ public sealed class ToolRunner
                 "pc_copy_to_project" => await _pc.CopyToProjectAsync(args, ct),
                 "download_file" => await _pc.DownloadAsync(args, ct),
                 "install_software" => await _pc.InstallAsync(args, ct),
-                "run_tests" => await ProjectCommands.RunAsync(_guard.Root, _shell, args, test: true, ct),
-                "get_diagnostics" => await ProjectCommands.RunAsync(_guard.Root, _shell, args, test: false, ct),
+                "run_tests" => await RunProjectAsync(args, test: true, ct),
+                "get_diagnostics" => await RunProjectAsync(args, test: false, ct),
                 _ => ToolResult.Fail($"Инструмент '{tool}' не поддерживается десктопным клиентом."),
             };
             // LOOP_GUARD: считаем только реально выполненные вызовы.
@@ -164,14 +175,14 @@ public sealed class ToolRunner
     };
 
     /// <summary>Почему инструмент запрещён в режиме плана (null — разрешён: чтение, поиск, просмотр).</summary>
-    private static string? PlanBlockReason(string tool, ToolArgs args)
+    private static string? PlanBlockReason(string tool, ToolArgs args, string root)
     {
         const string why = "РЕЖИМ ПЛАНА: изменения запрещены. Ничего не меняй — изучи проект и опиши этот шаг в плане.";
         if (PlanWriteTools.Contains(tool))
             return why;
         if (tool == "str_replace_editor" && args.Str("command") != "view")
             return why;
-        if (tool is "bash" or "terminal_exec" or "cmd_exec" && !CommandPolicy.IsReadOnly(args.Str("command") ?? string.Empty))
+        if (tool is "bash" or "terminal_exec" or "cmd_exec" && !CommandPolicy.IsReadOnly(args.Str("command") ?? string.Empty, root))
             return why + " В плане разрешены только команды чтения (ls, cat, git status/log/diff).";
         if (tool.StartsWith("local__", StringComparison.Ordinal)
             && !(tool.StartsWith("local__google__", StringComparison.Ordinal) || tool.StartsWith("local__mail__", StringComparison.Ordinal))
@@ -179,6 +190,17 @@ public sealed class ToolRunner
             || tool.EndsWith("attachment", StringComparison.Ordinal) || tool.EndsWith("drive_download", StringComparison.Ordinal))
             return why;
         return null;
+    }
+
+    private Task<ToolResult> RunProjectAsync(ToolArgs args, bool test, CancellationToken ct)
+    {
+        var touched = _buildFilesTouched || ProjectCommands.Fingerprint(_guard.Root) != _buildFingerprint;
+        return ProjectCommands.RunAsync(_guard.Root, _shell, args, test, ct, requireApproval: touched, onApproved: () =>
+        {
+            // Пользователь видел текущее состояние — следующая правка файлов сборки снова потребует вопроса.
+            _buildFilesTouched = false;
+            _buildFingerprint = ProjectCommands.Fingerprint(_guard.Root);
+        });
     }
 
     /// <summary>Есть ли файл уже сейчас: новый файл можно создать без предварительного чтения.</summary>

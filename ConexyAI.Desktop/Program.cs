@@ -19,6 +19,7 @@ const string Usage = """
       conexy projects remove <id|имя>             убрать проект
       conexy daemon                                 фоновый режим: выполнять задачи с сайта, подтверждения — на сайте
       conexy daemon --install | --uninstall         включить/отключить автозапуск демона при входе в систему
+      conexy remote [safe|full]                     что демону можно по подтверждению с сайта (по умолчанию safe)
 
     Агент видит и меняет файлы ТОЛЬКО внутри рабочей папки. Любая команда терминала,
     кроме чтения, выполняется после вашего подтверждения.
@@ -33,9 +34,8 @@ static string? NormalizeUrl(string? url)
         return null;
     if (!url.Contains("://"))
         url = "https://" + url;
-    return Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
-        ? url.TrimEnd('/')
-        : null;
+    // SERVER_URL_HTTPS: ключ по http утекает в сеть открытым текстом — http только для localhost.
+    return ClientConfig.IsAllowedServerUrl(url) ? url.TrimEnd('/') : null;
 }
 
 static string? Option(string[] args, string name)
@@ -84,6 +84,10 @@ try
         // WEB_DEVICE: добавлено 2026-10-18
         case "projects":
             return ProjectsCommand(args);
+
+        // REMOTE_APPROVAL_POLICY: уровень удалённых подтверждений меняется только локально.
+        case "remote":
+            return RemoteCommand(args);
 
         case "updatetest":
             return Updater.TestSchedule(args[1], args[2]) ?? 1;
@@ -288,9 +292,37 @@ static int ProjectsCommand(string[] args)
     }
 }
 
+static int RemoteCommand(string[] args)
+{
+    var level = args.SkipWhile(a => a != "remote").Skip(1).FirstOrDefault()?.ToLowerInvariant();
+    switch (level)
+    {
+        case null:
+            Console.WriteLine($"Удалённые подтверждения демона: {ClientConfig.LoadRemoteApprovalLevel()}");
+            Console.WriteLine("  safe — с сайта нельзя: установка программ, отправка писем, команды с путями вне проекта,");
+            Console.WriteLine("         чтение/копирование файлов вне проекта и сторонние MCP (по умолчанию);");
+            Console.WriteLine("  full — всё это тоже выполняется по подтверждению на сайте.");
+            Console.WriteLine("Подтверждение с сайта не подписано вами криптографически: при взломе сервера или аккаунта");
+            Console.WriteLine("его можно подделать. Включайте full, только если понимаете риск: conexy remote full");
+            return 0;
+        case ClientConfig.RemoteLevelSafe or ClientConfig.RemoteLevelFull:
+            ClientConfig.SaveRemoteApprovalLevel(level);
+            Console.WriteLine(level == ClientConfig.RemoteLevelFull
+                ? "Включено: демон выполняет любые действия по подтверждению с сайта. Вернуть: conexy remote safe"
+                : "Готово: опасные действия с сайта отклоняются демоном без запроса.");
+            return 0;
+        default:
+            Console.Error.WriteLine("Использование: conexy remote [safe|full]");
+            return 1;
+    }
+}
+
 static async Task<int> LoginAsync(string[] args)
 {
     var config = ClientConfig.Load();
+    // SERVER_URL_HTTPS: адрес из --url, отличный от сохранённого, — громко предупреждаем.
+    if (Option(args, "--url") is { } cliUrl && NormalizeUrl(cliUrl) is { } normalizedCli)
+        ClientConfig.WarnIfHostChanged(config.ServerUrl, normalizedCli, "--url");
     var url = Option(args, "--url") ?? config.ServerUrl;
     var key = Option(args, "--key");
     if (string.IsNullOrWhiteSpace(url))
@@ -319,7 +351,7 @@ static async Task<int> LoginAsync(string[] args)
     url = NormalizeUrl(url);
     if (url is null)
     {
-        Console.Error.WriteLine("Неверный адрес сервера. Пример: https://conexyai.ru");
+        Console.Error.WriteLine("Неверный адрес сервера: нужен https (http — только для localhost). Пример: https://conexyai.ru");
         return 1;
     }
 
@@ -1624,7 +1656,7 @@ static void PermissionsCommand(ConsoleApprover approver, string root, string arg
         case "add" when parts.Length == 2:
             if (PermissionStore.SuggestRule(parts[1]) is null)
             {
-                Ui.Error("Такое правило нельзя: только одиночная команда без цепочек и не запрещённая политикой.");
+                Ui.Error("Такое правило нельзя: нужна одиночная команда из двух+ слов («npm test») без цепочек и спецсимволов; интерпретаторы (python, node, pwsh…) и запрещённое политикой — нельзя.");
                 break;
             }
             approver.Permissions.Add(root, parts[1].Trim());

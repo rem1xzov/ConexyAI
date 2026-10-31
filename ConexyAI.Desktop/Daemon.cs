@@ -42,7 +42,8 @@ public static class Daemon
 
     public static void Log(string message)
     {
-        var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {message}";
+        // DAEMON_LOG_MASK: журнал читается любым процессом пользователя — токены из команд/ответов не пишем.
+        var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {Tools.SecretMask.Mask(message)}";
         lock (LogSync)
         {
             try
@@ -51,6 +52,8 @@ public static class Daemon
                 if (File.Exists(LogPath) && new FileInfo(LogPath).Length > MaxLogBytes)
                     File.WriteAllText(LogPath, string.Empty);
                 File.AppendAllText(LogPath, line + Environment.NewLine);
+                if (!OperatingSystem.IsWindows())
+                    File.SetUnixFileMode(LogPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             if (_console)
@@ -122,6 +125,10 @@ public static class Daemon
         Log($"Демон запущен (v{Ui.Version}), сервер {server.BaseUrl}, проектов: {device.Projects.Projects.Count}. Журнал: {LogPath}");
         if (device.Projects.Projects.Count == 0)
             Log("Проекты не настроены: conexy projects add <папка>");
+        // REMOTE_APPROVAL_POLICY: видно, что именно сайт может одобрить удалённо.
+        Log(ClientConfig.LoadRemoteApprovalLevel() == ClientConfig.RemoteLevelFull
+            ? "Удалённые подтверждения: full (установка, письма, MCP и команды вне проекта разрешаются с сайта). Вернуть: conexy remote safe"
+            : "Удалённые подтверждения: safe (установка, письма, MCP и команды вне проекта с сайта отклоняются). Разрешить: conexy remote full");
 
         var delay = TimeSpan.FromSeconds(2);
         while (!cts.IsCancellationRequested)

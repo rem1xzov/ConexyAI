@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace ConexyAI.Desktop;
 
@@ -10,6 +13,54 @@ namespace ConexyAI.Desktop;
 public static class Updater
 {
     public const string SkipFlag = "--no-update";
+
+    // UPDATE_INTEGRITY: ссылку на exe даёт сервер, а серверу мы не доверяем. Принимаем только https с GitHub
+    // и сверяем SHA-256 с digest ассета релиза из GitHub API (независимый от сервера источник). Нет digest или
+    // не совпал — обновление отклоняется. Защита от взлома самого репозитория GitHub это не даёт.
+    private static readonly string[] AllowedDownloadHosts =
+        ["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"];
+    private const string ReleasesApi = "https://api.github.com/repos/rem1xzov/ConexyAI/releases?per_page=20";
+    private const string AssetName = "conexy-win-x64.exe";
+    private const int MaxRedirects = 5;
+
+    internal static bool IsAllowedDownloadUrl(Uri? uri) =>
+        uri is { IsAbsoluteUri: true, Scheme: "https" } && uri.IsDefaultPort
+        && AllowedDownloadHosts.Contains(uri.Host, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Ожидаемый SHA-256 (hex) ассета с таким browser_download_url или null, если такого ассета/digest нет.</summary>
+    private static async Task<string?> ExpectedSha256Async(string url, CancellationToken ct)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("ConexyAI-Desktop/" + Ui.Version);
+        http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        using var doc = JsonDocument.Parse(await http.GetStringAsync(ReleasesApi, ct));
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            return null;
+        foreach (var release in doc.RootElement.EnumerateArray())
+        {
+            if (!release.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array)
+                continue;
+            foreach (var asset in assets.EnumerateArray())
+            {
+                if (asset.TryGetProperty("name", out var name) && name.GetString() == AssetName
+                    && asset.TryGetProperty("browser_download_url", out var link) && link.GetString() == url)
+                {
+                    var digest = asset.TryGetProperty("digest", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() : null;
+                    if (digest is null || !digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+                        return null;
+                    var hex = digest["sha256:".Length..].ToLowerInvariant();
+                    return hex.Length == 64 && hex.All(Uri.IsHexDigit) ? hex : null;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static async Task<string> Sha256Async(string path)
+    {
+        await using var stream = File.OpenRead(path);
+        return Convert.ToHexString(await SHA256.HashDataAsync(stream)).ToLowerInvariant();
+    }
 
     private static string? ExePath =>
         Environment.ProcessPath is { } p && !Path.GetFileNameWithoutExtension(p).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
@@ -122,7 +173,8 @@ public static class Updater
             File.Delete(target); // кусок другой версии — докачивать нельзя
         File.WriteAllText(marker, version);
 
-        using var http = new HttpClient(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(20) })
+        // UPDATE_INTEGRITY: редиректы (github.com → *.githubusercontent.com) вручную, каждый хост по белому списку.
+        using var http = new HttpClient(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(20), AllowAutoRedirect = false })
         {
             Timeout = Timeout.InfiniteTimeSpan, // зависание ловит IdleTimeout на каждом чтении
         };
@@ -135,11 +187,28 @@ public static class Updater
                 break;
             try
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, url);
-                if (have > 0)
-                    request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(have, null);
                 using var connect = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-                using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, connect.Token);
+                var current = new Uri(url);
+                HttpResponseMessage? hopResponse = null;
+                for (var hop = 0; ; hop++)
+                {
+                    if (!IsAllowedDownloadUrl(current))
+                    {
+                        Ui.Error($"Обновление отклонено: адрес скачивания не с GitHub ({current.Host}).");
+                        return false;
+                    }
+                    using var request = new HttpRequestMessage(HttpMethod.Get, current);
+                    if (have > 0)
+                        request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(have, null);
+                    hopResponse = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, connect.Token);
+                    if ((int)hopResponse.StatusCode is not (301 or 302 or 303 or 307 or 308) || hopResponse.Headers.Location is not { } location)
+                        break;
+                    hopResponse.Dispose();
+                    if (hop >= MaxRedirects)
+                        throw new HttpRequestException("слишком много редиректов");
+                    current = location.IsAbsoluteUri ? location : new Uri(current, location);
+                }
+                using var response = hopResponse!;
                 if (have > 0 && response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable)
                 {
                     // Файл уже целиком (или кусок испорчен) — начинаем заново, если размер не известен.
@@ -213,9 +282,47 @@ public static class Updater
         var fresh = exe + ".new";
         try
         {
+            // UPDATE_INTEGRITY: до скачивания — адрес с GitHub и известный digest ассета.
+            if (!Uri.TryCreate(info.DownloadUrl, UriKind.Absolute, out var downloadUri) || !IsAllowedDownloadUrl(downloadUri))
+            {
+                Ui.Error("Обновление отклонено: сервер дал ссылку не на релиз GitHub. Скачайте версию вручную со страницы релизов.");
+                return null;
+            }
+            string? expected;
+            try
+            {
+                using var apiCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                expected = await ExpectedSha256Async(info.DownloadUrl, apiCts.Token);
+            }
+            catch (Exception ex) when (ex is JsonException or HttpRequestException or TaskCanceledException)
+            {
+                Ui.Error("Не удалось проверить обновление через GitHub API: " + ex.Message + ". Обновление пропущено.");
+                return null;
+            }
+            if (expected is null)
+            {
+                Ui.Error($"Обновление отклонено: в релизах GitHub нет {AssetName} с этой ссылкой и контрольной суммой SHA-256.");
+                return null;
+            }
+
             Console.WriteLine($"Скачиваю v{info.Version}…");
             if (!await DownloadResumableAsync(info.DownloadUrl, fresh, info.Version ?? "?"))
                 return null;
+
+            if (await Sha256Async(fresh) != expected)
+            {
+                File.Delete(fresh);
+                Ui.Error("Обновление отклонено: SHA-256 скачанного файла не совпал с релизом GitHub. Файл удалён.");
+                return null;
+            }
+            // Если текущий exe подписан Authenticode, новый тоже должен быть подписан. Релизы сейчас без
+            // подписи — тогда проверка пропускается и целостность держится на SHA-256.
+            if (OperatingSystem.IsWindows() && Authenticode.IsTrusted(exe) && !Authenticode.IsTrusted(fresh))
+            {
+                File.Delete(fresh);
+                Ui.Error("Обновление отклонено: у новой версии нет действительной цифровой подписи.");
+                return null;
+            }
 
             try
             {
@@ -248,5 +355,75 @@ public static class Updater
             return 0;
         await child.WaitForExitAsync();
         return child.ExitCode;
+    }
+
+    /// <summary>UPDATE_INTEGRITY: проверка подписи Authenticode через WinVerifyTrust (без UI и без проверки отзыва онлайн).</summary>
+    private static class Authenticode
+    {
+        private static readonly Guid GenericVerifyV2 = new("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WintrustFileInfo
+        {
+            public uint cbStruct;
+            public IntPtr pcwszFilePath;
+            public IntPtr hFile;
+            public IntPtr pgKnownSubject;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WintrustData
+        {
+            public uint cbStruct;
+            public IntPtr pPolicyCallbackData;
+            public IntPtr pSIPClientData;
+            public uint dwUIChoice;
+            public uint fdwRevocationChecks;
+            public uint dwUnionChoice;
+            public IntPtr pFile;
+            public uint dwStateAction;
+            public IntPtr hWVTStateData;
+            public IntPtr pwszURLReference;
+            public uint dwProvFlags;
+            public uint dwUIContext;
+            public IntPtr pSignatureSettings;
+        }
+
+        [DllImport("wintrust.dll", ExactSpelling = true, SetLastError = false)]
+        private static extern int WinVerifyTrust(IntPtr hwnd, ref Guid action, ref WintrustData data);
+
+        public static bool IsTrusted(string path)
+        {
+            var filePath = Marshal.StringToCoTaskMemUni(path);
+            var fileInfo = new WintrustFileInfo { cbStruct = (uint)Marshal.SizeOf<WintrustFileInfo>(), pcwszFilePath = filePath };
+            var pFile = Marshal.AllocHGlobal(Marshal.SizeOf<WintrustFileInfo>());
+            try
+            {
+                Marshal.StructureToPtr(fileInfo, pFile, false);
+                var data = new WintrustData
+                {
+                    cbStruct = (uint)Marshal.SizeOf<WintrustData>(),
+                    dwUIChoice = 2,          // WTD_UI_NONE
+                    fdwRevocationChecks = 0, // WTD_REVOKE_NONE
+                    dwUnionChoice = 1,       // WTD_CHOICE_FILE
+                    pFile = pFile,
+                    dwStateAction = 1,       // WTD_STATEACTION_VERIFY
+                };
+                var action = GenericVerifyV2;
+                var result = WinVerifyTrust(new IntPtr(-1), ref action, ref data);
+                data.dwStateAction = 2;      // WTD_STATEACTION_CLOSE
+                WinVerifyTrust(new IntPtr(-1), ref action, ref data);
+                return result == 0;
+            }
+            catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+            {
+                return false;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(pFile);
+                Marshal.FreeCoTaskMem(filePath);
+            }
+        }
     }
 }

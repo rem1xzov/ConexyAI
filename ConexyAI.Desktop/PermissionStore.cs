@@ -43,6 +43,26 @@ public sealed class PermissionStore
     public IReadOnlyList<string> RulesFor(string root) =>
         Projects.TryGetValue(Key(root), out var rules) ? rules : [];
 
+    // PERMISSION_RULES_STRICT: интерпретаторы и оболочки выполняют произвольный код из аргументов
+    // (`python -c …`, `node -e …`, `pwsh -Command …`) — постоянное правило для них равно «разрешить всё».
+    private static readonly HashSet<string> Interpreters = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "python", "python3", "python2", "py", "pythonw", "node", "nodejs", "deno", "bun", "bunx", "powershell", "pwsh", "cmd",
+        "bash", "sh", "zsh", "fish", "dash", "ksh", "wsl", "ruby", "irb", "perl", "php", "lua", "java", "jshell", "npx", "pnpx",
+        "uvx", "uv", "pipx", "dotnet", "env", "sudo", "start", "start-process", "invoke-expression", "iex", "invoke-command",
+        "cscript", "wscript", "mshta", "rundll32", "regsvr32", "osascript", "xargs", "eval", "exec", "nohup", "time", "watch",
+        "ssh", "scp", "curl", "wget", "iwr", "invoke-webrequest", "irm", "invoke-restmethod",
+    };
+
+    // «dotnet» целиком — интерпретатор (`dotnet x.dll`), но «dotnet build/test» — обычное правило.
+    private static readonly HashSet<string> DotnetVerbs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "build", "test", "restore", "format", "publish", "pack", "clean", "run", "watch",
+    };
+
+    private static string Exe(string word) =>
+        Path.GetFileNameWithoutExtension(word.Replace('\\', '/').Split('/')[^1]);
+
     /// <summary>Правило, которое предложим запомнить для этой команды, или null (составная/опасная команда).</summary>
     public static string? SuggestRule(string command)
     {
@@ -50,11 +70,21 @@ public sealed class PermissionStore
         if (trimmed.Length == 0 || CommandPolicy.IsCompound(trimmed) || CommandPolicy.ForbiddenReason(trimmed) is not null)
             return null;
         var words = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        // «npm test», «dotnet build», «./gradlew build», «git push»; одно слово, если дальше идут флаги или пути.
-        return words.Length >= 2 && !words[1].StartsWith('-') && !words[1].Contains('/') && !words[1].Contains('\\') && words[1].Length <= 30
-            ? $"{words[0]} {words[1]}"
-            : words[0];
+        // «npm test», «dotnet build», «./gradlew build», «git push». Одного слова мало: «python» или «npm»
+        // разрешили бы любой код — если второе слово флаг/путь, правило не предлагаем.
+        if (words.Length < 2 || words[1].StartsWith('-') || words[1].Contains('/') || words[1].Contains('\\') || words[1].Length > 30)
+            return null;
+        var head = Exe(words[0]);
+        if (Interpreters.Contains(head) && !(head.Equals("dotnet", StringComparison.OrdinalIgnoreCase) && DotnetVerbs.Contains(words[1])))
+            return null;
+        // «npm exec», «pnpm dlx», «yarn dlx» — то же npx: скачать и запустить любой пакет.
+        if (words[1] is "exec" or "x" or "dlx" or "eval")
+            return null;
+        return $"{words[0]} {words[1]}";
     }
+
+    /// <summary>Правило из файла годится (старые однословные «python»/«npm» и правила для интерпретаторов игнорируются).</summary>
+    private static bool IsValidRule(string rule) => SuggestRule(rule) is not null;
 
     public string? Match(string root, string command)
     {
@@ -62,8 +92,9 @@ public sealed class PermissionStore
         if (CommandPolicy.IsCompound(trimmed) || CommandPolicy.ForbiddenReason(trimmed) is not null)
             return null;
         return RulesFor(root).FirstOrDefault(rule =>
-            trimmed.Equals(rule, StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith(rule + " ", StringComparison.OrdinalIgnoreCase));
+            IsValidRule(rule)
+            && (trimmed.Equals(rule, StringComparison.OrdinalIgnoreCase)
+                || trimmed.StartsWith(rule + " ", StringComparison.OrdinalIgnoreCase)));
     }
 
     public void Add(string root, string rule)

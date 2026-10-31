@@ -44,8 +44,42 @@ public static partial class CommandPolicy
         new(@"\breg\s+delete\s+hk", RegexOptions.IgnoreCase | RegexOptions.Compiled),
         new(@"\b(shutdown|restart-computer|stop-computer)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled),
         new(@"(curl|wget|iwr|invoke-webrequest)[^\n|]*\|\s*(sh|bash|iex|invoke-expression|powershell|pwsh)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled),
-        new(@"(\.ssh[\\/]|\.aws[\\/]|\.gnupg[\\/]|\.netrc|id_rsa|id_ed25519)", RegexOptions.IgnoreCase | RegexOptions.Compiled),
     };
+
+    // SECRET_PATHS: места с ключами и учётными данными — не читаются ни командой, ни файловыми инструментами,
+    // ни с подтверждением. Сюда же собственная папка настроек клиента (config.json с ключом, mcp.json, google.json,
+    // mail.json, services.json): иначе внедрённая инструкция уводит токены пользователя «обычным cat».
+    // Обход через вычисление пути ([Environment]::GetFolderPath…) этим не ловится, но такая команда
+    // не простая и без подтверждения не выполняется.
+    private static readonly Regex[] SecretPaths =
+    {
+        new(@"(\.ssh|\.aws|\.gnupg|\.netrc|_netrc|\.git-credentials|\.pgpass)(?![\w.-])", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"\.docker[\\/]config\.json|\.kube[\\/]config", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        // .docker/.kube/.azure в домашней папке (а не одноимённые папки проекта с compose-файлами).
+        new(@"(~|\bhome\}?|users[\\/][^\\/\s""']+|userprofile%?|/root)[\\/]\.(docker|kube|azure)(?![\w.-])", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"id_rsa|id_ed25519|id_ecdsa|id_dsa", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"\.config[\\/](gh|conexyai|google-chrome|chromium|microsoft-edge|bravesoftware)(?![\w.-])", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"appdata(%|[\\/]roaming)?[\\/]conexyai(?![\w.-])", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"(google[\\/]chrome|microsoft[\\/]edge|bravesoftware[\\/]brave-browser|yandex[\\/]yandexbrowser|chromium)[\\/]user data", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"(mozilla[\\/]firefox|\.mozilla)(?![\w.-])", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"application support[\\/](google[\\/]chrome|microsoft edge|firefox|conexyai)", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+    };
+
+    /// <summary>Папка настроек клиента (ключ, токены коннекторов) — абсолютный путь для проверки разрешённых путей.</summary>
+    public static string ClientConfigDir => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI");
+
+    /// <summary>Почему путь/команда касается секретов (null — не касается).</summary>
+    public static string? SecretPathReason(string text)
+    {
+        if (SecretPaths.Any(r => r.IsMatch(text)))
+            return "Доступ к этому месту запрещён политикой клиента (ключи, учётные данные, профили браузеров, настройки ConexyAI).";
+        var dir = ClientConfigDir;
+        var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return dir.Length > 3 && text.Contains(dir, cmp)
+            ? "Доступ к настройкам клиента ConexyAI запрещён политикой (там ключи и токены)."
+            : null;
+    }
 
     private static readonly HashSet<string> ReadOnlyHeads = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -58,32 +92,135 @@ public static partial class CommandPolicy
     };
 
     public static string? ForbiddenReason(string command) =>
-        Forbidden.Any(r => r.IsMatch(command))
+        Forbidden.Any(r => r.IsMatch(command)) || SecretPathReason(command) is not null
             ? "Команда запрещена политикой безопасности клиента (разрушительная операция, доступ к ключам или загрузка-и-запуск кода)."
             : null;
 
-    /// <summary>Только чтение, без цепочек и перенаправлений — можно без вопроса.</summary>
-    public static bool IsReadOnly(string command)
+    /// <summary>
+    /// Только чтение, без цепочек и перенаправлений — можно без вопроса. С <paramref name="root"/> дополнительно
+    /// требуется, чтобы каждый аргумент-путь (относительно <paramref name="cwd"/>) оставался внутри проекта.
+    /// </summary>
+    public static bool IsReadOnly(string command, string? root = null, string? cwd = null)
     {
         var trimmed = command.Trim();
-        if (trimmed.Length == 0 || ChainChars().IsMatch(trimmed))
+        // STRICT_READONLY: на Windows команда идёт в PowerShell, где `cat (iex (irm …))`, `$(…)`, `@(…)`,
+        // `[IO.File]::…`, `{…}` и `%` исполняют код. Без вопроса — только «простые» команды из букв, цифр
+        // и безопасной пунктуации; всё остальное спрашиваем.
+        if (trimmed.Length == 0 || !IsSimple(trimmed))
             return false;
 
-        var parts = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 0)
+        var parts = Tokens(trimmed);
+        if (parts.Count == 0)
             return false;
         if (parts[0].Equals("git", StringComparison.OrdinalIgnoreCase))
         {
-            if (parts.Length < 2 || !ReadOnlyGit.Contains(parts[1]))
+            if (parts.Count < 2 || !ReadOnlyGit.Contains(parts[1]))
                 return false;
-            // `git diff/log --output=file` пишет файл.
-            if (parts.Any(p => p.StartsWith("--output", StringComparison.OrdinalIgnoreCase)))
+            // `git diff/log --output=file` пишет файл; `git diff --no-index a b` читает любые файлы вне репозитория.
+            if (parts.Any(p => p.StartsWith("--output", StringComparison.OrdinalIgnoreCase)
+                               || p.StartsWith("--no-index", StringComparison.OrdinalIgnoreCase)
+                               || p.StartsWith("--ext-diff", StringComparison.OrdinalIgnoreCase)
+                               || p.StartsWith("--textconv", StringComparison.OrdinalIgnoreCase)))
                 return false;
             // `git branch x` создаёт ветку, `git branch -D x` удаляет — без вопроса только просмотр.
             return !parts[1].Equals("branch", StringComparison.OrdinalIgnoreCase)
                    || parts.Skip(2).All(p => ReadOnlyBranchFlags.Contains(p));
         }
-        return ReadOnlyHeads.Contains(parts[0]);
+        if (!ReadOnlyHeads.Contains(parts[0]))
+            return false;
+        // READONLY_INSIDE_ROOT: «cat C:\Users\me\AppData\…» — тоже чтение, но не проекта. Без вопроса —
+        // только пути внутри рабочей папки.
+        return root is null || parts.Skip(1).All(p => ArgumentInside(p, root, cwd ?? root));
+    }
+
+    /// <summary>
+    /// Простая команда: буквы, цифры, пробел и « - _ . / \ : * = + ~ ^ » и кавычки. Нет ни цепочек, ни
+    /// перенаправлений, ни подстановок, ни вызовов .NET/скриптблоков PowerShell, ни переменных окружения.
+    /// </summary>
+    public static bool IsSimple(string command) => SimpleCommand().IsMatch(command.Trim());
+
+    // Запятая исключена: в PowerShell `cat a,\x` — массив путей, второй из которых проверку не проходил бы.
+    [GeneratedRegex(@"^[\p{L}\p{N} \-_./\\:*=+~^'""]+$")]
+    private static partial Regex SimpleCommand();
+
+    private static List<string> Tokens(string command) =>
+        command.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(t => t.Trim('"', '\'')).Where(t => t.Length > 0).ToList();
+
+    private static readonly StringComparison PathCmp =
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static bool IsInside(string full, string root)
+    {
+        root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        return full.Equals(root, PathCmp) || full.StartsWith(root + Path.DirectorySeparatorChar, PathCmp);
+    }
+
+    /// <summary>Аргумент команды остаётся внутри проекта (флаги проверяются по значению после «=»/«:»).</summary>
+    private static bool ArgumentInside(string token, string root, string cwd)
+    {
+        var value = token;
+        if (value.StartsWith('-'))
+        {
+            var sep = value.IndexOfAny(['=', ':']);
+            if (sep < 0)
+                return true;
+            value = value[(sep + 1)..];
+            if (value.Length == 0)
+                return true;
+        }
+        // `~` в bash/PowerShell — домашняя папка; `env:`, `HKLM:`, `cert:` — провайдеры PowerShell, не файлы.
+        if (value.StartsWith('~'))
+            return false;
+        var colon = value.IndexOf(':');
+        if (colon >= 0 && !(colon == 1 && OperatingSystem.IsWindows() && Path.IsPathFullyQualified(value)))
+            return false;
+        try
+        {
+            var full = Path.GetFullPath(Path.IsPathRooted(value) ? value : Path.Combine(cwd, value));
+            if (!IsInside(full, root))
+                return false;
+            // Ссылка/junction внутри проекта, ведущая наружу, — тоже «вне проекта».
+            new PathGuard(root).Resolve(full.Replace("*", "_"));
+            return SecretPathReason(full) is null;
+        }
+        catch (Exception ex) when (ex is ToolException or ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Есть ли в команде пути за пределами проекта (абсолютные наружу, «..», «~», переменные окружения). Грубая
+    /// эвристика для удалённых подтверждений демона: песочницей она не является.
+    /// </summary>
+    public static bool ReferencesOutside(string command, string root)
+    {
+        if (Regex.IsMatch(command, @"\$env:|\$HOME\b|\$\{?HOME|%[A-Za-z_]+%|\[(System\.)?(IO\.|Environment)", RegexOptions.IgnoreCase))
+            return true;
+        foreach (var raw in Regex.Split(command, @"[\s;&|<>()`""'=,{}]+"))
+        {
+            var token = raw.Trim();
+            if (token.Length == 0 || token.Contains("://"))
+                continue;
+            if (token.StartsWith('~'))
+                return true;
+            // Флаги cmd вида /s, /b, /?.
+            if (OperatingSystem.IsWindows() && Regex.IsMatch(token, @"^/[A-Za-z?]{1,3}$"))
+                continue;
+            var looksLikePath = Path.IsPathRooted(token) || token.Contains("..");
+            if (!looksLikePath)
+                continue;
+            try
+            {
+                if (!IsInside(Path.GetFullPath(Path.IsPathRooted(token) ? token : Path.Combine(root, token)), root))
+                    return true;
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static readonly HashSet<string> ReadOnlyBranchFlags = new(StringComparer.Ordinal)
@@ -91,11 +228,11 @@ public static partial class CommandPolicy
         "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list", "--show-current",
     };
 
-    /// <summary>Есть ли в команде цепочки, перенаправления или подстановки (тогда по префиксу её не разрешаем).</summary>
-    public static bool IsCompound(string command) => ChainChars().IsMatch(command.Trim());
-
-    [GeneratedRegex(@"[;&|<>`]|\$\(|\r|\n")]
-    private static partial Regex ChainChars();
+    /// <summary>
+    /// Есть ли в команде цепочки, перенаправления, подстановки или иные метасимволы оболочки (тогда по префиксу
+    /// её не разрешаем). STRICT_READONLY: та же строгость, что и для команд чтения.
+    /// </summary>
+    public static bool IsCompound(string command) => !IsSimple(command);
 }
 
 /// <summary>bash / terminal_exec: команда в рабочей папке, с подтверждением, таймаутом и убийством дерева процессов.</summary>
@@ -119,7 +256,9 @@ public sealed partial class ShellTool
         _gitHubToken = gitHubToken;
     }
 
-    [System.Text.RegularExpressions.GeneratedRegex(@"(^|[\s;&|(])git(\.exe)?\s", RegexOptions.IgnoreCase)]
+    // GIT_TOKEN_SCOPE: токен получает только команда, которая САМА начинается с git/gh. Раньше хватало «git»
+    // где-то в строке: `printenv; git status` отдавал модели GIT_CONFIG_VALUE_0 с токеном в base64.
+    [System.Text.RegularExpressions.GeneratedRegex(@"^\s*(git|gh)(\.exe)?\s", RegexOptions.IgnoreCase)]
     private static partial Regex GitCall();
 
     public async Task<ToolResult> RunAsync(ToolArgs args, string tool, CancellationToken ct)
@@ -178,6 +317,10 @@ public sealed partial class ShellTool
     public Task<ToolResult> RunTrustedAsync(string command, int timeoutSeconds, CancellationToken ct) =>
         ExecuteAsync(command, timeoutSeconds, requireApproval: false, ct);
 
+    /// <summary>Подтверждение команды через общий approver (консоль или сайт в режиме демона).</summary>
+    public Task<bool> ApproveAsync(string title, string details, CancellationToken ct) =>
+        _approver.ApproveAsync(title, details, _guard.Root, ct);
+
     private async Task<ToolResult> ExecuteAsync(
         string command, int timeoutSeconds, bool requireApproval, CancellationToken ct, bool useCmd = false, bool skipPolicy = false,
         string? workingDirectory = null, string? description = null)
@@ -186,7 +329,7 @@ public sealed partial class ShellTool
         if (!skipPolicy && CommandPolicy.ForbiddenReason(command) is { } reason)
             return ToolResult.Fail(reason);
 
-        if (requireApproval && !CommandPolicy.IsReadOnly(command)
+        if (requireApproval && !CommandPolicy.IsReadOnly(command, _guard.Root, workingDirectory)
             && !await _approver.ApproveCommandAsync(command, description, workingDirectory, ct))
             return ToolResult.Fail("Пользователь отклонил выполнение команды. Не повторяй её; предложи другой путь или спроси, что делать.");
 
@@ -203,6 +346,7 @@ public sealed partial class ShellTool
         // Токен GitHub с сайта подаётся git'у через окружение процесса (не попадает ни в текст команды,
         // ни в .git/config). Только для github.com и только если в команде есть вызов git.
         string? ghToken = null;
+        string? ghBasic = null;
         if (_gitHubToken is not null && GitCall().IsMatch(command))
         {
             try { ghToken = await _gitHubToken(ct); }
@@ -211,7 +355,7 @@ public sealed partial class ShellTool
 
         if (!string.IsNullOrEmpty(ghToken))
         {
-            var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes("x-access-token:" + ghToken));
+            var basic = ghBasic = Convert.ToBase64String(Encoding.UTF8.GetBytes("x-access-token:" + ghToken));
             psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
             psi.Environment["GIT_CONFIG_COUNT"] = "1";
             psi.Environment["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader";
@@ -267,6 +411,8 @@ public sealed partial class ShellTool
         lock (sync) text = output.ToString().TrimEnd();
         if (!string.IsNullOrEmpty(ghToken))
             text = text.Replace(ghToken, "***");
+        if (!string.IsNullOrEmpty(ghBasic))
+            text = text.Replace(ghBasic, "***");
         // BASH_COMPRESS: ANSI и баннеры не нужны модели никогда, а от сборки — только итог и окно ошибки.
         text = Compress(command, text);
 
