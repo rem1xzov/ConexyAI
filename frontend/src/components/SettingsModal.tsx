@@ -1192,8 +1192,10 @@ function McpSection() {
       setServers(stored);
       setDirty(false);
       flashSaved();
-    } catch {
-      setError(t('settings.mcpError'));
+    } catch (e) {
+      // SEC_MCP_SSRF: сервер отклоняет непубличные адреса и объясняет причину — показываем её.
+      const data = (e as { response?: { data?: { error?: string; message?: string } } })?.response?.data;
+      setError(data?.error === 'MCP_URL_REJECTED' && data.message ? data.message : t('settings.mcpError'));
     } finally {
       setSaving(false);
     }

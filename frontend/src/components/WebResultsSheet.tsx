@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { shortDate, type WebResult } from '../utils/webResults';
+import { isHttpUrl, shortDate, type WebResult } from '../utils/webResults';
 
 // DEEPSEEK_SEARCH_UI: шторка «Результаты поиска» — выезжает снизу, закрывается крестиком, тапом
 // по затемнению или свайпом шапки вниз.
@@ -90,7 +90,8 @@ export function WebResultsSheet({ results, onClose }: WebResultsSheetProps) {
           </button>
         </div>
         <div className="web-sheet__list" data-no-drawer-swipe="true">
-          {results.map((result, index) => (
+          {/* SEC_SEARCH_HREF: вторая линия защиты — в href попадает только http(s). */}
+          {results.filter((result) => isHttpUrl(result.url)).map((result, index) => (
             <a
               key={result.url}
               className="web-sheet__item"

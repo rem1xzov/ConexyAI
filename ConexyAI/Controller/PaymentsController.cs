@@ -90,10 +90,13 @@ public class PaymentsController : ControllerBase
 
         // Читаем тело ДО проверки, чтобы залогировать содержимое даже у отклонённого запроса
         // (это помогает ловить и подделки, и сдвиг подсетей ЮKassa).
+        // SEC_WEBHOOK_LOG: тело целиком не пишем — в нём метаданные плательщика и карты (ПДн).
+        // Для диагностики достаточно event, object.id и status.
         var raw = await ReadBodyAsync(ct);
+        var (logEvent, logId, logStatus) = SummarizeWebhook(raw);
         _logger.LogInformation(
-            "YooKassa webhook received from {Ip} (allowed={Allowed}): {Body}",
-            remoteIp?.ToString() ?? "unknown", ipAllowed, raw);
+            "YooKassa webhook received from {Ip} (allowed={Allowed}): event={Event} id={PaymentId} status={Status}",
+            remoteIp?.ToString() ?? "unknown", ipAllowed, logEvent, logId, logStatus);
 
         if (!ipAllowed)
         {
@@ -140,6 +143,30 @@ public class PaymentsController : ControllerBase
         }
 
         return Ok(new { received = true });
+    }
+
+    // SEC_WEBHOOK_LOG: только нечувствительные поля для лога; неразбираемое тело помечается, но не пишется.
+    private static (string Event, string Id, string Status) SummarizeWebhook(string raw)
+    {
+        static string Cut(string? value) => value is null ? "-" : value.Length <= 64 ? value : value[..64];
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return ("<not-object>", "-", "-");
+            var ev = root.TryGetProperty("event", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
+            string? id = null, status = null;
+            if (root.TryGetProperty("object", out var obj) && obj.ValueKind == JsonValueKind.Object)
+            {
+                id = obj.TryGetProperty("id", out var i) && i.ValueKind == JsonValueKind.String ? i.GetString() : null;
+                status = obj.TryGetProperty("status", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
+            }
+            return (Cut(ev), Cut(id), Cut(status));
+        }
+        catch (JsonException)
+        {
+            return ("<malformed>", "-", "-");
+        }
     }
 
     private async Task<string> ReadBodyAsync(CancellationToken ct)

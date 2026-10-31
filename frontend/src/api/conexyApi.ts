@@ -59,8 +59,9 @@ export async function getSession(): Promise<DevTokenResponse> {
 }
 
 // MOBILE_HANDOFF: приложение меняет одноразовый код из deep link на сессию.
-export async function exchangeMobileHandoff(code: string): Promise<DevTokenResponse> {
-  const { data } = await axios.post<DevTokenResponse>('/api/auth/handoff', { code });
+// SEC_MOBILE_PKCE: вместе с кодом уходит verifier, сохранённый при openMobileLogin.
+export async function exchangeMobileHandoff(code: string, codeVerifier: string | null): Promise<DevTokenResponse> {
+  const { data } = await axios.post<DevTokenResponse>('/api/auth/handoff', { code, codeVerifier });
   return data;
 }
 

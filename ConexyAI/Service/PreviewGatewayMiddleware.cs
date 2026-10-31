@@ -21,12 +21,14 @@ public sealed partial class PreviewGatewayMiddleware
     private readonly RequestDelegate _next;
     private readonly IPreviewService _preview;
     private readonly IHttpClientFactory _http;
+    private readonly IWebHostEnvironment _environment;
 
-    public PreviewGatewayMiddleware(RequestDelegate next, IPreviewService preview, IHttpClientFactory http)
+    public PreviewGatewayMiddleware(RequestDelegate next, IPreviewService preview, IHttpClientFactory http, IWebHostEnvironment environment)
     {
         _next = next;
         _preview = preview;
         _http = http;
+        _environment = environment;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -58,7 +60,9 @@ public sealed partial class PreviewGatewayMiddleware
             context.Response.Cookies.Append(CookieName, info.Token, new CookieOptions
             {
                 HttpOnly = true,
-                Secure = context.Request.IsHttps,
+                // SEC_COOKIE_PREFIX: за Cloudflare/nginx сервер превью слушает только :80, и IsHttps был всегда
+                // false — cookie с токеном уходила без Secure. Вне Development превью открывается только по https.
+                Secure = context.Request.IsHttps || !_environment.IsDevelopment(),
                 SameSite = SameSiteMode.Lax,
                 Path = "/",
             });

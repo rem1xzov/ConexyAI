@@ -204,6 +204,14 @@ public class PaymentService : IPaymentService
         }
 
         var now = DateTime.UtcNow;
+        // SEC_PAYMENT_RACE: атомарно «забираем» платёж до выдачи — второй одновременный вебхук сюда не пройдёт.
+        if (!await _payments.TryClaimActivationAsync(payment.Id, now, ct))
+        {
+            _logger.LogInformation("YooKassa: payment {ProviderId} is already being activated, skipping.", payment.ProviderPaymentId);
+            return;
+        }
+        payment.ActivatedAt = now;
+
         // Автопродления нет: каждый платёж — разовый и ПРОДЛЕВАЕТ доступ от текущего срока, если он
         // ещё не истёк, иначе — от сегодняшнего дня.
         var from = user.SubscriptionExpiresAt is { } expires && expires > now ? expires : now;
@@ -218,10 +226,7 @@ public class PaymentService : IPaymentService
         // LIMIT_RESET: акция для Pro и выше — при каждой оплате выдаём один сброс лимитов на период.
         if (IsProOrHigher(granted))
             user.LimitResetAvailable = true;
-        await _users.UpdateAsync(user, ct);
-
-        payment.ActivatedAt = now;
-        await _payments.UpdateAsync(payment, ct);
+        await UpdateUserOrReleaseAsync(payment, user, ct);
 
         _logger.LogInformation(
             "YooKassa: payment {ProviderId} activated — user {UserId} is on {Tier} until {Expires:u}.",
@@ -248,18 +253,40 @@ public class PaymentService : IPaymentService
             return;
         }
 
+        // SEC_PAYMENT_RACE: см. ActivateAsync — без атомарного захвата токены начислялись бы дважды.
+        var now = DateTime.UtcNow;
+        if (!await _payments.TryClaimActivationAsync(payment.Id, now, ct))
+        {
+            _logger.LogInformation("YooKassa: payment {ProviderId} is already being credited, skipping.", payment.ProviderPaymentId);
+            return;
+        }
+        payment.ActivatedAt = now;
+
         if (string.Equals(payment.Pool, "Cowork", StringComparison.OrdinalIgnoreCase))
             user.CoworkTokenTopUp += payment.TokenAmount;
         else
             user.CoderTokenTopUp += payment.TokenAmount;
-        await _users.UpdateAsync(user, ct);
-
-        payment.ActivatedAt = DateTime.UtcNow;
-        await _payments.UpdateAsync(payment, ct);
+        await UpdateUserOrReleaseAsync(payment, user, ct);
 
         _logger.LogInformation(
             "YooKassa: payment {ProviderId} credited {Amount} tokens to {Pool} for user {UserId}.",
             payment.ProviderPaymentId, payment.TokenAmount, payment.Pool ?? "Coder", payment.UserId);
+    }
+
+    // SEC_PAYMENT_RACE: если запись пользователя упала, снимаем захват — повторная доставка вебхука
+    // должна смочь выдать оплаченное.
+    private async Task UpdateUserOrReleaseAsync(PaymentEntity payment, User user, CancellationToken ct)
+    {
+        try
+        {
+            await _users.UpdateAsync(user, ct);
+        }
+        catch
+        {
+            payment.ActivatedAt = null;
+            await _payments.ReleaseActivationAsync(payment.Id, CancellationToken.None);
+            throw;
+        }
     }
 
     // LIMIT_RESET: акция сброса лимитов — только Pro и выше.

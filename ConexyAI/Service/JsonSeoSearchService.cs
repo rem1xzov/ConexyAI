@@ -113,13 +113,15 @@ public class JsonSeoSearchService : IWebSearchService
         var index = 0;
         foreach (var item in items)
         {
-            if (string.IsNullOrWhiteSpace(item.Url)) continue;
+            // SEC_SEARCH_HREF: только http(s) и без переводов строк (см. SearchResultText).
+            var url = ConexyAI.Service.Web.SearchResultText.OneLine(item.Url);
+            if (!ConexyAI.Service.Web.SearchResultText.IsHttpUrl(url)) continue;
 
             index++;
-            sb.AppendLine($"{index}. {item.Title}");
-            sb.AppendLine($"   URL: {item.Url}");
+            sb.AppendLine($"{index}. {ConexyAI.Service.Web.SearchResultText.OneLine(item.Title)}");
+            sb.AppendLine($"   URL: {url}");
             if (!string.IsNullOrWhiteSpace(item.Passage))
-                sb.AppendLine($"   {item.Passage}");
+                sb.AppendLine($"   {ConexyAI.Service.Web.SearchResultText.OneLine(item.Passage)}");
         }
 
         if (index == 0)

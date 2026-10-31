@@ -23,15 +23,24 @@ public class AuthController : ControllerBase
 {
     private const string StateCookieName = "github_oauth_state";
     // GITHUB_OAUTH: добавлено 2026-09-19
-    private const string AuthCookieName = "conexy_auth";
+    // SEC_COOKIE_PREFIX: префикс __Host- запрещает браузеру принимать эту cookie с Domain=, без Secure или
+    // с Path ≠ /. Иначе сервис пользователя на {id}.preview.conexyai.ru (его Set-Cookie проксируется как есть)
+    // мог поставить conexy_auth с Domain=conexyai.ru и подсунуть жертве свою сессию (fixation).
+    private const string AuthCookieName = "__Host-conexy_auth";
+    // Старое имя больше НЕ читается (его как раз и подделывают), только стирается при выходе/сбросе.
+    private const string LegacyAuthCookieName = "conexy_auth";
 
     // MOBILE_HANDOFF: вход из Android-приложения. Google запрещает OAuth внутри WebView, поэтому
     // логин идёт в системном браузере, а сессия возвращается приложению одноразовым кодом:
     // браузер → conexy.app://auth?code=… → приложение меняет код на JWT.
     private const string MobileRedirectUri = "conexy.app://auth";
     private const string MobileRedirectCookie = "conexy_mobile_redirect";
+    // SEC_MOBILE_PKCE: code_challenge переживает круг через GitHub в этой cookie.
+    private const string MobileChallengeCookie = "conexy_mobile_challenge";
+    private const string MobileOutdatedMessage =
+        "Эта версия приложения ConexyAI устарела. Обновите приложение до последней версии и войдите снова.";
     private static readonly TimeSpan MobileHandoffTtl = TimeSpan.FromMinutes(2);
-    private static readonly ConcurrentDictionary<string, (TokenResponse Token, DateTime ExpiresUtc)> MobileHandoffs = new();
+    private static readonly ConcurrentDictionary<string, (TokenResponse Token, string Challenge, DateTime ExpiresUtc)> MobileHandoffs = new();
 
     private readonly ITokenService _tokenService;
     private readonly IWebHostEnvironment _environment;
@@ -101,39 +110,76 @@ public class AuthController : ControllerBase
     [EnableRateLimiting(AuthRateLimitPolicies.GitHubOAuth)]
     public IActionResult GitHubLogin() => StartGitHubLogin();
 
-    // MOBILE_HANDOFF: точка входа для приложения. Если пользователь уже вошёл на сайте в этом
-    // браузере — сессия отдаётся приложению сразу, без повторного OAuth.
+    // MOBILE_HANDOFF: точка входа для приложения.
+    // SEC_MOBILE_PKCE: приложение обязано прислать code_challenge (S256). Код из deep link без verifier
+    // бесполезен, поэтому чужое приложение, перехватившее conexy.app://, или сайт, открывший этот URL
+    // в браузере жертвы, сессию не получат. Уже залогиненному пользователю код больше не
+    // выдаётся молча: сначала страница подтверждения, сам код — только по POST с неё.
     /// <summary>Starts the login flow for the Android app and returns the session via a one-time code.</summary>
     [HttpGet("mobile")]
     [EnableRateLimiting(AuthRateLimitPolicies.GitHubOAuth)]
-    public async Task<IActionResult> MobileLogin([FromQuery] string? redirect, CancellationToken ct)
+    public async Task<IActionResult> MobileLogin(
+        [FromQuery] string? redirect,
+        [FromQuery(Name = "code_challenge")] string? codeChallenge,
+        [FromQuery(Name = "code_challenge_method")] string? codeChallengeMethod,
+        CancellationToken ct)
     {
         // MOBILE_REDIRECT: только наш собственный scheme — иначе это открытый редирект с токеном.
         if (!string.Equals(redirect, MobileRedirectUri, StringComparison.Ordinal))
             return BadRequest(new { error = "unsupported_redirect" });
 
+        // Старые APK (1.0.x) challenge не шлют — они получают понятную просьбу обновиться.
+        if (!IsValidCodeChallenge(codeChallenge)
+            || (codeChallengeMethod is not null && !string.Equals(codeChallengeMethod, "S256", StringComparison.Ordinal)))
+            return MobileMessagePage(StatusCodes.Status400BadRequest, MobileOutdatedMessage);
+
         if (Request.Cookies[AuthCookieName] is { Length: > 0 } cookie
             && await ValidateCookieTokenAsync(cookie, ct) is { } session)
         {
-            _logger.LogInformation("Mobile login: reusing the browser session for {UserId}.", session.Principal.FindFirst("sub")?.Value);
-            return MobileReturn(session.Response);
+            return await MobileConfirmPageAsync(session, codeChallenge!, ct);
         }
 
-        Response.Cookies.Append(MobileRedirectCookie, MobileRedirectUri, new CookieOptions
+        var shortLived = new CookieOptions
         {
             HttpOnly = true,
             Secure = !_environment.IsDevelopment(),
             SameSite = SameSiteMode.Lax,
             IsEssential = true,
             MaxAge = TimeSpan.FromMinutes(10)
-        });
+        };
+        Response.Cookies.Append(MobileRedirectCookie, MobileRedirectUri, shortLived);
+        Response.Cookies.Append(MobileChallengeCookie, codeChallenge!, shortLived);
 
         return StartGitHubLogin();
     }
 
+    // SEC_MOBILE_PKCE: подтверждение «Войти в приложение как …». Cookie сессии SameSite=Lax на кросс-сайтовый
+    // POST не уходит, а Origin/Sec-Fetch-Site дополнительно отсекают чужие формы.
+    /// <summary>Issues the one-time code after the signed-in user confirmed the app login.</summary>
+    [HttpPost("mobile/confirm")]
+    [EnableRateLimiting(AuthRateLimitPolicies.GitHubOAuth)]
+    public async Task<IActionResult> MobileConfirm(
+        [FromForm(Name = "code_challenge")] string? codeChallenge, CancellationToken ct)
+    {
+        if (!IsSameOriginRequest())
+            return MobileMessagePage(StatusCodes.Status403Forbidden, "Запрос отклонён. Вернитесь в приложение и нажмите «Войти» ещё раз.");
+
+        if (!IsValidCodeChallenge(codeChallenge))
+            return MobileMessagePage(StatusCodes.Status400BadRequest, MobileOutdatedMessage);
+
+        if (Request.Cookies[AuthCookieName] is not { Length: > 0 } cookie
+            || await ValidateCookieTokenAsync(cookie, ct) is not { } session)
+            return MobileMessagePage(StatusCodes.Status401Unauthorized, "Сессия на сайте не найдена. Вернитесь в приложение и нажмите «Войти» ещё раз.");
+
+        _logger.LogInformation("Mobile login: the user {UserId} confirmed reusing the browser session.", session.Principal.FindFirst("sub")?.Value);
+        return MobileReturn(session.Response, codeChallenge!);
+    }
+
     // MOBILE_HANDOFF: обмен одноразового кода на сессию. Код живёт две минуты и удаляется при
     // первом использовании, поэтому перехват deep link не даёт долговременного доступа.
-    /// <summary>Exchanges the one-time handoff code from the app link for a JWT.</summary>
+    // SEC_MOBILE_PKCE: и без code_verifier, который знает только начавшее вход приложение, код ничего не стоит.
+    // Код сжигается и при неверном verifier — перебирать нечего.
+    /// <summary>Exchanges the one-time handoff code from the app link (plus the PKCE verifier) for a JWT.</summary>
     [HttpPost("handoff")]
     [EnableRateLimiting(AuthRateLimitPolicies.GitHubOAuth)]
     public IActionResult ExchangeHandoff([FromBody] MobileHandoffRequest? request)
@@ -144,7 +190,91 @@ public class AuthController : ControllerBase
         if (entry.ExpiresUtc < DateTime.UtcNow)
             return BadRequest(new { error = "code_expired" });
 
+        if (!VerifyPkce(request.CodeVerifier, entry.Challenge))
+            return BadRequest(new { error = "invalid_code_verifier", message = MobileOutdatedMessage });
+
         return Ok(entry.Token);
+    }
+
+    /// <summary>RFC 7636 S256 challenge: base64url (no padding) of a SHA-256 digest = 43 characters.</summary>
+    public static bool IsValidCodeChallenge(string? challenge) =>
+        challenge is { Length: 43 } && challenge.All(IsBase64UrlChar);
+
+    /// <summary>Checks <c>BASE64URL(SHA256(ASCII(verifier))) == challenge</c> in constant time.</summary>
+    public static bool VerifyPkce(string? verifier, string challenge)
+    {
+        // RFC 7636 §4.1: 43..128 символов из [A-Z a-z 0-9 - . _ ~].
+        if (verifier is not { Length: >= 43 and <= 128 } || !verifier.All(c => IsBase64UrlChar(c) || c is '.' or '~'))
+            return false;
+
+        var computed = Base64Url(SHA256.HashData(System.Text.Encoding.ASCII.GetBytes(verifier)));
+        return CryptographicOperations.FixedTimeEquals(
+            System.Text.Encoding.ASCII.GetBytes(computed),
+            System.Text.Encoding.ASCII.GetBytes(challenge));
+    }
+
+    private static bool IsBase64UrlChar(char c) =>
+        c is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '-' or '_';
+
+    private static string Base64Url(byte[] bytes) =>
+        Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    // SEC_MOBILE_PKCE: форма подтверждения должна прийти с нашего же origin (браузеры шлют Origin на POST).
+    private bool IsSameOriginRequest()
+    {
+        var fetchSite = Request.Headers["Sec-Fetch-Site"].ToString();
+        if (fetchSite.Length > 0 && fetchSite != "same-origin")
+            return false;
+
+        var origin = Request.Headers.Origin.ToString();
+        if (origin.Length == 0)
+            return true;
+        return Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+               && string.Equals(uri.Authority, Request.Host.Value, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<IActionResult> MobileConfirmPageAsync(ValidatedToken session, string codeChallenge, CancellationToken ct)
+    {
+        string account = "ваш аккаунт";
+        if (session.Principal.TryGetUserId(out var userId)
+            && await _userRepository.GetByIdAsync(userId, ct) is { } user)
+        {
+            account = user.Email ?? user.GitHubUsername ?? account;
+        }
+
+        var encodedAccount = System.Net.WebUtility.HtmlEncode(account);
+        var encodedChallenge = System.Net.WebUtility.HtmlEncode(codeChallenge);
+        return MobileHtml(StatusCodes.Status200OK,
+            $"<p style=\"margin:0;text-align:center;padding:0 24px\">Войти в приложение ConexyAI как <b>{encodedAccount}</b>?</p>" +
+            "<form method=\"post\" action=\"/api/auth/mobile/confirm\" style=\"margin:0\">" +
+            $"<input type=\"hidden\" name=\"code_challenge\" value=\"{encodedChallenge}\">" +
+            "<button type=\"submit\" style=\"border:0;border-radius:10px;padding:12px 22px;background:#0e7490;" +
+            "color:#fff;font:inherit;font-weight:600;cursor:pointer\">Войти</button></form>" +
+            "<a style=\"color:#9aa4b2\" href=\"/\">Отмена</a>");
+    }
+
+    private ContentResult MobileMessagePage(int statusCode, string message) =>
+        MobileHtml(statusCode, $"<p style=\"margin:0;text-align:center;padding:0 24px\">{System.Net.WebUtility.HtmlEncode(message)}</p>");
+
+    private ContentResult MobileHtml(int statusCode, string body)
+    {
+        Response.Headers.CacheControl = "no-store";
+        // Страницу подтверждения нельзя встраивать во фрейм (clickjacking кнопки «Войти»).
+        Response.Headers.XFrameOptions = "DENY";
+        Response.Headers.ContentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'";
+        return new ContentResult
+        {
+            StatusCode = statusCode,
+            ContentType = "text/html; charset=utf-8",
+            Content =
+                "<!DOCTYPE html><html lang=\"ru\"><head><meta charset=\"utf-8\">" +
+                "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
+                "<title>ConexyAI</title></head>" +
+                "<body style=\"margin:0;height:100vh;display:flex;flex-direction:column;gap:16px;align-items:center;" +
+                "justify-content:center;background:#0a0a0a;color:#f2f4f8;font:16px/1.5 -apple-system,Segoe UI,Roboto,sans-serif\">" +
+                body +
+                "</body></html>",
+        };
     }
 
     private IActionResult StartGitHubLogin()
@@ -210,9 +340,13 @@ public class AuthController : ControllerBase
             // MOBILE_HANDOFF: вход начали из приложения — вернём сессию туда, а не на сайт.
             if (Request.Cookies[MobileRedirectCookie] == MobileRedirectUri)
             {
+                var challenge = Request.Cookies[MobileChallengeCookie];
                 Response.Cookies.Delete(MobileRedirectCookie);
+                Response.Cookies.Delete(MobileChallengeCookie);
+                if (!IsValidCodeChallenge(challenge))
+                    return MobileMessagePage(StatusCodes.Status400BadRequest, MobileOutdatedMessage);
                 _logger.LogInformation("GitHub callback success: handing the session back to the app.");
-                return MobileReturn(token);
+                return MobileReturn(token, challenge!);
             }
 
             var redirectUrl = $"{frontendBase}/";
@@ -251,7 +385,7 @@ public class AuthController : ControllerBase
         if (validated is null)
         {
             // Expired/invalid/revoked: drop the stale cookie so the client cleanly re-authenticates.
-            Response.Cookies.Delete(AuthCookieName);
+            DeleteAuthCookies();
             return Unauthorized();
         }
 
@@ -435,7 +569,7 @@ public class AuthController : ControllerBase
             _logger.LogInformation("Auth: user {UserId} logged out; all their tokens are revoked.", id);
         }
 
-        Response.Cookies.Delete(AuthCookieName);
+        DeleteAuthCookies();
         return Ok(new { success = true });
     }
 
@@ -520,14 +654,28 @@ public class AuthController : ControllerBase
         // SESSION_LIFETIME: добавлено 2026-09-26 — если сайт открыт по http, а не по https, браузер
         // выбрасывает эту Secure-cookie, и тогда сессия не переживёт даже перезагрузки страницы;
         // клиент вытягивает это своим токеном, но причину стоит искать здесь.
-        Response.Cookies.Append(AuthCookieName, token.Token, new CookieOptions
-        {
-            HttpOnly = true,
-            Secure = !_environment.IsDevelopment(),
-            SameSite = SameSiteMode.Lax,
-            IsEssential = true,
-            Expires = token.ExpiresAtUtc
-        });
+        // SEC_COOKIE_PREFIX: __Host- требует Secure + Path=/ + без Domain. Secure ставим всегда, не
+        // глядя на Request.IsHttps: за nginx/Cloudflare схема запроса к бэкенду — http. Chrome/Firefox
+        // принимают Secure-cookie и на http://localhost, так что локальная разработка не ломается.
+        Response.Cookies.Append(AuthCookieName, token.Token, AuthCookieOptions(token.ExpiresAtUtc));
+        Response.Cookies.Delete(LegacyAuthCookieName);
+    }
+
+    private static CookieOptions AuthCookieOptions(DateTime? expires) => new()
+    {
+        HttpOnly = true,
+        Secure = true,
+        Path = "/",
+        SameSite = SameSiteMode.Lax,
+        IsEssential = true,
+        Expires = expires
+    };
+
+    private void DeleteAuthCookies()
+    {
+        // Удаление __Host- cookie браузер примет только с теми же Secure и Path=/.
+        Response.Cookies.Delete(AuthCookieName, AuthCookieOptions(null));
+        Response.Cookies.Delete(LegacyAuthCookieName);
     }
 
     private static string GenerateState()
@@ -569,10 +717,11 @@ public class AuthController : ControllerBase
     /// к редиректу на незнакомую схему без жеста пользователя. Здесь есть и автоматический переход,
     /// и кнопка, если автопереход заблокирован.
     /// </remarks>
-    private IActionResult MobileReturn(TokenResponse token)
+    private IActionResult MobileReturn(TokenResponse token, string codeChallenge)
     {
-        var code = Guid.NewGuid().ToString("N");
-        MobileHandoffs[code] = (token, DateTime.UtcNow.Add(MobileHandoffTtl));
+        // SEC_MOBILE_PKCE: 128 бит из CSPRNG вместо Guid; код связан с challenge приложения.
+        var code = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+        MobileHandoffs[code] = (token, codeChallenge, DateTime.UtcNow.Add(MobileHandoffTtl));
 
         var now = DateTime.UtcNow;
         foreach (var stale in MobileHandoffs.Where(pair => pair.Value.ExpiresUtc < now).Select(pair => pair.Key).ToList())
@@ -600,4 +749,5 @@ public class AuthController : ControllerBase
 }
 
 // MOBILE_HANDOFF: тело запроса приложения — одноразовый код из deep link.
-public record MobileHandoffRequest(string? Code);
+// SEC_MOBILE_PKCE: + code_verifier, из которого был посчитан code_challenge.
+public record MobileHandoffRequest(string? Code, string? CodeVerifier = null);

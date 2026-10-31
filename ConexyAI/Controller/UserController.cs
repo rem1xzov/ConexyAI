@@ -2,6 +2,7 @@ using ConexyAI.Configuration;
 using ConexyAI.Contract;
 using ConexyAI.Extensions;
 using ConexyAI.Service;
+using ConexyAI.Service.Web;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -23,14 +24,17 @@ public class UserController : ControllerBase
     private readonly IUserIntegrationsService _integrations;
     private readonly IConexyGitHubService _github;
     private readonly ILogger<UserController> _logger;
+    private readonly PublicUrlGuard _urlGuard;
 
     public UserController(
         IUserMemoryService memory,
         IUserPreferencesService preferences,
         IUserIntegrationsService integrations,
         IConexyGitHubService github,
-        ILogger<UserController> logger)
+        ILogger<UserController> logger,
+        PublicUrlGuard urlGuard)
     {
+        _urlGuard = urlGuard;
         _memory = memory;
         _preferences = preferences;
         _integrations = integrations;
@@ -191,6 +195,17 @@ public class UserController : ControllerBase
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
         var servers = dto?.Servers ?? new List<McpServerInput>();
+
+        // SEC_MCP_SSRF: непубличный адрес (docker-сервис, localhost, метаданные облака) не сохраняем вообще;
+        // перед каждым запросом адрес проверяется ещё раз (McpHttpClient).
+        foreach (var server in servers)
+        {
+            if (server is null || string.IsNullOrWhiteSpace(server.Url)) continue;
+            var error = await McpRegistryFactory.ValidateUserUrlAsync(_urlGuard, server.Url, ct);
+            if (error is not null)
+                return BadRequest(new { error = "MCP_URL_REJECTED", message = error, url = server.Url });
+        }
+
         await _integrations.SaveMcpServersAsync(userId, servers, ct);
         return Ok(new McpServersDto((await _integrations.GetMcpServersAsync(userId, ct)).ToList()));
     }

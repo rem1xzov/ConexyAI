@@ -42,6 +42,15 @@ public interface IPaymentRepository
         DateTime fromUtc, DateTime toUtcExclusive, CancellationToken ct = default);
 
     Task UpdateAsync(PaymentEntity payment, CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomically marks the payment as activated (<c>ActivatedAt IS NULL</c> → <paramref name="now"/>).
+    /// Returns false when another request already claimed it.
+    /// </summary>
+    Task<bool> TryClaimActivationAsync(Guid paymentId, DateTime now, CancellationToken ct = default);
+
+    /// <summary>Undoes <see cref="TryClaimActivationAsync"/> when granting failed, so a retry can activate.</summary>
+    Task ReleaseActivationAsync(Guid paymentId, CancellationToken ct = default);
 }
 
 public class PaymentRepository : IPaymentRepository
@@ -105,6 +114,59 @@ public class PaymentRepository : IPaymentRepository
     public async Task UpdateAsync(PaymentEntity payment, CancellationToken ct = default)
     {
         _context.Payments.Update(payment);
+        // SEC_PAYMENT_RACE: ActivatedAt пишется ТОЛЬКО через TryClaimActivationAsync. Иначе параллельный вебхук со
+        // старой копией строки затирал бы флаг обратно в NULL и выдавал тариф повторно.
+        _context.Entry(payment).Property(p => p.ActivatedAt).IsModified = false;
         await _context.SaveChangesAsync(ct);
+    }
+
+    // SEC_PAYMENT_RACE: два одновременных вебхука по одному платежу оба видели ActivatedAt == null и выдавали
+    // тариф/токены дважды. Условный UPDATE ... WHERE "ActivatedAt" IS NULL пропускает ровно одного.
+    public async Task<bool> TryClaimActivationAsync(Guid paymentId, DateTime now, CancellationToken ct = default)
+    {
+        if (_context.Database.IsRelational())
+        {
+            var rows = await _context.Payments
+                .Where(p => p.Id == paymentId && p.ActivatedAt == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(p => p.ActivatedAt, now), ct);
+            if (rows == 0) return false;
+            SyncTracked(paymentId, now);
+            return true;
+        }
+
+        // Нереляционный провайдер (InMemory в тестах) не умеет ExecuteUpdate.
+        var payment = await _context.Payments.FirstOrDefaultAsync(p => p.Id == paymentId, ct);
+        if (payment is null) return false;
+        await _context.Entry(payment).ReloadAsync(ct);
+        if (payment.ActivatedAt is not null) return false;
+        payment.ActivatedAt = now;
+        await _context.SaveChangesAsync(ct);
+        return true;
+    }
+
+    public async Task ReleaseActivationAsync(Guid paymentId, CancellationToken ct = default)
+    {
+        if (_context.Database.IsRelational())
+        {
+            await _context.Payments
+                .Where(p => p.Id == paymentId)
+                .ExecuteUpdateAsync(s => s.SetProperty(p => p.ActivatedAt, (DateTime?)null), ct);
+            SyncTracked(paymentId, null);
+            return;
+        }
+
+        var payment = await _context.Payments.FirstOrDefaultAsync(p => p.Id == paymentId, ct);
+        if (payment is null) return;
+        payment.ActivatedAt = null;
+        await _context.SaveChangesAsync(ct);
+    }
+
+    // ExecuteUpdate минует трекер: выравниваем загруженную сущность, чтобы последующий Update не затёр поле.
+    private void SyncTracked(Guid paymentId, DateTime? value)
+    {
+        var local = _context.Payments.Local.FirstOrDefault(p => p.Id == paymentId);
+        if (local is null) return;
+        local.ActivatedAt = value;
+        _context.Entry(local).Property(p => p.ActivatedAt).OriginalValue = value;
     }
 }

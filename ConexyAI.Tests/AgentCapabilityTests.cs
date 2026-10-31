@@ -64,6 +64,7 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent mcp: lists remote tools, handshakes and parses SSE tool results", McpRemoteServerAsync);
         TestRegistry.Add("agent mcp: server tools are offered and dispatched by prefix", McpToolIsOfferedAndDispatchedAsync);
         TestRegistry.Add("agent mcp: a personal server overrides the operator one and sends its token", McpUserServerOverridesOperatorAsync);
+                TestRegistry.Add("agent mcp SEC_MCP_SSRF: internal user MCP URLs are refused, error bodies are not echoed", McpUserServerSsrfIsRejectedAsync);
         TestRegistry.Add("agent mcp: tool order is sorted so the prompt prefix stays cacheable", McpToolOrderIsStableAsync);
         TestRegistry.Add("agent prompts: charters carry deep research, fetch_web_page, the plan rule and artifacts", ChartersAsync);
         TestRegistry.Add("agent tools: the coder set is narrowed to the task (no browser/github/docs for a file fix)", ToolRoutingNarrowsCoderAsync);
@@ -1185,17 +1186,61 @@ internal static class AgentCapabilityTests
                 }
             }
         });
-        var factory = new McpRegistryFactory(options, new FakeHttpClientFactory(handler), NullLogger<McpRegistry>.Instance);
+        // SEC_MCP_SSRF: личный сервер проходит PublicUrlGuard, поэтому ему нужен публичный адрес.
+        var guard = new PublicUrlGuard(new MapResolver(new Dictionary<string, string[]> { ["user.example.com"] = new[] { "93.184.216.34" } }));
+        var factory = new McpRegistryFactory(options, new FakeHttpClientFactory(handler), NullLogger<McpRegistry>.Instance, guard);
         var registry = factory.Create(new List<McpServerInput>
         {
-            new() { Id = "notion", Name = "Notion", Url = "https://user.example/mcp", Token = "user-tok" }
+            new() { Id = "notion", Name = "Notion", Url = "https://user.example.com/mcp", Token = "user-tok" }
         });
 
         await registry.ListToolsAsync();
 
-        Assert(handler.Urls.Count > 0 && handler.Urls.All(u => u.Contains("user.example")),
+        Assert(handler.Urls.Count > 0 && handler.Urls.All(u => u.Contains("user.example.com")),
             "the user's server overrides the operator one: " + string.Join(",", handler.Urls));
         Assert(handler.Auths.Contains("Bearer user-tok"), "the user's token is sent: " + string.Join(",", handler.Auths));
+    }
+
+    // SEC_MCP_SSRF: личный MCP-сервер с внутренним адресом не получает ни одного запроса, а тело
+    // неуспешного ответа не попадает модели.
+    private static async Task McpUserServerSsrfIsRejectedAsync()
+    {
+        var guard = new PublicUrlGuard(new MapResolver(new Dictionary<string, string[]>
+        {
+            ["rebind.attacker.com"] = new[] { "172.18.0.5" },
+        }));
+
+        foreach (var url in new[]
+                 {
+                     "http://docker-socket-proxy:2375/containers/conexy_postgres/kill",
+                     "http://127.0.0.1:8080/api",
+                     "http://169.254.169.254/latest/meta-data",
+                     "https://rebind.attacker.com/mcp",
+                     "file:///etc/passwd",
+                 })
+        {
+            Assert(await McpRegistryFactory.ValidateUserUrlAsync(guard, url) is not null, "internal MCP URL must be rejected: " + url);
+
+            var handler = new McpHandler();
+            var factory = new McpRegistryFactory(Options.Create(new McpOptions()), new FakeHttpClientFactory(handler), NullLogger<McpRegistry>.Instance, guard);
+            var registry = factory.Create(new List<McpServerInput> { new() { Id = "evil", Name = "Evil", Url = url } });
+            await registry.ListToolsAsync();
+            Assert(handler.Urls.Count == 0, "no request may reach an internal MCP URL: " + url);
+        }
+
+        var errorGuard = new PublicUrlGuard(new MapResolver(new Dictionary<string, string[]> { ["mcp.public.com"] = new[] { "93.184.216.34" } }));
+        var errorRegistry = new McpRegistry(
+            new[] { new McpServerConfig("x", "X", "https://mcp.public.com/mcp", new Dictionary<string, string>(), 5, IsUser: true) },
+            new HttpClient(new SecretErrorHandler()), NullLogger<McpRegistry>.Instance, guard: errorGuard);
+        var call = await errorRegistry.CallAsync(new McpToolDescriptor("f", "x", "X", "t", "", default), "{}");
+        Assert(!call.Success && call.Text.Contains("HTTP 500") && !call.Text.Contains("SECRET"),
+            "a failed MCP response exposes only its status: " + call.Text);
+    }
+
+    private sealed class SecretErrorHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("SECRET internal body") });
     }
 
     // PREFIX_CACHE: порядок MCP-инструментов не должен зависеть от порядка ответа сервера — схемы идут

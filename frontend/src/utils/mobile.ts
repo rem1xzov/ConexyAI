@@ -116,8 +116,41 @@ export async function minimizeApp(): Promise<void> {
 export async function openMobileLogin(): Promise<boolean> {
   const browser = bridge()?.Plugins?.Browser;
   if (!browser) return false;
-  await browser.open({ url: new URL(MOBILE_LOGIN_URL, window.location.origin).toString() });
+  // SEC_MOBILE_PKCE: verifier знает только приложение; сервер получает лишь SHA-256 от него. Код из
+  // deep link без verifier на сессию не обменять. localStorage, а не sessionStorage: пока идёт вход
+  // в системном браузере, Android может выгрузить WebView.
+  const verifier = createPkceVerifier();
+  const challenge = await pkceChallenge(verifier);
+  localStorage.setItem(PKCE_VERIFIER_KEY, verifier);
+  const url = new URL(MOBILE_LOGIN_URL, window.location.origin);
+  url.searchParams.set('code_challenge', challenge);
+  url.searchParams.set('code_challenge_method', 'S256');
+  await browser.open({ url: url.toString() });
   return true;
+}
+
+const PKCE_VERIFIER_KEY = 'conexy_pkce_verifier';
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function createPkceVerifier(): string {
+  return base64Url(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+async function pkceChallenge(verifier: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  return base64Url(new Uint8Array(digest));
+}
+
+/** SEC_MOBILE_PKCE: забирает (и стирает) verifier текущего входа — он одноразовый, как и код. */
+export function takePkceVerifier(): string | null {
+  const verifier = localStorage.getItem(PKCE_VERIFIER_KEY);
+  localStorage.removeItem(PKCE_VERIFIER_KEY);
+  return verifier;
 }
 
 /** Registers the deep-link listener; returns false when the app shell is absent. */

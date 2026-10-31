@@ -54,6 +54,10 @@ services:
       retries: 10
       start_period: 10s
 
+  # SEC_MCP_SSRF: секции тут ужать нельзя — раннеру песочницы нужны create/start/wait/attach/logs/inspect/
+  # kill/rm, а у tecnativa ACL посекционные (ALLOW_START/STOP работают только при POST=0, а create/attach
+  # требуют POST=1). Поэтому защита — в том, что прокси виден только из сети backend и что пользовательские
+  # URL (MCP, fetch_web_page) не могут указывать на внутренние имена/адреса (PublicUrlGuard).
   # Deny-by-default proxy in front of the Docker daemon. The backend can only create,
   # start, wait on, log, inspect, kill and remove its sandbox containers. exec, image
   # enumeration/pull, build, volumes, networks and system endpoints are all denied.
@@ -177,6 +181,9 @@ services:
       Preview__Network: ${PREVIEW_NETWORK:-conexy-preview-net}
       # The backend talks to the host Docker daemon ONLY through the socket proxy.
       DOCKER_HOST: tcp://docker-socket-proxy:2375
+      # SEC_FORWARDED_HEADERS: X-Forwarded-For/Proto принимаются ТОЛЬКО от nginx (фиксированный IP в сети
+      # frontend, см. networks ниже). Контейнеры превью в сети preview больше не могут подделать IP клиента.
+      TrustedProxies: ${FRONTEND_PROXY_IP:-172.30.250.10}
     volumes:
       # Same-path bind mounts: the host path the backend passes to `docker run -v` must
       # resolve to the same directory on the Docker host (see DEPLOY.md).
@@ -186,6 +193,11 @@ services:
       # daemon, so this path must exist and be writable on the host.
       - ${SANDBOX_STATE_HOST_PATH:-/srv/conexyai/sandbox-state}:${SANDBOX_STATE_HOST_PATH:-/srv/conexyai/sandbox-state}
       - ${RAG_DOCUMENTS_PATH:-/srv/conexyai/documents}:${RAG_DOCUMENTS_PATH:-/srv/conexyai/documents}
+    # SEC_PREVIEW_NETWORK: бэкенд остаётся в сети preview — preview-gateway проксирует запросы в контейнеры
+    # start_service по имени, и другого пути к ним у него нет (internal-сеть не помогла бы: изоляция между
+    # участниками одной сети в docker bridge не настраивается без ICC=false, а с ним ломается и сам прокси).
+    # Следствие: код пользователя в превью может достучаться до backend:8080 напрямую, минуя nginx. Это
+    # тот же публичный API (авторизация обязательна), а подделка X-Forwarded-For закрыта TrustedProxies.
     networks:
       - frontend
       - backend
@@ -213,7 +225,9 @@ services:
       # Сертификаты Let's Encrypt с хоста (HTTPS терминируется в контейнерном nginx, см. frontend/nginx.conf).
       - /etc/letsencrypt:/etc/letsencrypt:ro
     networks:
-      - frontend
+      frontend:
+        # SEC_FORWARDED_HEADERS: фиксированный адрес — бэкенд доверяет X-Forwarded-* только ему (TrustedProxies).
+        ipv4_address: ${FRONTEND_PROXY_IP:-172.30.250.10}
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
       interval: 15s
@@ -222,7 +236,13 @@ services:
       start_period: 10s
 
 networks:
+  # SEC_FORWARDED_HEADERS: подсеть задана явно, чтобы у nginx был фиксированный IP. Если подсеть занята на
+  # хосте, поменяйте FRONTEND_SUBNET и FRONTEND_PROXY_IP вместе. Смена ipam существующей сети требует
+  # её пересоздания: docker compose -f docker-compose.prod.yml down && ... up -d --wait.
   frontend:
+    ipam:
+      config:
+        - subnet: ${FRONTEND_SUBNET:-172.30.250.0/24}
   backend:
   # PREVIEW: создаётся вручную один раз: docker network create conexy-preview-net
   preview:

@@ -360,7 +360,13 @@ builder.Services.AddHostedService<MemoryExtractionWorker>();
 builder.Services.AddHostedService<ChatTitleWorker>();
 builder.Services.AddHttpClient<IConexyLlmClient, ConexyLlmClient>();
 // MCP: отдельный HttpClient для удалённых MCP-серверов; фабрика создаёт реестр на прогон (с личными серверами пользователя).
-builder.Services.AddHttpClient("mcp", client => client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddHttpClient(McpRegistryFactory.OperatorHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
+// SEC_MCP_SSRF: личные MCP-серверы пользователя — URL недоверенный. Без редиректов и с пиннингом
+// проверенного публичного IP в ConnectCallback: иначе http://docker-socket-proxy:2375/... из настроек
+// пользователя превращался в POST в Docker API изнутри бэкенда.
+builder.Services.AddHttpClient(McpRegistryFactory.UserHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(sp =>
+        McpRegistryFactory.CreateUserHandler(sp.GetRequiredService<ConexyAI.Service.Web.PublicUrlGuard>()));
 builder.Services.AddSingleton<IMcpRegistryFactory, McpRegistryFactory>();
 // DEEPSEEK_SEARCH: поиск и чтение страниц идут через встроенный Search/Fetch API DeepSeek (тот же ключ).
 // WebSearch:Provider=jsonseo возвращает прежний поиск через JSON SEO.
@@ -479,6 +485,8 @@ app.Use(async (context, next) =>
 app.UseHttpsRedirection();
 app.UseCors("AllowFrontend");
 app.UseAuthentication();
+// SEC_DEVICE_SCOPE: токен из обмена ключа десктопа не даёт админку и правку настроек аккаунта.
+app.UseConexyDeviceSessionGuard();
 app.UseAuthorization();
 app.UseConexyRateLimiter();
 

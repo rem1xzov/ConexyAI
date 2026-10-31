@@ -23,6 +23,20 @@ export function hostOf(url: string): string {
   }
 }
 
+/**
+ * SEC_SEARCH_HREF: выдачу пишет сторонний поиск (и косвенно модель), а URL идёт прямо в href —
+ * `javascript:` в нём = XSS по клику. Пускаем только http(s).
+ */
+export function isHttpUrl(url: string | undefined): boolean {
+  if (!url || !/^https?:\/\//i.test(url)) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 /** Разбирает текстовую выдачу одного web_search. Нераспознанный текст даёт пустой список. */
 export function parseSearchOutput(output: string | undefined): WebResult[] {
   if (!output) return [];
@@ -39,8 +53,11 @@ export function parseSearchOutput(output: string | undefined): WebResult[] {
     if (!current || !line) continue;
     const url = /^URL:\s*(\S+)/.exec(line);
     if (url) {
-      current.url = url[1];
-      current.host = hostOf(url[1]);
+      // Не-http(s) URL не запоминаем: карточка без url в выдачу не попадает.
+      if (isHttpUrl(url[1])) {
+        current.url = url[1];
+        current.host = hostOf(url[1]);
+      }
       continue;
     }
     const date = /^Date:\s*(.+)$/.exec(line);

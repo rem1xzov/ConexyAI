@@ -56,14 +56,22 @@ public static class AuthSecurityExtensions
     public const string TooManyAttemptsError = "TOO_MANY_ATTEMPTS";
 
     /// <summary>
-    /// Proxies whose <c>X-Forwarded-For</c> is trusted: loopback + private ranges (the nginx
-    /// container reaches the backend over a docker bridge network). Anything else connecting
-    /// directly cannot spoof its client IP.
+    /// Proxies whose <c>X-Forwarded-*</c> headers are always trusted: loopback only. The nginx
+    /// frontend container is added explicitly via the <see cref="TrustedProxiesConfigKey"/> setting.
     /// </summary>
+    /// <remarks>
+    /// SEC_FORWARDED_HEADERS: раньше доверяли всем 10/8, 172.16/12, 192.168/16. Но бэкенд подключён к сети
+    /// preview, где крутится КОД ПОЛЬЗОВАТЕЛЕЙ (start_service): оттуда можно было стучаться напрямую в
+    /// backend:8080 с любым X-Forwarded-For и обходить лимиты по IP. Теперь доверяем только фиксированному
+    /// IP nginx (docker-compose.prod.yml задаёт его и передаёт в TrustedProxies).
+    /// </remarks>
     public static readonly IReadOnlyList<string> TrustedProxyNetworks = new[]
     {
-        "127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"
+        "127.0.0.0/8", "::1/128"
     };
+
+    /// <summary>Comma-separated IPs or CIDRs of reverse proxies (the nginx container), e.g. <c>172.30.250.10</c>.</summary>
+    public const string TrustedProxiesConfigKey = "TrustedProxies";
 
     /// <summary>Registers the revocation check, the login lockout, forwarded headers and rate limits.</summary>
     public static WebApplicationBuilder AddConexyAuthSecurity(this WebApplicationBuilder builder)
@@ -80,7 +88,9 @@ public static class AuthSecurityExtensions
         // LOGIN_LOCKOUT (M20)
         services.AddSingleton<ILoginAttemptTracker>(_ => new LoginAttemptTracker(TimeProvider.System));
 
-        services.Configure<ForwardedHeadersOptions>(ConfigureForwardedHeaders);
+        services.AddOptions<ForwardedHeadersOptions>()
+            .Configure<IConfiguration>((options, configuration) =>
+                ConfigureForwardedHeaders(options, configuration[TrustedProxiesConfigKey]));
         services.AddRateLimiter(ConfigureRateLimiter);
         return services;
     }
@@ -99,6 +109,52 @@ public static class AuthSecurityExtensions
     /// </summary>
     public static IApplicationBuilder UseConexyRateLimiter(this IApplicationBuilder app) =>
         app.UseRateLimiter();
+
+    /// <summary>
+    /// SEC_DEVICE_SCOPE: a JWT obtained by exchanging a desktop key (<c>src=device</c>) is not a full
+    /// browser session. Must run after authentication.
+    /// </summary>
+    /// <remarks>
+    /// Утёкший ключ десктопа не должен давать админку и правку настроек аккаунта (MCP-серверы с
+    /// токенами, GitHub-токен, память, инструкции). Десктоп (ConexyAI.Desktop/ServerClient.cs) ходит
+    /// только в /api/conexy, /api/skills, /api/subscription/usage, /api/device/* и хаб — их не трогаем.
+    /// GitHub-токен десктоп получает через /api/device/github-credential (нужен для git push на ПК).
+    /// </remarks>
+    public static IApplicationBuilder UseConexyDeviceSessionGuard(this IApplicationBuilder app) =>
+        app.Use(async (context, next) =>
+        {
+            if (IsDeviceSessionForbidden(context))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsJsonAsync(new
+                {
+                    error = "DEVICE_SESSION_FORBIDDEN",
+                    message = "Это действие доступно только на сайте, не из десктопной сессии."
+                }, context.RequestAborted);
+                return;
+            }
+
+            await next();
+        });
+
+    /// <summary>True when a device-key session calls an endpoint reserved for full sessions.</summary>
+    public static bool IsDeviceSessionForbidden(HttpContext context)
+    {
+        if (context.User.FindFirst(ITokenService.DeviceSourceClaim)?.Value != ITokenService.DeviceSourceValue)
+            return false;
+
+        var path = context.Request.Path;
+        if (path.StartsWithSegments("/api/admin"))
+            return true;
+
+        if (path.StartsWithSegments("/api/user"))
+        {
+            // MCP-серверы отдаются вместе с токенами — и чтение закрыто.
+            return !HttpMethods.IsGet(context.Request.Method) || path.StartsWithSegments("/api/user/mcp");
+        }
+
+        return false;
+    }
 
     // TOKEN_REVOCATION: добавлено 2026-09-24 (ревью M19)
     /// <summary>
@@ -158,20 +214,32 @@ public static class AuthSecurityExtensions
         return "ip:" + ip;
     }
 
-    private static void ConfigureForwardedHeaders(ForwardedHeadersOptions options)
+    public static void ConfigureForwardedHeaders(ForwardedHeadersOptions options, string? trustedProxies)
     {
-        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor;
+        // SEC_FORWARDED_HEADERS: X-Forwarded-Proto тоже читаем — иначе за nginx Request.IsHttps всегда false.
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
         // nginx APPENDS the address it saw ($proxy_add_x_forwarded_for), so only the right-most
         // entry is trustworthy; everything to its left is whatever the client sent.
         options.ForwardLimit = 1;
         options.KnownProxies.Clear();
         options.KnownNetworks.Clear();
-        foreach (var cidr in TrustedProxyNetworks)
+        var entries = TrustedProxyNetworks.Concat(
+            (trustedProxies ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        foreach (var entry in entries)
         {
-            var slash = cidr.IndexOf('/');
-            options.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(
-                IPAddress.Parse(cidr[..slash]),
-                int.Parse(cidr[(slash + 1)..], CultureInfo.InvariantCulture)));
+            var slash = entry.IndexOf('/');
+            if (slash < 0)
+            {
+                if (IPAddress.TryParse(entry, out var single))
+                    options.KnownProxies.Add(single);
+                continue;
+            }
+
+            if (IPAddress.TryParse(entry[..slash], out var prefix)
+                && int.TryParse(entry[(slash + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var length))
+            {
+                options.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(prefix, length));
+            }
         }
     }
 

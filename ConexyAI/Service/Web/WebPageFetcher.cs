@@ -408,7 +408,8 @@ public sealed class WebPageFetcher : IWebPageFetcher, IDisposable
     /// This is the DNS-rebinding defence: the pre-flight check in <see cref="FetchAsync"/> gives a
     /// readable error, but this is the check the connection actually depends on.
     /// </summary>
-    private static async ValueTask<Stream> ConnectPinnedAsync(PublicUrlGuard guard, DnsEndPoint endpoint, CancellationToken ct)
+    // SEC_MCP_SSRF: internal — тот же пиннинг использует HttpClient личных MCP-серверов.
+    internal static async ValueTask<Stream> ConnectPinnedAsync(PublicUrlGuard guard, DnsEndPoint endpoint, CancellationToken ct)
     {
         var check = await guard.CheckHostAsync(endpoint.Host, ct);
         if (!check.Allowed)

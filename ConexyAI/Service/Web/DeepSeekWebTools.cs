@@ -118,15 +118,17 @@ public sealed class DeepSeekSearchService : IWebSearchService
         var index = 0;
         foreach (var item in items ?? new List<SearchItem>())
         {
-            if (string.IsNullOrWhiteSpace(item.Url)) continue;
+            // SEC_SEARCH_HREF: только http(s) и без переводов строк (см. SearchResultText).
+            var url = SearchResultText.OneLine(item.Url);
+            if (!SearchResultText.IsHttpUrl(url)) continue;
             index++;
-            sb.AppendLine($"{index}. {item.Title}");
-            sb.AppendLine($"   URL: {item.Url}");
+            sb.AppendLine($"{index}. {SearchResultText.OneLine(item.Title)}");
+            sb.AppendLine($"   URL: {url}");
             if (!string.IsNullOrWhiteSpace(item.Date))
-                sb.AppendLine($"   Date: {item.Date}");
+                sb.AppendLine($"   Date: {SearchResultText.OneLine(item.Date)}");
             var text = string.IsNullOrWhiteSpace(item.Summary) ? item.Snippet : item.Summary;
             if (!string.IsNullOrWhiteSpace(text))
-                sb.AppendLine($"   {text.Trim()}");
+                sb.AppendLine($"   {SearchResultText.OneLine(text)}");
         }
 
         return index == 0
@@ -249,4 +251,23 @@ public sealed class DeepSeekPageFetcher : IWebPageFetcher
         [JsonPropertyName("title")] public string? Title { get; set; }
         [JsonPropertyName("content")] public string? Content { get; set; }
     }
+}
+
+/// <summary>
+/// SEC_SEARCH_HREF: поля выдачи поиска — чужой текст. Перевод строки в заголовке/выжимке позволял
+/// подделать строку «URL: javascript:…» в формате, который разбирает шторка «Результаты поиска»,
+/// поэтому каждое поле сводится к одной строке, а результат без http(s)-адреса отбрасывается.
+/// </summary>
+internal static class SearchResultText
+{
+    public static string OneLine(string? value) =>
+        string.Join(' ', (value ?? string.Empty).Split(new[] { '\r', '\n', '\u2028', '\u2029' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => part.Trim())
+            .Where(part => part.Length > 0));
+
+    public static bool IsHttpUrl(string? url) =>
+        !string.IsNullOrWhiteSpace(url)
+        && !url.Contains(' ')
+        && Uri.TryCreate(url, UriKind.Absolute, out var uri)
+        && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 }

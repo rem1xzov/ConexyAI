@@ -4377,11 +4377,90 @@ public class ConexyAgentRunner : IConexyAgentRunner
         if (!_mcpRegistry.TryResolve(toolCall.Function.Name, out var descriptor))
             return new ConexyToolResult(toolCall.Id, $"Unknown MCP tool '{toolCall.Function.Name}'.", true);
 
+        // SEC_MCP_CONFIRM: личный MCP-сервер может что-то менять или отправлять наружу (создать issue, написать письмо).
+        // Prompt injection со страницы или из файла иначе выводит данные без ведома пользователя, поэтому
+        // всё, что сервер не пометил readOnlyHint, идёт через ту же карточку подтверждения, что и bash.
+        // Десктопные прогоны (UseDevice) веб-карточку не показывают — там гейта пока нет.
+        Guid? actionId = null;
+        if (descriptor.IsUserServer && !descriptor.ReadOnly && !_job.UseDevice && !_pendingActionService.IsTaskAutoApproved(taskId))
+        {
+            var (approvedId, rejection) = await ConfirmMcpCallAsync(taskId, toolCall, descriptor, root, ct);
+            if (rejection is not null)
+                return rejection;
+            actionId = approvedId;
+        }
+
         await SendAgentStatusAsync(taskId, "executing", $"MCP: {descriptor.ServerName} / {descriptor.ToolName}...", ct: ct);
         await LogAsync(taskId, $"[MCP] {descriptor.ServerName}/{descriptor.ToolName}", ct);
 
         var result = await _mcpRegistry.CallAsync(descriptor, root.GetRawText(), ct);
-        return new ConexyToolResult(toolCall.Id, Truncate(result.Text, 20_000), !result.Success);
+        var text = Truncate(result.Text, 20_000);
+        if (actionId is { } id)
+            await EmitMcpActionAsync(taskId, id, descriptor, root, result.Success ? "completed" : "failed",
+                result.Success ? "Выполнено" : "Ошибка MCP", Truncate(text, 4_000), CancellationToken.None);
+        return new ConexyToolResult(toolCall.Id, text, !result.Success);
+    }
+
+    // SEC_MCP_CONFIRM: карточка подтверждения для MCP-вызова — тот же fail-closed протокол, что у RunBashWithConfirmationAsync.
+    private async Task<(Guid ActionId, ConexyToolResult? Rejection)> ConfirmMcpCallAsync(
+        Guid taskId, LlmToolCall toolCall, McpToolDescriptor descriptor, JsonElement root, CancellationToken ct)
+    {
+        var actionId = Guid.NewGuid();
+        var label = McpCommandLabel(descriptor, root);
+        await SendAgentStatusAsync(taskId, "confirming", $"Ожидает подтверждения: MCP {descriptor.ServerName} / {descriptor.ToolName}", ct: ct);
+        await EmitMcpActionAsync(taskId, actionId, descriptor, root, "pending_confirmation",
+            $"Вызов MCP-инструмента {descriptor.ServerName} / {descriptor.ToolName}", null, ct);
+
+        bool approved;
+        try
+        {
+            approved = await _pendingActionService.WaitForDecisionAsync(
+                actionId, _job.UserId, _job.ChatId, taskId, label, string.Empty, isDangerous: false, ct,
+                description: $"MCP {descriptor.ServerName} / {descriptor.ToolName}");
+        }
+        catch (CommandConfirmationException)
+        {
+            await TryEmitMcpActionAsync(taskId, actionId, descriptor, root, "failed", "Не удалось запросить подтверждение — вызов не выполнен.");
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            await TryEmitMcpActionAsync(taskId, actionId, descriptor, root, "rejected", "Подтверждение отменено (таймаут или остановка).");
+            return (actionId, new ConexyToolResult(toolCall.Id,
+                $"CANCELLED: подтверждение вызова MCP '{descriptor.ToolName}' не получено. Вызов НЕ выполнен.", true));
+        }
+
+        if (!approved)
+        {
+            await EmitMcpActionAsync(taskId, actionId, descriptor, root, "rejected", "Отклонено пользователем", null, ct);
+            return (actionId, new ConexyToolResult(toolCall.Id,
+                $"USER_REJECTED: вызов MCP '{descriptor.ToolName}' отклонён пользователем и НЕ выполнен. Продолжи без него.", false));
+        }
+
+        return (actionId, null);
+    }
+
+    private static string McpCommandLabel(McpToolDescriptor descriptor, JsonElement root) =>
+        $"MCP {descriptor.ServerName} / {descriptor.ToolName} {Truncate(root.GetRawText(), 600)}";
+
+    private Task EmitMcpActionAsync(
+        Guid taskId, Guid actionId, McpToolDescriptor descriptor, JsonElement root, string status, string summary, string? output, CancellationToken ct) =>
+        _hubContext.Clients.Group($"task_{taskId}").SendAsync("ToolAction", new ToolActionEvent
+        {
+            ToolName = "mcp",
+            Command = McpCommandLabel(descriptor, root),
+            Path = "",
+            Status = status,
+            Summary = summary,
+            Description = $"MCP {descriptor.ServerName} / {descriptor.ToolName}",
+            Output = output,
+            PendingActionId = actionId,
+        }, ct);
+
+    private async Task TryEmitMcpActionAsync(Guid taskId, Guid actionId, McpToolDescriptor descriptor, JsonElement root, string status, string summary)
+    {
+        try { await EmitMcpActionAsync(taskId, actionId, descriptor, root, status, summary, null, CancellationToken.None); }
+        catch (Exception ex) { await LogAsync(taskId, $"[Confirm] Не удалось обновить карточку MCP: {ex.Message}", CancellationToken.None); }
     }
 
     // COMMAND_CONFIRM: расширено 2026-09-20 — подтверждение требуется для любой bash-команды.

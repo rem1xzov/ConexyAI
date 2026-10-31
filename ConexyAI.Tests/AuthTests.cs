@@ -64,6 +64,80 @@ internal static class AuthTests
         TestRegistry.Add("auth SESSION_LIFETIME: the issued session lasts 90 days", TokenLifetimeAsync);
         TestRegistry.Add("auth H3: SpeechKit logs never contain recognized speech or full upstream bodies", SpeechLogsArePrivateAsync);
         TestRegistry.Add("auth L12: JWT signing key guard refuses placeholders outside Development", SigningKeyGuardAsync);
+        // SEC_MOBILE_PKCE: добавлено 2026-10-31
+        TestRegistry.Add("auth SEC_MOBILE_PKCE: mobile handoff needs a confirmed POST and the S256 verifier (HTTP)", MobilePkceOverHttpAsync);
+    }
+
+    // ---------------------------------------------------------------- SEC_MOBILE_PKCE
+
+    private static async Task MobilePkceOverHttpAsync()
+    {
+        await using var host = await AuthHost.StartAsync();
+        // Свой клиент без CookieContainer: Secure-cookie по http он бы не отправил, шлём заголовок сами.
+        using var client = new HttpClient(new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false })
+        {
+            BaseAddress = host.Client.BaseAddress
+        };
+
+        await client.PostAsJsonAsync("/api/auth/register", new { email = "pkce@example.com", password = Password, acceptedPolicy = true });
+        var mail = (RecordingEmailSender)host.App.Services.GetRequiredService<IEmailSender>();
+        var verify = await client.PostAsJsonAsync("/api/auth/verify-email", new { email = "pkce@example.com", code = mail.LastCode });
+        Assert(verify.StatusCode == HttpStatusCode.OK, $"verify must succeed, got {(int)verify.StatusCode}");
+        var token = (await verify.Content.ReadFromJsonAsync<TokenResponse>())!.Token;
+        var cookie = "__Host-conexy_auth=" + token;
+
+        // Старый APK без challenge — понятный отказ.
+        var old = await client.GetAsync("/api/auth/mobile?redirect=conexy.app://auth");
+        Assert(old.StatusCode == HttpStatusCode.BadRequest && (await old.Content.ReadAsStringAsync()).Contains("устарела"),
+            $"a request without code_challenge is refused with an update hint, got {(int)old.StatusCode}");
+
+        const string verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk-test";
+        var challenge = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(Encoding.ASCII.GetBytes(verifier)))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        Assert(ConexyAI.Controller.AuthController.VerifyPkce(verifier, challenge), "the S256 helper accepts its own pair");
+        Assert(!ConexyAI.Controller.AuthController.VerifyPkce(verifier + "x", challenge), "the S256 helper rejects another verifier");
+
+        // С сессией — только страница подтверждения, код не выдаётся.
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+                   $"/api/auth/mobile?redirect=conexy.app://auth&code_challenge={challenge}&code_challenge_method=S256"))
+        {
+            get.Headers.Add("Cookie", cookie);
+            var page = await client.SendAsync(get);
+            var html = await page.Content.ReadAsStringAsync();
+            Assert(page.StatusCode == HttpStatusCode.OK && html.Contains("Войти в приложение ConexyAI как") && html.Contains("pkce@example.com"),
+                "an existing session gets a confirmation page");
+            Assert(!html.Contains("conexy.app://auth?code="), "no code is issued by the GET");
+        }
+
+        async Task<(HttpStatusCode Status, string? Code)> ConfirmAsync(string? origin)
+        {
+            using var post = new HttpRequestMessage(HttpMethod.Post, "/api/auth/mobile/confirm")
+            {
+                Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["code_challenge"] = challenge })
+            };
+            post.Headers.Add("Cookie", cookie);
+            if (origin is not null) post.Headers.Add("Origin", origin);
+            var response = await client.SendAsync(post);
+            var match = System.Text.RegularExpressions.Regex.Match(await response.Content.ReadAsStringAsync(), "conexy\\.app://auth\\?code=([0-9a-f]+)");
+            return (response.StatusCode, match.Success ? match.Groups[1].Value : null);
+        }
+
+        async Task<HttpStatusCode> HandoffAsync(string code, string? codeVerifier) =>
+            (await client.PostAsJsonAsync("/api/auth/handoff", new { code, codeVerifier })).StatusCode;
+
+        var crossSite = await ConfirmAsync("https://evil.example.com");
+        Assert(crossSite.Status == HttpStatusCode.Forbidden && crossSite.Code is null, $"a cross-site confirm is refused, got {crossSite.Status}");
+
+        var first = await ConfirmAsync(client.BaseAddress!.GetLeftPart(UriPartial.Authority));
+        Assert(first.Status == HttpStatusCode.OK && first.Code is not null, $"a same-origin confirm issues a code, got {first.Status}");
+        Assert(await HandoffAsync(first.Code!, null) == HttpStatusCode.BadRequest, "a code without a verifier is useless");
+        Assert(await HandoffAsync(first.Code!, verifier) == HttpStatusCode.BadRequest, "a failed attempt burns the code");
+
+        var second = await ConfirmAsync(null);
+        Assert(await HandoffAsync(second.Code!, "wrong-verifier-wrong-verifier-wrong-verifier-1") == HttpStatusCode.BadRequest, "a wrong verifier is refused");
+
+        var third = await ConfirmAsync(null);
+        Assert(await HandoffAsync(third.Code!, verifier) == HttpStatusCode.OK, "the right verifier exchanges the code");
     }
 
     // ---------------------------------------------------------------- H1

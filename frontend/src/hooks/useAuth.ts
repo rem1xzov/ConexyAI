@@ -17,6 +17,7 @@ import {
 import { onTokenRefreshed, onUnauthorized } from '../api/client';
 import type { UserProfile } from '../types/api';
 import { userIdFromToken } from '../utils/authToken';
+import { takePkceVerifier } from '../utils/mobile';
 
 const STORAGE_KEY = 'conexy_auth';
 
@@ -291,7 +292,7 @@ export function useAuth() {
       const handoff = new URLSearchParams(window.location.search).get('handoff');
       if (handoff) {
         try {
-          const exchanged = await exchangeMobileHandoff(handoff);
+          const exchanged = await exchangeMobileHandoff(handoff, takePkceVerifier());
           if (cancelled) return;
           storeAuth(exchanged.token, exchanged.expiresAtUtc);
           tokenRef.current = exchanged.token;

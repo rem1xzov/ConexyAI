@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ConexyAI.Configuration;
 using ConexyAI.Contract;
+using ConexyAI.Service.Web;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -14,7 +15,8 @@ namespace ConexyAI.Service;
 // агенту под именами mcp__<server>__<tool>.
 
 /// <summary>A configured MCP server, with secrets already resolved from the environment.</summary>
-public sealed record McpServerConfig(string Id, string Name, string Url, IReadOnlyDictionary<string, string> Headers, int TimeoutSeconds);
+/// <param name="IsUser">True for a personal server of the user (untrusted URL): it goes through the SSRF guard.</param>
+public sealed record McpServerConfig(string Id, string Name, string Url, IReadOnlyDictionary<string, string> Headers, int TimeoutSeconds, bool IsUser = false);
 
 /// <summary>One MCP tool, mapped to the function name advertised to the model.</summary>
 public sealed record McpToolDescriptor(
@@ -23,7 +25,10 @@ public sealed record McpToolDescriptor(
     string ServerName,
     string ToolName,
     string Description,
-    JsonElement InputSchema);
+    JsonElement InputSchema,
+    // SEC_MCP_CONFIRM: вызовы не-read-only инструментов личных серверов идут через подтверждение.
+    bool IsUserServer = false,
+    bool ReadOnly = false);
 
 public sealed record McpCallResult(bool Success, string Text);
 
@@ -53,6 +58,8 @@ public class McpRegistry : IMcpRegistry
 
     private readonly List<McpServerConfig> _servers;
     private readonly HttpClient _http;
+    private readonly HttpClient _userHttp;
+    private readonly PublicUrlGuard? _guard;
     private readonly ILogger<McpRegistry> _logger;
     private readonly object _lock = new();
     private readonly Dictionary<string, McpHttpClient> _clients = new(StringComparer.Ordinal);
@@ -61,10 +68,14 @@ public class McpRegistry : IMcpRegistry
     private Dictionary<string, McpToolDescriptor> _byFunction = new(StringComparer.Ordinal);
     private DateTimeOffset _cachedAt = DateTimeOffset.MinValue;
 
-    public McpRegistry(IReadOnlyList<McpServerConfig> servers, HttpClient http, ILogger<McpRegistry> logger)
+    public McpRegistry(
+        IReadOnlyList<McpServerConfig> servers, HttpClient http, ILogger<McpRegistry> logger,
+        HttpClient? userHttp = null, PublicUrlGuard? guard = null)
     {
         _logger = logger;
         _http = http;
+        _userHttp = userHttp ?? http;
+        _guard = guard;
         _servers = servers.ToList();
     }
 
@@ -89,7 +100,8 @@ public class McpRegistry : IMcpRegistry
                 {
                     var functionName = BuildFunctionName(server, tool.ToolName, map);
                     var descriptor = new McpToolDescriptor(
-                        functionName, server.Id, server.Name, tool.ToolName, Truncate(tool.Description, 400), tool.InputSchema);
+                        functionName, server.Id, server.Name, tool.ToolName, Truncate(tool.Description, 400), tool.InputSchema,
+                        server.IsUser, tool.ReadOnly);
                     list.Add(descriptor);
                     map[functionName] = descriptor;
                     if (list.Count >= MaxTools) break;
@@ -154,7 +166,10 @@ public class McpRegistry : IMcpRegistry
         lock (_lock)
         {
             if (_clients.TryGetValue(server.Id, out var existing)) return existing;
-            var client = new McpHttpClient(server, _http, _logger);
+            // SEC_MCP_SSRF: личный сервер пользователя ходит только через клиент с пиннингом публичного IP.
+            var client = server.IsUser
+                ? new McpHttpClient(server, _userHttp, _logger, _guard)
+                : new McpHttpClient(server, _http, _logger);
             _clients[server.Id] = client;
             return client;
         }
@@ -199,15 +214,54 @@ public class McpRegistryFactory : IMcpRegistryFactory
 {
     private const int MaxServers = 10;
 
+    /// <summary>HttpClient for operator servers (trusted config, may live on the internal network).</summary>
+    public const string OperatorHttpClientName = "mcp";
+
+    /// <summary>HttpClient for user servers: no redirects, connects only to validated public addresses.</summary>
+    public const string UserHttpClientName = "mcp-user";
+
     private readonly List<McpServerConfig> _operatorServers;
     private readonly HttpClient _http;
+    private readonly HttpClient _userHttp;
+    private readonly PublicUrlGuard _guard;
     private readonly ILogger<McpRegistry> _logger;
 
-    public McpRegistryFactory(IOptions<McpOptions> options, IHttpClientFactory httpClientFactory, ILogger<McpRegistry> logger)
+    public McpRegistryFactory(
+        IOptions<McpOptions> options, IHttpClientFactory httpClientFactory, ILogger<McpRegistry> logger,
+        PublicUrlGuard? guard = null)
     {
         _logger = logger;
-        _http = httpClientFactory.CreateClient("mcp");
+        _http = httpClientFactory.CreateClient(OperatorHttpClientName);
+        _userHttp = httpClientFactory.CreateClient(UserHttpClientName);
+        _guard = guard ?? new PublicUrlGuard(new DnsHostAddressResolver());
         _operatorServers = ResolveOperatorServers(options.Value);
+    }
+
+    /// <summary>
+    /// SEC_MCP_SSRF: primary handler of <see cref="UserHttpClientName"/>. Redirects are off (a public
+    /// server could 302 to docker-socket-proxy) and the socket is opened only to an address that passed
+    /// <see cref="PublicUrlGuard"/> at connect time (DNS rebinding).
+    /// </summary>
+    public static SocketsHttpHandler CreateUserHandler(PublicUrlGuard guard) => new()
+    {
+        AllowAutoRedirect = false,
+        UseProxy = false,
+        UseCookies = false,
+        ConnectTimeout = TimeSpan.FromSeconds(10),
+        PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+        ConnectCallback = (context, ct) => WebPageFetcher.ConnectPinnedAsync(guard, context.DnsEndPoint, ct),
+    };
+
+    /// <summary>
+    /// SEC_MCP_SSRF: validates a user MCP URL (scheme, credentials, every resolved address public).
+    /// Returns null when the URL is acceptable, otherwise a human-readable reason.
+    /// </summary>
+    public static async Task<string?> ValidateUserUrlAsync(PublicUrlGuard guard, string? url, CancellationToken ct = default)
+    {
+        if (!Uri.TryCreate((url ?? string.Empty).Trim(), UriKind.Absolute, out var uri))
+            return "URL MCP-сервера должен быть абсолютным (https://…).";
+        var check = await guard.CheckAsync(uri, ct);
+        return check.Allowed ? null : check.Error ?? "Адрес MCP-сервера не публичный.";
     }
 
     public IMcpRegistry Create(IReadOnlyList<McpServerInput>? userServers)
@@ -221,7 +275,7 @@ public class McpRegistryFactory : IMcpRegistryFactory
             merged.Add(server);
         }
         if (merged.Count > MaxServers) merged = merged.Take(MaxServers).ToList();
-        return new McpRegistry(merged, _http, _logger);
+        return new McpRegistry(merged, _http, _logger, _userHttp, _guard);
     }
 
     private static List<McpServerConfig> ResolveOperatorServers(McpOptions options)
@@ -260,7 +314,7 @@ public class McpRegistryFactory : IMcpRegistryFactory
         if (!string.IsNullOrWhiteSpace(input.Token))
             headers["Authorization"] = "Bearer " + input.Token!.Trim();
 
-        return new McpServerConfig(id, name, url, headers, 30);
+        return new McpServerConfig(id, name, url, headers, 30, IsUser: true);
     }
 
     private static bool IsHttpUrl(string url) =>
@@ -302,16 +356,18 @@ public class McpHttpClient
     private readonly McpServerConfig _server;
     private readonly HttpClient _http;
     private readonly ILogger _logger;
+    private readonly PublicUrlGuard? _guard;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private string? _sessionId;
     private bool _initialized;
     private int _nextId;
 
-    public McpHttpClient(McpServerConfig server, HttpClient http, ILogger logger)
+    public McpHttpClient(McpServerConfig server, HttpClient http, ILogger logger, PublicUrlGuard? guard = null)
     {
         _server = server;
         _http = http;
         _logger = logger;
+        _guard = guard;
     }
 
     public async Task<IReadOnlyList<McpToolDescriptor>> ListToolsAsync(CancellationToken ct)
@@ -328,7 +384,10 @@ public class McpHttpClient
             if (string.IsNullOrWhiteSpace(name)) continue;
             var description = tool.TryGetProperty("description", out var d) ? d.GetString() ?? string.Empty : string.Empty;
             var schema = tool.TryGetProperty("inputSchema", out var s) ? s.Clone() : EmptyObject();
-            tools.Add(new McpToolDescriptor(string.Empty, _server.Id, _server.Name, name!, description, schema));
+            // MCP annotations.readOnlyHint — сервер сам объявляет инструмент только читающим.
+            var readOnly = tool.TryGetProperty("annotations", out var a) && a.ValueKind == JsonValueKind.Object
+                && a.TryGetProperty("readOnlyHint", out var hint) && hint.ValueKind == JsonValueKind.True;
+            tools.Add(new McpToolDescriptor(string.Empty, _server.Id, _server.Name, name!, description, schema, _server.IsUser, readOnly));
         }
         return tools;
     }
@@ -376,6 +435,17 @@ public class McpHttpClient
 
     private async Task<JsonElement?> SendAsync(string method, string paramsJson, CancellationToken ct, bool expectResult = true, bool captureSession = false)
     {
+        // SEC_MCP_SSRF: URL пользователя перепроверяется перед КАЖДЫМ запросом (сохранённый адрес мог
+        // начать резолвиться во внутреннюю сеть). Окончательная защита — пиннинг в ConnectCallback.
+        if (_server.IsUser)
+        {
+            if (_guard is null)
+                throw new McpException("MCP server URL guard is not configured.");
+            var error = await McpRegistryFactory.ValidateUserUrlAsync(_guard, _server.Url, ct);
+            if (error is not null)
+                throw new McpException("MCP server URL rejected: " + error);
+        }
+
         var id = Interlocked.Increment(ref _nextId);
         var request = new JsonObject
         {
@@ -404,11 +474,10 @@ public class McpHttpClient
         if (captureSession && response.Headers.TryGetValues("Mcp-Session-Id", out var sessionValues))
             _sessionId = sessionValues.FirstOrDefault();
 
+        // SEC_MCP_SSRF: тело неуспешного ответа модели не отдаём — только статус. Иначе ошибка любого
+        // внутреннего сервиса превращалась бы в канал чтения. Редирект (3xx) тоже считается ошибкой.
         if (!response.IsSuccessStatusCode)
-        {
-            var body = await SafeReadAsync(response, timeoutCts.Token);
-            throw new McpException($"HTTP {(int)response.StatusCode}: {Truncate(body, 300)}");
-        }
+            throw new McpException($"HTTP {(int)response.StatusCode}");
 
         if (!expectResult)
             return null;
@@ -483,6 +552,4 @@ public class McpHttpClient
     }
 
     private static JsonElement EmptyObject() => JsonDocument.Parse("{}").RootElement.Clone();
-
-    private static string Truncate(string text, int max) => text.Length <= max ? text : text[..max] + "…";
 }
