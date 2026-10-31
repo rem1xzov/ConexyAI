@@ -691,6 +691,14 @@
     "allowAllActive": "Auto-approve is on: commands run without asking",
     "disableAllowAll": "Disable"
   },
+  "webSheet": {
+    "title": "Search results",
+    "close": "Close",
+    "searching": "Searching {{query}}...",
+    "reading": "Reading {{host}}...",
+    "found_one": "Found {{count}} web page",
+    "found_other": "Found {{count}} web pages"
+  },
   "timeline": {
     "thinking": "Thinking",
     "thinkingEmpty": "The model left no text for this step",

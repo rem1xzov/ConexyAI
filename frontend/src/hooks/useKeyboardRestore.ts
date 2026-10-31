@@ -1,24 +1,17 @@
 import { useEffect } from 'react';
 
 /**
- * KEYBOARD_RESTORE: как в DeepSeek — если человек печатал и смахнул шторку уведомлений (переключить
- * трек), после её закрытия клавиатура открывается сама, курсор на прежнем месте.
+ * KEYBOARD_RESTORE: как в DeepSeek — если человек печатал и смахнул шторку уведомлений, после её
+ * закрытия клавиатура открывается сама, курсор на прежнем месте.
  *
- * Шторка забирает у окна фокус (`window.blur`) раньше, чем система прячет клавиатуру, поэтому
- * состояние запоминается именно в этот момент: позже обработчик закрытия клавиатуры
- * (useKeyboardInset) уже снимет фокус с композера.
- *
- * В приложении возврат запускает MainActivity.onWindowFocusChanged(true) через
- * `window.__conexyRestoreKeyboard()`: программный focus() в WebView не всегда поднимает
- * клавиатуру, поэтому нативная часть дополнительно вызывает showSoftInput. На сайте (и в старых
- * APK без этого вызова) работает обычное событие `focus` окна.
+ * Решение «печатал ли» принимает Android-оболочка (MainActivity): она видит саму клавиатуру и знает,
+ * была ли та открыта в момент потери фокуса окна. Страница не может это знать надёжно — система
+ * прячет клавиатуру раньше, чем приходит `window.blur`, и к этому моменту поле уже без фокуса.
+ * Поэтому здесь только:
+ *  - постоянно запоминается последнее положение курсора в композере;
+ *  - `window.__conexyRestoreKeyboard()` возвращает фокус в композер на это место.
+ * На сайте (без оболочки) — тот же возврат по `window.focus`, если поле было в фокусе при уходе.
  */
-
-interface Snapshot {
-  el: HTMLTextAreaElement;
-  start: number;
-  end: number;
-}
 
 declare global {
   interface Window {
@@ -27,8 +20,12 @@ declare global {
   }
 }
 
-function composerOf(node: Element | null): HTMLTextAreaElement | null {
+function composerOf(node: EventTarget | Element | null): HTMLTextAreaElement | null {
   return node instanceof HTMLTextAreaElement && node.hasAttribute('data-composer-input') ? node : null;
+}
+
+function findComposer(): HTMLTextAreaElement | null {
+  return composerOf(document.querySelector('textarea[data-composer-input]'));
 }
 
 function hasNativeShell(): boolean {
@@ -40,55 +37,53 @@ export function useKeyboardRestore(enabled: boolean): void {
   useEffect(() => {
     if (!enabled) return;
 
-    let snapshot: Snapshot | null = null;
+    let caret: { start: number; end: number } | null = null;
+    let typingWhenLeft = false;
 
-    const remember = () => {
+    const track = () => {
       const el = composerOf(document.activeElement);
-      snapshot = el && !el.disabled ? { el, start: el.selectionStart, end: el.selectionEnd } : null;
+      if (el) caret = { start: el.selectionStart, end: el.selectionEnd };
     };
 
     const restore = (): boolean => {
-      const saved = snapshot;
-      snapshot = null;
-      if (!saved || !saved.el.isConnected || saved.el.disabled) return false;
-      const { el, start, end } = saved;
-      // Если поле формально всё ещё в фокусе, повторный focus() браузер проигнорирует и IME не
+      const el = findComposer();
+      if (!el || el.disabled) return false;
+      const saved = caret ?? { start: el.value.length, end: el.value.length };
+      // Если поле формально ещё в фокусе, повторный focus() браузер проигнорирует и IME не
       // запросит — поэтому сначала коротко снимаем фокус.
       if (document.activeElement === el) el.blur();
       window.requestAnimationFrame(() => {
         window.setTimeout(() => {
           el.focus({ preventScroll: true });
           const length = el.value.length;
-          el.setSelectionRange(Math.min(start, length), Math.min(end, length));
+          el.setSelectionRange(Math.min(saved.start, length), Math.min(saved.end, length));
         }, 30);
       });
       return true;
     };
 
-    // Человек сам ушёл из поля (отправил, тапнул по ленте) — восстанавливать нечего.
-    const onFocusOut = (e: FocusEvent) => {
-      if (document.hasFocus() && composerOf(e.target as Element | null)) snapshot = null;
-    };
-
     const native = hasNativeShell();
-    const onWindowFocus = () => {
-      if (!native) restore();
+    const onWindowBlur = () => {
+      typingWhenLeft = composerOf(document.activeElement) !== null;
     };
-    const onVisibility = () => {
-      if (document.visibilityState === 'hidden') snapshot = null; // ушли в другое приложение
+    const onWindowFocus = () => {
+      if (!native && typingWhenLeft) restore();
+      typingWhenLeft = false;
     };
 
     window.__conexyRestoreKeyboard = restore;
-    window.addEventListener('blur', remember);
+    document.addEventListener('selectionchange', track);
+    document.addEventListener('input', track, true);
+    document.addEventListener('focusout', track, true);
+    window.addEventListener('blur', onWindowBlur);
     window.addEventListener('focus', onWindowFocus);
-    document.addEventListener('focusout', onFocusOut);
-    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       if (window.__conexyRestoreKeyboard === restore) delete window.__conexyRestoreKeyboard;
-      window.removeEventListener('blur', remember);
+      document.removeEventListener('selectionchange', track);
+      document.removeEventListener('input', track, true);
+      document.removeEventListener('focusout', track, true);
+      window.removeEventListener('blur', onWindowBlur);
       window.removeEventListener('focus', onWindowFocus);
-      document.removeEventListener('focusout', onFocusOut);
-      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [enabled]);
 }

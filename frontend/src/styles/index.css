@@ -5194,6 +5194,277 @@ html[data-plain-code='true'] .markdown strong.chat-term {
   min-width: 0;
 }
 
+/* DEEPSEEK_SEARCH_UI: живая строка поиска с бегущим бликом, точки и «Найдено N веб-страниц ›». */
+.web-search-live {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin: 2px 0 10px;
+}
+
+.web-search-live__text {
+  display: block;
+  max-width: 92%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  animation: web-search-in 0.2s ease-out both, deepseek-shimmer 1.6s infinite linear;
+}
+
+.search-shimmer-text {
+  background: linear-gradient(
+    90deg,
+    var(--muted) 0%,
+    var(--muted) 35%,
+    var(--text) 50%,
+    var(--muted) 65%,
+    var(--muted) 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@keyframes deepseek-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+@keyframes web-search-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.web-search-live__dots {
+  display: inline-flex;
+  gap: 5px;
+}
+
+.web-search-live__dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.25;
+  animation: web-dot 1.2s infinite ease-in-out;
+}
+
+.web-search-live__dots i:nth-child(2) { animation-delay: 0.2s; }
+.web-search-live__dots i:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes web-dot {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.9; }
+}
+
+.web-found {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--muted);
+  cursor: pointer;
+  animation: web-search-in 0.2s ease-out both;
+}
+
+.web-found:active {
+  opacity: 0.7;
+}
+
+.web-found__chevron {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* Шторка «Результаты поиска». */
+.web-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+}
+
+.web-sheet__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.web-sheet__panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(100dvh - 56px);
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-solid);
+  border-radius: 20px 20px 0 0;
+  transform: translate3d(0, 100%, 0);
+  transition: transform 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+  padding-bottom: var(--safe-bottom, 0px);
+}
+
+.web-sheet--open .web-sheet__backdrop {
+  opacity: 1;
+}
+
+.web-sheet--open .web-sheet__panel {
+  transform: translate3d(0, 0, 0);
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.web-sheet__header {
+  position: relative;
+  flex-shrink: 0;
+  height: 56px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+
+.web-sheet__grip {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  width: 36px;
+  height: 4px;
+  margin-left: -18px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.web-sheet__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.web-sheet__close {
+  position: absolute;
+  right: 16px;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.web-sheet__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.web-sheet__item {
+  display: block;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: inherit;
+  text-decoration: none;
+}
+
+.web-sheet__item:active {
+  background: var(--surface-2);
+}
+
+.web-sheet__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.web-sheet__favicon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.web-sheet__favicon--empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+
+.web-sheet__site {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.web-sheet__date {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+.web-sheet__index {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+.web-sheet__item-title,
+.web-sheet__snippet {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.web-sheet__item-title {
+  margin: 6px 0 4px;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.web-sheet__snippet {
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-search-live__text,
+  .web-search-live__dots i {
+    animation: none;
+  }
+  .web-sheet__panel,
+  .web-sheet__backdrop {
+    transition: none;
+  }
+}
+
 /* WEB_GROUP: подряд идущие поиски и чтения страниц — одна строка вместо полотна шагов. */
 .web-group {
   max-width: 100%;

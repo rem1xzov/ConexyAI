@@ -10,6 +10,8 @@ import { TodoPanel } from './TodoPanel';
 import { AssistantContent } from './artifacts/AssistantContent';
 import { isTerminalToolStatus, toolEventFromBlock } from '../utils/turnBlocks';
 import { isPhoneToolName } from '../utils/phoneTool';
+import { collectResults } from '../utils/webResults';
+import { WebResultsSheet } from './WebResultsSheet';
 
 // INTERLEAVED_STREAM: переписано 2026-09-24
 //
@@ -149,12 +151,45 @@ interface WebResearchGroupProps {
 function WebResearchGroup({ blocks, renderRow }: WebResearchGroupProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const events = blocks.map(toolEventFromBlock);
   const pages = events.filter((event) => event.toolName === 'fetch_web_page');
   const searches = events.filter((event) => event.toolName === 'web_search');
   const running = blocks.some((block) => !isTerminalToolStatus(block.status));
   const failed = !running && blocks.some((block) => block.status === 'error' || block.status === 'rejected');
   const hosts = [...new Set(pages.map((event) => urlHost((event.command ?? '').trim())).filter(Boolean))];
+
+  // DEEPSEEK_SEARCH_UI: как в DeepSeek — пока идёт поиск, строка «Поиск <запрос>…» с бегущим бликом и
+  // точки под ней; потом «Найдено N веб-страниц ›», которая открывает шторку с источниками.
+  const results = collectResults(
+    blocks.filter((block) => block.name === 'web_search').map((block) => block.output),
+  );
+  if (running) {
+    const lastQuery = [...searches].reverse().find((event) => (event.command ?? '').trim())?.command?.trim();
+    const lastPage = [...pages].reverse().find((event) => (event.command ?? '').trim())?.command?.trim();
+    const label = lastPage && pages.length >= searches.length
+      ? t('webSheet.reading', { host: urlHost(lastPage) })
+      : t('webSheet.searching', { query: lastQuery ?? '' });
+    return (
+      <div className="web-search-live" role="status">
+        <span key={label} className="web-search-live__text search-shimmer-text">{label}</span>
+        <span className="web-search-live__dots" aria-hidden="true">
+          <i /><i /><i />
+        </span>
+      </div>
+    );
+  }
+  if (results.length > 0) {
+    return (
+      <>
+        <button type="button" className="web-found" onClick={() => setSheetOpen(true)}>
+          {t('webSheet.found', { count: results.length })}
+          <span className="web-found__chevron" aria-hidden="true">›</span>
+        </button>
+        {sheetOpen && <WebResultsSheet results={results} onClose={() => setSheetOpen(false)} />}
+      </>
+    );
+  }
 
   const title = pages.length > 0
     ? t('timeline.webPages', { count: pages.length })

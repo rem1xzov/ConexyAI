@@ -42,6 +42,12 @@ public class MainActivity extends BridgeActivity {
     private int safeRightPx;
     private int keyboardPx;
     private boolean insetsKnown;
+    /** KEYBOARD_RESTORE: когда клавиатура в последний раз спряталась (uptime, мс). */
+    private long imeHiddenAt;
+    /** KEYBOARD_RESTORE: человек печатал, когда окно потеряло фокус (шторка, системный диалог). */
+    private boolean typingWhenFocusLost;
+    /** Клавиатура, спрятанная за это время до потери фокуса, — это система убрала её вместе со шторкой. */
+    private static final long IME_HIDE_GRACE_MS = 1000;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -76,7 +82,21 @@ public class MainActivity extends BridgeActivity {
             safeRightPx = bars.right;
             // KEYBOARD: экранная клавиатура. Если WebView уже сжат системой, эти отступы нулевые,
             // и CSS берёт видимую высоту из visualViewport — обе оценки сходятся в min().
-            keyboardPx = windowInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
+            int ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
+            if (keyboardPx > 0 && ime == 0) {
+                imeHiddenAt = android.os.SystemClock.uptimeMillis();
+                // T9_POPUP: плашка подсказок клавиатуры («легально / Удалить») — окно Chromium, привязанное
+                // к координатам слова при открытой клавиатуре. Когда клавиатура прячется и композер
+                // уезжает вниз, она оставалась висеть посреди экрана. Потеря фокуса WebView закрывает
+                // все его всплывающие окна; фокус сразу возвращаем, чтобы тапы работали как прежде.
+                webView.post(() -> {
+                    if (webView.hasFocus() && hasWindowFocus()) {
+                        webView.clearFocus();
+                        webView.requestFocus();
+                    }
+                });
+            }
+            keyboardPx = ime;
             insetsKnown = true;
             pushSafeArea(webView);
             // Высота WebView могла ещe не пересчитаться в этом кадре — повторяем после раскладки.
@@ -138,6 +158,15 @@ public class MainActivity extends BridgeActivity {
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (!hasFocus) {
+            // Система часто прячет клавиатуру чуть РАНЬШЕ, чем окно теряет фокус, поэтому считаем
+            // «печатал» и когда она спряталась только что.
+            long sinceHidden = android.os.SystemClock.uptimeMillis() - imeHiddenAt;
+            typingWhenFocusLost = keyboardPx > 0 || sinceHidden < IME_HIDE_GRACE_MS;
+            return;
+        }
+        boolean restore = typingWhenFocusLost;
+        typingWhenFocusLost = false;
+        if (!restore) {
             return;
         }
         WebView webView = getBridge() != null ? getBridge().getWebView() : null;
@@ -157,6 +186,10 @@ public class MainActivity extends BridgeActivity {
                         if (imm != null) {
                             imm.showSoftInput(webView, InputMethodManager.SHOW_IMPLICIT);
                         }
+                        // На части прошивок SHOW_IMPLICIT игнорируется — просим клавиатуру ещё и через insets.
+                        androidx.core.view.WindowInsetsControllerCompat controller =
+                                androidx.core.view.WindowCompat.getInsetsController(getWindow(), webView);
+                        controller.show(WindowInsetsCompat.Type.ime());
                     }, 120);
                 });
     }
