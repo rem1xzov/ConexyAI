@@ -35,6 +35,8 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent web: fetch_web_page never follows a redirect to a private host", FetchRefusesPrivateRedirectAsync);
         TestRegistry.Add("agent web: fetch_web_page returns title, final URL, decoded and bounded text", FetchReadsPublicPageAsync);
         TestRegistry.Add("agent web: fetch_web_page re-checks the address at connect time (DNS rebinding)", FetchDefeatsDnsRebindingAsync);
+        TestRegistry.Add("agent proxy: parses credentials and keeps them out of the description", AgentProxyParsesAsync);
+        TestRegistry.Add("agent proxy: live fetch through AGENT_PROXY_URL (skipped when unset)", AgentProxyLiveFetchAsync);
         TestRegistry.Add("agent web: HTML is cleaned into readable Markdown-like text", HtmlIsCleanedAsync);
         TestRegistry.Add("agent web: the guard, fetcher and vision service resolve from DI", WebServicesResolveFromDiAsync);
         TestRegistry.Add("agent chats: search_user_chats stays inside the user's own other chats", ChatSearchIsScopedAsync);
@@ -183,6 +185,39 @@ internal static class AgentCapabilityTests
         Assert(resolver.Calls >= 2, $"the host is resolved again at connect time, calls={resolver.Calls}");
         Assert(result.Status == WebPageFetchStatus.PageError && result.Output.Contains("запрещ"),
             $"the connect-time check refuses the rebound address, got {result.Status}: '{result.Output}'");
+    }
+
+    // AGENT_PROXY
+    private static Task AgentProxyParsesAsync()
+    {
+        var options = new AgentProxyOptions { Url = "http://user%40x:p%3Ass@1.2.3.4:8000" };
+        var parsed = options.TryParse(out var uri);
+        Assert(options.IsConfigured && parsed, "a full proxy URL parses");
+        var creds = AgentProxyOptions.Credentials(uri);
+        Assert(creds?.UserName == "user@x" && creds.Password == "p:ss", "credentials are unescaped");
+        Assert(options.Describe() == "http://1.2.3.4:8000", "the description hides the password");
+        Assert(!new AgentProxyOptions { Url = "" }.IsConfigured && !new AgentProxyOptions { Url = "ftp://h:1" }.IsConfigured,
+            "empty and unsupported URLs are off");
+        return Task.CompletedTask;
+    }
+
+    // Сетевой тест: идёт, только если в окружении задан AGENT_PROXY_URL (в репозитории адреса нет).
+    private static async Task AgentProxyLiveFetchAsync()
+    {
+        var url = Environment.GetEnvironmentVariable("AGENT_PROXY_URL");
+        if (string.IsNullOrWhiteSpace(url)) return;
+        using var fetcher = new WebPageFetcher(
+            new PublicUrlGuard(new DnsHostAddressResolver()),
+            Options.Create(new WebSearchOptions { FetchTimeoutSeconds = 30 }),
+            NullLogger<WebPageFetcher>.Instance,
+            proxyOptions: Options.Create(new AgentProxyOptions { Url = url }));
+        Assert(fetcher.UsesProxy, "the fetcher picked up the proxy");
+        var ip = await fetcher.FetchAsync("https://api.ipify.org/?format=json", null);
+        Assert(ip.Success, $"the proxy answers: {ip.Output}");
+        var proxyHost = new AgentProxyOptions { Url = url }.TryParse(out var p) ? p.Host : "";
+        Assert(ip.Output.Contains(proxyHost), $"the exit IP is the proxy's ({proxyHost}): {ip.Output}");
+        var page = await fetcher.FetchAsync("https://x.com/", 2000);
+        Console.WriteLine($"      live: ipify ok, x.com -> {page.Status}");
     }
 
     // The same registrations as Program.cs: the fetcher's test-only handler parameter must fall back

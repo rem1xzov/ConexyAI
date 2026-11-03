@@ -114,6 +114,8 @@ builder.Services.AddDbContext<DbConexy>(options =>
 
 // Options bound from appsettings.json (single source of truth for upstream mapping).
 builder.Services.Configure<AiUpstreamOptions>(builder.Configuration.GetSection(AiUpstreamOptions.SectionName));
+// AGENT_PROXY: исходящий прокси для чтения страниц и браузера агента (AgentProxy__Url / AGENT_PROXY_URL).
+builder.Services.Configure<ConexyAI.Configuration.AgentProxyOptions>(builder.Configuration.GetSection(ConexyAI.Configuration.AgentProxyOptions.SectionName));
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 builder.Services.Configure<GitHubOptions>(builder.Configuration.GetSection(GitHubOptions.SectionName));
 // GITHUB_OAUTH: добавлено 2026-09-19

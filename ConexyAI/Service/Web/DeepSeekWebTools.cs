@@ -214,6 +214,11 @@ public sealed class DeepSeekPageFetcher : IWebPageFetcher
                 return await _local.FetchAsync(raw, maxChars, ct);
             }
 
+            // AGENT_PROXY: DeepSeek ходит со своих серверов, и часть сайтов его не пускает. Если есть
+            // наш прокси — даём странице второй шанс через него (403 — это политика DeepSeek, не сайта).
+            if (_local.UsesProxy && status != HttpStatusCode.Forbidden)
+                return await _local.FetchAsync(raw, maxChars, ct);
+
             var reason = status == HttpStatusCode.Forbidden
                 ? "доступ к странице запрещён политикой безопасности"
                 : $"страницу не удалось прочитать (HTTP {(int)status})";

@@ -91,7 +91,8 @@ public sealed class WebPageFetcher : IWebPageFetcher, IDisposable
         PublicUrlGuard guard,
         IOptions<WebSearchOptions> options,
         ILogger<WebPageFetcher> logger,
-        HttpMessageHandler? handler = null)
+        HttpMessageHandler? handler = null,
+        IOptions<AgentProxyOptions>? proxyOptions = null)
     {
         _guard = guard;
         _logger = logger;
@@ -100,7 +101,14 @@ public sealed class WebPageFetcher : IWebPageFetcher, IDisposable
         _timeout = TimeSpan.FromSeconds(configured.FetchTimeoutSeconds > 0 ? configured.FetchTimeoutSeconds : 20);
         _maxBodyBytes = configured.FetchMaxBodyBytes > 0 ? configured.FetchMaxBodyBytes : 2 * 1024 * 1024;
 
-        _client = new HttpClient(handler ?? CreatePinnedHandler(guard), disposeHandler: true)
+        // AGENT_PROXY: с прокси сокет к сайту открывает прокси-сервер в интернете, поэтому пиннинг IP не
+        // нужен — до наших внутренних адресов прокси не достанет. Каждый адрес и редирект всё равно
+        // проходит PublicUrlGuard в цикле FetchAsync.
+        var proxy = proxyOptions?.Value.CreateWebProxy();
+        if (handler is null && proxy is not null)
+            logger.LogInformation("fetch_web_page goes through the agent proxy {Proxy}", proxyOptions!.Value.Describe());
+        UsesProxy = handler is null && proxy is not null;
+        _client = new HttpClient(handler ?? (proxy is not null ? CreateProxyHandler(proxy) : CreatePinnedHandler(guard)), disposeHandler: true)
         {
             // The per-call CancellationToken enforces the budget; the client timeout is only a backstop.
             Timeout = Timeout.InfiniteTimeSpan,
@@ -391,6 +399,21 @@ public sealed class WebPageFetcher : IWebPageFetcher, IDisposable
     /// hop), cookies are not kept between unrelated sites, and the socket is opened by
     /// <see cref="ConnectPinnedAsync"/> — never by the handler's own DNS lookup.
     /// </summary>
+    /// <summary>AGENT_PROXY: страницы читаются через исходящий прокси агента.</summary>
+    public bool UsesProxy { get; }
+
+    private static SocketsHttpHandler CreateProxyHandler(IWebProxy proxy) => new()
+    {
+        AllowAutoRedirect = false,
+        UseProxy = true,
+        Proxy = proxy,
+        UseCookies = false,
+        AutomaticDecompression = DecompressionMethods.All,
+        ConnectTimeout = TimeSpan.FromSeconds(15),
+        PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+        MaxResponseHeadersLength = 64,
+    };
+
     private static SocketsHttpHandler CreatePinnedHandler(PublicUrlGuard guard) => new()
     {
         AllowAutoRedirect = false,

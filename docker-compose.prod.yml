@@ -161,6 +161,9 @@ services:
       ADMIN_ACCOUNTS: ${ADMIN_ACCOUNTS:-}
       # DEEPSEEK_SEARCH: поиск и чтение страниц идут через DeepSeek (ключ DEEPSEEK_API_KEY). `jsonseo` вернёт старый поиск.
       WebSearch__Provider: ${WEB_SEARCH_PROVIDER:-deepseek}
+      # AGENT_PROXY: исходящий прокси для чтения страниц и браузера агента: http://user:pass@host:port.
+      # Задаётся только в .env на сервере. Пусто — без прокси.
+      AgentProxy__Url: ${AGENT_PROXY_URL:-}
       WebSearch__JsonSeoApiKey: ${JSONSEO_API_KEY:-}
       WebSearch__JsonSeoEndpoint: ${JSONSEO_ENDPOINT:-https://jsonseo.ru/api/yandex}
       SpeechKit__ApiKey: ${SPEECHKIT_API_KEY:-}

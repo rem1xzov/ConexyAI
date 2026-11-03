@@ -22,14 +22,40 @@ public interface IChromiumHost
 public sealed class ChromiumHost : IChromiumHost, IAsyncDisposable
 {
     private readonly ILogger<ChromiumHost> _logger;
+    private readonly Microsoft.Extensions.Options.IOptions<ConexyAI.Configuration.AgentProxyOptions>? _proxy;
     private IPlaywright? _playwright;
     private IBrowser? _browser;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private bool _unavailable;
 
-    public ChromiumHost(ILogger<ChromiumHost> logger)
+    public ChromiumHost(
+        ILogger<ChromiumHost> logger,
+        Microsoft.Extensions.Options.IOptions<ConexyAI.Configuration.AgentProxyOptions>? proxy = null)
     {
         _logger = logger;
+        _proxy = proxy;
+    }
+
+    /// <summary>
+    /// AGENT_PROXY: браузер агента ходит через тот же прокси. Chromium не умеет SOCKS5 с паролем, поэтому
+    /// для него прокси должен быть http:// (большинство провайдеров отдают оба на одном порту).
+    /// </summary>
+    private Proxy? BrowserProxy()
+    {
+        var options = _proxy?.Value;
+        if (options is null || !options.TryParse(out var uri)) return null;
+        var creds = ConexyAI.Configuration.AgentProxyOptions.Credentials(uri);
+        if (creds is not null && uri.Scheme.StartsWith("socks", StringComparison.Ordinal))
+        {
+            _logger.LogWarning("Agent proxy is SOCKS with a password; Chromium can't use it, the browser goes direct. Use http:// in AGENT_PROXY_URL.");
+            return null;
+        }
+        return new Proxy
+        {
+            Server = $"{uri.Scheme}://{uri.Host}:{uri.Port}",
+            Username = creds?.UserName,
+            Password = creds?.Password,
+        };
     }
 
     public async Task<bool> IsAvailableAsync(CancellationToken ct = default)
@@ -72,7 +98,8 @@ public sealed class ChromiumHost : IChromiumHost, IAsyncDisposable
                         // путь явно — тогда не нужен встроенный браузер Playwright. Пусто — Playwright
                         // берёт свой.
                         ExecutablePath = ResolveExecutablePath(),
-                        Args = new[] { "--no-sandbox", "--disable-setuid-sandbox" }
+                        Args = new[] { "--no-sandbox", "--disable-setuid-sandbox" },
+                        Proxy = BrowserProxy(),
                     });
                 }
                 catch (Exception ex)
