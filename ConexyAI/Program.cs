@@ -362,14 +362,37 @@ builder.Services.AddHostedService<MemoryExtractionWorker>();
 builder.Services.AddHostedService<ChatTitleWorker>();
 builder.Services.AddHttpClient<IConexyLlmClient, ConexyLlmClient>();
 // MCP: отдельный HttpClient для удалённых MCP-серверов; фабрика создаёт реестр на прогон (с личными серверами пользователя).
-builder.Services.AddHttpClient(McpRegistryFactory.OperatorHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
+// AGENT_PROXY: MCP-серверы (и операторские, и личные) ходят через тот же исходящий прокси, что и чтение
+// страниц, — иначе Figma/Slack/Notion из РФ не открываются.
+var mcpProxy = new ConexyAI.Configuration.AgentProxyOptions
+{
+    Url = builder.Configuration[ConexyAI.Configuration.AgentProxyOptions.SectionName + ":Url"] ?? string.Empty,
+}.CreateWebProxy();
+builder.Services.AddHttpClient(McpRegistryFactory.OperatorHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(() => mcpProxy is null
+        ? new SocketsHttpHandler { AllowAutoRedirect = false }
+        : McpRegistryFactory.CreateProxiedHandler(mcpProxy));
 // SEC_MCP_SSRF: личные MCP-серверы пользователя — URL недоверенный. Без редиректов и с пиннингом
 // проверенного публичного IP в ConnectCallback: иначе http://docker-socket-proxy:2375/... из настроек
 // пользователя превращался в POST в Docker API изнутри бэкенда.
 builder.Services.AddHttpClient(McpRegistryFactory.UserHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
     .ConfigurePrimaryHttpMessageHandler(sp =>
-        McpRegistryFactory.CreateUserHandler(sp.GetRequiredService<ConexyAI.Service.Web.PublicUrlGuard>()));
+        McpRegistryFactory.CreateUserHandler(sp.GetRequiredService<ConexyAI.Service.Web.PublicUrlGuard>(), mcpProxy));
 builder.Services.AddSingleton<IMcpRegistryFactory, McpRegistryFactory>();
+// MCP_OAUTH: добавлено 2026-11-03 — авторизация MCP-сервера в браузере (OAuth 2.1 + PKCE).
+// Публичный адрес сайта для redirect_uri: MCP_OAUTH_PUBLIC_BASE_URL или McpOAuth:PublicBaseUrl.
+builder.Services.Configure<ConexyAI.Configuration.McpOAuthOptions>(options =>
+{
+    builder.Configuration.GetSection(ConexyAI.Configuration.McpOAuthOptions.SectionName).Bind(options);
+    options.PublicBaseUrl = builder.Configuration[ConexyAI.Configuration.McpOAuthOptions.PublicBaseUrlEnvVar]
+                            ?? options.PublicBaseUrl;
+});
+builder.Services.AddSingleton<McpOAuthStateStore>();
+builder.Services.AddScoped<IMcpOAuthDiscovery>(sp => new McpOAuthDiscovery(
+    sp.GetRequiredService<IHttpClientFactory>().CreateClient(McpRegistryFactory.UserHttpClientName),
+    sp.GetRequiredService<ConexyAI.Service.Web.PublicUrlGuard>(),
+    sp.GetRequiredService<ILogger<McpOAuthDiscovery>>()));
+builder.Services.AddScoped<IMcpOAuthService, McpOAuthService>();
 // DEEPSEEK_SEARCH: поиск и чтение страниц идут через встроенный Search/Fetch API DeepSeek (тот же ключ).
 // WebSearch:Provider=jsonseo возвращает прежний поиск через JSON SEO.
 var useJsonSeo = string.Equals(builder.Configuration["WebSearch:Provider"], "jsonseo", StringComparison.OrdinalIgnoreCase);

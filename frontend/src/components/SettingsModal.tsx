@@ -9,6 +9,10 @@ import {
   deleteMemoryFact,
   getGitHubTokenStatus,
   getMcpServers,
+  // MCP_OAUTH: авторизация MCP-сервера в браузере и её статус.
+  getMcpOAuthStatus,
+  startMcpOAuth,
+  type McpOAuthStatus,
   getMemory,
   getPreferences,
   saveGitHubToken,
@@ -49,6 +53,8 @@ import { PhonePermissionsList, PhoneSetupModal } from './PhoneSetupModal';
 import type { SubscriptionUsage, McpServerInput } from '../types/api';
 // LEGAL_DOCS: добавлено 2026-09-25 — правовые документы доступны всегда, в том числе из настроек.
 import { LEGAL_PATHS } from './legal/LegalPage';
+// MCP_OAUTH: внешняя ссылка открывается системным браузером в приложении и новой вкладкой в вебе.
+import { openExternalUrl } from '../utils/mobile';
 
 export type SettingsSection = 'general' | 'limits' | 'personalization' | 'memory' | 'github' | 'mcp' | 'desktop' | 'app' | 'phone';
 
@@ -1139,17 +1145,38 @@ function AppSection({ active }: { active: boolean }) {
 }
 
 function McpSection() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [servers, setServers] = useState<McpServerInput[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // MCP_OAUTH: статус авторизации по индексу сервера и идущий запрос авторизации.
+  const [authStatus, setAuthStatus] = useState<Record<number, McpOAuthStatus>>({});
+  const [authorizing, setAuthorizing] = useState<number | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const lang = i18n.resolvedLanguage ?? i18n.language;
 
   function flashSaved() {
     setSaved(true);
     window.setTimeout(() => setSaved(false), 2000);
+  }
+
+  // MCP_OAUTH: статус сервера нельзя получить по одному id — ключом служит адрес (host+path).
+  async function refreshStatuses(list: McpServerInput[]) {
+    const next: Record<number, McpOAuthStatus> = {};
+    await Promise.all(
+      list.map(async (server, index) => {
+        if (!server.url) return;
+        try {
+          next[index] = await getMcpOAuthStatus(server.id ?? '', server.url);
+        } catch {
+          // Статус — подсказка, а не условие работы раздела: ошибку молча пропускаем.
+        }
+      }),
+    );
+    setAuthStatus(next);
   }
 
   useEffect(() => {
@@ -1159,6 +1186,7 @@ function McpSection() {
         if (!cancelled) {
           setServers(list);
           setLoaded(true);
+          void refreshStatuses(list);
         }
       })
       .catch(() => {
@@ -1168,6 +1196,15 @@ function McpSection() {
       cancelled = true;
     };
   }, []);
+
+  // Авторизация идёт в другой вкладке/браузере: при возврате фокуса обновляем статус.
+  useEffect(() => {
+    function onFocus() {
+      void refreshStatuses(servers);
+    }
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [servers]);
 
   function update(index: number, patch: Partial<McpServerInput>) {
     setServers((prev) => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)));
@@ -1184,6 +1221,31 @@ function McpSection() {
     setDirty(true);
   }
 
+  async function authorize(index: number) {
+    const server = servers[index];
+    if (!server?.url) return;
+    setAuthorizing(index);
+    setAuthError(null);
+    try {
+      const url = await startMcpOAuth(server.id ?? '', server.url);
+      openExternalUrl(url);
+    } catch (e) {
+      const data = (e as { response?: { data?: { message?: string } } })?.response?.data;
+      setAuthError(data?.message ?? t('settings.mcpAuthError'));
+    } finally {
+      setAuthorizing(null);
+    }
+  }
+
+  function statusLabel(index: number): string {
+    const status = authStatus[index];
+    if (!status?.authorized) return t('settings.mcpNotConnected');
+    if (!status.expiresAt) return t('settings.mcpConnected');
+    const date = new Date(status.expiresAt);
+    if (Number.isNaN(date.getTime())) return t('settings.mcpConnected');
+    return t('settings.mcpConnectedUntil', { date: date.toLocaleDateString(lang) });
+  }
+
   async function save() {
     setSaving(true);
     setError(null);
@@ -1192,6 +1254,7 @@ function McpSection() {
       setServers(stored);
       setDirty(false);
       flashSaved();
+      void refreshStatuses(stored);
     } catch (e) {
       // SEC_MCP_SSRF: сервер отклоняет непубличные адреса и объясняет причину — показываем её.
       const data = (e as { response?: { data?: { error?: string; message?: string } } })?.response?.data;
@@ -1210,37 +1273,51 @@ function McpSection() {
         <p className="settings-github__hint">{t('settings.mcpDesktopHint')}</p>
         {loaded && servers.length === 0 && <p className="settings-github__hint">{t('settings.mcpEmpty')}</p>}
         {servers.map((server, index) => (
-          <div key={index} className="settings-mcp__row">
-            <input
-              className="dialog-input"
-              name="conexy-mcp-name"
-              autoComplete="off"
-              placeholder={t('settings.mcpNamePlaceholder')}
-              value={server.name ?? ''}
-              onChange={(e) => update(index, { name: e.target.value })}
-            />
-            <input
-              className="dialog-input"
-              name="conexy-mcp-url"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder={t('settings.mcpUrlPlaceholder')}
-              value={server.url}
-              onChange={(e) => update(index, { url: e.target.value })}
-            />
-            <input
-              className="dialog-input"
-              type="password"
-              name="conexy-mcp-token"
-              autoComplete="new-password"
-              spellCheck={false}
-              placeholder={t('settings.mcpTokenPlaceholder')}
-              value={server.token ?? ''}
-              onChange={(e) => update(index, { token: e.target.value })}
-            />
-            <button className="dialog-btn" type="button" onClick={() => removeAt(index)} aria-label={t('settings.githubClear')}>
-              <TrashIcon />
-            </button>
+          <div key={index}>
+            <div className="settings-mcp__row">
+              <input
+                className="dialog-input"
+                name="conexy-mcp-name"
+                autoComplete="off"
+                placeholder={t('settings.mcpNamePlaceholder')}
+                value={server.name ?? ''}
+                onChange={(e) => update(index, { name: e.target.value })}
+              />
+              <input
+                className="dialog-input"
+                name="conexy-mcp-url"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={t('settings.mcpUrlPlaceholder')}
+                value={server.url}
+                onChange={(e) => update(index, { url: e.target.value })}
+              />
+              <input
+                className="dialog-input"
+                type="password"
+                name="conexy-mcp-token"
+                autoComplete="new-password"
+                spellCheck={false}
+                placeholder={t('settings.mcpTokenPlaceholder')}
+                value={server.token ?? ''}
+                onChange={(e) => update(index, { token: e.target.value })}
+              />
+              <button className="dialog-btn" type="button" onClick={() => removeAt(index)} aria-label={t('settings.githubClear')}>
+                <TrashIcon />
+              </button>
+            </div>
+            {/* MCP_OAUTH: вход в браузере вместо ручного токена; статический токен выше имеет приоритет. */}
+            <div className="settings-mcp__row">
+              <button
+                className="dialog-btn"
+                type="button"
+                disabled={!server.url || authorizing === index}
+                onClick={() => void authorize(index)}
+              >
+                {t('settings.mcpAuthorize')}
+              </button>
+              <span className="settings-github__hint">{statusLabel(index)}</span>
+            </div>
           </div>
         ))}
         <div className="settings-github__actions">
@@ -1252,6 +1329,7 @@ function McpSection() {
           </button>
           {saved && <span className="settings-github__saved">{t('settings.mcpSaved')}</span>}
           {error && <span className="settings-github__error">{error}</span>}
+          {authError && <span className="settings-github__error">{authError}</span>}
         </div>
       </div>
     </div>

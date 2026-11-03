@@ -121,3 +121,27 @@ export async function saveMcpServers(servers: McpServerInput[]): Promise<McpServ
     ? data.servers.filter((s): s is McpServerInput => !!s && typeof s.url === 'string')
     : [];
 }
+
+// MCP_OAUTH: авторизация MCP-сервера в браузере (OAuth 2.1 + PKCE) вместо ручного Bearer-токена.
+export interface McpOAuthStatus {
+  authorized: boolean;
+  expiresAt: string | null;
+}
+
+/** Возвращает authorize URL сервера авторизации; его надо открыть в браузере. */
+export async function startMcpOAuth(serverId: string, url: string): Promise<string> {
+  const { data } = await http.post<{ authorizeUrl?: string }>('/mcp/oauth/start', { serverId, url });
+  if (!data?.authorizeUrl) throw new Error('MCP_OAUTH_NO_URL');
+  return data.authorizeUrl;
+}
+
+/** Статус сохранённой авторизации сервера; url нужен, потому что ключ — адрес сервера. */
+export async function getMcpOAuthStatus(serverId: string, url: string): Promise<McpOAuthStatus> {
+  const { data } = await http.get<{ authorized?: boolean; expiresAt?: string | null }>('/mcp/oauth/status', {
+    params: { serverId, url },
+  });
+  return {
+    authorized: data?.authorized === true,
+    expiresAt: typeof data?.expiresAt === 'string' ? data.expiresAt : null,
+  };
+}

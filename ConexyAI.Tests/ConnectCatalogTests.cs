@@ -10,6 +10,7 @@ internal static class ConnectCatalogTests
         TestRegistry.Add("connect hub: catalog has unique ids and covers every service and MCP entry", CoversAllAsync);
         TestRegistry.Add("connect hub: find and search work by id, title and topic", SearchAsync);
         TestRegistry.Add("connect hub: service and mcp ids are unique across both catalogs", UniqueAsync);
+        TestRegistry.Add("connect hub: telegram account entry writes a stdio config with secret placeholders", TelegramAccountAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -45,6 +46,29 @@ internal static class ConnectCatalogTests
         var normalized = items.Select(i => i.Id.Replace('-', '_').ToLowerInvariant()).ToList();
         var duplicate = normalized.GroupBy(x => x).FirstOrDefault(g => g.Count() > 1)?.Key;
         Assert(duplicate is null, "duplicate id: " + duplicate);
+        return Task.CompletedTask;
+    }
+
+    // TELEGRAM_ACCOUNT: пакета нет в npm, поэтому запуск через uvx из закреплённого тега; ключи — только секретами.
+    private static Task TelegramAccountAsync()
+    {
+        Assert(McpCatalog.Find("telegram") is { } entry, "telegram entry exists");
+        var telegram = McpCatalog.Find("telegram")!;
+        Assert(telegram.Command == "uvx", "telegram runs through uvx");
+        Assert(telegram.Args.Contains(McpCatalog.TelegramSource) && telegram.Args.Last() == "telegram-mcp", "pinned telegram source is passed to uvx");
+        Assert(telegram.Category == "Мессенджеры", "telegram is listed under messengers");
+
+        var env = telegram.Env ?? new();
+        foreach (var name in new[] { "TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION_STRING" })
+        {
+            Assert(env.TryGetValue(name, out var value) && value == "${secret:" + name + "}", name + " is passed as a secret placeholder");
+            Assert(telegram.Inputs?.Any(i => i.Name == name) == true, name + " is asked for on install");
+        }
+
+        Assert(McpCatalog.Find("telegram")!.Id != ServiceCatalog.Services.First(s => s.Id == "telegram_bot").Id, "bot and account connectors stay separate entries");
+        var items = Items();
+        Assert(ConnectCatalog.Find(items, "telegram")?.Kind == ConnectKind.Mcp, "/connect telegram opens the account server");
+        Assert(items.First(i => i.Id == "telegram").NeedsNode == false, "telegram does not need Node.js");
         return Task.CompletedTask;
     }
 }

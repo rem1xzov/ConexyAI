@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -16,7 +17,21 @@ namespace ConexyAI.Service;
 
 /// <summary>A configured MCP server, with secrets already resolved from the environment.</summary>
 /// <param name="IsUser">True for a personal server of the user (untrusted URL): it goes through the SSRF guard.</param>
-public sealed record McpServerConfig(string Id, string Name, string Url, IReadOnlyDictionary<string, string> Headers, int TimeoutSeconds, bool IsUser = false);
+/// <param name="TokenProvider">
+/// MCP_OAUTH: OAuth-токен пользователя для этого сервера (если статического токена нет и Refresh уже сохранён).
+/// </param>
+public sealed record McpServerConfig(
+    string Id, string Name, string Url, IReadOnlyDictionary<string, string> Headers, int TimeoutSeconds,
+    bool IsUser = false, IMcpTokenProvider? TokenProvider = null);
+
+// MCP_OAUTH: сервер ответил 401/403 и требует авторизации. Реестр отдаёт его агенту без инструментов,
+// а раннер добавляет ссылку на вход (её строит IMcpOAuthService — ему нужен id пользователя).
+public sealed record McpServerAuthRequired(
+    string ServerId,
+    string ServerName,
+    string ServerUrl,
+    string? ResourceMetadataUrl,
+    string Reason);
 
 /// <summary>One MCP tool, mapped to the function name advertised to the model.</summary>
 public sealed record McpToolDescriptor(
@@ -32,9 +47,31 @@ public sealed record McpToolDescriptor(
 
 public sealed record McpCallResult(bool Success, string Text);
 
-public sealed class McpException : Exception
+public class McpException : Exception
 {
     public McpException(string message) : base(message) { }
+}
+
+// MCP_OAUTH: сервер ответил 401/403 и ждёт авторизации. Несёт всё, что нужно для старта flow:
+// id/имя/адрес сервера и (если сервер прислал) resource_metadata из WWW-Authenticate.
+public sealed class McpAuthorizationRequiredException : McpException
+{
+    public McpAuthorizationRequiredException(
+        string serverId, string serverName, string serverUrl, string? resourceMetadataUrl, string reason)
+        : base(reason)
+    {
+        ServerId = serverId;
+        ServerName = serverName;
+        ServerUrl = serverUrl;
+        ResourceMetadataUrl = resourceMetadataUrl;
+        Reason = reason;
+    }
+
+    public string ServerId { get; }
+    public string ServerName { get; }
+    public string ServerUrl { get; }
+    public string? ResourceMetadataUrl { get; }
+    public string Reason { get; }
 }
 
 public interface IMcpRegistry
@@ -47,6 +84,9 @@ public interface IMcpRegistry
 
     /// <summary>Maps an advertised function name back to its tool.</summary>
     bool TryResolve(string functionName, out McpToolDescriptor descriptor);
+
+    /// <summary>MCP_OAUTH: серверы, которые ответили 401/403 и ждут авторизации пользователя.</summary>
+    IReadOnlyList<McpServerAuthRequired> AuthorizationRequired { get; }
 
     Task<McpCallResult> CallAsync(McpToolDescriptor descriptor, string argumentsJson, CancellationToken ct = default);
 }
@@ -66,6 +106,7 @@ public class McpRegistry : IMcpRegistry
 
     private IReadOnlyList<McpToolDescriptor> _cached = Array.Empty<McpToolDescriptor>();
     private Dictionary<string, McpToolDescriptor> _byFunction = new(StringComparer.Ordinal);
+    private IReadOnlyList<McpServerAuthRequired> _authRequired = Array.Empty<McpServerAuthRequired>();
     private DateTimeOffset _cachedAt = DateTimeOffset.MinValue;
 
     public McpRegistry(
@@ -81,6 +122,11 @@ public class McpRegistry : IMcpRegistry
 
     public IReadOnlyList<string> ServerNames => _servers.Select(s => s.Name).ToList();
 
+    public IReadOnlyList<McpServerAuthRequired> AuthorizationRequired
+    {
+        get { lock (_lock) { return _authRequired; } }
+    }
+
     public async Task<IReadOnlyList<McpToolDescriptor>> ListToolsAsync(CancellationToken ct = default)
     {
         if (_cached.Count > 0 && DateTimeOffset.UtcNow - _cachedAt < CacheTtl)
@@ -88,6 +134,7 @@ public class McpRegistry : IMcpRegistry
 
         var list = new List<McpToolDescriptor>();
         var map = new Dictionary<string, McpToolDescriptor>(StringComparer.Ordinal);
+        var authRequired = new List<McpServerAuthRequired>();
 
         foreach (var server in _servers)
         {
@@ -111,6 +158,14 @@ public class McpRegistry : IMcpRegistry
             {
                 throw;
             }
+            catch (McpAuthorizationRequiredException ex)
+            {
+                // MCP_OAUTH: инструментов у сервера нет, но агент должен сказать пользователю, куда войти.
+                authRequired.Add(new McpServerAuthRequired(
+                    ex.ServerId, ex.ServerName, ex.ServerUrl, ex.ResourceMetadataUrl, ex.Reason));
+                _logger.LogInformation(
+                    "MCP server '{Server}' requires authorization (server key hidden).", server.Name);
+            }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "MCP server '{Server}' tool listing failed", server.Name);
@@ -126,6 +181,7 @@ public class McpRegistry : IMcpRegistry
         {
             _cached = list;
             _byFunction = map;
+            _authRequired = authRequired;
             _cachedAt = DateTimeOffset.UtcNow;
         }
         return list;
@@ -154,9 +210,28 @@ public class McpRegistry : IMcpRegistry
         {
             throw;
         }
+        catch (McpAuthorizationRequiredException ex)
+        {
+            // MCP_OAUTH: токен истёк или отозван уже во время прогона — инструмент больше не работает.
+            RememberAuthRequired(new McpServerAuthRequired(
+                ex.ServerId, ex.ServerName, ex.ServerUrl, ex.ResourceMetadataUrl, ex.Reason));
+            return new McpCallResult(false,
+                $"MCP-сервер «{descriptor.ServerName}» требует авторизации в ConexyAI, доступ больше не действует.");
+        }
         catch (Exception ex)
         {
             return new McpCallResult(false, $"MCP call failed: {ex.Message}");
+        }
+    }
+
+    private void RememberAuthRequired(McpServerAuthRequired required)
+    {
+        lock (_lock)
+        {
+            var items = new List<McpServerAuthRequired>(_authRequired);
+            items.RemoveAll(x => string.Equals(x.ServerId, required.ServerId, StringComparison.Ordinal));
+            items.Add(required);
+            _authRequired = items;
         }
     }
 
@@ -168,8 +243,8 @@ public class McpRegistry : IMcpRegistry
             if (_clients.TryGetValue(server.Id, out var existing)) return existing;
             // SEC_MCP_SSRF: личный сервер пользователя ходит только через клиент с пиннингом публичного IP.
             var client = server.IsUser
-                ? new McpHttpClient(server, _userHttp, _logger, _guard)
-                : new McpHttpClient(server, _http, _logger);
+                ? new McpHttpClient(server, _userHttp, _logger, _guard, server.TokenProvider)
+                : new McpHttpClient(server, _http, _logger, null, server.TokenProvider);
             _clients[server.Id] = client;
             return client;
         }
@@ -207,7 +282,14 @@ public class McpRegistry : IMcpRegistry
 // перекрывает операторский — так агент работает под аккаунтом пользователя, а не под общим.
 public interface IMcpRegistryFactory
 {
-    IMcpRegistry Create(IReadOnlyList<McpServerInput>? userServers);
+    /// <param name="userServers">Личные серверы пользователя из запроса/БД.</param>
+    /// <param name="tokenProvider">
+    /// MCP_OAUTH: фабрика OAuth-провайдера по ключу сервера (хост+путь). Возвращает null, когда
+    /// у пользователя нет сохранённой авторизации этого сервера.
+    /// </param>
+    IMcpRegistry Create(
+        IReadOnlyList<McpServerInput>? userServers,
+        Func<string, IMcpTokenProvider?>? tokenProvider = null);
 }
 
 public class McpRegistryFactory : IMcpRegistryFactory
@@ -242,14 +324,30 @@ public class McpRegistryFactory : IMcpRegistryFactory
     /// server could 302 to docker-socket-proxy) and the socket is opened only to an address that passed
     /// <see cref="PublicUrlGuard"/> at connect time (DNS rebinding).
     /// </summary>
-    public static SocketsHttpHandler CreateUserHandler(PublicUrlGuard guard) => new()
+    public static SocketsHttpHandler CreateUserHandler(PublicUrlGuard guard, IWebProxy? proxy = null) => new()
     {
         AllowAutoRedirect = false,
-        UseProxy = false,
+        // AGENT_PROXY: с прокси соединение открывает он (и до внутренних адресов не достанет), поэтому
+        // пиннинг сокета не нужен. Preflight-проверка адреса в McpHttpClient остаётся.
+        UseProxy = proxy is not null,
+        Proxy = proxy,
         UseCookies = false,
-        ConnectTimeout = TimeSpan.FromSeconds(10),
+        ConnectTimeout = TimeSpan.FromSeconds(15),
         PooledConnectionLifetime = TimeSpan.FromMinutes(2),
-        ConnectCallback = (context, ct) => WebPageFetcher.ConnectPinnedAsync(guard, context.DnsEndPoint, ct),
+        ConnectCallback = proxy is null
+            ? (context, ct) => WebPageFetcher.ConnectPinnedAsync(guard, context.DnsEndPoint, ct)
+            : null,
+    };
+
+    /// <summary>AGENT_PROXY: тот же исходящий прокси, что у чтения страниц, — для MCP-серверов.</summary>
+    public static SocketsHttpHandler CreateProxiedHandler(IWebProxy proxy) => new()
+    {
+        AllowAutoRedirect = false,
+        UseProxy = true,
+        Proxy = proxy,
+        UseCookies = false,
+        ConnectTimeout = TimeSpan.FromSeconds(15),
+        PooledConnectionLifetime = TimeSpan.FromMinutes(2),
     };
 
     /// <summary>
@@ -264,12 +362,14 @@ public class McpRegistryFactory : IMcpRegistryFactory
         return check.Allowed ? null : check.Error ?? "Адрес MCP-сервера не публичный.";
     }
 
-    public IMcpRegistry Create(IReadOnlyList<McpServerInput>? userServers)
+    public IMcpRegistry Create(
+        IReadOnlyList<McpServerInput>? userServers,
+        Func<string, IMcpTokenProvider?>? tokenProvider = null)
     {
         var merged = new List<McpServerConfig>(_operatorServers);
         foreach (var input in userServers ?? Array.Empty<McpServerInput>())
         {
-            var server = ResolveUserServer(input);
+            var server = ResolveUserServer(input, tokenProvider);
             if (server is null) continue;
             merged.RemoveAll(s => string.Equals(s.Id, server.Id, StringComparison.OrdinalIgnoreCase));
             merged.Add(server);
@@ -299,7 +399,9 @@ public class McpRegistryFactory : IMcpRegistryFactory
     }
 
     // A user server carries its own access token; it is sent as "Authorization: Bearer <token>".
-    private static McpServerConfig? ResolveUserServer(McpServerInput input)
+    // MCP_OAUTH: статический токен из настроек имеет приоритет; без него подключается OAuth-провайдер.
+    private static McpServerConfig? ResolveUserServer(
+        McpServerInput input, Func<string, IMcpTokenProvider?>? tokenProvider)
     {
         if (input is null || !input.Enabled) return null;
         var url = (input.Url ?? string.Empty).Trim();
@@ -314,7 +416,11 @@ public class McpRegistryFactory : IMcpRegistryFactory
         if (!string.IsNullOrWhiteSpace(input.Token))
             headers["Authorization"] = "Bearer " + input.Token!.Trim();
 
-        return new McpServerConfig(id, name, url, headers, 30, IsUser: true);
+        IMcpTokenProvider? provider = null;
+        if (!headers.ContainsKey("Authorization") && tokenProvider is not null)
+            provider = tokenProvider(McpServerKey.FromUrl(url));
+
+        return new McpServerConfig(id, name, url, headers, 30, IsUser: true, TokenProvider: provider);
     }
 
     private static bool IsHttpUrl(string url) =>
@@ -357,17 +463,21 @@ public class McpHttpClient
     private readonly HttpClient _http;
     private readonly ILogger _logger;
     private readonly PublicUrlGuard? _guard;
+    private readonly IMcpTokenProvider? _tokenProvider;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private string? _sessionId;
     private bool _initialized;
     private int _nextId;
 
-    public McpHttpClient(McpServerConfig server, HttpClient http, ILogger logger, PublicUrlGuard? guard = null)
+    public McpHttpClient(
+        McpServerConfig server, HttpClient http, ILogger logger, PublicUrlGuard? guard = null,
+        IMcpTokenProvider? tokenProvider = null)
     {
         _server = server;
         _http = http;
         _logger = logger;
         _guard = guard;
+        _tokenProvider = tokenProvider;
     }
 
     public async Task<IReadOnlyList<McpToolDescriptor>> ListToolsAsync(CancellationToken ct)
@@ -454,40 +564,75 @@ public class McpHttpClient
             ["method"] = method,
             ["params"] = JsonNode.Parse(string.IsNullOrWhiteSpace(paramsJson) ? "{}" : paramsJson) ?? new JsonObject(),
         };
+        var body = request.ToJsonString();
 
-        using var message = new HttpRequestMessage(HttpMethod.Post, _server.Url)
+        // MCP_OAUTH: при 401 с сохранённым OAuth-токеном один раз повторяем запрос с refresh.
+        var attempt = 0;
+        while (true)
         {
-            Content = new StringContent(request.ToJsonString(), Encoding.UTF8, "application/json")
-        };
-        message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
-        if (!string.IsNullOrEmpty(_sessionId))
-            message.Headers.TryAddWithoutValidation("Mcp-Session-Id", _sessionId);
-        foreach (var (key, value) in _server.Headers)
-            message.Headers.TryAddWithoutValidation(key, value);
+            using var message = new HttpRequestMessage(HttpMethod.Post, _server.Url)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+            message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+            if (!string.IsNullOrEmpty(_sessionId))
+                message.Headers.TryAddWithoutValidation("Mcp-Session-Id", _sessionId);
+            foreach (var (key, value) in _server.Headers)
+                message.Headers.TryAddWithoutValidation(key, value);
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(_server.TimeoutSeconds));
+            // Статический Authorization из настроек имеет приоритет; OAuth-токен — только без него.
+            var oauthToken = _tokenProvider is not null && !_server.Headers.ContainsKey("Authorization")
+                ? await _tokenProvider.GetAccessTokenAsync(forceRefresh: attempt > 0, ct)
+                : null;
+            if (!string.IsNullOrEmpty(oauthToken))
+                message.Headers.TryAddWithoutValidation("Authorization", "Bearer " + oauthToken);
 
-        using var response = await _http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(_server.TimeoutSeconds));
 
-        if (captureSession && response.Headers.TryGetValues("Mcp-Session-Id", out var sessionValues))
-            _sessionId = sessionValues.FirstOrDefault();
+            using var response = await _http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token);
 
-        // SEC_MCP_SSRF: тело неуспешного ответа модели не отдаём — только статус. Иначе ошибка любого
-        // внутреннего сервиса превращалась бы в канал чтения. Редирект (3xx) тоже считается ошибкой.
-        if (!response.IsSuccessStatusCode)
-            throw new McpException($"HTTP {(int)response.StatusCode}");
+            if (captureSession && response.Headers.TryGetValues("Mcp-Session-Id", out var sessionValues))
+                _sessionId = sessionValues.FirstOrDefault();
 
-        if (!expectResult)
-            return null;
+            var unauthorized = response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
+            if (unauthorized && _server.IsUser)
+            {
+                // Повторяем только если на первом заходе был токен: без токена повторять нечего.
+                if (attempt == 0 && _tokenProvider is not null && !string.IsNullOrEmpty(oauthToken))
+                {
+                    attempt++;
+                    _logger.LogInformation(
+                        "MCP server '{Server}' refused the OAuth token; retrying after refresh.", _server.Name);
+                    continue;
+                }
 
-        var raw = await SafeReadAsync(response, timeoutCts.Token);
-        if (string.IsNullOrWhiteSpace(raw))
-            return null;
+                // MCP_OAUTH: структурный результат вместо простой ошибки: выше реестр превратит его
+                // в «сервер требует авторизации» и агент покажет пользователю ссылку на вход.
+                var resourceMetadata = ParseResourceMetadataUrl(BuildWwwAuthenticate(response.Headers));
+                var reason = response.StatusCode == HttpStatusCode.Unauthorized
+                    ? "Сервер требует авторизации (HTTP 401)."
+                    : "Сервер отклонил доступ (HTTP 403).";
+                throw new McpAuthorizationRequiredException(
+                    _server.Id, _server.Name, _server.Url, resourceMetadata, reason);
+            }
 
-        var contentType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
-        return ParseResponse(raw, contentType, id);
+            // SEC_MCP_SSRF: тело неуспешного ответа модели не отдаём — только статус. Иначе ошибка любого
+            // внутреннего сервиса превращалась бы в канал чтения. Редирект (3xx) тоже считается ошибкой.
+            if (!response.IsSuccessStatusCode)
+                throw new McpException($"HTTP {(int)response.StatusCode}");
+
+            if (!expectResult)
+                return null;
+
+            var raw = await SafeReadAsync(response, timeoutCts.Token);
+            if (string.IsNullOrWhiteSpace(raw))
+                return null;
+
+            var contentType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+            return ParseResponse(raw, contentType, id);
+        }
     }
 
     private static JsonElement? ParseResponse(string body, string contentType, int id)
@@ -552,4 +697,48 @@ public class McpHttpClient
     }
 
     private static JsonElement EmptyObject() => JsonDocument.Parse("{}").RootElement.Clone();
+
+    /// <summary>
+    /// MCP_OAUTH: достаёт <c>resource_metadata</c> из заголовка WWW-Authenticate (RFC 9728).
+    /// Возвращает null для простого <c>Bearer</c> или если значение не абсолютный адрес.
+    /// </summary>
+    public static string? ParseResourceMetadataUrl(string? header)
+    {
+        if (string.IsNullOrWhiteSpace(header)) return null;
+
+        // Заголовок может содержать несколько challenges через запятую; параметр ищется в любом.
+        foreach (var part in header.Split(','))
+        {
+            var index = part.IndexOf("resource_metadata", StringComparison.OrdinalIgnoreCase);
+            if (index < 0) continue;
+
+            var rest = part[(index + "resource_metadata".Length)..].TrimStart();
+            if (!rest.StartsWith('=')) continue;
+            rest = rest[1..].TrimStart();
+
+            string value;
+            if (rest.StartsWith('"'))
+            {
+                var end = rest.IndexOf('"', 1);
+                if (end <= 1) continue;
+                value = rest[1..end];
+            }
+            else
+            {
+                var end = rest.IndexOfAny(new[] { ' ', ';', ',' });
+                value = end < 0 ? rest : rest[..end];
+            }
+
+            value = value.Trim();
+            if (Uri.TryCreate(value, UriKind.Absolute, out var uri)
+                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+                return uri.ToString();
+        }
+
+        return null;
+    }
+
+    private static string BuildWwwAuthenticate(HttpResponseHeaders headers) =>
+        string.Join(", ", headers.WwwAuthenticate.Select(header =>
+            string.IsNullOrWhiteSpace(header.Parameter) ? header.Scheme : header.Scheme + " " + header.Parameter));
 }

@@ -80,6 +80,14 @@ export function isMobileApp(): boolean {
   return Boolean(bridge()?.isNativePlatform?.());
 }
 
+// MCP_OAUTH: внешняя ссылка (authorize URL сервера авторизации) открывается системным браузером:
+// вход по OAuth внутри WebView не работает, а в вебе хватает новой вкладки.
+export function openExternalUrl(url: string): void {
+  const browser = bridge()?.Plugins?.Browser;
+  if (browser) void browser.open({ url });
+  else window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 /**
  * VOICE_INPUT: в Android WebView нет `SpeechRecognition`, поэтому в приложении распознаёт
  * нативный Android. На сайте возвращает null — там работает браузерное API.

@@ -306,6 +306,32 @@ namespace ConexyAI.Migrations
                     b.ToTable("email_verification_codes", (string)null);
                 });
 
+            modelBuilder.Entity("ConexyAI.Entity.McpOAuthTokenEntity", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ServerKey")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("ClientRegistration")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Tokens")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("UserId", "ServerKey");
+
+                    b.HasIndex("UserId", "ServerKey")
+                        .IsUnique();
+
+                    b.ToTable("mcp_oauth_tokens", (string)null);
+                });
+
             modelBuilder.Entity("ConexyAI.Entity.MobilePushTokenEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -883,6 +909,15 @@ namespace ConexyAI.Migrations
                         .IsRequired();
 
                     b.Navigation("Document");
+                });
+
+            modelBuilder.Entity("ConexyAI.Entity.McpOAuthTokenEntity", b =>
+                {
+                    b.HasOne("ConexyAI.Entity.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("ConexyAI.Entity.MobilePushTokenEntity", b =>

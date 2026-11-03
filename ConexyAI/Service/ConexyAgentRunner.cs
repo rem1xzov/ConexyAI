@@ -60,6 +60,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // на прогон, потому что включает ЛИЧНЫЕ серверы пользователя из запроса.
     private IMcpRegistry? _mcpRegistry;
     private readonly IMcpRegistryFactory? _mcpRegistryFactory;
+    // MCP_OAUTH: нужен, чтобы по 401/403 дать пользователю ссылку авторизации (ему нужен id пользователя).
+    private readonly IMcpOAuthService? _mcpOAuthService;
     private AgentHooks? _hooks;
     private int _hookRuns;
     // WEB_DEAD_LINKS: адреса, которые в этом прогоне уже не открылись (адрес -> причина), и счётчики
@@ -1234,7 +1236,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // PHONE_AGENT: добавлено 2026-10-29 — последними и необязательными.
         Phone.IPhoneToolBridge? phoneBridge = null,
         Phone.IPhoneApprovalService? phoneApprovals = null,
-        Phone.IPhoneNotifier? phoneNotifier = null)
+        Phone.IPhoneNotifier? phoneNotifier = null,
+        // MCP_OAUTH: добавлено 2026-11-03 — авторизация MCP-сервера в браузере.
+        IMcpOAuthService? mcpOAuthService = null)
     {
         _phoneBridge = phoneBridge;
         _phoneApprovals = phoneApprovals;
@@ -1266,6 +1270,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // MCP: реестр создаётся на прогон (см. RunLoopAsync) — он включает личные серверы пользователя.
         _mcpRegistry = null;
         _mcpRegistryFactory = mcpRegistryFactory;
+        _mcpOAuthService = mcpOAuthService;
         _deviceBridge = deviceBridge;
 
         var configured = agentOptions.Value.MaxIterations;
@@ -1417,8 +1422,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         // Инструменты этого прогона: по профилю режима; take_screenshot убирается, если Chromium нет.
         // MCP: реестр на прогон — операторские серверы + личные серверы пользователя из запроса.
-        _mcpRegistry = _mcpRegistryFactory?.Create(_job.McpServers);
+        _mcpRegistry = _mcpRegistryFactory?.Create(_job.McpServers, McpTokenProviderFor);
         _tools = await ResolveToolsAsync(ct);
+        await AppendMcpAuthNotesAsync(messages, ct);
 
         // LOOP_GUARD: защита от зацикливания живёт ровно один прогон — на следующий запуск состояние
         // не переносится (петля — свойство конкретной задачи).
@@ -3297,7 +3303,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _profile = WorkerProfile;
         _agent = identity;
         AgentExecutionContext.Current = identity;
-        _mcpRegistry = _mcpRegistryFactory?.Create(_job.McpServers);
+        _mcpRegistry = _mcpRegistryFactory?.Create(_job.McpServers, McpTokenProviderFor);
         _tools = await ResolveToolsAsync(ct);
 
         var taskId = job.TaskId;
@@ -3315,6 +3321,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             new("system", system),
             new("user", brief),
         };
+        await AppendMcpAuthNotesAsync(messages, ct);
 
         var answer = new StringBuilder();
         var group = _hubContext.Clients.Group($"task_{taskId}");
@@ -4395,10 +4402,63 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         var result = await _mcpRegistry.CallAsync(descriptor, root.GetRawText(), ct);
         var text = Truncate(result.Text, 20_000);
+        // MCP_OAUTH: доступ отозван посреди прогона — добавляем ссылку, чтобы модель сказала пользователю,
+        // где войти снова (сам инструмент уже вернул короткое объяснение).
+        var authRequired = _mcpRegistry.AuthorizationRequired
+            .FirstOrDefault(a => string.Equals(a.ServerId, descriptor.ServerId, StringComparison.Ordinal));
+        if (authRequired is not null)
+            text += "\n\n" + await McpAuthNoteAsync(authRequired, ct);
         if (actionId is { } id)
             await EmitMcpActionAsync(taskId, id, descriptor, root, result.Success ? "completed" : "failed",
                 result.Success ? "Выполнено" : "Ошибка MCP", Truncate(text, 4_000), CancellationToken.None);
         return new ConexyToolResult(toolCall.Id, text, !result.Success);
+    }
+
+    // MCP_OAUTH: провайдер OAuth-токена для одного личного сервера (ключ — host+path).
+    private IMcpTokenProvider? McpTokenProviderFor(string serverKey) =>
+        _mcpOAuthService?.CreateTokenProvider(_job.UserId, serverKey);
+
+    /// <summary>
+    /// MCP_OAUTH: серверы, ответившие 401/403, не дают инструментов — вместо этого системная заметка
+    /// со ссылкой на вход: модель обязана сказать пользователю, что нужно авторизовать ConexyAI.
+    /// </summary>
+    private async Task AppendMcpAuthNotesAsync(List<ChatMessage> messages, CancellationToken ct)
+    {
+        if (_mcpRegistry is null || _mcpOAuthService is null) return;
+        var required = _mcpRegistry.AuthorizationRequired;
+        if (required.Count == 0) return;
+
+        foreach (var server in required)
+        {
+            var note = await McpAuthNoteAsync(server, ct);
+            messages.Add(new ChatMessage("system", note));
+        }
+    }
+
+    private async Task<string> McpAuthNoteAsync(McpServerAuthRequired server, CancellationToken ct)
+    {
+        var reason = server.Reason;
+        if (_mcpOAuthService is null)
+            return $"MCP «{server.ServerName}» требует авторизации: {reason}";
+
+        try
+        {
+            var start = await _mcpOAuthService.StartAsync(
+                _job.UserId, server.ServerId, server.ServerName, server.ServerUrl, server.ResourceMetadataUrl, ct);
+            if (!string.IsNullOrWhiteSpace(start.AuthorizeUrl))
+                return $"MCP «{server.ServerName}» требует авторизации. Попроси пользователя открыть ссылку и разрешить доступ ConexyAI: {start.AuthorizeUrl}";
+            reason = start.Message ?? reason;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "MCP authorization start failed for {Server}", server.ServerName);
+        }
+
+        return $"MCP «{server.ServerName}» требует авторизации: {reason}";
     }
 
     // SEC_MCP_CONFIRM: карточка подтверждения для MCP-вызова — тот же fail-closed протокол, что у RunBashWithConfirmationAsync.

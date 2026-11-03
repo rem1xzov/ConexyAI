@@ -1813,7 +1813,8 @@ internal static class AgentCapabilityTests
     {
         private readonly IMcpRegistry _registry;
         public FakeMcpRegistryFactory(IMcpRegistry registry) => _registry = registry;
-        public IMcpRegistry Create(IReadOnlyList<McpServerInput>? userServers) => _registry;
+        public IMcpRegistry Create(
+            IReadOnlyList<McpServerInput>? userServers, Func<string, IMcpTokenProvider?>? tokenProvider = null) => _registry;
     }
 
     private sealed class FakeMcpRegistry : IMcpRegistry
@@ -1823,6 +1824,8 @@ internal static class AgentCapabilityTests
 
         public List<string> Calls { get; } = new();
         public IReadOnlyList<string> ServerNames => new[] { "Notion" };
+        public IReadOnlyList<McpServerAuthRequired> AuthorizationRequired { get; } =
+            Array.Empty<McpServerAuthRequired>();
 
         public void Add(string functionName, string serverName, string toolName, string description)
         {
