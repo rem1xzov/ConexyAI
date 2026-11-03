@@ -37,6 +37,7 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent web: fetch_web_page re-checks the address at connect time (DNS rebinding)", FetchDefeatsDnsRebindingAsync);
         TestRegistry.Add("agent proxy: parses credentials and keeps them out of the description", AgentProxyParsesAsync);
         TestRegistry.Add("agent proxy: live fetch through AGENT_PROXY_URL (skipped when unset)", AgentProxyLiveFetchAsync);
+        TestRegistry.Add("agent proxy: live MCP tools/list through AGENT_PROXY_URL (skipped when unset)", AgentProxyLiveMcpAsync);
         TestRegistry.Add("agent web: HTML is cleaned into readable Markdown-like text", HtmlIsCleanedAsync);
         TestRegistry.Add("agent web: the guard, fetcher and vision service resolve from DI", WebServicesResolveFromDiAsync);
         TestRegistry.Add("agent chats: search_user_chats stays inside the user's own other chats", ChatSearchIsScopedAsync);
@@ -218,6 +219,26 @@ internal static class AgentCapabilityTests
         Assert(ip.Output.Contains(proxyHost), $"the exit IP is the proxy's ({proxyHost}): {ip.Output}");
         var page = await fetcher.FetchAsync("https://x.com/", 2000);
         Console.WriteLine($"      live: ipify ok, x.com -> {page.Status}");
+    }
+
+    // AGENT_PROXY: MCP идёт тем же прокси, что и страницы. Живой сервер — публичный DeepWiki без авторизации.
+    private static async Task AgentProxyLiveMcpAsync()
+    {
+        var url = Environment.GetEnvironmentVariable("AGENT_PROXY_URL");
+        if (string.IsNullOrWhiteSpace(url)) return;
+        var proxy = new AgentProxyOptions { Url = url }.CreateWebProxy();
+        Assert(proxy is not null, "the proxy URL parses");
+
+        using var handler = McpRegistryFactory.CreateProxiedHandler(proxy!);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var server = new McpServerConfig("deepwiki", "DeepWiki", "https://mcp.deepwiki.com/mcp",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), 60);
+        var client = new McpHttpClient(server, http, NullLogger.Instance);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var tools = await client.ListToolsAsync(cts.Token);
+        Assert(tools.Count > 0, "the MCP server answered tools/list through the proxy");
+        Console.WriteLine($"      live MCP: {tools.Count} tools, first = {tools[0].ToolName}");
     }
 
     // The same registrations as Program.cs: the fetcher's test-only handler parameter must fall back
