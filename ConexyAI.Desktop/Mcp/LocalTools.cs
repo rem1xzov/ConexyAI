@@ -76,7 +76,13 @@ public sealed class LocalTools : IAsyncDisposable
 
         var lines = started.Select(c => c.Error is null
             ? $"MCP «{c.Name}»: {c.Tools.Count} инструм."
-            : $"MCP «{c.Name}» не запустился: {c.Error}").ToList();
+            : c.AuthorizationUrl is { } url
+                ? $"MCP «{c.Name}»: нужен вход в браузере — {url}"
+                : $"MCP «{c.Name}» не запустился: {c.Error}").ToList();
+
+        // MCP_AUTH_BROWSER: ссылка на вход печатается и сразу открывается в браузере.
+        foreach (var c in started.Where(c => c.AuthorizationUrl is not null))
+            McpAuthorizationHelp.Offer(c.Name, c.Diagnostics);
         if (GatewayMode)
             lines.Add($"Инструментов {WantedToolCount} — больше лимита {MaxTools}: агент работает с MCP через поиск (local__{McpGateway.ServerSlug}__find) и видит все.");
         return lines;

@@ -33,6 +33,12 @@ public sealed class StdioMcpClient : IAsyncDisposable
     public IReadOnlyList<(string Tool, string Description, JsonElement Schema)> Tools { get; private set; } = [];
     public string? Error { get; private set; }
 
+    /// <summary>MCP_AUTH_BROWSER: полный вывод сервера — из него берётся ссылка на вход.</summary>
+    public string? Diagnostics { get; private set; }
+
+    /// <summary>Ссылка на страницу авторизации, если сервер её напечатал.</summary>
+    public string? AuthorizationUrl { get; private set; }
+
     public async Task StartAsync(CancellationToken ct)
     {
         try
@@ -44,7 +50,8 @@ public sealed class StdioMcpClient : IAsyncDisposable
             {
                 while (await _process.StandardError.ReadLineAsync() is { } line)
                     lock (_stderr)
-                        if (_stderr.Length < 4000) _stderr.AppendLine(line);
+                        // MCP_AUTH_BROWSER: ссылка часто в середине вывода, поэтому держим всё (но в разумных пределах).
+                        if (_stderr.Length < 16_000) _stderr.AppendLine(line);
             });
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -81,8 +88,12 @@ public sealed class StdioMcpClient : IAsyncDisposable
             string err;
             lock (_stderr) err = _stderr.ToString().Trim();
             var waited = _entry.StartupSeconds > 0 ? _entry.StartupSeconds : 60;
+            Diagnostics = err;
+            AuthorizationUrl = McpAuthorizationHelp.FindAuthorizationUrl(err);
+            var authRequired = McpAuthorizationHelp.LooksLikeAuthorizationRequired(err);
             Error = (ex is OperationCanceledException ? $"не ответил за {waited} с" : ex.Message)
-                    + (err.Length > 0 ? " · " + err.Split('\n').Last().Trim() : string.Empty);
+                    + (authRequired ? " · нужен вход в браузере" : string.Empty)
+                    + (err.Length > 0 && !authRequired ? " · " + err.Split('\n').Last().Trim() : string.Empty);
             await DisposeAsync();
         }
     }
