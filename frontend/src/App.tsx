@@ -2434,7 +2434,7 @@ export default function App() {
     let messageAttachments: Awaited<ReturnType<typeof toMessageAttachment>>[] = [];
     try {
       messageAttachments = attachments.length
-        ? await Promise.all(attachments.map((a) => toMessageAttachment(a)))
+        ? await Promise.all(attachments.map((a) => toMessageAttachment(a, !(session?.incognito ?? live.incognitoActive))))
         : [];
     } catch (e) {
       console.warn('[Attachments] could not build previews', String(e));

@@ -56,6 +56,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SpeechInputPlugin.class);
         // PHONE_AGENT: инструменты телефона, разрешения, уведомления и push.
         registerPlugin(PhoneAgentPlugin.class);
+        // ATTACHMENT_ORIGINALS: открыть отправленный в чат файл в системном приложении.
+        registerPlugin(FileOpenerPlugin.class);
         super.onCreate(savedInstanceState);
 
         WebView webView = getBridge().getWebView();

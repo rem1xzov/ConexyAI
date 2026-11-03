@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { MessageAttachment } from '../types/chat';
-import { ChevronDownIcon, CloseIcon, FileIcon } from './Icons';
+import { loadOriginal } from '../utils/attachmentStore';
+import { downloadAttachment, openAttachment } from '../utils/openAttachment';
+import { ChevronDownIcon, CloseIcon, DownloadIcon, FileIcon } from './Icons';
+
+function originalLoader(attachment: MessageAttachment): () => Promise<Blob | undefined> {
+  return () => (attachment.originalId ? loadOriginal(attachment.originalId) : Promise.resolve(undefined));
+}
 
 // ATTACHMENT_GRID: добавлено 2026-09-22 — раньше каждое вложение рендерилось отдельной
 // полноширинной строкой, и сообщение с 4 фото растягивалось на весь экран. Теперь раскладка
@@ -39,6 +45,32 @@ interface LightboxProps {
 function Lightbox({ images, index, onClose, onNavigate }: LightboxProps) {
   const { t } = useTranslation();
   const current = images[index];
+  // ATTACHMENT_ORIGINALS: во весь экран показываем оригинал, а не превью 320px; пока он читается — превью.
+  const [originalUrl, setOriginalUrl] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
+
+  useEffect(() => {
+    setOriginalUrl(null);
+    setMissing(false);
+    setZoomed(false);
+    if (!current) return;
+    let cancelled = false;
+    let url: string | null = null;
+    void originalLoader(current)().then((blob) => {
+      if (cancelled) return;
+      if (!blob) {
+        setMissing(true);
+        return;
+      }
+      url = URL.createObjectURL(blob);
+      setOriginalUrl(url);
+    });
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [current]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -78,12 +110,39 @@ function Lightbox({ images, index, onClose, onNavigate }: LightboxProps) {
         <CloseIcon />
       </button>
 
-      <img
-        className="attachment-lightbox__img"
-        src={current.previewUrl}
-        alt={current.fileName}
-        onClick={(e) => e.stopPropagation()}
-      />
+      {originalUrl && (
+        <button
+          type="button"
+          className="attachment-lightbox__download"
+          onClick={(e) => {
+            e.stopPropagation();
+            void downloadAttachment(current.fileName, current.contentType, originalLoader(current));
+          }}
+          aria-label={t('attachment.download')}
+          title={t('attachment.download')}
+        >
+          <DownloadIcon />
+        </button>
+      )}
+
+      <div
+        className={`attachment-lightbox__stage${zoomed ? ' attachment-lightbox__stage--zoomed' : ''}`}
+        onClick={zoomed ? (e) => e.stopPropagation() : undefined}
+      >
+        <img
+          className="attachment-lightbox__img"
+          src={originalUrl ?? current.previewUrl}
+          alt={current.fileName}
+          title={originalUrl ? (zoomed ? t('attachment.zoomOut') : t('attachment.zoomIn')) : undefined}
+          style={{ cursor: originalUrl ? (zoomed ? 'zoom-out' : 'zoom-in') : 'default' }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (originalUrl) setZoomed((z) => !z);
+          }}
+        />
+      </div>
+
+      {missing && <div className="attachment-lightbox__note">{t('attachment.previewOnly')}</div>}
 
       {images.length > 1 && (
         <>
@@ -121,6 +180,17 @@ function Lightbox({ images, index, onClose, onNavigate }: LightboxProps) {
 export function AttachmentGrid({ attachments }: AttachmentGridProps) {
   const { t } = useTranslation();
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+
+  async function openFile(file: MessageAttachment) {
+    setFileError(null);
+    if (!file.originalId) {
+      setFileError(t('attachment.unavailable'));
+      return;
+    }
+    const ok = await openAttachment(file.fileName, file.contentType, originalLoader(file));
+    if (!ok) setFileError(t('attachment.unavailable'));
+  }
 
   const images = attachments.filter((a) => Boolean(a.previewUrl));
   const files = attachments.filter((a) => !a.previewUrl);
@@ -161,15 +231,23 @@ export function AttachmentGrid({ attachments }: AttachmentGridProps) {
           {files.map((file, i) => {
             const size = formatSize(file.sizeBytes, t);
             return (
-              <span key={`${file.fileName}-${i}`} className="attachment-files__chip" title={file.fileName}>
+              <button
+                type="button"
+                key={`${file.fileName}-${i}`}
+                className="attachment-files__chip"
+                title={file.fileName}
+                aria-label={t('attachment.openFile', { name: file.fileName })}
+                onClick={() => void openFile(file)}
+              >
                 <FileIcon size={14} />
                 <span className="attachment-files__name">{file.fileName}</span>
                 {size && <span className="attachment-files__size">{size}</span>}
-              </span>
+              </button>
             );
           })}
         </div>
       )}
+      {fileError && <div className="attachment-files__error" role="status">{fileError}</div>}
 
       {lightboxIndex !== null && images.length > 0 && (
         <Lightbox

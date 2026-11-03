@@ -75,7 +75,7 @@ public class ConexyLlmClient : IConexyLlmClient
         Guid? taskId = null,
         CancellationToken ct = default)
     {
-        var (baseUrl, apiKey, upstreamModel) = ResolveUpstream(modelType);
+        var (baseUrl, apiKey, upstreamModel) = ResolveUpstream(modelType, messages);
         var resolvedReasoningEffort = ResolveReasoningEffortForModel(modelType, reasoningEffort);
 
         var payload = new LlmChatRequest(
@@ -129,6 +129,24 @@ public class ConexyLlmClient : IConexyLlmClient
             throw new HttpRequestException($"Upstream LLM request timed out after {RequestTimeout.TotalSeconds} seconds.", ex);
         }
     }
+
+    private (string BaseUrl, string ApiKey, string UpstreamModel) ResolveUpstream(ConexyModelType modelType, IReadOnlyList<ChatMessage> messages)
+    {
+        var upstream = ResolveUpstream(modelType);
+        // PRO_VISION: deepseek-v4-pro has no vision support, so a Pro turn carrying images would be
+        // rejected (or the images ignored). Such turns go to the vision-capable flash model; the Pro
+        // reasoning settings (thinking/reasoning_effort) still apply, flash supports thinking mode.
+        if (modelType == ConexyModelType.ConexyV1Pro && ContainsImages(messages))
+        {
+            _logger.LogInformation("Pro turn carries images: routing to the vision model {Model}.", _options.DeepSeek.FlashModel);
+            return upstream with { UpstreamModel = _options.DeepSeek.FlashModel };
+        }
+        return upstream;
+    }
+
+    internal static bool ContainsImages(IReadOnlyList<ChatMessage> messages) =>
+        messages.Any(m => m.Content is IEnumerable<ContentBlock> blocks
+                          && blocks.Any(b => b.Type == "image_url"));
 
     private (string BaseUrl, string ApiKey, string UpstreamModel) ResolveUpstream(ConexyModelType modelType)
     {
@@ -192,7 +210,7 @@ public class ConexyLlmClient : IConexyLlmClient
         Guid? taskId = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var (baseUrl, apiKey, upstreamModel) = ResolveUpstream(modelType);
+        var (baseUrl, apiKey, upstreamModel) = ResolveUpstream(modelType, messages);
         var resolvedReasoningEffort = ResolveReasoningEffortForModel(modelType, reasoningEffort);
 
         var payload = new LlmChatRequest(

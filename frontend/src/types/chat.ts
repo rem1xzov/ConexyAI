@@ -93,6 +93,8 @@ export interface MessageAttachment {
   previewUrl?: string;
   /** Original size in bytes, when known. */
   sizeBytes?: number;
+  /** Key of the original bytes in attachmentStore (this device only). */
+  originalId?: string;
 }
 
 export interface AgentAction {

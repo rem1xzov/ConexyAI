@@ -674,7 +674,14 @@
     "close": "Close",
     "prev": "Previous image",
     "next": "Next image",
-    "counter": "{{index}} of {{total}}"
+    "counter": "{{index}} of {{total}}",
+    "download": "Download original",
+    "openFile": "Open {{name}}",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Fit to screen",
+    "previewOnly": "The original isn't stored on this device — showing a preview.",
+    "unavailable": "The original of this file isn't stored on this device.",
+    "openFailed": "Couldn't open the file."
   },
   "palette": {
     "openTerminal": "Open terminal",

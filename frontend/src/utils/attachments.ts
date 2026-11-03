@@ -1,5 +1,6 @@
 import type { TaskAttachment } from '../types/api';
 import type { MessageAttachment } from '../types/chat';
+import { base64ToBlob, saveOriginal } from './attachmentStore';
 
 // BUGFIX_ATTACHMENTS: добавлено 2026-09-21
 // The old whitelist accepted images and plain text-ish MIME types only, so documents (.docx,
@@ -140,13 +141,28 @@ export function imageThumbnailDataUrl(contentType: string, base64: string): Prom
   });
 }
 
-/** Builds the transcript-side representation of an attachment sent to the model. */
-export async function toMessageAttachment(attachment: TaskAttachment): Promise<MessageAttachment> {
+/**
+ * Builds the transcript-side representation of an attachment sent to the model.
+ * ATTACHMENT_ORIGINALS: the original bytes are kept aside (see attachmentStore) so the sender can
+ * open the photo in full quality or the file itself; `persist: false` keeps them in memory only.
+ */
+export async function toMessageAttachment(
+  attachment: TaskAttachment,
+  persist = true,
+): Promise<MessageAttachment> {
   const base: MessageAttachment = {
     fileName: attachment.fileName,
     contentType: attachment.contentType,
     sizeBytes: Math.round((attachment.contentBase64.length * 3) / 4),
   };
+
+  try {
+    const originalId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    await saveOriginal(originalId, base64ToBlob(attachment.contentBase64, attachment.contentType), persist);
+    base.originalId = originalId;
+  } catch (e) {
+    console.warn('[Attachments] could not keep the original', String(e));
+  }
 
   if (!attachment.contentType.toLowerCase().startsWith('image/')) return base;
 

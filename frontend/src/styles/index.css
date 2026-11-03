@@ -3471,6 +3471,21 @@ body {
   background: var(--surface-2);
   color: var(--text);
   font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease;
+}
+
+.attachment-files__chip:hover,
+.attachment-files__chip:focus-visible {
+  border-color: var(--accent, var(--muted));
+}
+
+.attachment-files__error {
+  margin: -4px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .attachment-files__name {
@@ -3496,6 +3511,24 @@ body {
   background: rgba(0, 0, 0, 0.88);
 }
 
+/* ATTACHMENT_ORIGINALS: оригинал вписан в экран; по нажатию — в натуральный размер с прокруткой. */
+.attachment-lightbox__stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.attachment-lightbox__stage--zoomed {
+  display: block;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
 .attachment-lightbox__img {
   max-width: 100%;
   max-height: 100%;
@@ -3504,8 +3537,28 @@ body {
   cursor: default;
 }
 
+.attachment-lightbox__stage--zoomed .attachment-lightbox__img {
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  border-radius: 0;
+}
+
+.attachment-lightbox__note {
+  position: absolute;
+  top: calc(24px + var(--safe-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 140px);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+  text-align: center;
+}
+
 .attachment-lightbox__close,
+.attachment-lightbox__download,
 .attachment-lightbox__nav {
+  z-index: 1;
   position: absolute;
   display: inline-flex;
   align-items: center;
@@ -3521,13 +3574,19 @@ body {
 }
 
 .attachment-lightbox__close:hover,
+.attachment-lightbox__download:hover,
 .attachment-lightbox__nav:hover {
   background: rgba(255, 255, 255, 0.22);
 }
 
 .attachment-lightbox__close {
-  top: 16px;
+  top: calc(16px + var(--safe-top, 0px));
   right: 16px;
+}
+
+.attachment-lightbox__download {
+  top: calc(16px + var(--safe-top, 0px));
+  right: 64px;
 }
 
 .attachment-lightbox__nav {
@@ -3545,7 +3604,7 @@ body {
 
 .attachment-lightbox__counter {
   position: absolute;
-  bottom: 18px;
+  bottom: calc(18px + var(--safe-bottom, 0px));
   left: 50%;
   transform: translateX(-50%);
   color: rgba(255, 255, 255, 0.85);
