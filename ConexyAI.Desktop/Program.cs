@@ -1127,7 +1127,7 @@ static async Task McpCommandAsync(LocalTools local, string arg)
                 Console.WriteLine($"  {(has ? Ui.Green_("●") : Ui.Muted("○"))} {Ui.Bold(e.Id),-12} {e.Title}");
                 Console.WriteLine("      " + Ui.Muted(e.Description));
             }
-            Ui.Info("  Нужен Node.js (команда npx). Серверы работают на вашем ПК, ключи хранятся зашифрованными.");
+            Ui.Info("  Нужен Node.js (команда npx); «Telegram (личный аккаунт)» — ещё и uv. Серверы работают на вашем ПК, ключи хранятся зашифрованными.");
             break;
         case "add" when parts.Length == 2:
             if (McpCatalog.Find(parts[1]) is not { } entry)
@@ -1182,6 +1182,12 @@ static async Task InstallFromCatalogAsync(LocalTools local, CatalogEntry entry)
     if (entry.Command == "npx" && OperatingSystem.IsWindows() && StdioMcpClient.FindNpxCli() is null)
     {
         Ui.Error("Не найден Node.js (npx). Установите: winget install OpenJS.NodeJS.LTS — или попросите агента «установи Node.js», затем повторите.");
+        return;
+    }
+    // CATALOG_UV: Telegram (личный аккаунт) ставится через uvx — без uv нечего и спрашивать ключи.
+    if (entry.Command == "uvx" && !StdioMcpClient.IsOnPath("uvx"))
+    {
+        Ui.Error("Не найден uv (команда uvx). Установите: winget install --id=astral-sh.uv — затем повторите.");
         return;
     }
 

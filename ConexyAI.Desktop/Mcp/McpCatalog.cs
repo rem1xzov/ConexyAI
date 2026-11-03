@@ -47,6 +47,13 @@ public static class McpCatalog
     /// <summary>Мост stdio ↔ удалённый MCP по HTTP с OAuth, закреплённая версия.</summary>
     public const string RemoteBridge = "mcp-remote@0.15.2";
 
+    /// <summary>
+    /// Telegram MCP (chigwell/telegram-mcp) — Python-пакет, в npm его нет: ставится через uvx прямо из GitHub
+    /// по закреплённому тегу. Ставить одноимённый пакет из PyPI нельзя — имя занято чужим проектом, и он
+    /// получил бы ключи аккаунта.
+    /// </summary>
+    public const string TelegramSource = "git+https://github.com/chigwell/telegram-mcp.git@v3.3.4";
+
     private static CatalogEntry Remote(
         string id, string title, string description, string url, string category,
         string? note = null, CatalogInput[]? inputs = null, string[]? extraArgs = null,
@@ -272,6 +279,26 @@ public static class McpCatalog
                 new("SLACK_TEAM_ID", "ID рабочего пространства (T…)", "Открывается в адресе Slack в браузере.", Secret: false),
             ],
             note: "Официальный сервер Anthropic, сейчас в архиве. " + ForeignNote),
+
+        // TELEGRAM_ACCOUNT: вход в личный аккаунт (MTProto) — видит историю и переписку целиком, в отличие от бота.
+        new("telegram", "Telegram (личный аккаунт)",
+            "Чаты, каналы и группы вашего аккаунта: читать переписку, искать по истории, отправлять и редактировать сообщения, файлы и медиа. Полный доступ, как в приложении, — нужен вход в аккаунт.",
+            "uvx", ["--from", TelegramSource, "telegram-mcp"],
+            Env: new()
+            {
+                ["TELEGRAM_API_ID"] = "${secret:TELEGRAM_API_ID}",
+                ["TELEGRAM_API_HASH"] = "${secret:TELEGRAM_API_HASH}",
+                ["TELEGRAM_SESSION_STRING"] = "${secret:TELEGRAM_SESSION_STRING}",
+            },
+            Inputs:
+            [
+                new("TELEGRAM_API_ID", "api_id (число)", "my.telegram.org → API development tools → создайте приложение; в его карточке App api_id."),
+                new("TELEGRAM_API_HASH", "api_hash", "my.telegram.org → API development tools → в карточке приложения App api_hash."),
+                new("TELEGRAM_SESSION_STRING", "session string",
+                    "В отдельном окне терминала: uvx --from \"" + TelegramSource + "\" telegram-mcp-generate-session --qr — отсканируйте QR в Telegram (Настройки → Устройства → Подключить устройство) и вставьте полученную строку. Вход по коду в самом MCP-сервере не работает: сессия нужна заранее."),
+            ],
+            Note: "Работает от вашего аккаунта: агент видит и может писать в те же чаты, что и вы. Нужен uv (winget install --id=astral-sh.uv). " + ForeignNote,
+            Category: "Мессенджеры", StartupSeconds: 180),
 
         Npx("discord", "Discord",
             "Серверы и каналы Discord от имени вашего бота: отправка сообщений, чтение, управление ролями и каналами.",

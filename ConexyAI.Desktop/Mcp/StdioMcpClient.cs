@@ -128,6 +128,28 @@ public sealed class StdioMcpClient : IAsyncDisposable
         return psi;
     }
 
+    /// <summary>
+    /// Есть ли программа в PATH. uvx на Windows запускается через cmd.exe, поэтому проверяем и .exe, и .cmd:
+    /// без этого установка из каталога падала бы невнятной ошибкой запуска.
+    /// </summary>
+    internal static bool IsOnPath(string exe)
+    {
+        var path = string.Join(';',
+            Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine),
+            Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User),
+            Environment.GetEnvironmentVariable("PATH"));
+        foreach (var dir in path.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            try
+            {
+                if (File.Exists(Path.Combine(dir, exe)) || File.Exists(Path.Combine(dir, exe + ".exe")) || File.Exists(Path.Combine(dir, exe + ".cmd")))
+                    return true;
+            }
+            catch (ArgumentException) { /* мусор в PATH */ }
+        }
+        return false;
+    }
+
     /// <summary>node.exe и npx-cli.js из установки Node.js в PATH.</summary>
     internal static (string Node, string Cli)? FindNpxCli()
     {
