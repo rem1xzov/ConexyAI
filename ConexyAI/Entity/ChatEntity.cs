@@ -40,4 +40,8 @@ public class ChatEntity
 
     /// <summary>When the link was (re)issued; null when not shared.</summary>
     public DateTime? SharedAt { get; set; }
+
+    // CHAT_HIDE: скрытый чат не показывается в общем списке, только в «Настройки → Общие → Скрытые чаты».
+    /// <summary>The owner hid the chat from the chat list; it stays fully usable.</summary>
+    public bool IsHidden { get; set; }
 }

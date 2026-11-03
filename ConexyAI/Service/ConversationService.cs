@@ -125,6 +125,10 @@ public interface IConversationService
     /// </summary>
     Task<int> SetPinnedAsync(Guid userId, Guid chatId, bool isPinned, CancellationToken ct = default);
 
+    // CHAT_HIDE
+    /// <summary>Hides or unhides one chat of the user; false when the user owns no such chat.</summary>
+    Task<bool> SetHiddenAsync(Guid userId, Guid chatId, bool isHidden, CancellationToken ct = default);
+
     // CHAT_SYNC_COMPLETE: добавлено 2026-09-24 — ревью H8.
     /// <summary>Every chat id the user has stored history for (complete list, ids only).</summary>
     Task<IReadOnlyList<Guid>> GetChatIdsAsync(Guid userId, CancellationToken ct = default);
@@ -498,6 +502,10 @@ public class ConversationService : IConversationService
     // CHAT_PIN: добавлено 2026-09-23
     public Task<int> SetPinnedAsync(Guid userId, Guid chatId, bool isPinned, CancellationToken ct = default) =>
         _chatHistory.SetPinnedAsync(userId, chatId, isPinned, ct);
+
+    // CHAT_HIDE
+    public Task<bool> SetHiddenAsync(Guid userId, Guid chatId, bool isHidden, CancellationToken ct = default) =>
+        _chatHistory.SetHiddenAsync(userId, chatId, isHidden, ct);
 
     // CONTEXT_DIAGNOSTICS: moved out of the agent runner so every path logs the same shape. Without
     // it there is no way to tell "history was lost" from "the model ignored it".

@@ -351,6 +351,24 @@ public class ConexyController : ControllerBase
         return Ok(new { id = chatId, isPinned = dto.IsPinned });
     }
 
+    // CHAT_HIDE: скрыть чат из общего списка (он остаётся доступен в «Настройки → Общие → Скрытые чаты»).
+    /// <summary>Hides or unhides one chat; the flag follows the user to every device.</summary>
+    [HttpPatch("chats/{chatId:guid}/hide")]
+    public async Task<IActionResult> HideChat(Guid chatId, [FromBody] ChatHideDto? dto, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        if (dto is null)
+            return BadRequest(new { error = "A boolean 'isHidden' is required." });
+
+        if (!await _conversation.SetHiddenAsync(userId, chatId, dto.IsHidden, ct))
+            return NotFound(new { error = "Chat not found." });
+
+        _logger.LogInformation("Chat {ChatId} {State} by user {UserId}.", chatId, dto.IsHidden ? "hidden" : "unhidden", userId);
+        return Ok(new { id = chatId, isHidden = dto.IsHidden });
+    }
+
     /// <summary>
     /// Chat list projection. The chat <em>kind</em> is inferred from the workspace: a chat that has
     /// one on disk is a conexy-coder (agent) chat, because the workspace is keyed by the chat id and
@@ -370,7 +388,8 @@ public class ConexyController : ControllerBase
             // CHAT_PIN: закрепление приезжает вместе с чатом, чтобы порядок сайдбара был общим.
             chat.IsPinned,
             // CHAT_OWNERSHIP: модель последнего хода — Cowork открывается как Cowork (ревью M18).
-            chat.Model);
+            chat.Model,
+            chat.IsHidden);
     }
 
     /// <summary>

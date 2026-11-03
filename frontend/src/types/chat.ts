@@ -188,6 +188,8 @@ export interface ChatSession {
   messages: ChatMessage[];
   createdAt: number;
   isPinned?: boolean;
+  // CHAT_HIDE: скрытый чат есть только в «Настройки → Общие → Скрытые чаты».
+  isHidden?: boolean;
   // CHAT_DELETE: добавлено 2026-09-23
   /**
    * True once this chat exists on the server (it was created by a sync, or a turn of it was

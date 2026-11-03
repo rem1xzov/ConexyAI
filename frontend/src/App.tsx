@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
-import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, getSubscriptionUsage, resetLimits, getTaskStatus, runTask, createChatShareLink, type VerificationChallenge } from './api/conexyApi';
+import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, setChatHidden, getSubscriptionUsage, resetLimits, getTaskStatus, runTask, createChatShareLink, type VerificationChallenge } from './api/conexyApi';
 // YOOKASSA: добавлено 2026-09-27 — создание платежа и окно возврата после оплаты.
 import { createPayment } from './api/paymentsApi';
 // USER_NAME: имя из персонализации подписывает приветствие на стартовом экране.
@@ -655,6 +655,8 @@ export default function App() {
   // CHAT_PIN: то же самое для закрепления — иначе ответ синхронизации, ушедший до переключения,
   // вернул бы старый флаг и чат «отклеился» бы на глазах.
   const recentPinsRef = useRef(new Map<string, { isPinned: boolean; at: number }>());
+  // CHAT_HIDE: время последнего скрытия/показа — синхронизация, ушедшая раньше, его не отменяет.
+  const recentHidesRef = useRef(new Map<string, number>());
   // CHAT_PIN_PENDING: закрепления, которые сервер ещё не знает (у чата нет ни одной строки истории:
   // `remote` ставится сразу после отправки задачи, а история пишется в конце хода). Такой пин
   // остаётся локальным и повторяется при следующей сверке — иначе сервер вернул бы false и
@@ -1579,6 +1581,8 @@ export default function App() {
       const serverTitles = new Map(chats.map((c) => [lower(c.id), c.title ?? null]));
       // CHAT_PIN: серверное закрепление — то же самое, но для порядка в сайдбаре.
       const serverPins = new Map(chats.map((c) => [lower(c.id), c.isPinned]));
+      // CHAT_HIDE: скрытие чата тоже общее для всех устройств.
+      const serverHidden = new Map(chats.map((c) => [lower(c.id), c.isHidden ?? false]));
 
       const snapshot = sessionsRef.current;
       const known = new Set(snapshot.map((s) => lower(s.id)));
@@ -1663,13 +1667,19 @@ export default function App() {
             && pendingPinsRef.current.get(s.id) === undefined
             && !(recentPin && recentPin.at > syncStartedAt);
 
-          if (titleWins || pinWins) {
+          const hiddenOnServer = serverHidden.get(key);
+          const recentHide = recentHidesRef.current.get(s.id);
+          const hideWins = hiddenOnServer !== undefined && hiddenOnServer !== (s.isHidden ?? false)
+            && !(recentHide && recentHide > syncStartedAt);
+
+          if (titleWins || pinWins || hideWins) {
             if (titleWins) retitled += 1;
             if (pinWins) repinned += 1;
             next = {
               ...next,
               ...(titleWins ? { title: serverTitle as string } : {}),
               ...(pinWins ? { isPinned: serverPin } : {}),
+              ...(hideWins ? { isHidden: hiddenOnServer } : {}),
             };
           }
 
@@ -1861,7 +1871,9 @@ export default function App() {
   // mode is locked in (the header keeps a passive badge so the user cannot forget it).
   const chatEmpty = (activeSession?.messages.length ?? 0) === 0 && !activeSession?.needsTranscript;
   // Incognito chats are in-memory only, so they never reach the sidebar or localStorage.
-  const visibleSessions = sessions.filter((s) => !s.incognito);
+  // CHAT_HIDE: скрытые чаты в сайдбар не попадают — только в «Настройки → Общие → Скрытые чаты».
+  const visibleSessions = sessions.filter((s) => !s.incognito && !s.isHidden);
+  const hiddenSessions = sessions.filter((s) => !s.incognito && s.isHidden);
 
   // CLAUDE_LAYOUT: добавлено 2026-09-20
   // Every tab gets the centred start screen while its conversation is empty; the greeting and
@@ -2244,6 +2256,39 @@ export default function App() {
       showToast(t('chat.pinFailed'));
       setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, isPinned: !next } : s)));
     }
+  }
+
+  // CHAT_HIDE: скрыть чат из общего списка / вернуть его. Флаг хранится на сервере (все устройства).
+  async function handleHideSession(id: string, hidden: boolean) {
+    const session = sessionsRef.current.find((s) => s.id === id);
+    if (!session || session.incognito) return;
+    const shouldAskServer = session.remote && GUID_LIKE.test(id);
+
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, isHidden: hidden } : s)));
+    recentHidesRef.current.set(id, Date.now());
+    // Скрытый открытый чат уходит с экрана — иначе кажется, что ничего не произошло.
+    if (hidden && activeIdRef.current === id) handleNewSession(session.kind ?? 'chat');
+    showToast(hidden ? t('chat.hidden') : t('chat.unhidden'));
+
+    if (!shouldAskServer) return;
+    try {
+      await setChatHidden(id, hidden);
+      recentHidesRef.current.set(id, Date.now());
+    } catch (e) {
+      console.warn('[ChatHide] could not update the chat on the server', { id, error: String(e) });
+      showToast(t('chat.hideFailed'));
+      setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, isHidden: !hidden } : s)));
+    }
+  }
+
+  // CHAT_HIDE: открыть скрытый чат из настроек — он работает как обычный, но в список не возвращается.
+  function handleOpenHiddenSession(id: string) {
+    guardLeave(() => {
+      const target = sessionsRef.current.find((s) => s.id === id);
+      if (target?.kind && target.kind !== activeTab) handleTabChange(target.kind);
+      openSession(id);
+      setSettingsOpen(false);
+    });
   }
 
   // CHAT_RENAME: добавлено 2026-09-23 — имя сохраняется на сервере, чтобы приехать на другое устройство.
@@ -2928,6 +2973,7 @@ export default function App() {
         onNewChat={handleNewChat}
         onShare={handleShareSession}
         onPin={handlePinSession}
+        onHide={(id, hidden) => void handleHideSession(id, hidden)}
         onRename={handleRenameSession}
         onDelete={(id) => guardLeave(() => void handleDeleteSession(id))}
       />
@@ -3188,6 +3234,7 @@ export default function App() {
         onSearchChange={setSearch}
         onShareSession={handleShareSession}
         onPinSession={handlePinSession}
+        onHideSession={(id, hidden) => void handleHideSession(id, hidden)}
         onRenameSession={handleRenameSession}
         onDeleteSession={(id) => (id === activeId ? guardLeave(() => void handleDeleteSession(id)) : void handleDeleteSession(id))}
         user={displayUser}
@@ -3566,6 +3613,9 @@ export default function App() {
           usage={usage}
           onLimitsReset={handleLimitsReset}
           onPreferencesSaved={(p: UserPreferences) => setPreferredName(p.name.trim() ? p.name.trim() : null)}
+          hiddenChats={hiddenSessions}
+          onOpenHiddenChat={handleOpenHiddenSession}
+          onUnhideChat={(id) => void handleHideSession(id, false)}
         />
       )}
 

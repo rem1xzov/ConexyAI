@@ -40,7 +40,8 @@ import { getSubscriptionUsage } from '../api/conexyApi';
 import { humanError } from '../utils/humanError';
 import { setPlainCode, usePlainCode } from '../utils/displayPrefs';
 import { ConfirmDialog } from './Dialog';
-import { CloseIcon, TrashIcon } from './Icons';
+import { ChevronDownIcon, CloseIcon, EyeIcon, EyeOffIcon, TrashIcon } from './Icons';
+import type { ChatSession } from '../types/chat';
 // PHONE_AGENT: раздел «Телефон» — только в Android-приложении с плагином PhoneAgent.
 import {
   isPhoneAgentAvailable,
@@ -72,6 +73,75 @@ interface SettingsModalProps {
   onLimitsReset?: () => Promise<void> | void;
   // USER_NAME: сохранённые настройки — приветствие на старте обновляется без перезагрузки.
   onPreferencesSaved?: (prefs: UserPreferences) => void;
+  // CHAT_HIDE: скрытые чаты живут только здесь — в «Общих».
+  hiddenChats?: ChatSession[];
+  onOpenHiddenChat?: (id: string) => void;
+  onUnhideChat?: (id: string) => void;
+}
+
+// CHAT_HIDE: список скрытых чатов; нажатие открывает чат как обычный, «Показать» возвращает его в список.
+function HiddenChatsSection({
+  chats,
+  onOpen,
+  onUnhide,
+}: {
+  chats: ChatSession[];
+  onOpen?: (id: string) => void;
+  onUnhide?: (id: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const lastActive = (s: ChatSession) =>
+    s.messages.length > 0 ? s.messages[s.messages.length - 1].createdAt : s.createdAt;
+  const sorted = [...chats].sort((a, b) => lastActive(b) - lastActive(a));
+
+  return (
+    <div className="settings-modal__section">
+      <button
+        type="button"
+        className="hidden-chats__toggle"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+      >
+        <EyeOffIcon size={16} />
+        <span className="hidden-chats__title">{t('hiddenChats.title')}</span>
+        <span className="hidden-chats__count">{chats.length}</span>
+        <ChevronDownIcon size={16} className={expanded ? 'rotate-180' : ''} />
+      </button>
+      {expanded && (
+        sorted.length === 0 ? (
+          <p className="hidden-chats__empty">{t('hiddenChats.empty')}</p>
+        ) : (
+          <ul className="hidden-chats__list">
+            {sorted.map((s) => (
+              <li key={s.id} className="hidden-chats__item">
+                <button
+                  type="button"
+                  className="hidden-chats__open"
+                  onClick={() => onOpen?.(s.id)}
+                  title={t('hiddenChats.open')}
+                >
+                  <span className="hidden-chats__name">{s.title}</span>
+                  <span className="hidden-chats__kind">
+                    {t(s.kind === 'projects' ? 'sidebar.tabs.agent' : s.kind === 'students' ? 'sidebar.tabs.students' : 'sidebar.tabs.chat')}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="hidden-chats__unhide"
+                  onClick={() => onUnhide?.(s.id)}
+                  title={t('sidebar.unhide')}
+                  aria-label={t('sidebar.unhide')}
+                >
+                  <EyeIcon size={16} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )
+      )}
+    </div>
+  );
 }
 
 const THEMES: { value: Theme; key: string }[] = [
@@ -1346,6 +1416,9 @@ export function SettingsModal({
   usage = null,
   onLimitsReset,
   onPreferencesSaved,
+  hiddenChats = [],
+  onOpenHiddenChat,
+  onUnhideChat,
 }: SettingsModalProps) {
   const { t } = useTranslation();
   const [section, setSection] = useState<SettingsSection>(initialSection);
@@ -1442,6 +1515,8 @@ export function SettingsModal({
                     ))}
                   </div>
                 </div>
+
+                <HiddenChatsSection chats={hiddenChats} onOpen={onOpenHiddenChat} onUnhide={onUnhideChat} />
 
                 {/* LEGAL_DOCS: добавлено 2026-09-25 — документы должны быть доступны пользователю
                     в любой момент, а не только при регистрации и оплате. */}

@@ -3499,6 +3499,110 @@ body {
   color: var(--muted);
 }
 
+/* ---------- CHAT_HIDE: Settings → General → Hidden chats ---------- */
+.hidden-chats__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.hidden-chats__toggle svg:last-child {
+  transition: transform 0.15s ease;
+}
+
+.hidden-chats__title {
+  flex: 1 1 auto;
+  font-weight: 500;
+}
+
+.hidden-chats__count {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.hidden-chats__empty {
+  margin: 8px 2px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.hidden-chats__list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.hidden-chats__item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 8px;
+}
+
+.hidden-chats__item:hover {
+  background: var(--surface-2);
+}
+
+.hidden-chats__open {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hidden-chats__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hidden-chats__kind {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.hidden-chats__unhide {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.hidden-chats__unhide:hover {
+  color: var(--text);
+}
+
 /* ---------- Attachment lightbox ---------- */
 .attachment-lightbox {
   position: fixed;

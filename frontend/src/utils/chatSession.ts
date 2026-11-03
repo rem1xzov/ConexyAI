@@ -132,6 +132,7 @@ export function sessionFromServer(
     messages,
     // CHAT_PIN: закрепление, сделанное на другом устройстве, приезжает вместе с чатом.
     isPinned: chat.isPinned,
+    isHidden: chat.isHidden ?? false,
     // A stub without messages is ordered by its last activity (the sidebar falls back to createdAt).
     createdAt: messages.length > 0 ? messages[0].createdAt : (Number.isFinite(lastActivity) ? lastActivity : Date.now()),
     needsTranscript: transcript ? undefined : true,

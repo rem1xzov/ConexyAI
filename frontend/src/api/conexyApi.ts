@@ -449,6 +449,11 @@ export async function setChatPinned(chatId: string, isPinned: boolean): Promise<
   await http.patch(`/conexy/chats/${chatId}/pin`, { isPinned });
 }
 
+// CHAT_HIDE: скрыть чат из общего списка или вернуть его туда.
+export async function setChatHidden(chatId: string, isHidden: boolean): Promise<void> {
+  await http.patch(`/conexy/chats/${chatId}/hide`, { isHidden });
+}
+
 export async function getWorkspaceFiles(sessionId: string): Promise<WorkspaceListing> {
   const { data } = await http.get<WorkspaceListing>(`/conexy/workspace/${sessionId}/files`);
   return data;

@@ -33,6 +33,9 @@ namespace ConexyAI.Migrations
                     b.Property<DateTime?>("DeletedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<bool>("IsHidden")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("Kind")
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");

@@ -81,6 +81,7 @@ await RunAsync("chat kind: the tab mode round-trips and junk is dropped", TestCh
 await RunAsync("chat delete: physical, owner-scoped, idempotent", TestChatDeleteAsync);
 await RunAsync("chat rename: owner-scoped and survives later turns", TestChatRenameAsync);
 await RunAsync("chat pin: owner-scoped and survives later turns", TestChatPinAsync);
+await RunAsync("chat hide: owner-scoped, reaches the chat list and can be undone", TestChatHideAsync);
 await RunAsync("ide files: create -> content -> save -> rename -> delete", TestIdeFileCrudAsync);
 await RunAsync("ide files: path traversal is blocked (shared validator)", TestIdeFilePathTraversalBlockedAsync);
 await RunAsync("ide files: manual save invalidates agent undo stack", TestManualSaveInvalidatesEditorUndoAsync);
@@ -1264,6 +1265,35 @@ async Task TestChatRenameAsync()
         "a new turn must not overwrite the chosen name");
 }
 
+// CHAT_HIDE: скрыть чат может только владелец; скрытый чат остаётся в ответе списка (для «Скрытых чатов»).
+async Task TestChatHideAsync()
+{
+    await using var context = CreateContext("chathide_" + Guid.NewGuid().ToString("N"));
+    var (service, _, _) = CreateConversationService(context);
+    var owner = Guid.NewGuid();
+    var stranger = Guid.NewGuid();
+    var chatId = Guid.NewGuid();
+
+    await service.PersistTurnAsync(
+        new ConversationContext(Guid.NewGuid(), chatId, owner, "SYSTEM", "вопрос"),
+        "ответ",
+        TurnOutcome.Completed);
+
+    Assert(!(await service.GetChatsAsync(owner, 50)).Single(c => c.ChatId == chatId).IsHidden,
+        "a fresh chat must not be hidden");
+    Assert(!await service.SetHiddenAsync(stranger, chatId, true), "a foreign hide must be refused");
+    Assert(!(await service.GetChatsAsync(owner, 50)).Single(c => c.ChatId == chatId).IsHidden,
+        "the owner's chat must stay visible after a foreign attempt");
+
+    Assert(await service.SetHiddenAsync(owner, chatId, true), "the owner can hide the chat");
+    Assert((await service.GetChatsAsync(owner, 50)).Single(c => c.ChatId == chatId).IsHidden,
+        "the hidden flag must reach the chat list");
+
+    Assert(await service.SetHiddenAsync(owner, chatId, false), "the owner can unhide the chat");
+    Assert(!(await service.GetChatsAsync(owner, 50)).Single(c => c.ChatId == chatId).IsHidden,
+        "an unhide must reach the chat list");
+}
+
 // CHAT_PIN: добавлено 2026-09-23 — закрепление чата живёт на сервере и доступно только владельцу.
 // Для каждого чата берётся максимум по строкам, поэтому закрепление не слетает от новых сообщений,
 // а снимается только явным unpin, который чистит все строки.
@@ -1968,6 +1998,9 @@ sealed class StaticConversationService : IConversationService
     // CHAT_PIN: и закрепления тоже.
     public Task<int> SetPinnedAsync(Guid userId, Guid chatId, bool isPinned, CancellationToken ct = default) =>
         Task.FromResult(0);
+
+    public Task<bool> SetHiddenAsync(Guid userId, Guid chatId, bool isHidden, CancellationToken ct = default) =>
+        Task.FromResult(false);
 }
 
 sealed class FakeHttpMessageHandler : HttpMessageHandler

@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatSession } from '../types/chat';
 import { ConfirmDialog, PromptDialog } from './Dialog';
-import { EditIcon, PinIcon, PlusIcon, ShareIcon, ThreeDotsIcon, TrashIcon } from './Icons';
+import { EditIcon, EyeIcon, EyeOffIcon, PinIcon, PlusIcon, ShareIcon, ThreeDotsIcon, TrashIcon } from './Icons';
 
 // CHAT_ACTIONS: добавлено 2026-09-29 — действия шапки чата (новый чат, меню чата). Показываются,
 // только когда в чате есть хотя бы одно сообщение; по умолчанию их нет. Меню повторяет то, что уже
@@ -12,6 +12,8 @@ interface ChatHeaderActionsProps {
   onNewChat: () => void;
   onShare: (session: ChatSession) => void;
   onPin: (id: string) => void;
+  // CHAT_HIDE: скрыть чат или вернуть скрытый в общий список.
+  onHide: (id: string, hidden: boolean) => void;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
 }
@@ -21,6 +23,7 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
   onNewChat,
   onShare,
   onPin,
+  onHide,
   onRename,
   onDelete,
 }: ChatHeaderActionsProps) {
@@ -90,6 +93,24 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
               <PinIcon size={16} className="chats__menu-icon" />{' '}
               {session.isPinned ? t('sidebar.unpin') : t('sidebar.pin')}
             </button>
+            {!session.incognito && (
+              <button
+                type="button"
+                role="menuitem"
+                className="chats__menu-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onHide(session.id, !session.isHidden);
+                }}
+              >
+                {session.isHidden ? (
+                  <EyeIcon size={16} className="chats__menu-icon" />
+                ) : (
+                  <EyeOffIcon size={16} className="chats__menu-icon" />
+                )}{' '}
+                {session.isHidden ? t('sidebar.unhide') : t('sidebar.hide')}
+              </button>
+            )}
             <button
               type="button"
               role="menuitem"

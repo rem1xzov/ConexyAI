@@ -125,6 +125,8 @@ export interface ChatSummary {
   lastMessagePreview?: string | null;
   // CHAT_PIN: добавлено 2026-09-23 — закреплён ли чат наверху сайдбара (общий флаг для всех устройств).
   isPinned: boolean;
+  // CHAT_HIDE: чат скрыт из общего списка (нет у старого бэкенда).
+  isHidden?: boolean;
   // CHAT_MODEL_SYNC: добавлено 2026-09-24 (M18, контракт C-3) — последняя модель чата:
   // "ConexyV1-flash" | "ConexyV1-pro" | "conexy-coder" | "conexy-cowork"; null у старых строк.
   model?: string | null;

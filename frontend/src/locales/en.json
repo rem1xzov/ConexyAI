@@ -124,6 +124,9 @@
     "deleteFailed": "Could not delete the chat on the server — it is still in the list. Try again.",
     "renameFailed": "Could not save the name on the server — the chat was not renamed.",
     "pinFailed": "Could not pin the chat on the server — the order was not changed.",
+    "hidden": "Chat hidden. Find it in Settings → General → Hidden chats.",
+    "unhidden": "The chat is back in the list.",
+    "hideFailed": "Could not update the chat on the server.",
     "shareTitleFallback": "A ConexyAI conversation"
   },
   "sidebar": {
@@ -150,6 +153,8 @@
     "shareUnavailable": "This chat is not stored on the server yet, so there is no link to share",
     "pin": "Pin",
     "unpin": "Unpin",
+    "hide": "Hide chat",
+    "unhide": "Show in chat list",
     "pinned": "Pinned",
     "rename": "Rename",
     "delete": "Delete",
@@ -668,6 +673,11 @@
     "waitForUpload": "Wait for the files to finish uploading — they can't be sent yet.",
     "attachmentsTooLarge": "These files are too large to send. Reduce their size or attach fewer files — for example, send them one at a time.",
     "sendFailed": "Couldn't send the message. Please try again."
+  },
+  "hiddenChats": {
+    "title": "Hidden chats",
+    "empty": "No hidden chats. Hide a chat from its menu in the chat list.",
+    "open": "Open chat"
   },
   "attachment": {
     "view": "Open full size",

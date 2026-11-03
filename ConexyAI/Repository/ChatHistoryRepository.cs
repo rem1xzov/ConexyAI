@@ -76,7 +76,13 @@ public class ChatHistoryRepository : IChatHistoryRepository
             .Select(m => m.ChatId)
             .Distinct()
             .ToListAsync(ct);
-        var missingPinned = pinnedIds.Except(rows.Select(r => r.ChatId)).ToList();
+        // CHAT_HIDE: скрытые чаты тоже входят всегда — иначе старый скрытый чат не попал бы в список «Скрытые чаты».
+        var hiddenIds = await _context.Chats
+            .AsNoTracking()
+            .Where(c => c.UserId == userId && c.IsHidden && c.DeletedAt == null)
+            .Select(c => c.Id)
+            .ToListAsync(ct);
+        var missingPinned = pinnedIds.Union(hiddenIds).Except(rows.Select(r => r.ChatId)).ToList();
         if (missingPinned.Count > 0)
         {
             rows.AddRange(await QueryChatSummariesAsync(userId, excludeChatId: null, missingPinned.Count, ct, missingPinned));
@@ -86,14 +92,15 @@ public class ChatHistoryRepository : IChatHistoryRepository
         var models = await _context.Chats
             .AsNoTracking()
             .Where(c => c.UserId == userId && ids.Contains(c.Id))
-            .Select(c => new { c.Id, c.Model })
-            .ToDictionaryAsync(c => c.Id, c => c.Model, ct);
+            .Select(c => new { c.Id, c.Model, c.IsHidden })
+            .ToDictionaryAsync(c => c.Id, ct);
 
         return rows
             .OrderByDescending(r => r.LastActivityAt)
             .Select(r => new ChatListSummary(
                 r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind, r.Title, r.IsPinned,
-                models.GetValueOrDefault(r.ChatId)))
+                models.GetValueOrDefault(r.ChatId)?.Model,
+                models.GetValueOrDefault(r.ChatId)?.IsHidden ?? false))
             .ToList();
     }
 
@@ -105,12 +112,13 @@ public class ChatHistoryRepository : IChatHistoryRepository
             return null;
 
         var r = rows[0];
-        var model = await _context.Chats
+        var chat = await _context.Chats
             .AsNoTracking()
             .Where(c => c.Id == chatId && c.UserId == userId)
-            .Select(c => c.Model)
+            .Select(c => new { c.Model, c.IsHidden })
             .FirstOrDefaultAsync(ct);
-        return new ChatListSummary(r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind, r.Title, r.IsPinned, model);
+        return new ChatListSummary(r.ChatId, r.LastActivityAt, r.MessageCount, r.FirstUser, r.LastAssistant, r.Kind, r.Title, r.IsPinned,
+            chat?.Model, chat?.IsHidden ?? false);
     }
 
     // SHARE_PUBLIC: добавлено 2026-10-01
@@ -354,5 +362,30 @@ public class ChatHistoryRepository : IChatHistoryRepository
 
         await _context.SaveChangesAsync(ct);
         return rows.Count;
+    }
+
+    // CHAT_HIDE: флаг живёт в строке владельца чата: чужой или удалённый чат не меняется.
+    public async Task<bool> SetHiddenAsync(Guid userId, Guid chatId, bool isHidden, CancellationToken ct = default)
+    {
+        var chat = await _context.Chats
+            .FirstOrDefaultAsync(c => c.Id == chatId && c.UserId == userId && c.DeletedAt == null, ct);
+        if (chat is null)
+        {
+            // Чаты из времён до таблицы владельцев: строки chat нет, но история этого пользователя есть.
+            var claimedByAnyone = await _context.Chats.AnyAsync(c => c.Id == chatId, ct);
+            var hasOwnHistory = await _context.ChatMessages.AnyAsync(m => m.ChatId == chatId && m.UserId == userId, ct);
+            if (claimedByAnyone || !hasOwnHistory)
+                return false;
+            chat = new ChatEntity { Id = chatId, UserId = userId };
+            _context.Chats.Add(chat);
+        }
+
+        if (chat.IsHidden != isHidden || _context.Entry(chat).State == EntityState.Added)
+        {
+            chat.IsHidden = isHidden;
+            chat.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync(ct);
+        }
+        return true;
     }
 }

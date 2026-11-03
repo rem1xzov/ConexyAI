@@ -24,7 +24,9 @@ public record ChatSummaryDto(
     bool IsPinned,
     // CHAT_OWNERSHIP: добавлено 2026-09-24 — модель последнего хода ("conexy-cowork" и т.п.), чтобы
     // чат, открытый на другом устройстве, вернулся в свой режим (ревью M18).
-    string? Model = null);
+    string? Model = null,
+    // CHAT_HIDE: скрытые чаты не показываются в сайдбаре ни на одном устройстве.
+    bool IsHidden = false);
 
 // CHAT_SYNC_COMPLETE: добавлено 2026-09-24 — ревью H8.
 /// <summary>
@@ -47,6 +49,10 @@ public record ChatRenameDto(string? Title);
 // CHAT_PIN: добавлено 2026-09-23
 /// <summary>Body of <c>PATCH /api/conexy/chats/{id}/pin</c>: pin or unpin one chat.</summary>
 public record ChatPinDto(bool IsPinned);
+
+// CHAT_HIDE
+/// <summary>Body of <c>PATCH /api/conexy/chats/{id}/hide</c>: hide or unhide one chat.</summary>
+public record ChatHideDto(bool IsHidden);
 
 // SHARE_PUBLIC: добавлено 2026-10-01
 /// <summary>

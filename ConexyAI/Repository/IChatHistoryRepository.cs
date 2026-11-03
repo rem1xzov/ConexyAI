@@ -70,6 +70,10 @@ public interface IChatHistoryRepository
     /// </summary>
     Task<int> SetPinnedAsync(Guid userId, Guid chatId, bool isPinned, CancellationToken ct = default);
 
+    // CHAT_HIDE
+    /// <summary>Hides or unhides a live chat of the user; false when the user owns no such chat.</summary>
+    Task<bool> SetHiddenAsync(Guid userId, Guid chatId, bool isHidden, CancellationToken ct = default);
+
     // CHAT_SHARE_LINK: добавлено 2026-09-24 — чат по ссылке может быть старше первых N из списка.
     /// <summary>One chat of the user as the chat list shows it, or null when the user has no such chat.</summary>
     Task<ChatListSummary?> GetChatAsync(Guid userId, Guid chatId, CancellationToken ct = default);
@@ -128,7 +132,9 @@ public sealed record ChatListSummary(
     // CHAT_PIN: закреплён ли чат наверху сайдбара; сюда же приезжает закрепление с другого устройства.
     bool IsPinned,
     // CHAT_OWNERSHIP: модель последнего хода (из таблицы chat), null для старых чатов.
-    string? Model = null);
+    string? Model = null,
+    // CHAT_HIDE: чат скрыт из общего списка.
+    bool IsHidden = false);
 
 // SHARE_PUBLIC: добавлено 2026-10-01
 /// <summary>Публично расшаренный чат, открытый по токену: только на чтение.</summary>

@@ -13,6 +13,7 @@ import {
   PinIcon,
   EditIcon,
   TrashIcon,
+  EyeOffIcon,
 } from './Icons';
 
 interface SidebarProps {
@@ -28,6 +29,8 @@ interface SidebarProps {
   onSearchChange: (value: string) => void;
   onShareSession: (session: ChatSession) => void;
   onPinSession: (id: string) => void;
+  // CHAT_HIDE: скрыть чат из списка (вернуть — в настройках или в меню самого чата).
+  onHideSession: (id: string, hidden: boolean) => void;
   onRenameSession: (id: string, title: string) => void;
   onDeleteSession: (id: string) => void;
   // EMAIL_AUTH: добавлено 2026-09-19
@@ -72,6 +75,7 @@ export function Sidebar(props: SidebarProps) {
     onSearchChange,
     onShareSession,
     onPinSession,
+    onHideSession,
     onRenameSession,
     onDeleteSession,
     user,
@@ -284,6 +288,15 @@ export function Sidebar(props: SidebarProps) {
                           }}
                         >
                           <PinIcon size={16} className="chats__menu-icon" /> {s.isPinned ? t('sidebar.unpin') : t('sidebar.pin')}
+                        </button>
+                        <button
+                          className="chats__menu-item"
+                          onClick={() => {
+                            onHideSession(s.id, true);
+                            setOpenMenuId(null);
+                          }}
+                        >
+                          <EyeOffIcon size={16} className="chats__menu-icon" /> {t('sidebar.hide')}
                         </button>
                         <button className="chats__menu-item" onClick={() => startRename(s)}>
                           <EditIcon size={16} className="chats__menu-icon" /> {t('sidebar.rename')}
