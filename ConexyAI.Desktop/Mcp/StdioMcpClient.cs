@@ -134,10 +134,36 @@ public sealed class StdioMcpClient : IAsyncDisposable
         psi.StandardOutputEncoding = new UTF8Encoding(false);
         psi.StandardInputEncoding = new UTF8Encoding(false);
         psi.StandardErrorEncoding = new UTF8Encoding(false);
+        // AGENT_PROXY: локальные MCP-серверы ходят в интернет через тот же прокси, что и агент (иначе
+        // заблокированные в РФ сервисы не открываются). Переменные сервера из mcp.json важнее.
+        if (ProxyUrl is { } proxy)
+        {
+            foreach (var name in new[] { "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY" })
+                psi.Environment[name] = proxy;
+            psi.Environment["NO_PROXY"] = psi.Environment["no_proxy"] = "localhost,127.0.0.1,::1";
+            // Node 24+: fetch/undici берёт прокси из окружения только с этим флагом.
+            psi.Environment["NODE_USE_ENV_PROXY"] = "1";
+            // Telegram (MTProto) окружение HTTP_PROXY не читает — ему свои переменные.
+            if (_entry.CatalogId == "telegram" && Uri.TryCreate(proxy, UriKind.Absolute, out var p))
+            {
+                psi.Environment["TELEGRAM_PROXY_TYPE"] = p.Scheme.StartsWith("socks5", StringComparison.Ordinal) ? "socks5" : p.Scheme == "socks4" ? "socks4" : "http";
+                psi.Environment["TELEGRAM_PROXY_HOST"] = p.Host;
+                psi.Environment["TELEGRAM_PROXY_PORT"] = p.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                psi.Environment["TELEGRAM_PROXY_RDNS"] = "true";
+                var user = p.UserInfo.Split(':', 2);
+                if (user[0].Length > 0)
+                    psi.Environment["TELEGRAM_PROXY_USERNAME"] = Uri.UnescapeDataString(user[0]);
+                if (user.Length > 1)
+                    psi.Environment["TELEGRAM_PROXY_PASSWORD"] = Uri.UnescapeDataString(user[1]);
+            }
+        }
         foreach (var (k, v) in _entry.Env ?? [])
             psi.Environment[k] = _entry.Expand(v);
         return psi;
     }
+
+    /// <summary>AGENT_PROXY: прокси для локальных MCP (свой /proxy или сервера); задаётся перед запуском серверов.</summary>
+    public static string? ProxyUrl { get; set; }
 
     /// <summary>
     /// Есть ли программа в PATH. uvx на Windows запускается через cmd.exe, поэтому проверяем и .exe, и .cmd:

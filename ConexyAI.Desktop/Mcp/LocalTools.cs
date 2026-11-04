@@ -52,6 +52,9 @@ public sealed class LocalTools : IAsyncDisposable
         if (restart)
             await StopAllAsync();
 
+        // AGENT_PROXY: прокси для запускаемых серверов (свой /proxy или сервера у админа).
+        StdioMcpClient.ProxyUrl = await TelegramLogin.ResolveProxyAsync(ct);
+
         var config = McpConfig.Load();
         var wanted = config.Servers
             .Where(p => !p.Value.Disabled && !string.IsNullOrWhiteSpace(p.Value.Command))
