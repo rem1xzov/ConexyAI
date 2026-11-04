@@ -231,7 +231,7 @@ public sealed class WindowTools
         return result;
     }
 
-    private static void BringToFront(IntPtr hwnd)
+    internal static void BringToFront(IntPtr hwnd)
     {
         if (IsIconic(hwnd))
             ShowWindow(hwnd, 9); // SW_RESTORE
@@ -317,7 +317,7 @@ public sealed class WindowTools
         return (EncodePng(rgb, outW, outH), note);
     }
 
-    private static byte[] EncodePng(byte[] rgb, int width, int height)
+    internal static byte[] EncodePng(byte[] rgb, int width, int height)
     {
         using var raw = new MemoryStream();
         using (var z = new ZLibStream(raw, CompressionLevel.Fastest, leaveOpen: true))

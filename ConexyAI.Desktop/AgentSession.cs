@@ -350,8 +350,46 @@ public sealed class AgentSession : IAsyncDisposable
         Ui.AgentStatus(agentId, Prop(payload, "agentRole") ?? agentId, Prop(payload, "stage") ?? string.Empty, Prop(payload, "label") ?? string.Empty);
     }
 
+    private async Task<ToolResult> TelegramLoginToolAsync(string tool, string argumentsJson)
+    {
+        try
+        {
+            var args = ToolArgs.Parse(argumentsJson);
+            var ct = _lifetime.Token;
+            return tool switch
+            {
+                "telegram_login_start" => ToolResult.Ok(await Mcp.TelegramLogin.RemoteStartAsync(
+                    args.Required("api_id", tool), args.Required("api_hash", tool), ct)),
+                "telegram_login_status" => ToolResult.Ok(await Mcp.TelegramLogin.RemoteStatusAsync(_device.Local, args.Int("wait_seconds") ?? 20, ct)),
+                "telegram_login_password" => ToolResult.Ok(Mcp.TelegramLogin.RemotePassword(args.Required("password", tool))),
+                "telegram_login_cancel" => Cancel(),
+                _ => ToolResult.Fail("Неизвестная команда входа в Telegram."),
+            };
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ToolException or System.ComponentModel.Win32Exception)
+        {
+            return ToolResult.Fail(ex.Message);
+        }
+
+        static ToolResult Cancel()
+        {
+            Mcp.TelegramLogin.RemoteCancel();
+            return ToolResult.Ok("""{"state":"idle"}""");
+        }
+    }
+
     private async Task OnExecuteToolAsync(Guid callId, Guid taskId, string tool, string argumentsJson)
     {
+        // TELEGRAM_LOGIN: вход в Telegram, запущенный из настроек сайта/телефона — без проекта и подтверждений.
+        if (tool.StartsWith("telegram_login_", StringComparison.Ordinal))
+        {
+            _callRemote.TryRemove(callId, out _);
+            _callProjects.TryRemove(callId, out _);
+            _callAgents.TryRemove(callId, out _);
+            await SendResultAsync(callId, await TelegramLoginToolAsync(tool, argumentsJson));
+            return;
+        }
+
         (string Id, string Role)? agent = _callAgents.TryRemove(callId, out var a) ? a : null;
         Ui.CurrentAgent.Value = agent;
 

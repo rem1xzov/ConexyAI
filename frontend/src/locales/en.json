@@ -674,6 +674,24 @@
     "attachmentsTooLarge": "These files are too large to send. Reduce their size or attach fewer files — for example, send them one at a time.",
     "sendFailed": "Couldn't send the message. Please try again."
   },
+  "telegram": {
+    "tab": "Telegram",
+    "title": "Telegram (personal account)",
+    "intro": "The agent can read and search your chats, send messages and files. Telegram runs through Conexy on your PC, so it must be on. Keys and the sign-in stay encrypted on the PC only.",
+    "step1": "Create an app (any name and URL) at",
+    "step2": "Copy App api_id and App api_hash here.",
+    "connect": "Connect",
+    "starting": "Preparing sign-in on your PC… Up to a minute the first time.",
+    "confirmPhone": "Last step: confirm the sign-in in Telegram — one tap. Telegram requires this to make sure it's you; no app can enter an account without it.",
+    "openTelegram": "Confirm in Telegram",
+    "orScan": "Or scan the QR code from another device:",
+    "confirmScan": "Last step: in Telegram on your phone open Settings → Devices → Link Desktop Device and scan the code. Only once.",
+    "cancel": "Cancel",
+    "password": "Two-step verification is on — enter your Telegram cloud password:",
+    "badPassword": "Wrong password.",
+    "signIn": "Sign in",
+    "done": "Telegram connected: {{user}}. The agent can use it now."
+  },
   "hiddenChats": {
     "title": "Hidden chats",
     "empty": "No hidden chats. Hide a chat from its menu in the chat list.",

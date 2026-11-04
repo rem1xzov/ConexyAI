@@ -40,6 +40,7 @@ import { getSubscriptionUsage } from '../api/conexyApi';
 import { humanError } from '../utils/humanError';
 import { setPlainCode, usePlainCode } from '../utils/displayPrefs';
 import { ConfirmDialog } from './Dialog';
+import { TelegramConnect } from './TelegramConnect';
 import { ChevronDownIcon, CloseIcon, EyeIcon, EyeOffIcon, TrashIcon } from './Icons';
 import type { ChatSession } from '../types/chat';
 // PHONE_AGENT: раздел «Телефон» — только в Android-приложении с плагином PhoneAgent.
@@ -57,7 +58,7 @@ import { LEGAL_PATHS } from './legal/LegalPage';
 // MCP_OAUTH: внешняя ссылка открывается системным браузером в приложении и новой вкладкой в вебе.
 import { openExternalUrl } from '../utils/mobile';
 
-export type SettingsSection = 'general' | 'limits' | 'personalization' | 'memory' | 'github' | 'mcp' | 'desktop' | 'app' | 'phone';
+export type SettingsSection = 'general' | 'limits' | 'personalization' | 'memory' | 'github' | 'mcp' | 'telegram' | 'desktop' | 'app' | 'phone';
 
 interface SettingsModalProps {
   theme: Theme;
@@ -162,6 +163,8 @@ const SECTIONS: { value: SettingsSection; key: string }[] = [
   { value: 'memory', key: 'memory.tab' },
   { value: 'github', key: 'settings.githubTab' },
   { value: 'mcp', key: 'settings.mcpTab' },
+  // TELEGRAM_LOGIN: личный Telegram — подключение и с сайта, и с телефона.
+  { value: 'telegram', key: 'telegram.tab' },
   { value: 'desktop', key: 'settings.desktopTab' },
   { value: 'app', key: 'settings.appTab' },
   { value: 'phone', key: 'phone.tab' },
@@ -1560,6 +1563,10 @@ export function SettingsModal({
 
             <div hidden={section !== 'mcp'}>
               <McpSection />
+            </div>
+
+            <div hidden={section !== 'telegram'}>
+              <TelegramConnect />
             </div>
 
             <div hidden={section !== 'desktop'}>

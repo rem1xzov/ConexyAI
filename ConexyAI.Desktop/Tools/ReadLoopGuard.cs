@@ -146,6 +146,7 @@ public sealed partial class ReadLoopGuard
         "file_write" or "file_write_bytes" or "file_patch" or "apply_patch" => true,
         "bash" or "terminal_exec" or "cmd_exec" or "run_tests" or "get_diagnostics" => true,
         "bg_start" or "bg_stop" or "install_software" or "window_keys" => true,
+        _ when tool.StartsWith("computer_", StringComparison.Ordinal) && tool != "computer_screen" => true,
         "str_replace_editor" => args.Str("command") != "view",
         _ => false,
     };

@@ -294,8 +294,9 @@ public static class McpCatalog
             [
                 new("TELEGRAM_API_ID", "api_id (число)", "my.telegram.org → API development tools → создайте приложение; в его карточке App api_id."),
                 new("TELEGRAM_API_HASH", "api_hash", "my.telegram.org → API development tools → в карточке приложения App api_hash."),
+                // TELEGRAM_LOGIN: сессию клиент создаёт сам (QR/ссылка в Telegram) — пользователь её не вводит.
                 new("TELEGRAM_SESSION_STRING", "session string",
-                    "В отдельном окне терминала: uvx --from \"" + TelegramSource + "\" telegram-mcp-generate-session --qr — отсканируйте QR в Telegram (Настройки → Устройства → Подключить устройство) и вставьте полученную строку. Вход по коду в самом MCP-сервере не работает: сессия нужна заранее."),
+                    "Создаётся автоматически при входе.", Optional: true),
             ],
             Note: "Работает от вашего аккаунта: агент видит и может писать в те же чаты, что и вы. Нужен uv (winget install --id=astral-sh.uv). " + ForeignNote,
             Category: "Мессенджеры", StartupSeconds: 180),

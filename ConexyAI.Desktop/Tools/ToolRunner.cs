@@ -11,6 +11,7 @@ public sealed class ToolRunner
     private readonly ShellTool _shell;
     private readonly PcTools _pc;
     private readonly WindowTools _windows;
+    private readonly ComputerTools _computer;
     private readonly Action<string> _log;
     private readonly Mcp.LocalTools? _local;
     private readonly ICommandApprover _approver;
@@ -55,6 +56,7 @@ public sealed class ToolRunner
         _shell = new ShellTool(_guard, approver, gitHubToken);
         _pc = new PcTools(_guard, approver, _shell);
         _windows = new WindowTools(approver, _guard.Root);
+        _computer = new ComputerTools(approver, _guard.Root, log);
         _log = log;
     }
 
@@ -120,6 +122,8 @@ public sealed class ToolRunner
                 "window_list" => _windows.List(args),
                 "screen_capture" => await _windows.CaptureAsync(args, ct),
                 "window_keys" => await _windows.KeysAsync(args, ct),
+                // PC_CONTROL: мышь, клавиатура, запуск программ — как человек за компьютером.
+                _ when ComputerTools.IsComputerTool(tool) => await _computer.RunAsync(tool, args, ct),
                 "pc_list_dir" => await _pc.ListDirAsync(args, ct),
                 "pc_read_file" => await _pc.ReadFileAsync(args, ct),
                 "pc_copy_to_project" => await _pc.CopyToProjectAsync(args, ct),
@@ -172,6 +176,7 @@ public sealed class ToolRunner
     {
         "file_write", "file_patch", "apply_patch", "file_write_bytes", "bg_start", "install_software",
         "download_file", "pc_copy_to_project", "window_keys",
+        "computer_click", "computer_move", "computer_drag", "computer_scroll", "computer_type", "computer_key", "computer_open",
     };
 
     /// <summary>Почему инструмент запрещён в режиме плана (null — разрешён: чтение, поиск, просмотр).</summary>

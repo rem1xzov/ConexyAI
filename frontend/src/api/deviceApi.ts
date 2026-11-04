@@ -18,6 +18,35 @@ export interface IssuedDeviceKey {
   info: DeviceKey;
 }
 
+// TELEGRAM_LOGIN: вход в личный Telegram идёт на ПК пользователя (там работает Telegram MCP); сайт лишь управляет им.
+export interface TelegramLoginStatus {
+  state: 'idle' | 'starting' | 'waiting' | 'password' | 'done' | 'failed';
+  /** tg://login?token=… — открыть в Telegram на телефоне или отсканировать как QR. */
+  url?: string | null;
+  user?: string | null;
+  error?: string | null;
+  badPassword?: boolean;
+}
+
+export async function startTelegramLogin(apiId: string, apiHash: string): Promise<TelegramLoginStatus> {
+  const { data } = await http.post<TelegramLoginStatus>('/device/telegram/start', { apiId, apiHash }, { timeout: 130_000 });
+  return data;
+}
+
+export async function getTelegramLoginStatus(): Promise<TelegramLoginStatus> {
+  const { data } = await http.get<TelegramLoginStatus>('/device/telegram/status', { timeout: 130_000 });
+  return data;
+}
+
+export async function sendTelegramPassword(password: string): Promise<TelegramLoginStatus> {
+  const { data } = await http.post<TelegramLoginStatus>('/device/telegram/password', { password });
+  return data;
+}
+
+export async function cancelTelegramLogin(): Promise<void> {
+  await http.post('/device/telegram/cancel', {});
+}
+
 export interface DesktopClientInfo {
   downloadUrl: string;
   platform: string;

@@ -652,6 +652,7 @@ static void PrintHelp()
             ("/plan on|off", "агент только изучает проект и предлагает план; выполняет после вашего одобрения"),
             ("/team on|off", "оркестр: ведущий агент собирает команду субагентов (ProMax, Ultra, Admin); действует в чате до /team off"),
             ("/auto", "выполнять команды без подтверждения — вкл/выкл (или флаг --auto)"),
+            ("/control on|off", "полный доступ к ПК: агент сам открывает программы и сайты, кликает, печатает, жмёт клавиши без вопросов; вы видите всё на экране. Стоп — курсор в левый верхний угол"),
             ("/permissions", "команды без вопроса в этом проекте\nadd <команда> · remove N · clear"),
         ]),
         ("Фоновая работа с сайта", [
@@ -917,6 +918,22 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                         ? "Режим плана: агент только изучает проект и предлагает план, правки и изменяющие команды заблокированы. После ответа можно одобрить план. /plan — выключить."
                         : "Режим плана выключен: агент снова может менять файлы.");
                     break;
+                // PC_CONTROL: полный доступ агента к экрану, мыши и клавиатуре (сохраняется, действует и на задачи с сайта).
+                case "/control":
+                {
+                    var enable = arg.ToLowerInvariant() switch
+                    {
+                        "on" or "вкл" => true,
+                        "off" or "выкл" => false,
+                        _ => !ClientConfig.LoadFullPcControl(),
+                    };
+                    ClientConfig.SaveFullPcControl(enable);
+                    Ui.Info(enable
+                        ? "Полный доступ к ПК включён: агент сам открывает программы, кликает и печатает без вопросов — вы видите всё на экране, каждое действие пишется здесь. " +
+                          "Аварийная остановка: уведите курсор в левый верхний угол экрана или нажмите Esc здесь. /control off — выключить."
+                        : "Полный доступ выключен: каждое действие агента на экране (клик, текст, клавиши) сначала подтверждаете вы.");
+                    break;
+                }
                 case "/compact":
                     if (await CompactCommandAsync(session, arg) is { } fresh)
                         return (root, fresh);
@@ -1192,6 +1209,7 @@ static async Task InstallFromCatalogAsync(LocalTools local, CatalogEntry entry)
     }
 
     Console.WriteLine(Ui.Bold(entry.Title) + " — " + entry.Description);
+    var telegramKeys = new Dictionary<string, string>();
     var server = new McpServerEntry
     {
         Command = entry.Command,
@@ -1199,8 +1217,12 @@ static async Task InstallFromCatalogAsync(LocalTools local, CatalogEntry entry)
         Env = entry.Env is null ? null : new Dictionary<string, string>(entry.Env),
         CatalogId = entry.Id,
     };
+    // TELEGRAM_LOGIN: строку сессии больше не спрашиваем — клиент сам проводит вход по api_id/api_hash.
+    var telegram = entry.Id == "telegram";
     foreach (var input in entry.Inputs ?? [])
     {
+        if (telegram && input.Name == "TELEGRAM_SESSION_STRING")
+            continue;
         Ui.Info("  " + input.Help);
         Console.Write($"  {input.Prompt}: ");
         var value = (input.Secret ? ReadSecret() : Console.ReadLine() ?? string.Empty).Trim();
@@ -1214,6 +1236,15 @@ static async Task InstallFromCatalogAsync(LocalTools local, CatalogEntry entry)
         server.SetSecret(input.Name, value);
         if (input.ArgIfSet is { } arg)
             server.Args!.Add(arg);
+        if (telegram)
+            telegramKeys[input.Name] = value;
+    }
+
+    if (telegram)
+    {
+        await TelegramConsoleLoginAsync(local, telegramKeys.GetValueOrDefault("TELEGRAM_API_ID") ?? string.Empty,
+            telegramKeys.GetValueOrDefault("TELEGRAM_API_HASH") ?? string.Empty);
+        return;
     }
 
     var config = McpConfig.Load();
@@ -1226,6 +1257,54 @@ static async Task InstallFromCatalogAsync(LocalTools local, CatalogEntry entry)
         Ui.Info("  " + line);
     if (entry.Note is { } note)
         Ui.Info("  " + Ui.Muted(note));
+}
+
+// TELEGRAM_LOGIN: вход в аккаунт прямо здесь — QR в консоли (или ссылка для телефона), пароль 2FA, сохранение.
+static async Task TelegramConsoleLoginAsync(LocalTools local, string apiId, string apiHash)
+{
+    TelegramLogin.Attempt attempt;
+    try
+    {
+        attempt = TelegramLogin.Start(apiId, apiHash, showQr: true);
+    }
+    catch (InvalidOperationException ex)
+    {
+        Ui.Error(ex.Message);
+        return;
+    }
+
+    using (attempt)
+    {
+        Ui.Info("  Вход в Telegram (первый раз скачивает пакеты — до минуты)…");
+        string? shownUrl = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(10);
+        while (attempt.State is not (TelegramLogin.State.Done or TelegramLogin.State.Failed) && DateTime.UtcNow < deadline)
+        {
+            if (attempt.State == TelegramLogin.State.WaitingScan && attempt.Url != shownUrl)
+            {
+                shownUrl = attempt.Url;
+                Ui.Info("  Отсканируйте QR выше в Telegram на телефоне: Настройки → Устройства → Подключить устройство. Это один раз — без него Telegram не пускает ни одну программу в аккаунт.");
+            }
+            if (attempt.State == TelegramLogin.State.NeedPassword)
+            {
+                if (attempt.BadPassword)
+                    Ui.Error("  Неверный пароль.");
+                Console.Write("  Пароль двухэтапной проверки Telegram: ");
+                attempt.SubmitPassword(ReadSecret().Trim());
+            }
+            await attempt.WaitChangeAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
+        }
+
+        if (attempt.State != TelegramLogin.State.Done || attempt.Session is null)
+        {
+            Ui.Error("  Вход в Telegram не завершён: " + (attempt.Error ?? "время вышло") + ". Повторите /connect telegram.");
+            return;
+        }
+
+        Ui.Info($"  Вошли как {attempt.User}. Сохраняю и запускаю Telegram MCP…");
+        foreach (var line in await TelegramLogin.SaveAsync(local, attempt.ApiId, attempt.ApiHash, attempt.Session, CancellationToken.None))
+            Ui.Info("  " + line);
+    }
 }
 
 // /connect: единое место подключения сервисов: меню по разделам, поиск, статусы, отключение.

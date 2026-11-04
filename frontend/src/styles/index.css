@@ -3499,6 +3499,42 @@ body {
   color: var(--muted);
 }
 
+/* ---------- TELEGRAM_LOGIN: Settings → Telegram ---------- */
+.telegram-connect__form,
+.telegram-connect__confirm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.telegram-connect__form .settings-github__input {
+  width: 100%;
+}
+
+.telegram-connect__steps {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.telegram-connect__steps a {
+  color: var(--accent, #2aabee);
+}
+
+.telegram-connect__qr {
+  border-radius: 10px;
+  background: #fff;
+  padding: 6px;
+}
+
+.telegram-connect__done {
+  color: var(--text);
+  font-weight: 500;
+}
+
 /* ---------- CHAT_HIDE: Settings → General → Hidden chats ---------- */
 .hidden-chats__toggle {
   display: flex;

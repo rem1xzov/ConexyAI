@@ -265,6 +265,67 @@ public class DeviceController : ControllerBase
     public async Task<IActionResult> CancelQueued(Guid taskId, CancellationToken ct) =>
         await _deviceQueue.CancelAsync(User.GetUserId(), taskId, ct) ? NoContent() : NotFound();
 
+    // ---- TELEGRAM_LOGIN: подключение Telegram (личный аккаунт) из настроек сайта и телефона ----
+    // Telegram MCP работает на ПК пользователя, поэтому вход тоже идёт там: сервер только передаёт
+    // команды подключённому клиенту и ничего не хранит (ключи и сессия живут зашифрованными на ПК).
+
+    public sealed record TelegramStartRequest(string? ApiId, string? ApiHash);
+
+    public sealed record TelegramPasswordRequest(string? Password);
+
+    [HttpPost("telegram/start")]
+    [Authorize]
+    public Task<IActionResult> TelegramStart([FromBody] TelegramStartRequest body, CancellationToken ct) =>
+        string.IsNullOrWhiteSpace(body.ApiId) || string.IsNullOrWhiteSpace(body.ApiHash)
+            ? Task.FromResult<IActionResult>(BadRequest(new { error = "Нужны api_id и api_hash." }))
+            : TelegramCallAsync("telegram_login_start", new { api_id = body.ApiId.Trim(), api_hash = body.ApiHash.Trim() }, ct);
+
+    [HttpGet("telegram/status")]
+    [Authorize]
+    public Task<IActionResult> TelegramStatus(CancellationToken ct) =>
+        TelegramCallAsync("telegram_login_status", new { wait_seconds = 20 }, ct);
+
+    [HttpPost("telegram/password")]
+    [Authorize]
+    public Task<IActionResult> TelegramPassword([FromBody] TelegramPasswordRequest body, CancellationToken ct) =>
+        string.IsNullOrEmpty(body.Password)
+            ? Task.FromResult<IActionResult>(BadRequest(new { error = "Введите пароль." }))
+            : TelegramCallAsync("telegram_login_password", new { password = body.Password }, ct);
+
+    [HttpPost("telegram/cancel")]
+    [Authorize]
+    public Task<IActionResult> TelegramCancel(CancellationToken ct) =>
+        TelegramCallAsync("telegram_login_cancel", new { }, ct);
+
+    private async Task<IActionResult> TelegramCallAsync(string tool, object args, CancellationToken ct)
+    {
+        var userId = User.GetUserId();
+        if (!_bridge.IsOnline(userId))
+            return Conflict(new { error = "ПК не подключён. Telegram работает через Conexy на вашем ПК: запустите его (или включите фоновую работу: /daemon on) и повторите." });
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(120));
+        DeviceToolOutcome outcome;
+        try
+        {
+            outcome = await _bridge.ExecuteAsync(userId, Guid.Empty, tool, System.Text.Json.JsonSerializer.Serialize(args), timeout.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return StatusCode(504, new { error = "ПК не ответил вовремя. Проверьте, что Conexy на ПК запущен и обновлён." });
+        }
+
+        if (outcome.IsError)
+        {
+            // Старый клиент не знает этих команд.
+            var message = outcome.Output.Contains("не поддерживается", StringComparison.Ordinal) || outcome.Output.Contains("проект", StringComparison.OrdinalIgnoreCase)
+                ? "Обновите Conexy на ПК (/update) — вход в Telegram из настроек появился в новой версии."
+                : outcome.Output;
+            return BadRequest(new { error = message });
+        }
+        return Content(outcome.Output, "application/json");
+    }
+
     [HttpGet("keys")]
     [Authorize]
     public async Task<IActionResult> List(CancellationToken ct) =>

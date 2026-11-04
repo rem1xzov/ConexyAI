@@ -26,6 +26,40 @@ public sealed class ClientConfig
     /// </summary>
     public string? RemoteApprovalLevel { get; set; }
 
+    /// <summary>PC_CONTROL: агент управляет мышью и клавиатурой без подтверждения каждого действия.</summary>
+    public bool FullPcControl { get; set; }
+
+    /// <summary>PC_CONTROL: читается при каждом действии — /control в окне сразу действует и на фоновый демон.</summary>
+    public static bool LoadFullPcControl()
+    {
+        try
+        {
+            return File.Exists(FilePath)
+                && JsonSerializer.Deserialize<ClientConfig>(File.ReadAllText(FilePath))?.FullPcControl == true;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    public static void SaveFullPcControl(bool enabled)
+    {
+        ClientConfig config;
+        try
+        {
+            config = File.Exists(FilePath)
+                ? JsonSerializer.Deserialize<ClientConfig>(File.ReadAllText(FilePath)) ?? new ClientConfig()
+                : new ClientConfig();
+        }
+        catch (JsonException)
+        {
+            config = new ClientConfig();
+        }
+        config.FullPcControl = enabled;
+        config.Save();
+    }
+
     /// <summary>Уровень удалённых подтверждений из файла (читается на каждый запрос: демону не нужен перезапуск).</summary>
     public static string LoadRemoteApprovalLevel()
     {
