@@ -25,8 +25,19 @@ from telethon.errors import SessionPasswordNeededError, PasswordHashInvalidError
 def out(line):
     sys.stdout.write(line + "\n"); sys.stdout.flush()
 
+def proxy():
+    url = os.environ.get("TG_PROXY")
+    if not url:
+        return None
+    from urllib.parse import urlparse, unquote
+    u = urlparse(url)
+    kind = "socks5" if u.scheme.startswith("socks5") else ("socks4" if u.scheme == "socks4" else "http")
+    return dict(proxy_type=kind, addr=u.hostname, port=u.port, rdns=True,
+                username=unquote(u.username) if u.username else None,
+                password=unquote(u.password) if u.password else None)
+
 async def main():
-    client = TelegramClient(StringSession(), int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"])
+    client = TelegramClient(StringSession(), int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"], proxy=proxy())
     await client.connect()
     show_qr = os.environ.get("TG_SHOW_QR") == "1"
     while True:
@@ -181,8 +192,29 @@ except Exception as e:
         }
     }
 
+    /// <summary>
+    /// TELEGRAM_PROXY: Telegram ходит по своему протоколу (MTProto) и системный HTTP-прокси не использует — прокси
+    /// передаётся явно. Порядок: свой прокси ПК (/proxy) → прокси сервера (только админу) → напрямую.
+    /// </summary>
+    public static async Task<string?> ResolveProxyAsync(CancellationToken ct)
+    {
+        var local = ClientConfig.LoadProxy();
+        if (local is not null)
+            return local.Equals("off", StringComparison.OrdinalIgnoreCase) ? null : local;
+        return ServerClient.Current is { } server ? await server.GetAgentProxyAsync(ct) : null;
+    }
+
+    public static bool IsValidProxy(string url) =>
+        Uri.TryCreate(url.Trim(), UriKind.Absolute, out var u)
+        && u.Scheme is "socks5" or "socks5h" or "socks4" or "http" or "https"
+        && !string.IsNullOrEmpty(u.Host) && u.Port > 0;
+
+    /// <summary>Адрес без логина и пароля — для сообщений.</summary>
+    public static string DescribeProxy(string? url) =>
+        url is not null && Uri.TryCreate(url, UriKind.Absolute, out var u) ? $"{u.Scheme}://{u.Host}:{u.Port}" : "напрямую";
+
     /// <summary>Запускает вход. <paramref name="showQr"/> — печатать QR в консоль (интерактивный клиент).</summary>
-    public static Attempt Start(string apiId, string apiHash, bool showQr)
+    public static Attempt Start(string apiId, string apiHash, bool showQr, string? proxy = null)
     {
         if (!int.TryParse(apiId.Trim(), out _))
             throw new InvalidOperationException("api_id — это число из карточки приложения на my.telegram.org.");
@@ -200,8 +232,10 @@ except Exception as e:
             StandardOutputEncoding = Encoding.UTF8,
             CreateNoWindow = !showQr,
         };
-        foreach (var arg in new[] { "run", "--no-project", "--quiet", "--with", "telethon>=1.36,<2", "--with", "qrcode>=7", "python", "-c", Script })
+        foreach (var arg in new[] { "run", "--no-project", "--quiet", "--with", "telethon>=1.36,<2", "--with", "qrcode>=7", "--with", "python-socks[asyncio]>=2", "python", "-c", Script })
             psi.ArgumentList.Add(arg);
+        if (proxy is not null)
+            psi.Environment["TG_PROXY"] = proxy.Trim();
         psi.Environment["TG_API_ID"] = apiId.Trim();
         psi.Environment["TG_API_HASH"] = apiHash.Trim();
         psi.Environment["TG_SHOW_QR"] = showQr ? "1" : "0";
@@ -214,7 +248,7 @@ except Exception as e:
     }
 
     /// <summary>Сохраняет ключи и сессию в mcp.json (зашифрованно) и (пере)запускает Telegram MCP.</summary>
-    public static async Task<IReadOnlyList<string>> SaveAsync(LocalTools? local, string apiId, string apiHash, string session, CancellationToken ct)
+    public static async Task<IReadOnlyList<string>> SaveAsync(LocalTools? local, string apiId, string apiHash, string session, CancellationToken ct, string? proxy = null)
     {
         var entry = McpCatalog.Find("telegram") ?? throw new InvalidOperationException("Нет записи Telegram в каталоге.");
         var server = new McpServerEntry
@@ -227,6 +261,26 @@ except Exception as e:
         server.SetSecret("TELEGRAM_API_ID", apiId);
         server.SetSecret("TELEGRAM_API_HASH", apiHash);
         server.SetSecret("TELEGRAM_SESSION_STRING", session);
+        // TELEGRAM_PROXY: сам MCP-сервер тоже должен ходить через прокси (переменные chigwell/telegram-mcp).
+        if (proxy is not null && Uri.TryCreate(proxy.Trim(), UriKind.Absolute, out var p))
+        {
+            server.Env ??= new Dictionary<string, string>();
+            server.Env["TELEGRAM_PROXY_TYPE"] = p.Scheme.StartsWith("socks5", StringComparison.Ordinal) ? "socks5" : p.Scheme == "socks4" ? "socks4" : "http";
+            server.Env["TELEGRAM_PROXY_HOST"] = p.Host;
+            server.Env["TELEGRAM_PROXY_PORT"] = p.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            server.Env["TELEGRAM_PROXY_RDNS"] = "true";
+            if (!string.IsNullOrEmpty(p.UserInfo))
+            {
+                var parts = p.UserInfo.Split(':', 2);
+                server.Env["TELEGRAM_PROXY_USERNAME"] = "${secret:TELEGRAM_PROXY_USERNAME}";
+                server.SetSecret("TELEGRAM_PROXY_USERNAME", Uri.UnescapeDataString(parts[0]));
+                if (parts.Length > 1)
+                {
+                    server.Env["TELEGRAM_PROXY_PASSWORD"] = "${secret:TELEGRAM_PROXY_PASSWORD}";
+                    server.SetSecret("TELEGRAM_PROXY_PASSWORD", Uri.UnescapeDataString(parts[1]));
+                }
+            }
+        }
         var config = McpConfig.Load();
         config.Servers[entry.Id] = server;
         config.Save();
@@ -239,16 +293,19 @@ except Exception as e:
     // ── Вход с сайта / телефона (через подключённый ПК) ─────────────────────
 
     private static Attempt? _remote;
+    private static string? _remoteProxy;
     private static readonly object RemoteSync = new();
 
     /// <summary>telegram_login_start: начинает вход и ждёт ссылку tg://login (до 90 с — первый запуск качает пакеты).</summary>
     public static async Task<string> RemoteStartAsync(string apiId, string apiHash, CancellationToken ct)
     {
+        var proxy = await ResolveProxyAsync(ct);
         Attempt attempt;
         lock (RemoteSync)
         {
             _remote?.Dispose();
-            _remote = attempt = Start(apiId, apiHash, showQr: false);
+            _remote = attempt = Start(apiId, apiHash, showQr: false, proxy);
+            _remoteProxy = proxy;
         }
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(90);
         while (attempt.State == State.Starting && DateTime.UtcNow < deadline)
@@ -271,7 +328,7 @@ except Exception as e:
                 if (_remote == attempt)
                     _remote = null;
             }
-            await SaveAsync(local, attempt.ApiId, attempt.ApiHash, session, ct);
+            await SaveAsync(local, attempt.ApiId, attempt.ApiHash, session, ct, _remoteProxy);
             attempt.Dispose();
         }
         return StatusJson(attempt);

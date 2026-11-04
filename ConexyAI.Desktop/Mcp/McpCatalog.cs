@@ -283,7 +283,8 @@ public static class McpCatalog
         // TELEGRAM_ACCOUNT: вход в личный аккаунт (MTProto) — видит историю и переписку целиком, в отличие от бота.
         new("telegram", "Telegram (личный аккаунт)",
             "Чаты, каналы и группы вашего аккаунта: читать переписку, искать по истории, отправлять и редактировать сообщения, файлы и медиа. Полный доступ, как в приложении, — нужен вход в аккаунт.",
-            "uvx", ["--from", TelegramSource, "telegram-mcp"],
+            // TELEGRAM_PROXY: python-socks — чтобы работали TELEGRAM_PROXY_* (там, где Telegram заблокирован).
+            "uvx", ["--from", TelegramSource, "--with", "python-socks[asyncio]", "telegram-mcp"],
             Env: new()
             {
                 ["TELEGRAM_API_ID"] = "${secret:TELEGRAM_API_ID}",

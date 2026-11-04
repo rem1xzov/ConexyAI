@@ -24,6 +24,7 @@ public class DeviceController : ControllerBase
     private readonly IHttpClientFactory _httpFactory;
     // WEB_DEVICE: добавлено 2026-10-18
     private readonly IDeviceToolBridge _bridge;
+    private readonly Microsoft.Extensions.Options.IOptions<ConexyAI.Configuration.AgentProxyOptions> _proxy;
     private readonly IDeviceTaskQueue _deviceQueue;
 
     // Кэш номеров последних релизов: GitHub API не дёргаем на каждый запрос.
@@ -55,8 +56,10 @@ public class DeviceController : ControllerBase
         IConfiguration configuration,
         IHttpClientFactory httpFactory,
         IDeviceToolBridge bridge,
-        IDeviceTaskQueue deviceQueue)
+        IDeviceTaskQueue deviceQueue,
+        Microsoft.Extensions.Options.IOptions<ConexyAI.Configuration.AgentProxyOptions> proxy)
     {
+        _proxy = proxy;
         _bridge = bridge;
         _deviceQueue = deviceQueue;
         _httpFactory = httpFactory;
@@ -268,6 +271,19 @@ public class DeviceController : ControllerBase
     // ---- TELEGRAM_LOGIN: подключение Telegram (личный аккаунт) из настроек сайта и телефона ----
     // Telegram MCP работает на ПК пользователя, поэтому вход тоже идёт там: сервер только передаёт
     // команды подключённому клиенту и ничего не хранит (ключи и сессия живут зашифрованными на ПК).
+
+    /// <summary>
+    /// TELEGRAM_PROXY: прокси сервера (AGENT_PROXY_URL) для Telegram на ПК. В нём логин и пароль платного прокси,
+    /// поэтому отдаётся только администратору; остальные задают свой на ПК (/proxy).
+    /// </summary>
+    [HttpGet("proxy")]
+    [Authorize]
+    public IActionResult AgentProxy()
+    {
+        if (!User.IsAdmin() || !_proxy.Value.IsConfigured)
+            return NoContent();
+        return Ok(new { url = _proxy.Value.Url.Trim() });
+    }
 
     public sealed record TelegramStartRequest(string? ApiId, string? ApiHash);
 

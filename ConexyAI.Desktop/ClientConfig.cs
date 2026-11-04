@@ -29,6 +29,51 @@ public sealed class ClientConfig
     /// <summary>PC_CONTROL: агент управляет мышью и клавиатурой без подтверждения каждого действия.</summary>
     public bool FullPcControl { get; set; }
 
+    /// <summary>TELEGRAM_PROXY: свой прокси для Telegram (socks5://… или http://…), в защищённом виде. "off" — напрямую.</summary>
+    public string? ProtectedProxy { get; set; }
+
+    public static string? LoadProxy()
+    {
+        try
+        {
+            if (!File.Exists(FilePath) || JsonSerializer.Deserialize<ClientConfig>(File.ReadAllText(FilePath))?.ProtectedProxy is not { Length: > 0 } stored)
+                return null;
+            var raw = Convert.FromBase64String(stored);
+            if (OperatingSystem.IsWindows())
+                raw = ProtectedData.Unprotect(raw, null, DataProtectionScope.CurrentUser);
+            return Encoding.UTF8.GetString(raw);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or CryptographicException or FormatException)
+        {
+            return null;
+        }
+    }
+
+    public static void SaveProxy(string? value)
+    {
+        ClientConfig config;
+        try
+        {
+            config = File.Exists(FilePath)
+                ? JsonSerializer.Deserialize<ClientConfig>(File.ReadAllText(FilePath)) ?? new ClientConfig()
+                : new ClientConfig();
+        }
+        catch (JsonException)
+        {
+            config = new ClientConfig();
+        }
+        if (string.IsNullOrWhiteSpace(value))
+            config.ProtectedProxy = null;
+        else
+        {
+            var raw = Encoding.UTF8.GetBytes(value.Trim());
+            if (OperatingSystem.IsWindows())
+                raw = ProtectedData.Protect(raw, null, DataProtectionScope.CurrentUser);
+            config.ProtectedProxy = Convert.ToBase64String(raw);
+        }
+        config.Save();
+    }
+
     /// <summary>PC_CONTROL: читается при каждом действии — /control в окне сразу действует и на фоновый демон.</summary>
     public static bool LoadFullPcControl()
     {

@@ -51,6 +51,29 @@ public sealed class ServerClient : IDisposable
         _key = key;
         // TIMEOUT_VISIBLE: 60 секунд пустого окна при зависшем запросе — слишком долго.
         _http = new HttpClient { BaseAddress = new Uri(BaseUrl + "/"), Timeout = TimeSpan.FromSeconds(30) };
+        Current = this;
+    }
+
+    /// <summary>TELEGRAM_PROXY: последний созданный клиент — чтобы модули без ссылки на сервер могли спросить прокси.</summary>
+    public static ServerClient? Current { get; private set; }
+
+    /// <summary>TELEGRAM_PROXY: прокси сервера (только для админа); null — нет или не положено.</summary>
+    public async Task<string?> GetAgentProxyAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "api/device/proxy");
+            request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));
+            using var response = await _http.SendAsync(request, ct);
+            if (response.StatusCode != HttpStatusCode.OK)
+                return null;
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            return doc.RootElement.TryGetProperty("url", out var url) ? url.GetString() : null;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or InvalidOperationException or TaskCanceledException)
+        {
+            return null;
+        }
     }
 
     public async Task<string> GetTokenAsync(CancellationToken ct = default)

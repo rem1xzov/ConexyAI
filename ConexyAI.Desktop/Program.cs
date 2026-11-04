@@ -652,6 +652,7 @@ static void PrintHelp()
             ("/plan on|off", "агент только изучает проект и предлагает план; выполняет после вашего одобрения"),
             ("/team on|off", "оркестр: ведущий агент собирает команду субагентов (ProMax, Ultra, Admin); действует в чате до /team off"),
             ("/auto", "выполнять команды без подтверждения — вкл/выкл (или флаг --auto)"),
+            ("/proxy [url|off|reset]", "прокси для Telegram (если он заблокирован); по умолчанию у администратора — прокси сервера"),
             ("/control on|off", "полный доступ к ПК: агент сам открывает программы и сайты, кликает, печатает, жмёт клавиши без вопросов; вы видите всё на экране. Стоп — курсор в левый верхний угол"),
             ("/permissions", "команды без вопроса в этом проекте\nadd <команда> · remove N · clear"),
         ]),
@@ -918,6 +919,31 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                         ? "Режим плана: агент только изучает проект и предлагает план, правки и изменяющие команды заблокированы. После ответа можно одобрить план. /plan — выключить."
                         : "Режим плана выключен: агент снова может менять файлы.");
                     break;
+                // TELEGRAM_PROXY: свой прокси для Telegram на этом ПК.
+                case "/proxy":
+                {
+                    var value = arg.Trim();
+                    if (value.Length == 0)
+                    {
+                        var current = await TelegramLogin.ResolveProxyAsync(CancellationToken.None);
+                        Ui.Info("Прокси для Telegram: " + TelegramLogin.DescribeProxy(current)
+                            + (ClientConfig.LoadProxy() is null && current is not null ? " (с сервера)" : string.Empty)
+                            + ". /proxy <socks5://логин:пароль@хост:порт> · /proxy off — напрямую · /proxy reset — как на сервере");
+                    }
+                    else if (value.Equals("reset", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ClientConfig.SaveProxy(null);
+                        Ui.Info("Свой прокси убран.");
+                    }
+                    else if (value.Equals("off", StringComparison.OrdinalIgnoreCase) || TelegramLogin.IsValidProxy(value))
+                    {
+                        ClientConfig.SaveProxy(value);
+                        Ui.Info("Прокси для Telegram: " + TelegramLogin.DescribeProxy(value.Equals("off", StringComparison.OrdinalIgnoreCase) ? null : value) + ". Уже подключённый Telegram — переподключите: /connect telegram.");
+                    }
+                    else
+                        Ui.Error("Нужен адрес вида socks5://логин:пароль@хост:порт или http://хост:порт.");
+                    break;
+                }
                 // PC_CONTROL: полный доступ агента к экрану, мыши и клавиатуре (сохраняется, действует и на задачи с сайта).
                 case "/control":
                 {
@@ -1263,9 +1289,11 @@ static async Task InstallFromCatalogAsync(LocalTools local, CatalogEntry entry)
 static async Task TelegramConsoleLoginAsync(LocalTools local, string apiId, string apiHash)
 {
     TelegramLogin.Attempt attempt;
+    var proxy = await TelegramLogin.ResolveProxyAsync(CancellationToken.None);
+    Ui.Info("  Подключение к Telegram: " + TelegramLogin.DescribeProxy(proxy) + (proxy is null ? " (если Telegram у вас заблокирован — /proxy socks5://логин:пароль@хост:порт)" : string.Empty));
     try
     {
-        attempt = TelegramLogin.Start(apiId, apiHash, showQr: true);
+        attempt = TelegramLogin.Start(apiId, apiHash, showQr: true, proxy);
     }
     catch (InvalidOperationException ex)
     {
@@ -1297,12 +1325,20 @@ static async Task TelegramConsoleLoginAsync(LocalTools local, string apiId, stri
 
         if (attempt.State != TelegramLogin.State.Done || attempt.Session is null)
         {
-            Ui.Error("  Вход в Telegram не завершён: " + (attempt.Error ?? "время вышло") + ". Повторите /connect telegram.");
+            var blocked = attempt.Error?.Contains("ConnectionError", StringComparison.Ordinal) == true
+                || attempt.Error?.Contains("Proxy", StringComparison.OrdinalIgnoreCase) == true;
+            Ui.Error("  Вход в Telegram не завершён: " + (attempt.Error ?? "время вышло") + ".");
+            if (blocked)
+                Ui.Info(proxy is null
+                    ? "  ПК не достаёт до Telegram (заблокирован). Задайте прокси: /proxy socks5://логин:пароль@хост:порт (или http://…) — или включите VPN в режиме «весь трафик» (TUN), затем /connect telegram."
+                    : "  Прокси " + TelegramLogin.DescribeProxy(proxy) + " не пропустил соединение с Telegram. Проверьте его или задайте другой: /proxy <url>.");
+            else
+                Ui.Info("  Повторите /connect telegram.");
             return;
         }
 
         Ui.Info($"  Вошли как {attempt.User}. Сохраняю и запускаю Telegram MCP…");
-        foreach (var line in await TelegramLogin.SaveAsync(local, attempt.ApiId, attempt.ApiHash, attempt.Session, CancellationToken.None))
+        foreach (var line in await TelegramLogin.SaveAsync(local, attempt.ApiId, attempt.ApiHash, attempt.Session, CancellationToken.None, proxy))
             Ui.Info("  " + line);
     }
 }
