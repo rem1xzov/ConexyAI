@@ -123,9 +123,22 @@ public static class Daemon
         device.Local = local;
         Log($"Локальные инструменты: {local.WantedToolCount} (Google: {(local.Google.Connected ? "подключён" : "нет")}, почта: {(local.Mail.Connected ? "подключена" : "нет")})");
         Log($"Демон запущен (v{Ui.Version}), сервер {server.BaseUrl}, проектов: {device.Projects.Projects.Count}. Журнал: {LogPath}");
-        // FLOAT_BUBBLE: чёрный кружок с логотипом поверх всех окон — открыть Conexy и бросить файлы.
+        // FLOAT_BUBBLE: чёрный круг с логотипом поверх всех окон — открыть Conexy и бросить файлы.
         Bubble.Show();
         AppDomain.CurrentDomain.ProcessExit += (_, _) => Bubble.Hide();
+        // BUBBLE_KEEPALIVE: круг закрывается вместе с окном клиента — у демона он должен вернуться сам,
+        // а не через минуту при следующей регистрации.
+        _ = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                Bubble.Show();
+                try { await Task.Delay(TimeSpan.FromSeconds(10), cts.Token); }
+                catch (OperationCanceledException) { break; }
+            }
+        });
+        // UPDATE_TAKES_EFFECT: демон держит старый exe в памяти — после обновления новый клиент просит его перезапустить.
+        WriteVersionMarker();
         if (device.Projects.Projects.Count == 0)
             Log("Проекты не настроены: conexy projects add <папка>");
         // REMOTE_APPROVAL_POLICY: видно, что именно сайт может одобрить удалённо.
@@ -151,6 +164,7 @@ public static class Daemon
                         break;
                     try { await session.RegisterAsync(); }
                     catch (Exception ex) when (ex is not OperationCanceledException) { /* переподключение само зарегистрирует */ }
+                    // FLOAT_BUBBLE: круг мог закрыться вместе с окном клиента — возвращаем его.
                 }
                 if (!cts.IsCancellationRequested)
                     Log("Соединение закрыто, переподключаюсь…");
@@ -171,6 +185,51 @@ public static class Daemon
         stopWait?.Unregister(null);
         Log("Демон остановлен.");
         return 0;
+    }
+
+    /// <summary>UPDATE_TAKES_EFFECT: версия запущенного демона — по ней клиент понимает, что демон устарел.</summary>
+    public static string VersionMarkerPath => Path.Combine(ProjectStore.ConfigDir, "daemon.version");
+
+    private static void WriteVersionMarker()
+    {
+        try
+        {
+            Directory.CreateDirectory(ProjectStore.ConfigDir);
+            File.WriteAllText(VersionMarkerPath, Ui.Version);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>
+    /// UPDATE_TAKES_EFFECT: после `/update` файл на диске новый, а процесс демона — старый, поэтому новые
+    /// возможности (круг, вход в Telegram, управление ПК) не работали до перезагрузки. Перезапускаем его.
+    /// </summary>
+    public static void RestartIfStale()
+    {
+        try
+        {
+            if (!IsRunning())
+                return;
+            // Маркера нет — демон запущен сборкой, которая его ещё не писала (старая версия).
+            var running = File.Exists(VersionMarkerPath) ? File.ReadAllText(VersionMarkerPath).Trim() : string.Empty;
+            if (running.Length > 0 && running == Ui.Version)
+                return;
+            var autostart = AutostartEnabled();
+            Stop();
+            if (autostart)
+            {
+                Install();
+                Ui.Info($"Демон обновлён до v{Ui.Version} и запущен заново.");
+            }
+            else
+            {
+                Ui.Info($"Демон (v{running}) остановлен: он работал на старой версии. Включите заново: /daemon on");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException)
+        {
+            // Не повод мешать запуску.
+        }
     }
 
     /// <summary>Останавливает запущенный демон и ждёт до 5 секунд. True — демона больше нет.</summary>

@@ -388,8 +388,12 @@ static async Task<int> ChatAsync(string[] args)
     }
 
     // DRAG_DROP: файлы, брошенные на плавающий кружок (или на ярлык conexy.exe), сразу становятся вложениями.
-    // FLOAT_BUBBLE: пока этот процесс жив, кружок на рабочем столе прячется.
+    // FLOAT_BUBBLE: пока этот процесс жив, круг считает клиент открытым; сам круг стартуем здесь же — он
+    // должен висеть и при обычном запуске, а не только у фонового демона.
     Bubble.MarkInteractive();
+    Bubble.Show();
+    // UPDATE_TAKES_EFFECT: демон после обновления крутил старую версию — перезапускаем его.
+    Daemon.RestartIfStale();
     var attachIndex = Array.IndexOf(args, "--attach");
     var dropped = attachIndex >= 0 ? args.Skip(attachIndex + 1).TakeWhile(a => !a.StartsWith("--")) : args.Where(File.Exists);
     foreach (var file in dropped.ToList())
@@ -662,6 +666,7 @@ static void PrintHelp()
             ("/team on|off", "оркестр: ведущий агент собирает команду субагентов (ProMax, Ultra, Admin); действует в чате до /team off"),
             ("/auto", "выполнять команды без подтверждения — вкл/выкл (или флаг --auto)"),
             ("/proxy [url|off|reset]", "прокси для Telegram (если он заблокирован); по умолчанию у администратора — прокси сервера"),
+            ("/bubble", "круг с логотипом на рабочем столе: клик открывает Conexy, файлы можно бросить на него"),
             ("/control on|off", "полный доступ к ПК: агент сам открывает программы и сайты, кликает, печатает, жмёт клавиши без вопросов; вы видите всё на экране. Стоп — курсор в левый верхний угол"),
             ("/permissions", "команды без вопроса в этом проекте\nadd <команда> · remove N · clear"),
         ]),
@@ -954,6 +959,23 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                     break;
                 }
                 // PC_CONTROL: полный доступ агента к экрану, мыши и клавиатуре (сохраняется, действует и на задачи с сайта).
+                // FLOAT_BUBBLE: круг — кружка нет — показываем и добавляем команду.
+                case "/bubble":
+                    if (arg.Equals("off", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Bubble.Hide();
+                        Ui.Info("Круг убран (появится снова при следующем запуске клиента).");
+                    }
+                    else if (arg.Equals("status", StringComparison.OrdinalIgnoreCase) || arg.Length == 0)
+                    {
+                        Bubble.Show();
+                        Ui.Info("Круг на рабочем столе: он всегда поверх окон, его можно перетащить, а файлы бросать прямо на него. Журнал: " + Bubble.LogPath);
+                    }
+                    else
+                    {
+                        Ui.Info("/bubble — показать круг · /bubble off — убрать · /bubble status — журнал.");
+                    }
+                    break;
                 case "/control":
                 {
                     var enable = arg.ToLowerInvariant() switch
