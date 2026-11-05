@@ -5953,20 +5953,35 @@ public class ConexyAgentRunner : IConexyAgentRunner
             sb.AppendLine("Files changed:");
             foreach (var file in changedFiles)
             {
-                sb.AppendLine($"- {file}");
+                sb.AppendLine($"- `{CodeSafe(file, 160)}`");
             }
         }
 
         if (commands.Count > 0)
         {
             sb.AppendLine("Commands executed:");
-            foreach (var command in commands)
+            // SUMMARY_NO_MATH: команды раньше уходили в чат как есть. Скрипт PowerShell с `$tmp`, `$_` и `$z`
+            // превращался в формулы: клиент видел столбики букв вместо текста. Теперь — одна строка в
+            // `code span`, где никакой разметки нет, и список ограничен — это сводка, а не транскрипт.
+            foreach (var command in commands.Take(12))
             {
-                sb.AppendLine($"- {command}");
+                sb.AppendLine($"- `{CodeSafe(command, 160)}`");
             }
+            if (commands.Count > 12)
+                sb.AppendLine($"… и ещё {commands.Count - 12}.");
         }
 
         return sb.ToString().Trim();
+    }
+
+    /// <summary>
+    /// One-line, markup-safe text for an inline code span: line breaks and runs of spaces collapse, backticks
+    /// are replaced (a span cannot contain its own delimiter), and the result is bounded.
+    /// </summary>
+    private static string CodeSafe(string text, int max)
+    {
+        var flat = System.Text.RegularExpressions.Regex.Replace(text.Trim(), @"\s+", " ").Replace('`', '\'');
+        return flat.Length > max ? flat[..max] + "…" : flat;
     }
 
     private record AuditVerdict(bool Approved, IReadOnlyList<string> Issues, string? SkipReason = null)

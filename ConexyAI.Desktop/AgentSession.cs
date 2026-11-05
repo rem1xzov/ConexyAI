@@ -31,6 +31,9 @@ public sealed class AgentSession : IAsyncDisposable
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, (string Id, string Role)> _callAgents = new();
 
     private TaskCompletionSource<string?>? _turn;
+    // TURN_ACTIVE: события сервера (токены, статусы, лог) обрабатываем только внутри хода. После
+    // остановки они ещё летят — и рисовались поверх рамки ввода, ломая её.
+    private volatile bool _inTurn;
     private CancellationTokenSource? _turnCts;
     private bool _streamedAnything;
     private volatile bool _needBullet;
@@ -114,6 +117,8 @@ public sealed class AgentSession : IAsyncDisposable
         // Последний аргумент событий группы — id группы (scopeId); он нам не нужен.
         _hub.On<string, string?>("OnContentToken", (delta, _) =>
         {
+            if (!_inTurn)
+                return;
             _streamedAnything = true;
             _answer.Append(delta);
             Ui.Idle();
@@ -226,6 +231,7 @@ public sealed class AgentSession : IAsyncDisposable
     public async Task<string?> AskAsync(string prompt, CancellationToken ct)
     {
         _turn = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _inTurn = true;
         _turnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _streamedAnything = false;
         _needBullet = true;
@@ -264,6 +270,7 @@ public sealed class AgentSession : IAsyncDisposable
         }
         finally
         {
+            _inTurn = false;
             _turnCts.Cancel();
             Ui.Idle();
             Ui.TeamEnd();
@@ -314,6 +321,8 @@ public sealed class AgentSession : IAsyncDisposable
 
     private void OnServerToolAction(JsonElement payload)
     {
+        if (!_inTurn)
+            return;
         var tool = Prop(payload, "toolName");
         if (tool is null || !ServerTools.Contains(tool))
             return;
@@ -337,7 +346,7 @@ public sealed class AgentSession : IAsyncDisposable
 
     private void OnTeam(JsonElement payload)
     {
-        if (payload.ValueKind != JsonValueKind.Object)
+        if (!_inTurn || payload.ValueKind != JsonValueKind.Object)
             return;
         var agents = new List<(string Id, string Role, string Brief, string Scope)>();
         foreach (var p in payload.EnumerateObject())
@@ -360,6 +369,10 @@ public sealed class AgentSession : IAsyncDisposable
 
     private void OnAgentStatus(JsonElement payload)
     {
+        // LATE_EVENTS: после остановки хода сервер ещё присылает статусы — в консоли они рисовались поверх
+        // рамки ввода и ломали её. Без активного хода их не показываем.
+        if (!_inTurn)
+            return;
         var agentId = Prop(payload, "agentId");
         if (agentId is null or "lead")
             return;

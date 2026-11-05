@@ -553,6 +553,9 @@ public static partial class Ui
         while (Console.KeyAvailable)
             Console.ReadKey(intercept: true);
 
+        // PROMPT_GUARD: спиннер агента (если ещё жив после остановки) стираем ДО отрисовки рамки.
+        Idle();
+        _prompting = true;
         Console.WriteLine();
         if (Attachments.Pending.Count > 0)
         {
@@ -769,12 +772,18 @@ public static partial class Ui
         Console.SetCursorPosition(0, row + 1);
         if (Attachments.Pending.Count > 0)
             Console.WriteLine("  " + C(Cyan, "+ " + Attachments.Describe()));
+        _prompting = false;
         return line;
     }
 
     // ── Спиннер ─────────────────────────────────────────────────────────────
 
     private static string _label = "Думаю";
+
+    // PROMPT_GUARD: пока на экране рамка ввода, спиннер не рисуется вообще. После остановки агента приходили
+    // запоздалые статусы, Busy() заново запускал спиннер, и его строка «Думаю…» затирала строку ввода —
+    // написать что-либо было невозможно до перезапуска окна.
+    private static volatile bool _prompting;
 
     // Пока открыто меню подтверждения, спиннер и панель оркестра не рисуются: иначе другой
     // субагент (его результат вызывает Busy) закрашивал меню, и клиент «висел» в ожидании ответа,
@@ -783,7 +792,7 @@ public static partial class Ui
 
     public static void Busy(string? label = null)
     {
-        if (!Ansi)
+        if (!Ansi || _prompting)
             return;
 
         CancellationTokenSource cts;
@@ -813,7 +822,8 @@ public static partial class Ui
                 var teamMode = false;
                 lock (Gate)
                 {
-                    if (cts.IsCancellationRequested || _confirming)
+                    // Рамка ввода на экране — ничего не пишем: иначе строка статуса затрёт поле ввода.
+                    if (cts.IsCancellationRequested || _confirming || _prompting)
                         break;
                     // Пока работает команда — вместо строки спиннера живая панель агентов.
                     if (_team is { Workers.Count: > 0 })
@@ -846,7 +856,8 @@ public static partial class Ui
         {
             _spin?.Cancel();
             _spin = null;
-            if (!Ansi)
+            // PROMPT_GUARD: после остановки агента спиннер уже не наш — рамку ввода не трогаем.
+            if (!Ansi || _prompting)
                 return;
             if (_drawn > 0)
                 EraseTeam();
@@ -880,7 +891,7 @@ public static partial class Ui
                 return;
             _spin.Cancel();
             _spin = null;
-            if (!Ansi)
+            if (!Ansi || _prompting)
                 return;
             if (_drawn > 0)
                 EraseTeam();
