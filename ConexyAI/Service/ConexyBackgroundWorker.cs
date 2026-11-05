@@ -55,7 +55,8 @@ public class ConexyBackgroundWorker : BackgroundService
         return "\n\n" + Prompts.PromptFragments.DesktopEnvironment(
             string.IsNullOrEmpty(info.Os) ? "unknown OS" : info.Os,
             string.IsNullOrEmpty(workspace) ? "(текущая папка)" : workspace,
-            info.Name);
+            info.Name,
+            info.FullControl);
     }
 
     // PHONE_AGENT: добавлено 2026-10-29 — правила работы с телефоном + модель/версия Android из RegisterPhone.

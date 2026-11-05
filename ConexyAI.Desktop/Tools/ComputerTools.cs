@@ -145,7 +145,10 @@ public sealed class ComputerTools
         DrawCursor(rgb);
 
         var png = WindowTools.EncodePng(rgb, _shotWidth, _shotHeight);
-        var note = $"{prefix} Экран {_shotWidth}×{_shotHeight} (координаты для computer_click — в пикселях ЭТОГО снимка; красный крестик — курсор).".Trim();
+        // UI_STEP_NOTE: в заметке время и позиция курсора — два снимка почти никогда не совпадают байт-в-байт
+        // в ответе, и защита от петель не принимает нормальную работу с экраном за «топтание на месте».
+        GetCursorPos(out var cursor);
+        var note = $"{prefix} Экран {_shotWidth}×{_shotHeight} (координаты для computer_click — в пикселях ЭТОГО снимка; красный крестик — курсор; шаг {DateTime.Now:HH:mm:ss.fff}, курсор {cursor.X},{cursor.Y}).".Trim();
         return $"IMAGE_BASE64:image/png:{Convert.ToBase64String(png)}\n{note}";
     }
 

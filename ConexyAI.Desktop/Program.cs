@@ -963,6 +963,12 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                         _ => !ClientConfig.LoadFullPcControl(),
                     };
                     ClientConfig.SaveFullPcControl(enable);
+                    // PC_CONTROL: сервер сразу узнаёт о режиме — промпт агента меняется в этом же чате.
+                    _ = Task.Run(async () =>
+                    {
+                        try { await session.RegisterAsync(); }
+                        catch (Exception ex) when (ex is not OperationCanceledException) { }
+                    });
                     Ui.Info(enable
                         ? "Полный доступ к ПК включён: агент сам открывает программы, кликает и печатает без вопросов — вы видите всё на экране, каждое действие пишется здесь. " +
                           "Аварийная остановка: уведите курсор в левый верхний угол экрана или нажмите Esc здесь. /control off — выключить."

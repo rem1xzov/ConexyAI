@@ -18,9 +18,23 @@ internal static class ContentPolicyPromptTests
         TestRegistry.Add("content policy: free speech with a politics-only limit", FreeSpeechWithLimitsAsync);
         TestRegistry.Add("content policy: crisis support and helplines", CrisisSupportAsync);
         TestRegistry.Add("content policy: the crisis block is separate from the core rules", CrisisIsSeparateAsync);
+        TestRegistry.Add("desktop prompt: full control switches from asking to acting", FullControlAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
+
+    // PC_CONTROL: с включённым полным доступом агент обязан выполнять поручения, а не отказываться.
+    private static Task FullControlAsync()
+    {
+        var on = PromptFragments.DesktopEnvironment("Windows", "C:\\work", "PC", fullControl: true);
+        Assert(on.Contains("Полный доступ к ПК включён"), "the prompt must announce the full-access mode");
+        Assert(on.Contains("ВЫПОЛНЯЕШЬ"), "the model must be told to act instead of discussing");
+        Assert(on.Contains("Не отказывайся"), "refusals must be explicitly ruled out");
+
+        var off = PromptFragments.DesktopEnvironment("Windows", "C:\\work", "PC");
+        Assert(!off.Contains("Полный доступ к ПК включён"), "without the mode the block must be absent");
+        return Task.CompletedTask;
+    }
 
     private static Task FreeSpeechWithLimitsAsync()
     {

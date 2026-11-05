@@ -13,7 +13,7 @@ namespace ConexyAI.Service.Device;
 public sealed record DeviceToolOutcome(string Output, bool IsError);
 
 /// <summary>Сведения о подключённом устройстве — для промпта агента.</summary>
-public sealed record DeviceInfo(string Name, string Os, string Workspace, IReadOnlyList<DeviceProject>? Projects = null);
+public sealed record DeviceInfo(string Name, string Os, string Workspace, IReadOnlyList<DeviceProject>? Projects = null, bool FullControl = false);
 
 // WEB_DEVICE: добавлено 2026-10-18 — проект (папка) на ПК, который можно выбрать из веба.
 public sealed record DeviceProject(string Id, string Name, string? Path);
@@ -32,6 +32,9 @@ public interface IDeviceToolBridge
     /// важнее фонового демона, иначе демон каждую минуту перехватывает задачи и выполняет их в своей папке.
     /// </summary>
     bool SetMode(Guid userId, string connectionId, string? mode);
+
+    /// <summary>РС сообщает режим полного доступа к экрану и клавиатуре (PC_CONTROL /control on).</summary>
+    bool SetFullControl(Guid userId, string connectionId, bool fullControl);
 
     /// <summary>Снимает подключение при разрыве; ждущие вызовы этого устройства завершаются ошибкой.</summary>
     void Unregister(string connectionId);
@@ -84,6 +87,7 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
     {
         public IReadOnlyList<DeviceProject> Projects { get; init; } = Array.Empty<DeviceProject>();
         public IReadOnlyList<DeviceToolSpec> Tools { get; init; } = Array.Empty<DeviceToolSpec>();
+        public bool FullControl { get; init; }
     }
 
     /// <summary>Все подключения пользователя: одно окно могло переподключиться, пока демон ещё жив.</summary>
@@ -137,7 +141,7 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
         _devices.TryGetValue(userId, out var set) && DateTime.UtcNow - set.LastSeenAt < TimeSpan.FromSeconds(30);
 
     public DeviceInfo? GetInfo(Guid userId) =>
-        Active(userId) is { } d ? new DeviceInfo(d.Name, d.Os, d.Workspace, d.Projects) : null;
+        Active(userId) is { } d ? new DeviceInfo(d.Name, d.Os, d.Workspace, d.Projects, d.FullControl) : null;
 
     public bool IsDeviceConnection(Guid userId, string connectionId) =>
         _devices.TryGetValue(userId, out var set) && set.ByConnection.ContainsKey(connectionId);
@@ -233,6 +237,15 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
 
     public IReadOnlyList<DeviceToolSpec>? GetTools(Guid userId) =>
         Active(userId) is { Tools.Count: > 0 } d ? d.Tools : null;
+
+    // PC_CONTROL: режим «полный доступ» решает модель промпта — без него она переспрашивает каждый шаг.
+    public bool SetFullControl(Guid userId, string connectionId, bool fullControl)
+    {
+        if (!Update(userId, connectionId, d => d with { FullControl = fullControl }))
+            return false;
+        _logger.LogInformation("Desktop device full control: user={UserId} on={On}", userId, fullControl);
+        return true;
+    }
 
     /// <summary>JSON с клиента — только для чтения: имя, описание и схема (чистит DeviceToolSanitizer).</summary>
     private static List<DeviceToolSpec> ParseTools(string? json)

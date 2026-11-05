@@ -259,6 +259,11 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     public Task<bool> RegisterDeviceMode(string? mode) =>
         Task.FromResult(_devices.SetMode(CallerId(), Context.ConnectionId, mode));
 
+    // PC_CONTROL: ПК сообщает, включён ли у него полный доступ (/control on).
+    /// <summary>Включён ли на этом ПК режим полного доступа к экрану и клавиатуре.</summary>
+    public Task<bool> RegisterDeviceControl(bool fullControl) =>
+        Task.FromResult(_devices.SetFullControl(CallerId(), Context.ConnectionId, fullControl));
+
     // ---- WEB_DEVICE: добавлено 2026-10-18 — запуск из веба «на моём ПК» ----
 
     /// <summary>Десктоп сообщает список своих проектов: JSON <c>[{ "id", "name", "path"? }]</c>.</summary>

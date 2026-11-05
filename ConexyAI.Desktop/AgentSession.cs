@@ -160,6 +160,15 @@ public sealed class AgentSession : IAsyncDisposable
         {
             // Старый сервер: он считает подключение устройством с неизвестным режимом.
         }
+        // PC_CONTROL: сервер должен знать, включён ли полный доступ — от этого зависит промпт агента.
+        try
+        {
+            await _hub.InvokeAsync("RegisterDeviceControl", ClientConfig.LoadFullPcControl());
+        }
+        catch (Microsoft.AspNetCore.SignalR.HubException)
+        {
+            // Старый сервер без этого флага — агент будет спрашивать подтверждения.
+        }
         try
         {
             await _hub.InvokeAsync("RegisterDeviceProjects", _device.Projects.ToJson());
