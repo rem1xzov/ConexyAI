@@ -123,6 +123,9 @@ public static class Daemon
         device.Local = local;
         Log($"Локальные инструменты: {local.WantedToolCount} (Google: {(local.Google.Connected ? "подключён" : "нет")}, почта: {(local.Mail.Connected ? "подключена" : "нет")})");
         Log($"Демон запущен (v{Ui.Version}), сервер {server.BaseUrl}, проектов: {device.Projects.Projects.Count}. Журнал: {LogPath}");
+        // FLOAT_BUBBLE: чёрный кружок с логотипом поверх всех окон — открыть Conexy и бросить файлы.
+        Bubble.Show();
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => Bubble.Hide();
         if (device.Projects.Projects.Count == 0)
             Log("Проекты не настроены: conexy projects add <папка>");
         // REMOTE_APPROVAL_POLICY: видно, что именно сайт может одобрить удалённо.

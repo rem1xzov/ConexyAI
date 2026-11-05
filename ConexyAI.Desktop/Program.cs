@@ -387,6 +387,15 @@ static async Task<int> ChatAsync(string[] args)
         key = config.GetKey();
     }
 
+    // DRAG_DROP: файлы, брошенные на плавающий кружок (или на ярлык conexy.exe), сразу становятся вложениями.
+    // FLOAT_BUBBLE: пока этот процесс жив, кружок на рабочем столе прячется.
+    Bubble.MarkInteractive();
+    var attachIndex = Array.IndexOf(args, "--attach");
+    var dropped = attachIndex >= 0 ? args.Skip(attachIndex + 1).TakeWhile(a => !a.StartsWith("--")) : args.Where(File.Exists);
+    foreach (var file in dropped.ToList())
+        if (Attachments.AddFile(file) is { } attachError)
+            Console.Error.WriteLine(attachError);
+
     var root = Path.GetFullPath(Option(args, "--dir") ?? Directory.GetCurrentDirectory());
     if (!Directory.Exists(root))
     {

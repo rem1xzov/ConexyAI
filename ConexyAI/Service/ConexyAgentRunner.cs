@@ -120,7 +120,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 x = new { type = "integer" }, y = new { type = "integer" },
                 amount = new { type = "integer" }
             } }),
-        Function("computer_type", "Набрать текст с клавиатуры в активное поле (любой язык, эмодзи). Сначала кликни в поле. enter=true — нажать Enter после (отправить сообщение, выполнить поиск).",
+        Function("computer_type", "Набрать текст с клавиатуры в активное поле (любой язык, эмодзи). Сначала кликни в поле. enter=true — нажать Enter после (отправить сообщение, выполнить поиск). Логины и пароли пользователя тоже набирай отсюда: без полного доступа текст показывается человеку в окне подтверждения.",
             new { type = "object", properties = new {
                 text = new { type = "string" },
                 enter = new { type = "boolean" }

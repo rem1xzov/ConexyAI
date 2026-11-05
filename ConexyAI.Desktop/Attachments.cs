@@ -23,6 +23,11 @@ public static partial class Attachments
 
     private static int _clipCounter;
 
+    // PASTE_DEDUP: одна и та же картинка приходит дважды (опрос буфера + Ctrl+V терминала). Помним
+    // недавние хеши: дубликат в пределах пары секунд отбрасывается, а через время ту же картинку можно вставить снова.
+    private static readonly List<(string Hash, DateTime At)> RecentClipImages = new();
+    private static readonly TimeSpan ClipDedupWindow = TimeSpan.FromSeconds(3);
+
     private static readonly Dictionary<string, string> Types = new(StringComparer.OrdinalIgnoreCase)
     {
         [".png"] = "image/png", [".jpg"] = "image/jpeg", [".jpeg"] = "image/jpeg", [".gif"] = "image/gif",
@@ -103,7 +108,14 @@ public static partial class Attachments
     /// </summary>
     public static string ExtractFiles(string line, string root, List<string> errors)
     {
-        var text = line;
+        // DRAG_DROP: терминалы оборачивают вставку в маркеры «bracketed paste», а часть приложений при перетаскивании
+        // отдаёт file:///C:/… вместо пути — приводим всё к обычным путям.
+        var text = line.Replace("\x1b[200~", " ").Replace("\x1b[201~", " ").Replace("[200~", " ").Replace("[201~", " ");
+        text = FileUri().Replace(text, m =>
+        {
+            try { return "\"" + new Uri(m.Value).LocalPath + "\""; }
+            catch (UriFormatException) { return m.Value; }
+        });
 
         string Resolve(string p)
         {
@@ -210,8 +222,14 @@ public static partial class Attachments
                 var temp = raw[6..].Trim();
                 try
                 {
-                    var name = $"clipboard-{++_clipCounter}.png";
                     var bytes = File.ReadAllBytes(temp);
+                    var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+                    var now = DateTime.UtcNow;
+                    RecentClipImages.RemoveAll(r => now - r.At > ClipDedupWindow);
+                    if (RecentClipImages.Any(r => r.Hash == hash))
+                        continue;
+                    RecentClipImages.Add((hash, now));
+                    var name = $"clipboard-{++_clipCounter}.png";
                     if (Pending.Count >= MaxFiles || TotalBytes + bytes.Length > MaxTotalBytes)
                         errors = "Вложений слишком много или они слишком большие.";
                     else
@@ -286,12 +304,21 @@ public static partial class Attachments
 
         var before = Pending.Count;
         var (text, note) = PasteFromClipboard();
+        // Вставка той же картинки через Ctrl+V меняет номер буфера — запоминаем новый, чтобы не ловить её снова.
+        _clipboardSequence = GetClipboardSequenceNumber();
         if (text is not null || Pending.Count == before)
-            return false;
+        {
+            // Дубликат: файл уже прикреплён раньше — сообщаем, но второй раз не добавляем.
+            message = Pending.Count > 0 ? "Уже прикреплено: " + Describe() : (note ?? string.Empty);
+            return Pending.Count > before;
+        }
 
         message = note ?? "Прикреплено: " + string.Join(", ", Pending.Skip(before).Select(a => a.FileName));
         return true;
     }
+
+    [GeneratedRegex("file:///[^\\s\"]+")]
+    private static partial Regex FileUri();
 
     [GeneratedRegex("\"([^\"]+\\.[A-Za-z0-9]{1,8})\"")]
     private static partial Regex QuotedPath();
