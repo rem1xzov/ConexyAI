@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace ConexyAI.Desktop.Tools;
 
@@ -17,6 +18,15 @@ public sealed class ComputerTools
 {
     private const int MaxSide = 1600;
     private const int MaxTextLength = 4000;
+
+    // PC_CONTROL_SELF_GUARD: нажатия и клики не уходят в окна, которые могут закрыть сам Conexy или выполнить
+    // набранный текст как команду. Раньше активной оказывалась консоль клиента — и Ctrl+C/Alt+F4 закрывали
+    // приложение прямо посреди задачи.
+    private static readonly HashSet<string> ProtectedProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "conexy", "conhost", "WindowsTerminal", "OpenConsole", "cmd", "powershell", "pwsh", "wsl",
+        "bash", "mintty", "explorer", "Taskmgr", "mmc", "regedit", "mstsc", "SystemSettings",
+    };
 
     private readonly ICommandApprover _approver;
     private readonly string _root;
@@ -50,12 +60,25 @@ public sealed class ComputerTools
         if (FailsafeTriggered())
             throw new ToolException("Пользователь остановил управление ПК (курсор в левом верхнем углу экрана). Не продолжай действия на экране — опиши, что успел сделать, и спроси, продолжать ли.");
 
+        // PC_CONTROL_SELF_GUARD: сначала узнаём активное окно — в него уйдут и клик, и текст, и клавиши.
+        var foreground = Foreground();
+        if (IsInputTool(tool) && foreground is { Protected: true })
+            throw new ToolException(
+                $"Сейчас активно окно «{foreground.Value.Title}» ({foreground.Value.Process}.exe) — туда нажатия не отправляются: " +
+                "это может закрыть Conexy или выполнить текст как команду. Сначала открой или активируй нужную программу/страницу " +
+                "(computer_open, либо клик по её окну после того, как она станет активной), затем повтори действие.");
+
+        if ((tool == "computer_click" || tool == "computer_drag") && ClickHitsOwnWindow(args))
+            throw new ToolException("Точка попадает в окно Conexy — клик отменён, чтобы не закрыть приложение. " +
+                "Активируй целевое окно и сними экран заново (координаты сдвинутся).");
+
         var description = Describe(tool, args);
         if (!ClientConfig.LoadFullPcControl()
             && !await _approver.ApproveAsync("Управление ПК", description + "\n(чтобы не спрашивать каждый раз: /control on)", _root, ct))
             throw new ToolException("Пользователь не разрешил действие на экране. Не повторяй его; спроси, как поступить.");
 
         _log("🖱 " + description);
+        ControlLog(description);
         switch (tool)
         {
             case "computer_click": Click(args); break;
@@ -73,6 +96,75 @@ public sealed class ComputerTools
             return ToolResult.Ok("Готово: " + description);
         await Task.Delay(Math.Clamp(args.Int("delay_ms") ?? 700, 100, 10_000), ct);
         return ToolResult.Ok(Capture("После: " + description + "."));
+    }
+
+    private static bool IsInputTool(string tool) =>
+        tool is "computer_click" or "computer_drag" or "computer_type" or "computer_key";
+
+    private readonly record struct ForegroundWindow(IntPtr Handle, string Process, string Title, bool Protected);
+
+    private static ForegroundWindow? Foreground()
+    {
+        var hwnd = GetForegroundWindow();
+        if (hwnd == IntPtr.Zero)
+            return null;
+        GetWindowThreadProcessId(hwnd, out var pid);
+        string process;
+        if (pid == (uint)Environment.ProcessId)
+            process = "conexy";
+        else
+        {
+            try { process = Process.GetProcessById((int)pid).ProcessName; }
+            catch (ArgumentException) { return null; }
+        }
+        var sb = new StringBuilder(256);
+        GetWindowText(hwnd, sb, sb.Capacity);
+        var protectedWindow = ProtectedProcesses.Contains(process) || pid == (uint)Environment.ProcessId;
+        return new ForegroundWindow(hwnd, process, sb.ToString(), protectedWindow);
+    }
+
+    /// <summary>Клик по окну самого Conexy (например, по его крестику) не выполняем.</summary>
+    private bool ClickHitsOwnWindow(ToolArgs args)
+    {
+        if (args.Int("x") is null || args.Int("y") is null)
+            return false;
+        var own = new List<IntPtr>();
+        var self = (uint)Environment.ProcessId;
+        EnumWindows((hwnd, _) =>
+        {
+            GetWindowThreadProcessId(hwnd, out var pid);
+            if (pid == self && IsWindowVisible(hwnd))
+                own.Add(hwnd);
+            return true;
+        }, IntPtr.Zero);
+        // Координаты приходят в пикселях снимка — переводим в экранные той же формулой, что и Point().
+        var (sx, sy) = ToScreen(args.Int("x")!.Value, args.Int("y")!.Value);
+        foreach (var hwnd in own)
+        {
+            if (!GetWindowRect(hwnd, out var r))
+                continue;
+            if (sx >= r.Left && sx <= r.Right && sy >= r.Top && sy <= r.Bottom)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Журнал действий на экране: после закрытия окна остаётся след, что именно делал агент.</summary>
+    private void ControlLog(string description)
+    {
+        try
+        {
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, "control.log");
+            if (File.Exists(path) && new FileInfo(path).Length > 2 * 1024 * 1024)
+                File.WriteAllText(path, string.Empty);
+            File.AppendAllText(path, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {description}{Environment.NewLine}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Журнал — не повод ломать действие.
+        }
     }
 
     private static string Describe(string tool, ToolArgs args) => tool switch
@@ -186,8 +278,13 @@ public sealed class ComputerTools
             throw new ToolException("Сначала сделай снимок экрана (computer_screen) — координаты считаются по нему.");
         if (x < 0 || y < 0 || x >= _shotWidth || y >= _shotHeight)
             throw new ToolException($"Точка ({x}, {y}) вне снимка {_shotWidth}×{_shotHeight}.");
-        return (_originX + (int)Math.Round(x / _scale), _originY + (int)Math.Round(y / _scale));
+        return ToScreen(x, y);
     }
+
+    /// <summary>Пиксели снимка → пиксели экрана.</summary>
+    private (int X, int Y) ToScreen(int x, int y) =>
+        (_originX + (int)Math.Round(x / (_scale == 0 ? 1 : _scale)),
+         _originY + (int)Math.Round(y / (_scale == 0 ? 1 : _scale)));
 
     private static void MoveTo((int X, int Y) p)
     {
@@ -343,9 +440,19 @@ public sealed class ComputerTools
         {
             // Не путь и не адрес («telegram», «vpn») — ищем через меню «Пуск», как человек.
         }
+
+        // OPEN_TYPING_GUARD: текст в «Пуска» набираем только если меню действительно открылось. Иначе символы
+        // ушли бы в активное окно (например, в консоль Conexy), и Enter превратил бы их в команду.
+        var before = Foreground();
         SendVk(0x5B, false);
         SendVk(0x5B, true);
-        await Task.Delay(700, ct);
+        await Task.Delay(800, ct);
+        var after = Foreground();
+        if (after is { Protected: true } || after?.Handle == before?.Handle)
+            throw new ToolException(
+                $"Не удалось открыть «{target}»: меню «Пуск» не появилось, и набирать текст в активное окно " +
+                $"({after?.Process ?? "?"}) опасно для самого Conexy. Открой программу сам, затем повтори действие на экране.");
+
         foreach (var ch in target)
         {
             SendUnicode(ch, false);
@@ -397,6 +504,16 @@ public sealed class ComputerTools
     }
 
     [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] private struct RECT { public int Left, Top, Right, Bottom; }
+
+    private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextW")] private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct BITMAPINFOHEADER

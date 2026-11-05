@@ -185,9 +185,14 @@ public sealed class AgentSession : IAsyncDisposable
             try
             {
                 await _hub.InvokeAsync("RegisterDeviceTools", json);
-                Log?.Invoke(count == 0
-                    ? "Инструментов ПК нет: Google и почта не подключены, локальных MCP нет."
-                    : $"Инструменты ПК для сайта: {count}.");
+                // LOG_SPAM: демон перерегистрируется раз в минуту — одна и та же строка не нужна каждый раз.
+                if (_lastToolsLogged != count)
+                {
+                    _lastToolsLogged = count;
+                    Log?.Invoke(count == 0
+                        ? "Инструментов ПК нет: Google и почта не подключены, локальных MCP нет."
+                        : $"Инструменты ПК для сайта: {count}.");
+                }
             }
             catch (Microsoft.AspNetCore.SignalR.HubException)
             {
@@ -196,6 +201,8 @@ public sealed class AgentSession : IAsyncDisposable
             }
         }
     }
+
+    private int _lastToolsLogged = -1;
 
     /// <summary>Схемы локальных инструментов для сервера. Ограничены по размеру сообщения SignalR (~32 КБ).</summary>
     private (string Json, int Count) ToolSpecsJson()
