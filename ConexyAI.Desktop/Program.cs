@@ -392,6 +392,8 @@ static async Task<int> ChatAsync(string[] args)
     // должен висеть и при обычном запуске, а не только у фонового демона.
     Bubble.MarkInteractive();
     Bubble.Show();
+    // TRAY_QUIT: «Закрыть Conexy» в трее завершает клиент вместе с кругом.
+    Bubble.ListenForQuit(() => Environment.Exit(0));
     // UPDATE_TAKES_EFFECT: демон после обновления крутил старую версию — перезапускаем его.
     Daemon.RestartIfStale();
     var attachIndex = Array.IndexOf(args, "--attach");

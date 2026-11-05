@@ -137,6 +137,12 @@ public static class Daemon
                 catch (OperationCanceledException) { break; }
             }
         });
+        // TRAY_QUIT: «Закрыть Conexy» в трее останавливает и демон, иначе он снова вернёт круг.
+        Bubble.ListenForQuit(() =>
+        {
+            try { cts.Cancel(); }
+            catch (ObjectDisposedException) { }
+        });
         // UPDATE_TAKES_EFFECT: демон держит старый exe в памяти — после обновления новый клиент просит его перезапустить.
         WriteVersionMarker();
         if (device.Projects.Projects.Count == 0)

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace ConexyAI.Desktop;
 
@@ -18,13 +19,16 @@ public static class Bubble
     /// <summary>Событие «подними окно»: круг не запускает второй клиент, а просит уже открытый показаться.</summary>
     public const string ShowWindowEventName = @"Local\ConexyAI-Show";
 
+    /// <summary>Событие «закройся»: нажатие в трее закрывает клиент и убирает круг.</summary>
+    public const string QuitEventName = @"Local\ConexyAI-Quit";
+
     private static Process? _process;
     private static readonly object Sync = new();
 
     public static string LogPath => Path.Combine(ProjectStore.ConfigDir, "bubble.log");
 
     private const string Script = """
-        param([string]$Exe, [string]$ShowEvent, [string]$InteractiveMutex, [string]$Log)
+        param([string]$Exe, [string]$ShowEvent, [string]$QuitEvent, [string]$InteractiveMutex, [string]$Log)
 
         $ErrorActionPreference = 'Stop'
         function Log($m) {
@@ -50,7 +54,7 @@ public static class Bubble
         $form.StartPosition = 'Manual'
         $form.ShowInTaskbar = $false
         $form.TopMost = $true
-        $form.BackColor = [System.Drawing.Color]::FromArgb(18, 18, 18)
+        $form.BackColor = [System.Drawing.Color]::Black
         $form.ClientSize = New-Object System.Drawing.Size($size, $size)
         $form.Text = 'Conexy'
 
@@ -65,16 +69,13 @@ public static class Bubble
         $form.Add_Paint({
             param($s, $e)
             $e.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-            $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(18, 18, 18))
+            $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::Black)
             $e.Graphics.FillEllipse($brush, 0, 0, $s.Width - 1, $s.Height - 1)
-            $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(70, 70, 70)), 1
-            $e.Graphics.DrawEllipse($pen, 0, 0, $s.Width - 2, $s.Height - 2)
             if ($s.Tag -ne $null) {
-                $icon = New-Object System.Drawing.Icon -ArgumentList $s.Tag, 34, 34
-                $e.Graphics.DrawIcon($icon, 11, 11)
+                $icon = New-Object System.Drawing.Icon -ArgumentList $s.Tag, 30, 30
+                $e.Graphics.DrawIcon($icon, 13, 13)
             }
             $brush.Dispose()
-            $pen.Dispose()
         })
 
         # В правом нижнем углу, над панелью задач; положение запоминается между запусками.
@@ -96,6 +97,37 @@ public static class Bubble
         $dragging = $false
         $moved = $false
         $start = New-Object System.Drawing.Point 0, 0
+
+        # Общие действия: открыть окно и закрыть клиент целиком (трей и клик по кругу).
+        function Open-Conexy {
+            $running = $false
+            try {
+                $m = [System.Threading.Mutex]::OpenExisting($InteractiveMutex)
+                $m.Dispose()
+                $running = $true
+            } catch { $running = $false }
+            if ($running) {
+                try {
+                    $ev = [System.Threading.EventWaitHandle]::OpenExisting($ShowEvent)
+                    $ev.Set() | Out-Null
+                    $ev.Dispose()
+                } catch { Log ('show event: ' + $_.Exception.Message) }
+            } else {
+                try { Start-Process -FilePath $Exe -WorkingDirectory (Split-Path $Exe) } catch { Log ('start: ' + $_.Exception.Message) }
+            }
+        }
+
+        function Close-Conexy {
+            try {
+                $ev = [System.Threading.EventWaitHandle]::OpenExisting($QuitEvent)
+                $ev.Set() | Out-Null
+                $ev.Dispose()
+            } catch { }
+            # Клиент может быть занят — через полторы секунды добиваем оставшиеся процессы.
+            Start-Sleep -Milliseconds 1500
+            try { Get-Process -Name conexy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue } catch { }
+            Log 'closed from tray'
+        }
 
         $form.Add_MouseDown({
             param($s, $e)
@@ -124,22 +156,7 @@ public static class Bubble
                 try { Set-Content -LiteralPath $posFile -Value ($s.Left.ToString() + ',' + $s.Top.ToString()) -Encoding ascii } catch { }
                 return
             }
-            # Окно Conexy открыто — просим его показаться; нет — запускаем клиент.
-            $running = $false
-            try {
-                $m = [System.Threading.Mutex]::OpenExisting($InteractiveMutex)
-                $m.Dispose()
-                $running = $true
-            } catch { $running = $false }
-            if ($running) {
-                try {
-                    $ev = [System.Threading.EventWaitHandle]::OpenExisting($ShowEvent)
-                    $ev.Set() | Out-Null
-                    $ev.Dispose()
-                } catch { Log ('show event: ' + $_.Exception.Message) }
-            } else {
-                try { Start-Process -FilePath $Exe -WorkingDirectory (Split-Path $Exe) } catch { Log ('start: ' + $_.Exception.Message) }
-            }
+            Open-Conexy
         })
 
         # Файлы, брошенные на круг, становятся вложениями новой сессии.
@@ -170,6 +187,29 @@ public static class Bubble
         $script:form = $form
         $timer.Start()
 
+        # Значок в трее («скрытые значки»): там Conexy можно открыть или закрыть полностью.
+        try {
+            $trayIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($Exe)
+            $tray = New-Object System.Windows.Forms.NotifyIcon
+            $tray.Icon = if ($trayIcon) { $trayIcon } else { [System.Drawing.SystemIcons]::Application }
+            $tray.Text = 'Conexy'
+            $menu = New-Object System.Windows.Forms.ContextMenuStrip
+            $itemOpen = $menu.Items.Add('Открыть Conexy')
+            $itemOpen.Add_Click({ Open-Conexy })
+            $itemQuit = $menu.Items.Add('Закрыть Conexy')
+            $itemQuit.Add_Click({ Close-Conexy; $script:tray.Visible = $false; $script:form.Close() })
+            $tray.ContextMenuStrip = $menu
+            $tray.Add_DoubleClick({ Open-Conexy })
+            $script:tray = $tray
+            $tray.Visible = $true
+        } catch {
+            Log ('tray: ' + $_.Exception.Message)
+        }
+
+        $form.Add_FormClosed({
+            try { $script:tray.Visible = $false; $script:tray.Dispose() } catch { }
+        })
+
         Log ('shown at ' + $form.Location + ' exe=' + $Exe)
         [System.Windows.Forms.Application]::Run($form)
         """;
@@ -192,7 +232,9 @@ public static class Bubble
             try
             {
                 Directory.CreateDirectory(ProjectStore.ConfigDir);
-                File.WriteAllText(scriptPath, Script);
+                // PS_UTF8_BOM: Windows PowerShell 5.1 читает .ps1 без BOM как ANSI — русский текст в меню
+                // превращался в кракозябры и ломал разбор скрипта.
+                File.WriteAllText(scriptPath, Script, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
                 var shell = PowershellPath();
                 var psi = new ProcessStartInfo(shell)
                 {
@@ -204,6 +246,7 @@ public static class Bubble
                              "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
                              "-ExecutionPolicy", "Bypass", "-File", scriptPath,
                              "-Exe", exe, "-ShowEvent", ShowWindowEventName,
+                             "-QuitEvent", QuitEventName,
                              "-InteractiveMutex", InteractiveMutexName, "-Log", LogPath,
                          })
                     psi.ArgumentList.Add(arg);
@@ -303,9 +346,36 @@ public static class Bubble
         SetForegroundWindow(hwnd);
     }
 
+    /// <summary>
+    /// Слушает команду «закрыть» из трея: по ней процесс клиента завершается, и круг с клиентом исчезают.
+    /// </summary>
+    public static void ListenForQuit(Action onQuit)
+    {
+        try
+        {
+            _quitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, QuitEventName);
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    _quitEvent.WaitOne();
+                }
+                catch (ObjectDisposedException) { return; }
+                onQuit();
+            })
+            { IsBackground = true, Name = "conexy-quit" };
+            thread.Start();
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            _quitEvent = null;
+        }
+    }
+
     // ReSharper disable once NotAccessedField.Local — держим ссылки, чтобы мьютекс и событие не освободились.
     private static Mutex? _interactive;
     private static EventWaitHandle? _showEvent;
+    private static EventWaitHandle? _quitEvent;
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetConsoleWindow();
