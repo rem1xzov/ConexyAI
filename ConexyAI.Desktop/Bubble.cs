@@ -5,9 +5,11 @@ using System.Text;
 namespace ConexyAI.Desktop;
 
 /// <summary>
-/// FLOAT_BUBBLE: маленький помощник на рабочем столе — чёрный круг с логотипом, всегда поверх других окон.
-/// Висит, пока запущен Conexy (окно или фоновый демон): клик открывает окно Conexy (или поднимает уже
-/// открытое), на круг можно перетащить файлы — они станут вложениями, сам круг перетаскивается мышью.
+/// FLOAT_BUBBLE: маленький помощник на рабочем столе — облачко-компаньон внутри чёрного круга, всегда
+/// поверх других окон. Висит, пока запущен Conexy (окно или фоновый демон): клик открывает окно Conexy
+/// (или поднимает уже открытое), на круг можно перетащить файлы — они станут вложениями, сам круг
+/// перетаскивается мышью. Облачко «живёт»: левитирует, моргает и следит глазами за курсором; когда
+/// агенту нужно подтверждение, в круге загорается значок уведомления.
 /// <para>Клиент консольный, поэтому окно рисует PowerShell + WinForms. Единственный экземпляр охраняет
 /// мьютекс внутри скрипта: сколько бы процессов клиента ни запустили круг, он один.</para>
 /// </summary>
@@ -27,8 +29,11 @@ public static class Bubble
 
     public static string LogPath => Path.Combine(ProjectStore.ConfigDir, "bubble.log");
 
+    /// <summary>Сколько подтверждений сейчас ждут ответа: по этому файлу круг показывает значок.</summary>
+    public static string ApprovalFile => Path.Combine(ProjectStore.ConfigDir, "approvals.pending");
+
     private const string Script = """
-        param([string]$Exe, [string]$ShowEvent, [string]$QuitEvent, [string]$InteractiveMutex, [string]$Log)
+        param([string]$Exe, [string]$ShowEvent, [string]$QuitEvent, [string]$InteractiveMutex, [string]$Log, [string]$ApprovalFile)
 
         $ErrorActionPreference = 'Stop'
         function Log($m) {
@@ -48,9 +53,90 @@ public static class Bubble
         $own = New-Object System.Threading.Mutex($false, 'Local\ConexyAI-Bubble')
         if (-not $own.WaitOne(0)) { exit 0 }
 
-        $size = 56
+        $size = 64
+
+        # <companion-draw>
+        function Add-Capsule($path, $x, $y, $w, $h) {
+            $d = [Math]::Min($w, $h)
+            if ($h -le $w) {
+                $path.AddEllipse($x, $y, $w, $h)
+            } else {
+                $path.AddArc($x, $y, $w, $d, 180, 180)
+                $path.AddArc($x, $y + $h - $d, $w, $d, 0, 180)
+                $path.CloseFigure()
+            }
+        }
+
+        # Компаньон: белое облачко с чёрными глазами внутри круга. $lift — левитация, $eyeDx/$eyeDy — взгляд,
+        # $blink — прищур, $badge — значок «нужно подтверждение».
+        function Draw-Companion($g, $w, $h, $lift, $eyeDx, $eyeDy, $blink, $badge, $pulse) {
+            $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+            $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+
+            # VISIBLE_CIRCLE: рисуем по МЕНЬШЕЙ стороне — ровно та же окружность, что и Region, поэтому
+            # облако всегда в центре видимого круга, даже если окно посчитало себя больше.
+            $d = [Math]::Min($w, $h)
+            $bg = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::Black)
+            $g.FillRectangle($bg, 0, 0, $w, $h)
+            $g.FillEllipse($bg, 0, 0, ($d - 1), ($d - 1))
+            $bg.Dispose()
+
+            $cx = $d / 2.0
+            $cy = $d / 2.0 + $lift
+
+            # Силуэт облака: три пуховые шапки сверху и общее основание. Один путь с Winding = объединение.
+            $cloud = New-Object System.Drawing.Drawing2D.GraphicsPath
+            $cloud.FillMode = [System.Drawing.Drawing2D.FillMode]::Winding
+            $cloud.AddEllipse(($cx - 21.0), ($cy - 5.0), 17.0, 17.0)
+            $cloud.AddEllipse(($cx - 11.0), ($cy - 16.0), 23.0, 23.0)
+            $cloud.AddEllipse(($cx + 5.0), ($cy - 6.0), 17.0, 17.0)
+            $cloud.AddEllipse(($cx - 20.0), ($cy + 0.5), 40.0, 16.0)
+            $white = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
+            $g.FillPath($white, $cloud)
+            $white.Dispose()
+            $cloud.Dispose()
+
+            # Глаза: чёрные капсулы; при моргании превращаются в тонкие полоски.
+            $eyeW = 6.5
+            $eyeH = if ($blink) { 2.2 } else { 11.0 }
+            $eyeTop = $cy - 2.5 + $eyeDy
+            $eyes = @(($cx - 9.0 + $eyeDx), ($cx + 2.5 + $eyeDx))
+            $black = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::Black)
+            foreach ($ex in $eyes) {
+                $p = New-Object System.Drawing.Drawing2D.GraphicsPath
+                Add-Capsule $p $ex $eyeTop $eyeW $eyeH
+                $g.FillPath($black, $p)
+                $p.Dispose()
+            }
+            $black.Dispose()
+
+            # Значок «нужно подтвердить»: пульсирующая янтарная точка с восклицательным знаком.
+            # BADGE_INSIDE: держим его внутри видимого круга — у края он обрезался дугой.
+            if ($badge) {
+                $alpha = [int](180 + 75 * $pulse)
+                $amber = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb($alpha, 245, 166, 35))
+                $bx = $d - 23.0
+                $by = $d - 53.0
+                $g.FillEllipse($amber, $bx, $by, 15.0, 15.0)
+                $amber.Dispose()
+                $mark = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::Black)
+                $g.FillRectangle($mark, ($bx + 6.4), ($by + 3.0), 2.3, 5.6)
+                $g.FillRectangle($mark, ($bx + 6.4), ($by + 10.1), 2.3, 2.1)
+                $mark.Dispose()
+            }
+        }
+        # </companion-draw>
+
         $form = New-Object System.Windows.Forms.Form
         $form.FormBorderStyle = 'None'
+        # DPI_FIX: без этого окно само меняло размер на экранах с масштабом 125–150%, а круглая область
+        # оставалась прежней — облако рисовалось правее видимого круга и обрезалось.
+        # FLICKER_FIX: без двойной буферзации перерисовка 20 раз в секунду сильно мерцала.
+        $doubleBuffered = [System.Windows.Forms.Form].GetProperty('DoubleBuffered',
+            [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic)
+        $doubleBuffered.SetValue($form, $true)
+        $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::None
+        $form.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96)
         $form.StartPosition = 'Manual'
         $form.ShowInTaskbar = $false
         $form.TopMost = $true
@@ -58,34 +144,41 @@ public static class Bubble
         $form.ClientSize = New-Object System.Drawing.Size($size, $size)
         $form.Text = 'Conexy'
 
-        # Круглое окно: регион-эллипс, иначе остались бы тёмные углы.
-        $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-        $path.AddEllipse(0, 0, $size - 1, $size - 1)
-        $form.Region = New-Object System.Drawing.Region($path)
+        # Круглое окно: регион-эллипс по фактическому размеру клиента (и при любом изменении).
+        function Update-Shape {
+            $d = [Math]::Min($script:form.ClientSize.Width, $script:form.ClientSize.Height)
+            if ($d -lt 8) { return }
+            $p = New-Object System.Drawing.Drawing2D.GraphicsPath
+            $p.AddEllipse(0, 0, ($d - 1), ($d - 1))
+            try { $script:form.Region = New-Object System.Drawing.Region($p) } catch { }
+            $p.Dispose()
+        }
 
-        # Логотип — иконка самого conexy.exe.
-        try { $form.Tag = [System.Drawing.Icon]::ExtractAssociatedIcon($Exe) } catch { Log ('icon: ' + $_.Exception.Message) }
+        $script:phase = 0.0
+        $script:eyeDx = 0.0
+        $script:eyeDy = 0.0
+        $script:blink = $false
+        $script:badge = $false
+        $script:pulse = 0.0
+        $script:nextBlink = (Get-Date).AddMilliseconds(1500)
+        $script:blinkUntil = [DateTime]::MinValue
+        $script:lastBadgeCheck = [DateTime]::MinValue
 
         $form.Add_Paint({
             param($s, $e)
-            $e.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-            $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::Black)
-            $e.Graphics.FillEllipse($brush, 0, 0, $s.Width - 1, $s.Height - 1)
-            if ($s.Tag -ne $null) {
-                $icon = New-Object System.Drawing.Icon -ArgumentList $s.Tag, 30, 30
-                $e.Graphics.DrawIcon($icon, 13, 13)
-            }
-            $brush.Dispose()
+            $lift = [Math]::Sin($script:phase) * 2.6
+            # PAINT_CENTER: размер берём из клиентской области — так облако всегда точно в центре круга.
+            $w = $s.ClientSize.Width
+            $h = $s.ClientSize.Height
+            Draw-Companion $e.Graphics $w $h $lift $script:eyeDx $script:eyeDy $script:blink $script:badge $script:pulse
         })
 
-        # В правом нижнем углу, над панелью задач; положение запоминается между запусками.
         $posFile = Join-Path (Split-Path $Log) 'bubble.pos'
         $placed = $false
         try {
             if (Test-Path -LiteralPath $posFile) {
                 $saved = (Get-Content -LiteralPath $posFile -Raw).Trim() -split ','
-                $x = [int]$saved[0]; $y = [int]$saved[1]
-                $form.Location = New-Object System.Drawing.Point $x, $y
+                $form.Location = New-Object System.Drawing.Point ([int]$saved[0]), ([int]$saved[1])
                 $placed = $true
             }
         } catch { $placed = $false }
@@ -178,13 +271,63 @@ public static class Bubble
             catch { Log ('drop: ' + $_.Exception.Message) }
         })
 
-        # Круг всегда сверху: некоторые приложения и полноэкранные окна снимают флаг — возвращаем.
+        # Живость: левитация, случайные моргания, взгляд за курсором, значок подтверждения.
         $timer = New-Object System.Windows.Forms.Timer
-        $timer.Interval = 1500
+        $timer.Interval = 50
         $timer.Add_Tick({
+            $now = Get-Date
+            $script:phase += 0.11
+
+            if ($now -gt $script:nextBlink) {
+                $script:blinkUntil = $now.AddMilliseconds(130)
+                $script:nextBlink = $now.AddMilliseconds((Get-Random -Minimum 2200 -Maximum 5200))
+            }
+            $script:blink = $now -lt $script:blinkUntil
+
+            # Глаза следят за курсором, когда он рядом с кругом.
+            try {
+                $p = [System.Windows.Forms.Cursor]::Position
+                $local = $script:form.PointToClient((New-Object System.Drawing.Point $p.X, $p.Y))
+                $dx = $local.X - ($script:form.ClientSize.Width / 2.0)
+                $dy = $local.Y - ($script:form.ClientSize.Height / 2.0)
+                $dist = [Math]::Sqrt($dx * $dx + $dy * $dy)
+                if ($dist -gt 1 -and $dist -lt 180) {
+                    $script:eyeDx = [Math]::Max(-2.2, [Math]::Min(2.2, $dx / 34.0))
+                    $script:eyeDy = [Math]::Max(-1.6, [Math]::Min(1.6, $dy / 44.0))
+                } else {
+                    $script:eyeDx = 0.0
+                    $script:eyeDy = 0.0
+                }
+            } catch { }
+
+            # Значок подтверждения: файл со счётчиком пишет клиент, пока ждёт ответа.
+            if (($now - $script:lastBadgeCheck).TotalMilliseconds -gt 400) {
+                $script:lastBadgeCheck = $now
+                $pending = $false
+                try {
+                    if (Test-Path -LiteralPath $ApprovalFile) {
+                        $raw = (Get-Content -LiteralPath $ApprovalFile -Raw).Trim()
+                        $pending = ($raw.Length -gt 0 -and [int]$raw -gt 0)
+                    }
+                } catch { $pending = $false }
+                $script:badge = $pending
+            }
+            $script:pulse = ([Math]::Sin($now.TimeOfDay.TotalSeconds * 4.0) + 1.0) / 2.0
+
             if (-not $script:form.TopMost) { $script:form.TopMost = $true }
+            $script:form.Invalidate()
         })
         $script:form = $form
+        Update-Shape
+        $form.Add_Resize({ Update-Shape })
+        # SIZE_ON_SHOW: при показе WinForms сам растягивал окно до 136x64 (круг занимал левую часть,
+        # а облако рисовалось в центре широкого окна — «уезжало вправо»). Задаём размер после показа.
+        $form.Add_Shown({
+            $script:form.ClientSize = New-Object System.Drawing.Size($size, $size)
+            Update-Shape
+            $script:form.Invalidate()
+            Log ('client=' + $script:form.ClientSize.Width + 'x' + $script:form.ClientSize.Height)
+        })
         $timer.Start()
 
         # Значок в трее («скрытые значки»): там Conexy можно открыть или закрыть полностью.
@@ -235,8 +378,7 @@ public static class Bubble
                 // PS_UTF8_BOM: Windows PowerShell 5.1 читает .ps1 без BOM как ANSI — русский текст в меню
                 // превращался в кракозябры и ломал разбор скрипта.
                 File.WriteAllText(scriptPath, Script, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
-                var shell = PowershellPath();
-                var psi = new ProcessStartInfo(shell)
+                var psi = new ProcessStartInfo(PowershellPath())
                 {
                     UseShellExecute = false,
                     CreateNoWindow = true,
@@ -248,10 +390,11 @@ public static class Bubble
                              "-Exe", exe, "-ShowEvent", ShowWindowEventName,
                              "-QuitEvent", QuitEventName,
                              "-InteractiveMutex", InteractiveMutexName, "-Log", LogPath,
+                             "-ApprovalFile", ApprovalFile,
                          })
                     psi.ArgumentList.Add(arg);
                 _process = Process.Start(psi);
-                Log($"bubble launched: pid={_process?.Id} shell={shell}");
+                Log($"bubble launched: pid={_process?.Id}");
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
             {
@@ -335,17 +478,6 @@ public static class Bubble
         }
     }
 
-    /// <summary>Поднимает окно консоли клиента (круг попросил показаться).</summary>
-    private static void BringConsoleToFront()
-    {
-        var hwnd = GetConsoleWindow();
-        if (hwnd == IntPtr.Zero)
-            return;
-        ShowWindow(hwnd, 9);   // SW_RESTORE
-        ShowWindow(hwnd, 5);   // SW_SHOW
-        SetForegroundWindow(hwnd);
-    }
-
     /// <summary>
     /// Слушает команду «закрыть» из трея: по ней процесс клиента завершается, и круг с клиентом исчезают.
     /// </summary>
@@ -372,7 +504,18 @@ public static class Bubble
         }
     }
 
-    // ReSharper disable once NotAccessedField.Local — держим ссылки, чтобы мьютекс и событие не освободились.
+    /// <summary>Поднимает окно консоли клиента (круг попросил показаться).</summary>
+    private static void BringConsoleToFront()
+    {
+        var hwnd = GetConsoleWindow();
+        if (hwnd == IntPtr.Zero)
+            return;
+        ShowWindow(hwnd, 9);   // SW_RESTORE
+        ShowWindow(hwnd, 5);   // SW_SHOW
+        SetForegroundWindow(hwnd);
+    }
+
+    // ReSharper disable once NotAccessedField.Local — держим ссылки, чтобы мьютекс и события не освободились.
     private static Mutex? _interactive;
     private static EventWaitHandle? _showEvent;
     private static EventWaitHandle? _quitEvent;

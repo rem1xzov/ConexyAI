@@ -53,6 +53,9 @@ public sealed class ConsoleApprover : ICommandApprover
             if (_auto)
                 return true;
 
+            // APPROVAL_BADGE: пока человек решает, на круге горит значок «нужно подтверждение».
+            using var badge = ApprovalBadge.Enter();
+
             if (!Ui.Ansi)
                 return await AskPlainAsync(command, workingDirectory, ct, note);
 
@@ -82,6 +85,7 @@ public sealed class ConsoleApprover : ICommandApprover
         await _gate.WaitAsync(ct);
         try
         {
+            using var badge = ApprovalBadge.Enter();
             if (!Ui.Ansi)
                 return await AskPlainAsync(details, where, ct, allowAuto: false);
             var choice = await Ui.ConfirmAsync(title, details, where, ct, allowAuto: false);

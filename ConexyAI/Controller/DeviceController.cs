@@ -33,9 +33,9 @@ public class DeviceController : ControllerBase
     // Адрес по умолчанию — последний релиз на GitHub (образ собирается workflow desktop-release). Переопределяется
     // настройкой Desktop:DownloadUrl, если exe лежит в другом месте.
     private const string DefaultDownloadUrl =
-        "https://github.com/rem1xzov/ConexyAI/releases/latest/download/conexy-win-x64.exe";
+        "https://github.com/rem1xzov/ConexyAI/releases/latest/download/conexy.exe";
 
-    private const string DesktopAssetName = "conexy-win-x64.exe";
+    private const string DesktopAssetName = "conexy.exe";
 
     // MOBILE_APP: у мобильного клиента свой релиз и свой номер версии. Десктоп и приложение
     // обновляются независимо, поэтому берём не «последний релиз вообще», а последний,

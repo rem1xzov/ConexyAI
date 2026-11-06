@@ -74,6 +74,8 @@ public sealed class RemoteApprover : ICommandApprover
     {
         if (_hub is not { State: HubConnectionState.Connected } hub || ToolCallContext.Current is not { } ctx)
             return false;
+        // APPROVAL_BADGE: подтверждение ждёт ответа — на круге горит значок.
+        using var badge = ApprovalBadge.Enter();
         var requestId = Guid.NewGuid();
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _approvals[requestId] = tcs; // до вызова: ответ может прийти раньше, чем вернётся Invoke

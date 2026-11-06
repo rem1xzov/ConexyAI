@@ -217,7 +217,7 @@
     "desktopGuideSmartscreenTitle": "1. Windows: “Windows protected your PC”",
     "desktopGuideSmartscreenWhy": "This blue SmartScreen window appears for any new program without a paid code-signing certificate. It does not mean the file has a virus: Windows shows it because few people have downloaded the program so far.",
     "desktopGuideSmartscreen1": "In the blue window, click “More info”.",
-    "desktopGuideSmartscreen2": "Check that the “App” line says conexy.exe or conexy-win-x64.exe.",
+    "desktopGuideSmartscreen2": "Check that the “App” line says conexy.exe.",
     "desktopGuideSmartscreen3": "Click “Run anyway”. You will only see this on the first launch.",
     "desktopGuideAvTitle": "2. Your antivirus blocked or deleted the file",
     "desktopGuideAv1": "This is a false positive: antivirus tools distrust new unsigned programs, especially ones that run terminal commands. The agent needs this to build and run your project.",

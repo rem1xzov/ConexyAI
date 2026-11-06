@@ -20,7 +20,8 @@ public static class Updater
     private static readonly string[] AllowedDownloadHosts =
         ["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"];
     private const string ReleasesApi = "https://api.github.com/repos/rem1xzov/ConexyAI/releases?per_page=20";
-    private const string AssetName = "conexy-win-x64.exe";
+    // ASSET_NAME: файл релиза называется так же, как сам клиент — conexy.exe (раньше conexy-win-x64.exe).
+    private const string AssetName = "conexy.exe";
     private const int MaxRedirects = 5;
 
     internal static bool IsAllowedDownloadUrl(Uri? uri) =>
