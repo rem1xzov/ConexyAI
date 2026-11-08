@@ -24,6 +24,11 @@ public static class Bubble
     /// <summary>Событие «закройся»: нажатие в трее закрывает клиент и убирает круг.</summary>
     public const string QuitEventName = @"Local\ConexyAI-Quit";
 
+    /// <summary>Заголовок окна клиента: по нему круг находит окно и поднимает его.</summary>
+    public const string WindowTitle = "Conexy";
+    /// <summary>Заголовок окна самого кружка — чтобы не принять его за клиент.</summary>
+    private const string BubbleWindowTitle = "ConexyCloud";
+
     private static Process? _process;
     private static readonly object Sync = new();
 
@@ -32,8 +37,67 @@ public static class Bubble
     /// <summary>Сколько подтверждений сейчас ждут ответа: по этому файлу круг показывает значок.</summary>
     public static string ApprovalFile => Path.Combine(ProjectStore.ConfigDir, "approvals.pending");
 
+    private const string Win32Helper = """
+        using System;
+        using System.Text;
+        using System.Runtime.InteropServices;
+
+        public static class ConexyWin
+        {
+            public delegate bool EnumProc(IntPtr h, IntPtr p);
+
+            [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr p);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextW")]
+            public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+            [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+            [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+
+            public static IntPtr Find(string title, string skip)
+            {
+                IntPtr found = IntPtr.Zero;
+                EnumWindows((h, p) =>
+                {
+                    if (!IsWindowVisible(h)) return true;
+                    var sb = new StringBuilder(512);
+                    GetWindowText(h, sb, sb.Capacity);
+                    var t = sb.ToString();
+                    if (t.Length == 0 || t.Contains(skip)) return true;
+                    if (t.Equals(title, StringComparison.OrdinalIgnoreCase)
+                        || t.StartsWith(title + " ", StringComparison.OrdinalIgnoreCase)
+                        || t.StartsWith(title + " —", StringComparison.OrdinalIgnoreCase)
+                        || t.Contains(" — " + title))
+                    {
+                        found = h;
+                        return false;
+                    }
+                    return true;
+                }, IntPtr.Zero);
+                return found;
+            }
+
+            public static void Raise(IntPtr h)
+            {
+                if (IsIconic(h)) ShowWindow(h, 9);
+                ShowWindow(h, 5);
+                keybd_event(0x12, 0, 0, UIntPtr.Zero);
+                keybd_event(0x12, 0, 2, UIntPtr.Zero);
+                SetForegroundWindow(h);
+            }
+
+            public static bool ClientFocused(string title, string skip)
+            {
+                var h = Find(title, skip);
+                return h != IntPtr.Zero && GetForegroundWindow() == h;
+            }
+        }
+        """;
+
     private const string Script = """
-        param([string]$Exe, [string]$ShowEvent, [string]$QuitEvent, [string]$InteractiveMutex, [string]$Log, [string]$ApprovalFile)
+        param([string]$Exe, [string]$ShowEvent, [string]$QuitEvent, [string]$InteractiveMutex, [string]$Log, [string]$ApprovalFile, [string]$AttentionFile, [string]$HelperFile)
 
         $ErrorActionPreference = 'Stop'
         function Log($m) {
@@ -43,6 +107,9 @@ public static class Bubble
         try {
             Add-Type -AssemblyName System.Windows.Forms
             Add-Type -AssemblyName System.Drawing
+            # WIN32_FIND: поиск окна клиента по заголовку — GetConsoleWindow в Windows Terminal невидим,
+            # поэтому поднимаем окно терминала, в котором крутится Conexy.
+            Add-Type -Path $HelperFile
             [System.Windows.Forms.Application]::EnableVisualStyles()
         } catch {
             Log ('init failed: ' + $_.Exception.Message)
@@ -142,7 +209,7 @@ public static class Bubble
         $form.TopMost = $true
         $form.BackColor = [System.Drawing.Color]::Black
         $form.ClientSize = New-Object System.Drawing.Size($size, $size)
-        $form.Text = 'Conexy'
+        $form.Text = 'ConexyCloud'
 
         # Круглое окно: регион-эллипс по фактическому размеру клиента (и при любом изменении).
         function Update-Shape {
@@ -193,6 +260,15 @@ public static class Bubble
 
         # Общие действия: открыть окно и закрыть клиент целиком (трей и клик по кругу).
         function Open-Conexy {
+            # Сначала ищем настоящее окно клиента: в Windows Terminal GetConsoleWindow возвращает невидимое окно,
+            # и раньше клик по кругу не делал ничего заметного.
+            $h = [ConexyWin]::Find('Conexy', 'ConexyCloud')
+            if ($h -ne [IntPtr]::Zero) {
+                # Открыли окно — значок уведомления больше не нужен.
+                try { if (Test-Path -LiteralPath $AttentionFile) { Remove-Item -LiteralPath $AttentionFile -Force } } catch { }
+                [ConexyWin]::Raise($h)
+                return
+            }
             $running = $false
             try {
                 $m = [System.Threading.Mutex]::OpenExisting($InteractiveMutex)
@@ -300,7 +376,8 @@ public static class Bubble
                 }
             } catch { }
 
-            # Значок подтверждения: файл со счётчиком пишет клиент, пока ждёт ответа.
+            # Значок подтверждения/уведомления: файлы пишет клиент, а пока окно Conexy на переднем плане —
+            # значок не показываем вовсе.
             if (($now - $script:lastBadgeCheck).TotalMilliseconds -gt 400) {
                 $script:lastBadgeCheck = $now
                 $pending = $false
@@ -309,7 +386,11 @@ public static class Bubble
                         $raw = (Get-Content -LiteralPath $ApprovalFile -Raw).Trim()
                         $pending = ($raw.Length -gt 0 -and [int]$raw -gt 0)
                     }
-                } catch { $pending = $false }
+                    if (Test-Path -LiteralPath $AttentionFile) { $pending = $true }
+                } catch { }
+                if ($pending) {
+                    try { if ([ConexyWin]::ClientFocused('Conexy', 'ConexyCloud')) { $pending = $false } } catch { }
+                }
                 $script:badge = $pending
             }
             $script:pulse = ([Math]::Sin($now.TimeOfDay.TotalSeconds * 4.0) + 1.0) / 2.0
@@ -372,9 +453,11 @@ public static class Bubble
                 return;
 
             var scriptPath = Path.Combine(ProjectStore.ConfigDir, "bubble.ps1");
+            var helperPath = Path.Combine(ProjectStore.ConfigDir, "bubblehelper.cs");
             try
             {
                 Directory.CreateDirectory(ProjectStore.ConfigDir);
+                File.WriteAllText(helperPath, Win32Helper, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
                 // PS_UTF8_BOM: Windows PowerShell 5.1 читает .ps1 без BOM как ANSI — русский текст в меню
                 // превращался в кракозябры и ломал разбор скрипта.
                 File.WriteAllText(scriptPath, Script, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
@@ -390,7 +473,8 @@ public static class Bubble
                              "-Exe", exe, "-ShowEvent", ShowWindowEventName,
                              "-QuitEvent", QuitEventName,
                              "-InteractiveMutex", InteractiveMutexName, "-Log", LogPath,
-                             "-ApprovalFile", ApprovalFile,
+                             "-ApprovalFile", ApprovalFile, "-AttentionFile", Attention.FilePath,
+                             "-HelperFile", helperPath,
                          })
                     psi.ArgumentList.Add(arg);
                 _process = Process.Start(psi);
@@ -507,11 +591,58 @@ public static class Bubble
     /// <summary>Поднимает окно консоли клиента (круг попросил показаться).</summary>
     private static void BringConsoleToFront()
     {
-        var hwnd = GetConsoleWindow();
+        var hwnd = FindOwnWindow();
+        if (hwnd == IntPtr.Zero)
+            hwnd = GetConsoleWindow();
         if (hwnd == IntPtr.Zero)
             return;
+        RaiseWindow(hwnd);
+    }
+
+    /// <summary>Окно клиента по заголовку: в Windows Terminal GetConsoleWindow — невидимое окно.</summary>
+    private static IntPtr FindOwnWindow()
+    {
+        var found = IntPtr.Zero;
+        EnumWindows((hwnd, _) =>
+        {
+            if (!IsWindowVisible(hwnd))
+                return true;
+            var title = WindowText(hwnd);
+            if (title.Length == 0 || title.Contains(BubbleWindowTitle, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (title.Equals(WindowTitle, StringComparison.OrdinalIgnoreCase))
+            {
+                found = hwnd;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    /// <summary>Окно клиента сейчас на переднем плане? По этому признаку прячем значок уведомления.</summary>
+    public static bool IsClientWindowForeground()
+    {
+        var own = FindOwnWindow();
+        if (own == IntPtr.Zero)
+            return false;
+        return GetForegroundWindow() == own;
+    }
+
+    private static string WindowText(IntPtr hwnd)
+    {
+        var sb = new StringBuilder(512);
+        GetWindowText(hwnd, sb, sb.Capacity);
+        return sb.ToString();
+    }
+
+    private static void RaiseWindow(IntPtr hwnd)
+    {
         ShowWindow(hwnd, 9);   // SW_RESTORE
         ShowWindow(hwnd, 5);   // SW_SHOW
+        // Windows не даёт фоновому процессу забрать фокус — нажатие Alt снимает этот запрет.
+        keybd_event(0x12, 0, 0, UIntPtr.Zero);
+        keybd_event(0x12, 0, 0x0002, UIntPtr.Zero);
         SetForegroundWindow(hwnd);
     }
 
@@ -528,4 +659,21 @@ public static class Bubble
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumProc callback, IntPtr lParam);
+
+    private delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hwnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextW")]
+    private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
 }

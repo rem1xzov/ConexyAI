@@ -38,10 +38,11 @@ import {
 } from '../api/deviceApi';
 import { getSubscriptionUsage } from '../api/conexyApi';
 import { humanError } from '../utils/humanError';
+import { useIsMobile } from '../hooks/useMediaQuery';
 import { setPlainCode, usePlainCode } from '../utils/displayPrefs';
 import { ConfirmDialog } from './Dialog';
 import { TelegramConnect } from './TelegramConnect';
-import { ChevronDownIcon, CloseIcon, EyeIcon, EyeOffIcon, TrashIcon } from './Icons';
+import { ChevronDownIcon, CloseIcon, DatabaseIcon, DownloadIcon, EyeIcon, EyeOffIcon, GearIcon, GitHubIcon, MonitorIcon, PhoneIcon, PlugIcon, SendIcon, ShieldIcon, TrashIcon, UserIcon } from './Icons';
 import type { ChatSession } from '../types/chat';
 // PHONE_AGENT: раздел «Телефон» — только в Android-приложении с плагином PhoneAgent.
 import {
@@ -156,18 +157,18 @@ const LANGS: { value: string; key: string }[] = [
   { value: 'en', key: 'settings.langEn' },
 ];
 
-const SECTIONS: { value: SettingsSection; key: string }[] = [
-  { value: 'general', key: 'prefs.tabGeneral' },
-  { value: 'limits', key: 'prefs.tabLimits' },
-  { value: 'personalization', key: 'prefs.tabPersonalization' },
-  { value: 'memory', key: 'memory.tab' },
-  { value: 'github', key: 'settings.githubTab' },
-  { value: 'mcp', key: 'settings.mcpTab' },
+const SECTIONS: { value: SettingsSection; key: string; Icon: typeof GearIcon }[] = [
+  { value: 'general', key: 'prefs.tabGeneral', Icon: GearIcon },
+  { value: 'limits', key: 'prefs.tabLimits', Icon: ShieldIcon },
+  { value: 'personalization', key: 'prefs.tabPersonalization', Icon: UserIcon },
+  { value: 'memory', key: 'memory.tab', Icon: DatabaseIcon },
+  { value: 'github', key: 'settings.githubTab', Icon: GitHubIcon },
+  { value: 'mcp', key: 'settings.mcpTab', Icon: PlugIcon },
   // TELEGRAM_LOGIN: личный Telegram — подключение и с сайта, и с телефона.
-  { value: 'telegram', key: 'telegram.tab' },
-  { value: 'desktop', key: 'settings.desktopTab' },
-  { value: 'app', key: 'settings.appTab' },
-  { value: 'phone', key: 'phone.tab' },
+  { value: 'telegram', key: 'telegram.tab', Icon: SendIcon },
+  { value: 'desktop', key: 'settings.desktopTab', Icon: MonitorIcon },
+  { value: 'app', key: 'settings.appTab', Icon: DownloadIcon },
+  { value: 'phone', key: 'phone.tab', Icon: PhoneIcon },
 ];
 
 // MOBILE_APP: на телефоне раздел «Десктоп» бессмыслен (там exe для Windows), и вместо него
@@ -1442,6 +1443,9 @@ export function SettingsModal({
   );
   const [prefsDirty, setPrefsDirty] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // SETTINGS_SHELL: на телефоне сначала список разделов, потом сам раздел (как в приложении).
+  const narrow = useIsMobile();
+  const [mobilePane, setMobilePane] = useState<'nav' | 'body'>(initialSection === 'general' ? 'nav' : 'body');
 
   // Closing with unsaved personalization edits asks first instead of silently dropping them.
   function requestClose() {
@@ -1463,28 +1467,50 @@ export function SettingsModal({
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div className="settings-modal__head">
-            <div className="dialog-title">{t('settings.title')}</div>
+            {narrow && mobilePane === 'body' ? (
+              <button
+                className="icon-btn"
+                onClick={() => setMobilePane('nav')}
+                aria-label={t('common.back')}
+                type="button"
+              >
+                <ChevronDownIcon size={18} className="rotate-90" />
+              </button>
+            ) : null}
+            <div className="dialog-title">
+              {narrow && mobilePane === 'body'
+                ? t(SECTIONS.find((s) => s.value === section)?.key ?? 'settings.title')
+                : t('settings.title')}
+            </div>
             <button className="icon-btn" onClick={requestClose} aria-label={t('common.close')} type="button">
               <CloseIcon size={18} />
             </button>
           </div>
 
-          <div className="settings-modal__segmented settings-tabs" role="tablist">
-            {visibleSections.map((s) => (
-              <button
-                key={s.value}
-                role="tab"
-                aria-selected={section === s.value}
-                className={`settings-seg ${section === s.value ? 'settings-seg--active' : ''}`}
-                onClick={() => setSection(s.value)}
-                type="button"
-              >
-                {t(s.key)}
-              </button>
-            ))}
-          </div>
+          <div
+            className={`settings-shell${narrow ? ' settings-shell--narrow' : ''}${narrow && mobilePane === 'body' ? ' settings-shell--detail' : ''}`}
+          >
+            <nav className="settings-nav" role="tablist">
+              {visibleSections.map((s) => (
+                <button
+                  key={s.value}
+                  role="tab"
+                  aria-selected={section === s.value}
+                  className={`settings-nav__item${section === s.value ? ' is-active' : ''}`}
+                  onClick={() => {
+                    setSection(s.value);
+                    if (narrow) setMobilePane('body');
+                  }}
+                  type="button"
+                >
+                  <s.Icon size={18} className="settings-nav__icon" />
+                  <span className="settings-nav__label">{t(s.key)}</span>
+                  <ChevronDownIcon size={16} className="settings-nav__chev" />
+                </button>
+              ))}
+            </nav>
 
-          <div className="settings-modal__body">
+            <div className="settings-modal__body">
             <div hidden={section !== 'general'}>
               <div className="settings-panel">
                 <div className="settings-modal__section">
@@ -1582,6 +1608,7 @@ export function SettingsModal({
                 <PhoneSection />
               </div>
             )}
+            </div>
           </div>
         </div>
       </div>

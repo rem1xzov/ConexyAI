@@ -390,8 +390,12 @@ static async Task<int> ChatAsync(string[] args)
     // DRAG_DROP: файлы, брошенные на плавающий кружок (или на ярлык conexy.exe), сразу становятся вложениями.
     // FLOAT_BUBBLE: пока этот процесс жив, круг считает клиент открытым; сам круг стартуем здесь же — он
     // должен висеть и при обычном запуске, а не только у фонового демона.
+    // WINDOW_TITLE: круг по заголовку находит окно клиента, чтобы поднять его по клику
+    // (GetConsoleWindow в Windows Terminal возвращает невидимое окно).
+    try { Console.Title = Bubble.WindowTitle; } catch (IOException) { }
     Bubble.MarkInteractive();
     Bubble.Show();
+    Attention.Watch();
     // TRAY_QUIT: «Закрыть Conexy» в трее завершает клиент вместе с кругом.
     Bubble.ListenForQuit(() => Environment.Exit(0));
     // UPDATE_TAKES_EFFECT: демон после обновления крутил старую версию — перезапускаем его.

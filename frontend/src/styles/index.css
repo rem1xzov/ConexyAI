@@ -4050,6 +4050,124 @@ body {
   font-weight: 600;
 }
 
+/* ---------- SETTINGS_SHELL: двухколоночный экран настроек (как в DeepSeek) ---------- */
+.settings-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 18px;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 0 0 208px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.settings-nav__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 8px 11px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.settings-nav__item:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.settings-nav__item.is-active {
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.settings-nav__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-nav__chev {
+  display: none;
+  flex-shrink: 0;
+  transform: rotate(-90deg);
+  opacity: 0.7;
+}
+
+.settings-modal__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-modal__head .dialog-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Телефон: сначала список разделов, потом сам раздел — как в мобильном приложении. */
+@media (max-width: 768px) {
+  .settings-modal.settings-modal--wide {
+    width: 100vw;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+    padding: 14px 14px 8px;
+  }
+
+  .settings-shell--narrow {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .settings-shell--narrow .settings-nav {
+    flex: 1 1 auto;
+    width: 100%;
+    padding: 0;
+  }
+
+  .settings-shell--narrow .settings-nav__item {
+    min-height: 52px;
+    border-radius: 12px;
+  }
+
+  .settings-shell--narrow .settings-nav__chev {
+    display: block;
+  }
+
+  .settings-shell--narrow.settings-shell--detail .settings-nav {
+    display: none;
+  }
+
+  .settings-shell--narrow:not(.settings-shell--detail) .settings-modal__body {
+    display: none;
+  }
+
+  .settings-shell--narrow.settings-shell--detail .settings-modal__body {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+}
+
 /* ---------- THEME-AWARE CHAT COLORS (replaces hardcoded Tailwind zinc/red/etc.) ---------- */
 .chat-surface { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); }
 .chat-surface-soft { background: var(--surface); border: 1px solid var(--border); color: var(--text); }
@@ -9007,7 +9125,7 @@ body.workspace-resizing {
 
 /* ---------- SETTINGS: personalization + memory ---------- */
 .settings-modal--wide {
-  width: min(600px, 94vw);
+  width: min(880px, 94vw);
   max-height: min(760px, 90vh);
   overflow: hidden;
 }

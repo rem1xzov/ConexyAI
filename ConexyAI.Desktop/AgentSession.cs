@@ -276,6 +276,8 @@ public sealed class AgentSession : IAsyncDisposable
             Ui.TeamEnd();
             Ui.FlushText();
             Console.WriteLine();
+            // ATTENTION_BADGE: агент закончил, а окно не на переднем плане — на круге загорается значок.
+            Attention.SetIfUnfocused("Агент закончил работу");
         }
     }
 
