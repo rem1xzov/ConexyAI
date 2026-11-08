@@ -1602,14 +1602,12 @@ body {
   padding: 2px 6px;
   border-radius: 6px;
   font-size: 16px;
-  opacity: 0;
+  opacity: 1;
   transition: opacity 0.15s;
 }
 
-.chats__row:hover .chats__menu-btn,
-.chats__menu-btn:focus {
-  opacity: 1;
-}
+/* Кнопка рендерится только у активного чата (см. Sidebar), поэтому hover-правило не нужно:
+   у остальных строк её просто нет. */
 
 /* CHAT_MENU_TOUCH: on a phone or tablet there is no hover, so a hover-only button is invisible.
    The button is always shown there and the touch target grows to at least 36x36 (the icon keeps
@@ -11512,7 +11510,6 @@ html[data-theme="light"]:not([data-incognito="true"]) .artifact-panel {
 .guest-hero__btn,
 .nav__item,
 .icon-btn,
-.chats__menu-btn,
 .mobile-menu-btn {
   border-radius: 999px;
   border: 1px solid var(--glass-edge);
@@ -11534,7 +11531,6 @@ html[data-theme="light"]:not([data-incognito="true"]) .artifact-panel {
 .guest-hero__btn:hover,
 .nav__item:hover,
 .icon-btn:hover,
-.chats__menu-btn:hover,
 .mobile-menu-btn:hover {
   background:
     linear-gradient(180deg, var(--glass-sheen), transparent 72%),

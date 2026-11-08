@@ -260,14 +260,18 @@ export function Sidebar(props: SidebarProps) {
                       </button>
                     )}
 
-                    <button
-                      className="chats__menu-btn"
-                      onClick={(e) => toggleMenu(s.id, e.currentTarget)}
-                      aria-label={t('sidebar.sessionMenu')}
-                      aria-expanded={openMenuId === s.id}
-                    >
-                      <ThreeDotsIcon size={16} />
-                    </button>
+                    {/* CHAT_MENU_ACTIVE_ONLY: «⋯» есть только у открытого чата — по одиночке, а не у каждой
+                        строки списка. Открыли другой чат — кнопка переехала к нему. */}
+                    {s.id === activeId && (
+                      <button
+                        className="chats__menu-btn"
+                        onClick={(e) => toggleMenu(s.id, e.currentTarget)}
+                        aria-label={t('sidebar.sessionMenu')}
+                        aria-expanded={openMenuId === s.id}
+                      >
+                        <ThreeDotsIcon size={16} />
+                      </button>
+                    )}
 
                     {openMenuId === s.id && (
                       <div className={`chats__menu ${menuUp ? 'chats__menu--up' : ''}`} ref={menuRef}>
