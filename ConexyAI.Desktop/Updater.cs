@@ -22,13 +22,22 @@ public static class Updater
     private const string ReleasesApi = "https://api.github.com/repos/rem1xzov/ConexyAI/releases?per_page=20";
     // ASSET_NAME: файл релиза называется так же, как сам клиент — conexy.exe (раньше conexy-win-x64.exe).
     private const string AssetName = "conexy.exe";
+    private const string ReleasesPage = "https://github.com/rem1xzov/ConexyAI/releases";
     private const int MaxRedirects = 5;
 
     internal static bool IsAllowedDownloadUrl(Uri? uri) =>
         uri is { IsAbsoluteUri: true, Scheme: "https" } && uri.IsDefaultPort
         && AllowedDownloadHosts.Contains(uri.Host, StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Ожидаемый SHA-256 (hex) ассета с таким browser_download_url или null, если такого ассета/digest нет.</summary>
+    /// <summary>
+    /// Ожидаемый SHA-256 (hex) ассета с таким <c>browser_download_url</c> или null, если такого ассета/digest нет.
+    /// <para>
+    /// ASSET_BY_URL: сверяем по ССЫЛКЕ, а не по имени файла. Имя ассета менялось (conexy-win-x64.exe → conexy.exe),
+    /// и жёсткая проверка имени ломала обновление ровно в момент переименования: сервер уже отдаёт новую ссылку,
+    /// а старый клиент ищет ассет со старым именем и не находит ничего. Ссылка с GitHub однозначно указывает
+    /// на релиз и файл, а контрольная сумма всё равно сверяется.
+    /// </para>
+    /// </summary>
     private static async Task<string?> ExpectedSha256Async(string url, CancellationToken ct)
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
@@ -43,15 +52,17 @@ public static class Updater
                 continue;
             foreach (var asset in assets.EnumerateArray())
             {
-                if (asset.TryGetProperty("name", out var name) && name.GetString() == AssetName
-                    && asset.TryGetProperty("browser_download_url", out var link) && link.GetString() == url)
-                {
-                    var digest = asset.TryGetProperty("digest", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() : null;
-                    if (digest is null || !digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
-                        return null;
-                    var hex = digest["sha256:".Length..].ToLowerInvariant();
-                    return hex.Length == 64 && hex.All(Uri.IsHexDigit) ? hex : null;
-                }
+                if (!asset.TryGetProperty("browser_download_url", out var link) || link.GetString() != url)
+                    continue;
+                // Имя принимаем любое из известных: у релиза может лежать и новый файл, и старая копия.
+                var name = asset.TryGetProperty("name", out var n) ? n.GetString() : null;
+                if (name is not ("conexy.exe" or "conexy-win-x64.exe"))
+                    continue;
+                var digest = asset.TryGetProperty("digest", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() : null;
+                if (digest is null || !digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+                    return null;
+                var hex = digest["sha256:".Length..].ToLowerInvariant();
+                return hex.Length == 64 && hex.All(Uri.IsHexDigit) ? hex : null;
             }
         }
         return null;
@@ -302,7 +313,8 @@ public static class Updater
             }
             if (expected is null)
             {
-                Ui.Error($"Обновление отклонено: в релизах GitHub нет {AssetName} с этой ссылкой и контрольной суммой SHA-256.");
+                Ui.Error($"Обновление отклонено: в релизах GitHub нет {AssetName} с этой ссылкой и контрольной суммой SHA-256. " +
+                         $"Скачайте вручную: {ReleasesPage}");
                 return null;
             }
 
