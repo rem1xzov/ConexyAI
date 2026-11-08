@@ -4,7 +4,7 @@ import type { ChatMessage, DeviceQuestion } from '../types/chat';
 import type { DeviceDiffFile, DeviceDiffPayload } from '../types/signalr';
 import { DEVICE_DIFF_HEADING, diffStats } from '../utils/deviceTarget';
 import { HighlightedCode } from './markdown/HighlightedCode';
-import { ChevronDownIcon } from './Icons';
+import { ChevronDownIcon, CheckIcon } from './Icons';
 
 // WEB_DEVICE: добавлено 2026-10-18 — части ответа агента, работающего на ПК пользователя:
 // ожидание подключения ПК, вопросы агента и изменённые на ПК файлы.
@@ -94,6 +94,9 @@ function DeviceQuestionCard({
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(false);
+  // QUESTION_COLLAPSE: после ответа плашка сворачивается в одну строку — вопрос уже не "висит" в глазах,
+  // а ответ всегда видно и можно развернуть обратно одним нажатием.
+  const [expanded, setExpanded] = useState(false);
   const answered = question.answer !== undefined;
   const locked = answered || sending || disabled;
 
@@ -111,49 +114,81 @@ function DeviceQuestionCard({
   }
 
   return (
-    <div className={`device-card device-card--question ${answered ? 'device-card--done' : ''}`}>
-      <div className="device-card__head">{t('device.question')}</div>
-      <p className="device-card__question">{question.question}</p>
-      {question.options.length > 0 && (
-        <div className="device-card__actions">
-          {question.options.map((option) => (
-            <button
-              key={option}
-              type="button"
-              className={`cmd-confirm__btn ${question.answer === option ? 'cmd-confirm__btn--allow' : ''}`}
-              disabled={locked}
-              onClick={() => void send(option)}
-            >
-              {option}
-            </button>
-          ))}
-        </div>
-      )}
-      {answered ? (
-        <p className="device-card__hint">
-          {t('device.answered')}: <strong>{question.answer}</strong>
-        </p>
-      ) : (
-        <form
-          className="device-card__form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send(text);
-          }}
+    <div
+      className={`device-card device-card--question ${answered ? 'device-card--done' : ''}${answered && !expanded ? ' device-card--collapsed' : ''}`}
+    >
+      {answered && !expanded ? (
+        <button
+          type="button"
+          className="device-card__summary"
+          onClick={() => setExpanded(true)}
+          aria-expanded={false}
+          title={t('device.question')}
         >
-          <input
-            className="dialog-input device-card__input"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder={t('device.answerPlaceholder')}
-            disabled={locked}
-          />
-          <button type="submit" className="cmd-confirm__btn cmd-confirm__btn--allow" disabled={locked || !text.trim()}>
-            {t('device.answer')}
-          </button>
-        </form>
+          <CheckIcon size={14} className="device-card__summary-icon" />
+          <span className="device-card__summary-text">
+            {t('device.answered')}: <strong>{question.answer}</strong>
+          </span>
+          <ChevronDownIcon size={14} className="device-card__summary-chev" />
+        </button>
+      ) : (
+        <>
+          <div className="device-card__head">
+            {t('device.question')}
+            {answered && (
+              <button
+                type="button"
+                className="device-card__collapse"
+                onClick={() => setExpanded(false)}
+                aria-label={t('common.close')}
+              >
+                <ChevronDownIcon size={14} className="device-card__summary-chev device-card__summary-chev--up" />
+              </button>
+            )}
+          </div>
+          <p className="device-card__question">{question.question}</p>
+          {question.options.length > 0 && (
+            <div className="device-card__actions">
+              {question.options.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  className={`cmd-confirm__btn ${question.answer === option ? 'cmd-confirm__btn--allow' : ''}`}
+                  disabled={locked}
+                  onClick={() => void send(option)}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          )}
+          {answered ? (
+            <p className="device-card__hint">
+              {t('device.answered')}: <strong>{question.answer}</strong>
+            </p>
+          ) : (
+            <form
+              className="device-card__form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void send(text);
+              }}
+            >
+              <input
+                className="dialog-input device-card__input"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder={t('device.answerPlaceholder')}
+                disabled={locked}
+              />
+              <button type="submit" className="cmd-confirm__btn cmd-confirm__btn--allow" disabled={locked || !text.trim()}>
+                {t('device.answer')}
+              </button>
+            </form>
+          )}
+          {error && <span className="chat-danger">{t('device.actionFailed')}</span>}
+        </>
       )}
-      {error && <span className="chat-danger">{t('device.actionFailed')}</span>}
     </div>
   );
 }

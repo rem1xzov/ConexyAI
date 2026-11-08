@@ -1973,11 +1973,11 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   padding: 0;
   border: none;
-  border-radius: 8px;
+  border-radius: 50%;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -4167,6 +4167,87 @@ body {
     flex: 1 1 auto;
     min-height: 0;
   }
+}
+
+/* ---------- GLASS_ROUND: круглые кнопки «жидкое стекло» ---------- */
+/* Полупрозрачный шар с бликом сверху и тонкой светлой каймой: так кнопки в шапке и вокруг поля ввода
+   выглядят как в референсе, и одинаково в тёмной и светлой теме. */
+:root {
+  --glass-fill: rgba(255, 255, 255, 0.10);
+  --glass-sheen: rgba(255, 255, 255, 0.26);
+  --glass-edge: rgba(255, 255, 255, 0.20);
+  --glass-shadow: rgba(0, 0, 0, 0.38);
+}
+
+:root[data-theme='light'] {
+  --glass-fill: rgba(255, 255, 255, 0.62);
+  --glass-sheen: rgba(255, 255, 255, 0.95);
+  --glass-edge: rgba(9, 12, 20, 0.10);
+  --glass-shadow: rgba(9, 12, 20, 0.16);
+}
+
+.chat-actions__btn,
+.attach-btn,
+.mic-btn,
+.icon-btn.glass-round {
+  position: relative;
+  border-radius: 50%;
+  border: 1px solid var(--glass-edge);
+  background:
+    radial-gradient(120% 120% at 30% 12%, var(--glass-sheen), transparent 55%),
+    var(--glass-fill);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+    0 6px 16px var(--glass-shadow);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  backdrop-filter: blur(14px) saturate(150%);
+  color: var(--text);
+  transition: transform 0.12s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.chat-actions__btn:hover,
+.attach-btn:hover,
+.mic-btn:hover,
+.icon-btn.glass-round:hover {
+  background:
+    radial-gradient(120% 120% at 30% 12%, rgba(255, 255, 255, 0.34), transparent 58%),
+    var(--glass-fill);
+  transform: translateY(-1px);
+  color: var(--text);
+}
+
+.chat-actions__btn:active,
+.attach-btn:active,
+.mic-btn:active,
+.icon-btn.glass-round:active {
+  transform: scale(0.95);
+}
+
+/* Размеры: кнопки у поля ввода — 40 px, в шапке — 38 px. */
+.attach-btn,
+.mic-btn {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+}
+
+.mic-btn {
+  color: var(--text);
+}
+
+.mic-btn--active {
+  color: #fff;
+  background:
+    radial-gradient(120% 120% at 30% 12%, rgba(255, 255, 255, 0.35), transparent 55%),
+    var(--danger, #f43f5e);
+}
+
+/* Кнопка отправки остаётся акцентной, но с тем же стеклянным бликом. */
+.send-btn {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 6px 16px var(--glass-shadow);
 }
 
 /* ---------- THEME-AWARE CHAT COLORS (replaces hardcoded Tailwind zinc/red/etc.) ---------- */
@@ -11012,6 +11093,80 @@ html[data-theme="light"]:not([data-incognito="true"]) .artifact-panel {
 
 .device-card--done {
   opacity: 0.75;
+}
+
+/* ---------- QUESTION_COLLAPSE: плашка вопроса после ответа ---------- */
+.device-card--collapsed {
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+}
+
+.device-card__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.device-card__summary:hover {
+  color: var(--text);
+}
+
+.device-card__summary-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-card__summary-text strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.device-card__summary-icon {
+  flex-shrink: 0;
+  color: var(--ok, #22c55e);
+}
+
+.device-card__summary-chev {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.device-card__summary-chev--up {
+  transform: rotate(180deg);
+}
+
+.device-card__collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.device-card__collapse:hover {
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 .device-card__head {
