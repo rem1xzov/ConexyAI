@@ -11591,7 +11591,8 @@ html[data-incognito='true'] .chat-surface-soft {
      с обрезкой, правая всегда целая. */
   .chat-header {
     gap: 6px;
-    padding: 0 8px;
+    /* Слева — место под плавающую кнопку меню (она fixed, 40 px в 48-пиксельной полосе). */
+    padding: 0 8px 0 56px;
   }
 
   .chat-header__left {
@@ -11599,6 +11600,8 @@ html[data-incognito='true'] .chat-surface-soft {
     min-width: 0;
     gap: 6px;
     overflow: hidden;
+    /* Справа — место под абсолютные кнопки действий, иначе выбор модели заезжает под них. */
+    padding-right: 104px;
   }
 
   .chat-header__actions {
