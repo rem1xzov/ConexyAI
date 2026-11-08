@@ -2945,18 +2945,21 @@ export default function App() {
   // INCOGNITO_CHAT: добавлено 2026-09-20
   // Rendered in the chat header: an active switch while the chat is still empty, a passive
   // badge afterwards (the mode is locked, but the user must not forget it is on).
+  // INCOGNITO_MOBILE: на телефоне шапка тесная — там только круглый призрак без подписи, и он
+  // исчезает, как только в чате появилось первое сообщение (никакого бейджа в тесной строке).
   const incognitoControl = showIncognitoToggle ? (
     <button
-      className={`incognito-toggle ${incognito ? 'incognito-toggle--on' : ''}`}
+      className={`incognito-toggle ${incognito ? 'incognito-toggle--on' : ''}${isMobile ? ' incognito-toggle--compact' : ''}`}
       onClick={() => setIncognito((v) => !v)}
       type="button"
       aria-pressed={incognito}
+      aria-label={t('chat.incognito')}
       title={t('chat.incognitoHint')}
     >
       <GhostIcon size={15} />
-      <span>{t('chat.incognito')}</span>
+      {!isMobile && <span>{t('chat.incognito')}</span>}
     </button>
-  ) : incognitoActive ? (
+  ) : incognitoActive && !isMobile ? (
     <span className="incognito-badge" title={t('chat.incognitoHint')}>
       <GhostIcon size={15} />
       <span>{t('chat.incognito')}</span>

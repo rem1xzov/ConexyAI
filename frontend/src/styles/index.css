@@ -4167,7 +4167,6 @@ body {
   }
 }
 
-/* ---------- THEME-AWARE CHAT COLORS (replaces hardcoded Tailwind zinc/red/etc.) ---------- */
 .chat-surface { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); }
 .chat-surface-soft { background: var(--surface); border: 1px solid var(--border); color: var(--text); }
 .chat-input { background: var(--bg-input); border: 1px solid var(--border); color: var(--text); }
@@ -11569,3 +11568,61 @@ html[data-theme="light"]:not([data-incognito="true"]) .artifact-panel {
   box-shadow: none;
 }
 
+
+/* ---------- THEME-AWARE CHAT COLORS ---------- */
+/* ---------- INCOGNITO_MOBILE: компактный призрак и шапка без наложения ---------- */
+/* INCOGNITO_OPAQUE: в инкогнито подложка пузырей была полупрозрачной (0.72) — через неё
+   просвечивала аура и соседние сообщения, и текст выглядел «наложенным» друг на друга. */
+html[data-incognito='true'] .chat-surface,
+html[data-incognito='true'] .chat-surface-soft {
+  background: #131313;
+}
+.incognito-toggle--compact {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  justify-content: center;
+  gap: 0;
+}
+
+@media (max-width: 768px) {
+  /* HEADER_NO_OVERLAP: на узком экране левая группа (логотип + выбор модели) и правая (инкогнито,
+     новый чат, меню) не помещались и рисовались друг поверх друга. Левая группа теперь сжимается
+     с обрезкой, правая всегда целая. */
+  .chat-header {
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .chat-header__left {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .chat-header__actions {
+    flex: 0 0 auto;
+    gap: 6px;
+  }
+
+  .chat-header .modelpicker {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .chat-header .modelpicker__trigger {
+    min-width: 0;
+    max-width: 100%;
+    padding: 6px 10px;
+    overflow: hidden;
+  }
+
+  .chat-header .modelpicker__label-full,
+  .chat-header .modelpicker__label-short {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
