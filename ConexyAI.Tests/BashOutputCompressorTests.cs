@@ -58,6 +58,13 @@ internal static class BashOutputCompressorTests
             "raw tool markup must be cut off the answer");
         Assert(ConexyAgentRunner.StripToolMarkup("Обычный ответ без разметки") == "Обычный ответ без разметки",
             "plain text stays intact");
+
+        // TOOL_MARKUP_MIDTEXT: блок вызовов в середине ответа удаляется целиком, текст вокруг остаётся.
+        var middle = "План обновлён. <||DSML|| calls><||DSML|| invoke name=\"todo_write\">x</||DSML|| invoke></||DSML|| calls> Проверок не было.";
+        var cleaned = ConexyAgentRunner.StripToolMarkup(middle);
+        Assert(!cleaned.Contains("DSML"), $"no markup may survive, got '{cleaned}'");
+        Assert(cleaned.Contains("План обновлён", StringComparison.Ordinal) && cleaned.Contains("Проверок не было", StringComparison.Ordinal),
+            $"text around the block must stay, got '{cleaned}'");
         return Task.CompletedTask;
     }
 

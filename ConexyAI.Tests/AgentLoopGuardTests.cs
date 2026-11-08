@@ -19,6 +19,7 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("loop guard: the last step asks the model to wrap up instead of stopping silently", WrapUpFragmentAsync);
         TestRegistry.Add("loop guard: different arguments with the same output stop the run", NoProgressAsync);
         TestRegistry.Add("loop guard: re-reading the same file with new ranges is refused until an edit", ReadTargetAsync);
+        TestRegistry.Add("loop guard: plan and question tools never count as a loop", BookkeepingAsync);
         TestRegistry.Add("loop guard: reading the same file through bash with new offsets is a loop", ShellReadAsync);
         TestRegistry.Add("verify gate: a success claim without any check is caught", UnverifiedClaimsAsync);
     }
@@ -141,6 +142,23 @@ internal static class AgentLoopGuardTests
 
     // LOOP_GUARD: в реальном прогоне модель перебирала имена файлов (t.xlsx, t2.xlsx, …), а вывод
     // оставался тем же. Точное совпадение аргументов такое не ловит.
+    // BOOKKEEPING_TOOLS: обновление плана и вопросы человеку повторяются с одинаковым ответом постоянно.
+    // Раньше это выглядело как «топтание на месте» и отключало все инструменты посреди задачи.
+    private static Task BookkeepingAsync()
+    {
+        var guard = new AgentLoopGuard();
+        for (var i = 0; i < AgentLoopGuard.StopAfterRefusals + 3; i++)
+        {
+            var args = "{\"todos\":[{\"id\":\"" + i + "\",\"status\":\"skipped\"}]}";
+            Assert(guard.Refuse("todo_write", args) is null, "the plan may always be updated");
+            guard.Record("todo_write", args, "План обновлён.");
+        }
+        Assert(!guard.ShouldStop, "plan updates must never stop the run");
+        Assert(guard.Refusals == 0, $"no refusals from bookkeeping, got {guard.Refusals}");
+        Assert(guard.Refuse("ask_user", "{\"question\":\"Какой вариант?\"}") is null, "asking the user is always allowed");
+        return Task.CompletedTask;
+    }
+
     private static Task NoProgressAsync()
     {
         var guard = new AgentLoopGuard();

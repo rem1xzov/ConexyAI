@@ -57,9 +57,17 @@ public sealed partial class AgentLoopGuard
         "остановись, проанализируй, что уже известно, и либо сделай следующий шаг другим способом, либо дай итог пользователю.";
 
     /// <summary>Текст отказа, когда модель проигнорировала несколько отказов подряд.</summary>
+    /// <summary>Служебные инструменты: их повторы — не петля, а рабочка (план, вопрос, диагностика).</summary>
+    private static readonly HashSet<string> BookkeepingTools = new(StringComparer.Ordinal)
+    {
+        "todo_write", "ask_user", "project_rules", "turn_diff", "read_skill",
+        "agents_status", "team_message", "spawn_agents",
+    };
+
     public const string LoopStopRefusal =
         "Инструменты отключены: ты повторял одни и те же действия без нового результата. Дай итоговый ответ текстом — " +
-        "что сделано, что не получилось и что нужно от пользователя.";
+        "что сделано, что не получилось и что осталось. Не проси пользователя перезапускать программу или писать " +
+        "«продолжай»: отказ инструментов — это конец этого хода, а не ваша задача для человека.";
 
     /// <summary>Текст отказа, когда один и тот же объект читается снова и снова.</summary>
     public const string ReadTargetRefusal =
@@ -209,6 +217,11 @@ public sealed partial class AgentLoopGuard
     /// </summary>
     public string? Refuse(string tool, string arguments)
     {
+        // BOOKKEEPING: план, вопрос человеку и диагностика не участвуют в защите от петель — иначе обновление
+        // плана с одинаковым ответом «План обновлён» считалось топтанием на месте и отключало все инструменты.
+        if (BookkeepingTools.Contains(tool))
+            return null;
+
         if (IsRead(tool, arguments) && _targets.GetValueOrDefault(Target(tool, arguments)) >= ReadTargetThreshold)
         {
             // READ_INSIST: первый отказ по этому объекту — просто подсказка, а не повод отключать
@@ -257,6 +270,10 @@ public sealed partial class AgentLoopGuard
 
     public void Record(string tool, string arguments, string output)
     {
+        // BOOKKEEPING: и в историю вызовов не пишем — иначе один и тот же текст отчёта плана ломал
+        // сравнение «одинаковый результат» для следующих настоящих инструментов.
+        if (BookkeepingTools.Contains(tool))
+            return;
         _recent.Add(new Call(tool, arguments, Hash(output)));
         // Любая правка/команда — прогресс: счётчики чтения обнуляются, перечитывать после правки нормально.
         if (IsProgressTool(tool, arguments))

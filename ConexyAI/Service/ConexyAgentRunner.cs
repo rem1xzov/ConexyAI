@@ -2276,7 +2276,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 await SendAgentStatusAsync(taskId, "thinking", "Подвожу итог…", ct: ct);
                 messages.Add(new ChatMessage("system",
                     "[Loop Guard] " + AgentLoopGuard.LoopStopRefusal +
-                    " Инструменты отключены: не пиши вызовы инструментов и служебную разметку — только текст."));
+                    " Инструменты отключены: не пиши вызовы инструментов и служебную разметку — только текст. " +
+                    "Не проси перезапустить Conexy, не пиши «что нужно от тебя», не проси прислать «продолжай»: " +
+                    "перечисли, что уже сделано и что осталось, и заканчивай — продолжить можно новым сообщением."));
             }
 
             // AGENT_TOOL_FAILURES: и жёсткая верхняя граница. Дальше модели не даётся шанса крутить
@@ -5887,21 +5889,61 @@ public class ConexyAgentRunner : IConexyAgentRunner
     }
 
     /// <summary>
-    /// RAW_TOOL_MARKUP: когда инструменты отключены, модель иногда дописывает в ответ сырой формат
-    /// вызова (`<||DSML|| invoke ...>`). Пользователь видит это как мусор в чате — режем всё от маркера до конца.
+    /// RAW_TOOL_MARKUP: когда инструменты отключены, модель дописывает в ответ сырой формат вызова
+    /// (<c>&lt;||DSML|| invoke …&gt;</c>). Пользователь не должен видеть эту разметку вообще.
     /// </summary>
+    /// <remarks>
+    /// Раньше всё резалось «от маркера до конца» — и если модель продолжала нормальный текст после
+    /// блока вызовов, хвост ответа терялся, а мусор оставался в середине. Теперь удаляются все
+    /// ЗАКРЫТЫЕ блоки, где бы они ни стояли, а незакрытый блок отрезается вместе с хвостом.
+    /// </remarks>
     public static string StripToolMarkup(string text)
     {
         if (string.IsNullOrEmpty(text))
             return text;
-        foreach (var marker in new[] { "<||DSML", "<｜｜DSML", "||DSML||", "｜｜DSML｜｜" })
+
+        foreach (var marker in Markers)
         {
-            var index = text.IndexOf(marker, StringComparison.Ordinal);
-            if (index >= 0)
-                return text[..index].TrimEnd();
+            var closePrefix = Closing(marker);
+            while (true)
+            {
+                var start = text.IndexOf(marker, StringComparison.Ordinal);
+                if (start < 0)
+                    break;
+
+                var close = text.IndexOf(closePrefix, start + marker.Length, StringComparison.Ordinal);
+                if (close < 0)
+                {
+                    // Блок не закрыт — дальше идёт уже не текст ответа.
+                    return text[..start].TrimEnd();
+                }
+
+                // Удаляем блочный кусок до первого закрывающего тега, а следом — оставшиеся закрывающие
+                // теги вложенных блоков (`</||DSML|| invoke></||DSML|| calls>`).
+                text = (text[..start] + text[CutTag(text, close)..]).Trim();
+                while (text.StartsWith(closePrefix, StringComparison.Ordinal))
+                    text = text[CutTag(text, 0)..].Trim();
+            }
+
+            // Одиночные закрывающие теги без открывающего.
+            while (text.IndexOf(closePrefix, StringComparison.Ordinal) is var lone && lone >= 0)
+                text = (text[..lone] + text[CutTag(text, lone)..]).Trim();
         }
-        return text;
+
+        return text.Replace("<||DSML||", string.Empty).Replace("</||DSML||", string.Empty).TrimEnd();
     }
+
+    private static string Closing(string marker) =>
+        marker.Replace("<||", "</||").Replace("<｜｜", "</｜｜");
+
+    /// <summary>Конец тега: сразу после '&gt;', а если его нет — до конца строки.</summary>
+    private static int CutTag(string text, int tagStart)
+    {
+        var end = text.IndexOf('>', tagStart);
+        return end < 0 ? text.Length : end + 1;
+    }
+
+    private static readonly string[] Markers = { "<||DSML", "<｜｜DSML", "||DSML||", "｜｜DSML｜｜" };
 
     private static string ExtractTextContent(ChatMessage message)
     {
