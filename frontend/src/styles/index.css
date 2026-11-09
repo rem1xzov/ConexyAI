@@ -11452,3 +11452,206 @@ html[data-incognito='true'] .chat-surface-soft {
     white-space: nowrap;
   }
 }
+
+/* ---------- QUESTION_CARD: карточка вопроса агента в стиле Claude, палитра MOB ---------- */
+.device-card--question {
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  animation: deviceQuestionIn 0.22s ease-out both;
+}
+
+@keyframes deviceQuestionIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .device-card--question {
+    animation: none;
+  }
+}
+
+.device-card--question .device-card__head {
+  justify-content: space-between;
+  font-weight: 500;
+}
+
+.device-card__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.device-card__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.device-card__close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.device-card--question .device-card__question {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.device-answers {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.device-answers li + li .device-answers__row {
+  border-top: 1px solid var(--border);
+}
+
+.device-answers__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.device-answers__row:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.device-answers__row:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.device-answers__row--chosen {
+  background: var(--accent-soft);
+}
+
+.device-answers__num {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.device-answers__row--chosen .device-answers__num {
+  background: var(--accent);
+  color: var(--surface-solid);
+}
+
+.device-answers__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.device-answers__check {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.device-card__form--reply {
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-input);
+  transition: border-color 0.15s ease;
+}
+
+.device-card__form--reply:focus-within {
+  border-color: var(--accent);
+}
+
+.device-card__form--reply .device-card__input {
+  border: none;
+  background: transparent;
+  padding: 7px 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  outline: none;
+}
+
+.device-card__form--reply .device-card__input::placeholder {
+  color: var(--muted);
+}
+
+.device-card__send {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--surface-solid);
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.device-card__send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.device-card__send:not(:disabled):hover {
+  transform: scale(1.05);
+}
+
+.device-card__summary-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin: 0 3.5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.device-answers__row--chosen:disabled {
+  opacity: 1;
+}

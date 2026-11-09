@@ -1433,6 +1433,13 @@ export default function App() {
           ? m
           : { ...m, deviceQuestions: [...(m.deviceQuestions ?? []), { ...payload, options: payload.options ?? [] }] },
       );
+      // The card may appear well below the viewport (the PC agent asks mid-task), so bring it into
+      // view once React has painted it instead of making the user scroll down to find the question.
+      window.setTimeout(() => {
+        const cards = document.querySelectorAll<HTMLElement>('[data-question-id]');
+        const card = Array.from(cards).find((el) => el.dataset.questionId === payload.requestId);
+        card?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }, 90);
     },
     onDeviceDiff: (payload, scopeId) => {
       const ctx = resolveTurn(scopeId) ?? (payload.taskId ? registry.byTask(payload.taskId) : undefined);
