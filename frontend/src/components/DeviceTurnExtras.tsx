@@ -17,6 +17,29 @@ export interface DeviceTurnActions {
 
 export const DeviceTurnContext = createContext<DeviceTurnActions | null>(null);
 
+export function DeviceQuestionCards({ message }: { message: ChatMessage }) {
+  const actions = useContext(DeviceTurnContext);
+  if (message.role !== 'assistant') return null;
+  const questions = message.deviceQuestions ?? [];
+  if (questions.length === 0) return null;
+
+  return (
+    <>
+      {questions.map((q) => (
+        <DeviceQuestionCard
+          key={q.requestId}
+          question={q}
+          // Only a missing context disables the card. Tying this to `streaming` left a question asked
+          // by the PC agent after the chat turn had already finished permanently unclickable.
+          disabled={!actions}
+          onAnswer={(answer) => actions?.answerQuestion(message.id, q.requestId, answer) ?? Promise.resolve()}
+        />
+      ))}
+    </>
+  );
+}
+
+// WEB_DEVICE: добавлено 2026-10-18 — часть ответа агента внизу: ожидание подключения ПК и изменённые на ПК файлы.
 export function DeviceTurnExtras({ message }: { message: ChatMessage }) {
   const actions = useContext(DeviceTurnContext);
   if (message.role !== 'assistant') return null;
@@ -29,16 +52,6 @@ export function DeviceTurnExtras({ message }: { message: ChatMessage }) {
       {streaming && message.waitingDevice && message.taskId && actions && (
         <WaitingDeviceCard taskId={message.taskId} actions={actions} />
       )}
-      {(message.deviceQuestions ?? []).map((q) => (
-        <DeviceQuestionCard
-          key={q.requestId}
-          question={q}
-          // Only a missing context disables the card. Tying this to `streaming` left a question asked
-          // by the PC agent after the chat turn had already finished permanently unclickable.
-          disabled={!actions}
-          onAnswer={(answer) => actions?.answerQuestion(message.id, q.requestId, answer) ?? Promise.resolve()}
-        />
-      ))}
       {message.deviceDiff && message.deviceDiff.files.length > 0 && !diffPersisted && (
         <DeviceDiffBlock diff={message.deviceDiff} />
       )}

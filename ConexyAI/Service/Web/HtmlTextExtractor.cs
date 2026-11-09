@@ -5,8 +5,8 @@ using AngleSharp.Html.Parser;
 
 namespace ConexyAI.Service.Web;
 
-/// <summary>Readable text of an HTML page: its title and a Markdown-like body.</summary>
-public sealed record ExtractedPage(string? Title, string Text);
+/// <summary>Readable text of an HTML page: its title, a Markdown-like body and its social metadata.</summary>
+public sealed record ExtractedPage(string? Title, string Text, string? Description = null, string? SiteName = null);
 
 // AGENT_WEB_TOOLS: добавлено 2026-09-24
 /// <summary>
@@ -49,6 +49,14 @@ public static class HtmlTextExtractor
             title = Collapse(document.QuerySelector("h1")?.TextContent ?? string.Empty);
         }
 
+        // USER_LINKS: страницы-приложения (Figma, Notion, SPA) отдают почти пустой HTML, но их
+        // OpenGraph-описание всё равно говорит, что это за файл/макет — возвращаем его отдельно.
+        var description = FirstMeta(document,
+            "meta[property='og:description']",
+            "meta[name='description']",
+            "meta[name='twitter:description']");
+        var siteName = FirstMeta(document, "meta[property='og:site_name']", "meta[name='application-name']");
+
         foreach (var element in document.QuerySelectorAll(RemovedSelectors).ToList())
         {
             element.Remove();
@@ -66,7 +74,22 @@ public static class HtmlTextExtractor
             writer.Visit(root, listDepth: 0);
         }
 
-        return new ExtractedPage(title.Length == 0 ? null : title, writer.Finish());
+        return new ExtractedPage(
+            title.Length == 0 ? null : title,
+            writer.Finish(),
+            description.Length == 0 ? null : description,
+            siteName.Length == 0 ? null : siteName);
+    }
+
+    private static string FirstMeta(IParentNode document, params string[] selectors)
+    {
+        foreach (var selector in selectors)
+        {
+            var value = Collapse(document.QuerySelector(selector)?.GetAttribute("content") ?? string.Empty);
+            if (value.Length > 0)
+                return value;
+        }
+        return string.Empty;
     }
 
     /// <summary>

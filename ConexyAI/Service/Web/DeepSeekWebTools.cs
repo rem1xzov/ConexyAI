@@ -202,8 +202,15 @@ public sealed class DeepSeekPageFetcher : IWebPageFetcher
             {
                 var page = await response.Content.ReadFromJsonAsync<FetchResponse>(cancellationToken: timeoutCts.Token);
                 var content = page?.Content ?? string.Empty;
+                // USER_LINKS: SPA/Figma отдают DeepSeek-у пустой текст, но локальное чтение достаёт
+                // OpenGraph-заголовок и описание файла — для ссылок это лучше, чем «страница пустая».
                 if (content.Trim().Length == 0)
-                    return new(WebPageFetchStatus.PageError, "Страница пустая: на ней нет текста.", "empty_page", uri.AbsoluteUri);
+                {
+                    var local = await _local.FetchAsync(raw, maxChars, ct);
+                    return local.Success
+                        ? local
+                        : new(WebPageFetchStatus.PageError, "Страница пустая: на ней нет текста.", "empty_page", uri.AbsoluteUri);
+                }
                 return Success(uri.AbsoluteUri, page?.Title, content, maxChars);
             }
 
@@ -215,8 +222,9 @@ public sealed class DeepSeekPageFetcher : IWebPageFetcher
             }
 
             // AGENT_PROXY: DeepSeek ходит со своих серверов, и часть сайтов его не пускает. Если есть
-            // наш прокси — даём странице второй шанс через него (403 — это политика DeepSeek, не сайта).
-            if (_local.UsesProxy && status != HttpStatusCode.Forbidden)
+            // наш прокси — даём странице второй шанс через него; 403 — политика DeepSeek, поэтому пробуем
+            // локально и без прокси: сайт может спокойно отдать страницу нам напрямую.
+            if (_local.UsesProxy || status == HttpStatusCode.Forbidden)
                 return await _local.FetchAsync(raw, maxChars, ct);
 
             var reason = status == HttpStatusCode.Forbidden

@@ -646,6 +646,16 @@ static void DaemonCommand(string arg, string root)
     }
 }
 
+// INIT_COMMAND: /init — задача для агента, а не локальная команда: промпт уходит на сервер как есть,
+// сервер разворачивает его в инструкцию «изучи проект и создай CONEXY.md».
+static bool IsInitCommand(string prompt)
+{
+    var text = prompt.TrimStart();
+    if (!text.StartsWith("/init", StringComparison.OrdinalIgnoreCase))
+        return false;
+    return text.Length == 5 || char.IsWhiteSpace(text[5]);
+}
+
 // Справка-конспект: разделы, выровненная колонка команд, описание переносится по ширине окна,
 // подкоманды — отдельными строками под командой.
 static void PrintHelp()
@@ -665,6 +675,7 @@ static void PrintHelp()
             ("/chats", "все чаты (общие с сайтом): переключиться или создать; у каждого своя папка"),
             ("/agent coder|cowork", "Coder — код и терминал; Cowork — исследования, документы, почта (платные тарифы)"),
             ("/compact [фокус]", "сжать длинный чат в пересказ и продолжить в новом — дешевле"),
+            ("/init [фокус]", "изучить проект и создать CONEXY.md — правила, которые агент читает в каждом запуске"),
             ("/usage", "тариф и расход токенов"),
         ]),
         ("Режимы работы", [
@@ -822,7 +833,7 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
             }
         }
 
-        if (prompt.StartsWith('/'))
+        if (prompt.StartsWith('/') && !IsInitCommand(prompt))
         {
             var parts = prompt.Trim().Split(' ', 2, StringSplitOptions.TrimEntries);
             var arg = parts.Length > 1 ? parts[1].Trim('"') : string.Empty;

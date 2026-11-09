@@ -62,9 +62,10 @@ public static class FetchWebPageTool
         function = new
         {
             name = Name,
-            description = "Open a public web page (http/https) and read its text: title, final URL after redirects and the readable content " +
+            description = "Open a public web page (http/https) and read its text: title, site, description, final URL after redirects and the readable content " +
                           "(headings as Markdown '#', list items as '- ', link text kept; scripts, navigation, headers/footers and forms removed). " +
-                          "Use it to actually read the pages found with web_search — documentation, API references, articles, reports — instead of relying on search snippets. " +
+                          "When the user pastes or asks about a link (an article, docs, a Figma/Notion file, a product page), open it with this tool BEFORE answering — do not guess from the URL. " +
+                          "Pages built with JavaScript return little HTML text: the title/description still come back; for the rendered content and visuals use the browser tools (browser_open, browser_extract, browser_screenshot). " +
                           "Read several pages at once: put 3–5 fetch_web_page calls in one turn, they are fetched in parallel — do not open them one by one. " +
                           "Supports HTML, plain text, Markdown and JSON; internal/private addresses are refused.",
             parameters = new

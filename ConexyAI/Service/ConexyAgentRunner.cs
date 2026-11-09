@@ -1373,6 +1373,16 @@ public class ConexyAgentRunner : IConexyAgentRunner
             await group.SendAsync("OnLog", $"[Skills] {string.Join(", ", _skillSummaries.Select(s => s.Name))}", ct);
         }
 
+        // USER_LINKS: пользователь прислал ссылку — открываем её, а не отвечаем по названию домена.
+        // Текст читает fetch_web_page; макеты и SPA — browser_open + browser_screenshot.
+        IReadOnlyList<string> userLinks = _profile.Allows(FetchWebPageTool.Name) ? WebLinks.Extract(_job.Prompt) : [];
+        if (userLinks.Count > 0)
+        {
+            var insertAt = messages.Count > 0 && messages[0].Role == "system" ? 1 : 0;
+            messages.Insert(insertAt, new ChatMessage("system", PromptFragments.UserLinks(userLinks)));
+            await group.SendAsync("OnLog", $"[Links] {string.Join(", ", userLinks)}", ct);
+        }
+
         // AGENT_HOOKS: добавлено 2026-10-04 — хуки проекта (.conexy/hooks.json). Только для режима с
         // песочницей (Coder): у Cowork нет bash. Запускаются без подтверждения — это автоматизация
         // владельца репозитория, выполняемая в изолированной песочнице.
@@ -2517,6 +2527,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         if (ContainsAny(text, BrowserWords)) kind |= TaskKind.Browser;
         if (ContainsAny(text, GithubWords)) kind |= TaskKind.Github;
         if (ContainsAny(text, DocumentWords)) kind |= TaskKind.Documents;
+        // USER_LINKS: присланная ссылка — повод дать агенту браузер (макеты Figma, SPA, страницы
+        // с JavaScript), даже если в тексте нет слова «браузер».
+        if (WebLinks.Extract(prompt).Count > 0) kind |= TaskKind.Browser;
         return kind;
     }
 

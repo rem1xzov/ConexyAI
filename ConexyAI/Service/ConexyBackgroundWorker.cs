@@ -5,6 +5,7 @@ using ConexyAI.Entity;
 using ConexyAI.Hub;
 using ConexyAI.Model;
 using ConexyAI.Repository;
+using ConexyAI.Service.Web;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 
@@ -219,6 +220,11 @@ public class ConexyBackgroundWorker : BackgroundService
 
     private async Task ProcessJobAsync(ConexyJob job, CancellationToken workerToken)
     {
+        // INIT_COMMAND: /init — не текст для модели, а задача инициализации проекта (CONEXY.md).
+        // Раскрываем только там, где у агента есть файловые инструменты (Agent/Cowork или ПК).
+        if (Prompts.BuiltInCommands.IsInit(job.Prompt) && (job.ModelType.IsAgent() || job.UseDevice))
+            job = job with { Prompt = Prompts.BuiltInCommands.Expand(job.Prompt) };
+
         // Link the worker's lifetime token with a per-task token so a user-initiated stop
         // cancels just this generation while leaving the queue worker alive.
         var taskToken = _cancellations.Acquire(job.TaskId, workerToken, job.ChatId);
@@ -230,6 +236,8 @@ public class ConexyBackgroundWorker : BackgroundService
             var runner = scope.ServiceProvider.GetRequiredService<IConexyAgentRunner>();
             var llmClient = scope.ServiceProvider.GetRequiredService<IConexyLlmClient>();
             var webSearch = scope.ServiceProvider.GetRequiredService<IWebSearchService>();
+            // USER_LINKS: пользователь прислал ссылку — чат тоже должен её открыть, а не угадывать.
+            var webPageFetcher = scope.ServiceProvider.GetRequiredService<IWebPageFetcher>();
             // SUBSCRIPTION_TIERS: добавлено 2026-09-17
             var subscriptionService = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
             // CONVERSATION_SERVICE: добавлено 2026-09-23 — единая сборка контекста и запись хода.
@@ -369,7 +377,7 @@ public class ConexyBackgroundWorker : BackgroundService
                 {
                     // Flash/Pro -> streaming dialog (Pro is the reasoning chat model and
                     // also powers the Socratic Students mode).
-                    result = await StreamCompletionAsync(llmClient, conversation, context, webSearch, job, buffer, taskToken);
+                    result = await StreamCompletionAsync(llmClient, conversation, context, webSearch, webPageFetcher, job, buffer, taskToken);
 
                     // SUBSCRIPTION_TIERS: добавлено 2026-09-17
                     // INCOGNITO_CHAT: limits still apply — incognito hides history, it is not a free pass.
@@ -552,20 +560,29 @@ public class ConexyBackgroundWorker : BackgroundService
         IConversationService conversation,
         ConversationContext context,
         IWebSearchService webSearch,
+        IWebPageFetcher webPageFetcher,
         ConexyJob job,
         TurnBuffer buffer,
         CancellationToken ct)
     {
         // web_search is available to flash/pro only when the Smart Search toggle is on.
-        var searchEnabled = !job.ModelType.IsAgent() && job.SmartSearch;
+        // USER_LINKS: ссылка в сообщении включает чтение страниц даже с выключенным умным поиском —
+        // пользователь не должен включать тумблер, чтобы агент посмотрел присланный адрес.
+        IReadOnlyList<string> links = job.ModelType.IsAgent() ? [] : WebLinks.Extract(job.Prompt);
+        var linkReading = links.Count > 0;
+        var searchEnabled = (!job.ModelType.IsAgent() && job.SmartSearch) || linkReading;
 
         // CONVERSATION_SERVICE: system prompt, memory facts, prior turns, the current user message
         // and the resumed-answer prefix are all assembled by the shared service now. This method
         // no longer knows how history works — which is what keeps it from drifting again.
         var messages = await conversation.BuildRequestAsync(context, ct);
-        if (searchEnabled)
+        if (!job.ModelType.IsAgent() && job.SmartSearch)
         {
             messages.Insert(1, new("system", Prompts.PromptFragments.SmartSearch));
+        }
+        if (linkReading)
+        {
+            messages.Insert(1, new("system", Prompts.PromptFragments.UserLinks(links)));
         }
 
         // Flash never reasons. Pro reasons only when the Thinking toggle is on — in students mode too:
@@ -583,7 +600,7 @@ public class ConexyBackgroundWorker : BackgroundService
         string result;
         if (searchEnabled)
         {
-            result = await SearchAwareCompletionAsync(llmClient, webSearch, job, messages, reasoningEffort, group, ct);
+            result = await SearchAwareCompletionAsync(llmClient, webSearch, webPageFetcher, job, messages, reasoningEffort, links, group, ct);
         }
         else
         {
@@ -677,26 +694,36 @@ public class ConexyBackgroundWorker : BackgroundService
     private async Task<string> SearchAwareCompletionAsync(
         IConexyLlmClient llmClient,
         IWebSearchService webSearch,
+        IWebPageFetcher webPageFetcher,
         ConexyJob job,
         List<ChatMessage> messages,
         string? reasoningEffort,
+        IReadOnlyList<string> links,
         IClientProxy group,
         CancellationToken ct)
     {
         var tools = new List<object> { WebSearchTool.Schema() };
+        if (links.Count > 0)
+            tools.Add(FetchWebPageTool.Schema());
 
         // SMART_SEARCH_FORCE: если вопрос про свежие/версионные/рыночные факты — первый раунд
         // принудительно ищет, чтобы модель не ответила из памяти (и не отрицала существование новинки).
         var forceSearch = Prompts.PromptFragments.RequiresFreshInfo(job.Prompt);
+        // USER_LINKS: если сообщение — это в основном ссылка, первый раунд обязан открыть её.
+        var forceLink = links.Count > 0 && WebLinks.IsLinkFocused(job.Prompt);
         if (forceSearch)
         {
             _logger.LogInformation("Smart search: forcing web_search on the first round [task {TaskId}].", job.TaskId);
+        }
+        else if (forceLink)
+        {
+            _logger.LogInformation("User links: forcing a page fetch on the first round [task {TaskId}].", job.TaskId);
         }
 
         for (var round = 0; round < MaxSearchRounds; round++)
         {
             ct.ThrowIfCancellationRequested();
-            var toolChoice = round == 0 && forceSearch ? "required" : "auto";
+            var toolChoice = round == 0 && (forceSearch || forceLink) ? "required" : "auto";
 
             var content = new StringBuilder();
             var reasoning = new StringBuilder();
@@ -757,18 +784,39 @@ public class ConexyBackgroundWorker : BackgroundService
 
             foreach (var toolCall in toolCalls)
             {
-                if (toolCall.Function.Name != WebSearchTool.Name) continue;
+                if (toolCall.Function.Name == WebSearchTool.Name)
+                {
+                    var query = ParseSearchQuery(toolCall.Function.Arguments);
+                    // H3: the query is the user's text — only its length is logged.
+                    _logger.LogInformation("SearchAware tool_call [task {TaskId}]: name={Name} queryChars={QueryChars}", job.TaskId, toolCall.Function.Name, query.Length);
 
-                var query = ParseSearchQuery(toolCall.Function.Arguments);
-                // H3: the query is the user's text — only its length is logged.
-                _logger.LogInformation("SearchAware tool_call [task {TaskId}]: name={Name} queryChars={QueryChars}", job.TaskId, toolCall.Function.Name, query.Length);
+                    await group.SendAsync("SearchStatus", new SearchStatusEvent { Status = "searching", Query = query }, ct);
+                    var result = await webSearch.SearchAsync(query, ct);
+                    await group.SendAsync("SearchStatus", new SearchStatusEvent { Status = "completed", Query = query }, ct);
+                    _logger.LogInformation("SearchAware search result [task {TaskId}]: success={Success} outputLen={OutputLen}", job.TaskId, result.Success, result.Output?.Length ?? 0);
 
-                await group.SendAsync("SearchStatus", new SearchStatusEvent { Status = "searching", Query = query }, ct);
-                var result = await webSearch.SearchAsync(query, ct);
-                await group.SendAsync("SearchStatus", new SearchStatusEvent { Status = "completed", Query = query }, ct);
-                _logger.LogInformation("SearchAware search result [task {TaskId}]: success={Success} outputLen={OutputLen}", job.TaskId, result.Success, result.Output?.Length ?? 0);
+                    messages.Add(new ChatMessage(Role: "tool", Content: result.Output, ToolCallId: toolCall.Id));
+                    continue;
+                }
 
-                messages.Add(new ChatMessage(Role: "tool", Content: result.Output, ToolCallId: toolCall.Id));
+                if (toolCall.Function.Name == FetchWebPageTool.Name)
+                {
+                    var url = ParseStringArgument(toolCall.Function.Arguments, "url");
+                    var maxChars = ParseIntArgument(toolCall.Function.Arguments, "max_chars");
+                    await group.SendAsync("SearchStatus", new SearchStatusEvent { Status = "searching", Query = url }, ct);
+                    var page = string.IsNullOrWhiteSpace(url)
+                        ? new WebPageFetchResult(WebPageFetchStatus.PageError, "fetch_web_page requires a 'url'.", "bad_url")
+                        : await webPageFetcher.FetchAsync(url, maxChars, ct);
+                    await group.SendAsync("SearchStatus", new SearchStatusEvent { Status = "completed", Query = url }, ct);
+                    _logger.LogInformation("SearchAware fetch [task {TaskId}]: success={Success} outputLen={OutputLen}", job.TaskId, page.Success, page.Output?.Length ?? 0);
+
+                    messages.Add(new ChatMessage(Role: "tool", Content: page.Output, ToolCallId: toolCall.Id));
+                    continue;
+                }
+
+                // Неизвестный вызов всё равно должен получить ответ, иначе следующий раунд
+                // падает на несогласованном наборе tool_calls/tool-сообщений.
+                messages.Add(new ChatMessage(Role: "tool", Content: "Этот инструмент в этом режиме недоступен.", ToolCallId: toolCall.Id));
             }
         }
 
@@ -787,18 +835,37 @@ public class ConexyBackgroundWorker : BackgroundService
         return finalBuilder.ToString();
     }
 
-    private static string ParseSearchQuery(string argumentsJson)
+    private static string ParseSearchQuery(string argumentsJson) =>
+        ParseStringArgument(argumentsJson, "query");
+
+    private static string ParseStringArgument(string argumentsJson, string name)
     {
         try
         {
             using var doc = System.Text.Json.JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("query", out var q) && q.ValueKind == System.Text.Json.JsonValueKind.String)
-                return q.GetString() ?? string.Empty;
+            if (doc.RootElement.TryGetProperty(name, out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String)
+                return value.GetString() ?? string.Empty;
         }
         catch (System.Text.Json.JsonException)
         {
-            // Best-effort; the search service rejects an empty query downstream.
+            // Best-effort; the service rejects an empty value downstream.
         }
         return string.Empty;
+    }
+
+    private static int? ParseIntArgument(string argumentsJson, string name)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(argumentsJson);
+            if (doc.RootElement.TryGetProperty(name, out var value) && value.ValueKind == System.Text.Json.JsonValueKind.Number
+                && value.TryGetInt32(out var number))
+                return number;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Ignore malformed optional arguments; the fetcher applies its default.
+        }
+        return null;
     }
 }

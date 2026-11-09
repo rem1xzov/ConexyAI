@@ -6,6 +6,7 @@ import { assistantPhase } from '../utils/assistantPhase';
 import { artifactsToMarkdown } from '../utils/artifacts';
 import { producedFiles } from '../utils/producedFiles';
 import { ConexyLogo } from './ConexyLogo';
+import { ThinkingStep } from './ThinkingStep';
 import { VisionGallery } from './VisionGallery';
 import { AttachmentGrid } from './AttachmentGrid';
 import { AgentTimeline, feedSummary } from './AgentTimeline';
@@ -18,7 +19,7 @@ import { MessageActions } from './MessageActions';
 import { UserMessageActions } from './UserMessageActions';
 import { useIsMobile } from '../hooks/useMediaQuery';
 // WEB_DEVICE: добавлено 2026-10-18
-import { DeviceTurnExtras } from './DeviceTurnExtras';
+import { DeviceTurnExtras, DeviceQuestionCards } from './DeviceTurnExtras';
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -121,7 +122,7 @@ function MessageBubbleBase({
   // reasoning-а (ThinkingStep), поэтому отдельная аккордеон-«Процесс размышлений» наверху была бы
   // тем же текстом дважды. Оставляем её только там, где шагов нет: обычный чат, а также
   // восстановленное после перезагрузки сообщение (steps живут только в памяти вкладки).
-  const hasSteps = (message.steps?.length ?? 0) > 0;
+  const hasSteps = agentTurn && (message.steps?.length ?? 0) > 0;
   // INTERLEAVED_STREAM: the chronological feed, built once per event batch. A message restored from
   // a cache written before the feed existed has none, so its flat fields are replayed — which keeps
   // its tools and reasoning exactly where the old timeline drew them. Only an agent turn replays its
@@ -131,7 +132,9 @@ function MessageBubbleBase({
       message.blocks ??
       blocksFromLegacy({
         toolActions: message.toolActions,
-        steps: message.steps,
+        // THINKING_ONCE: reasoning steps belong to the agent feed only. A chat turn (Flash/Pro) gets
+        // ONE thinking block at the top of the answer, not a row per backend phase.
+        steps: agentTurn ? message.steps : undefined,
         thinking,
         content,
         withContent: agentTurn,
@@ -147,8 +150,10 @@ function MessageBubbleBase({
   // ходов Flash он показывается только при реально пришедших reasoning-токенах (их быть не
   // должно — модель принудительно отключена на бэкенде). Для Pro аккордеон работает как раньше.
   const modelReasons = message.model !== 'ConexyV1-flash';
+  // THINKING_ONCE: one plate per answer, at the top — the model thinks, then answers. Flash never
+  // reasons, so it gets no plate at all, not even the empty "thinking…" placeholder.
   const showThinkingAccordion =
-    (hasThinking || (phase === 'thinking' && modelReasons)) && !hasSteps && !parts.thoughts;
+    modelReasons && (hasThinking || phase === 'thinking') && !hasSteps && !parts.thoughts;
   // Live agent status, rendered as a pill only when no tool event already covers it.
   // INTERLEAVED_STREAM: offered for every phase now, not just `tool_calling`. Some phases stream no
   // text of their own — the auditor review is one — so this label is the only trace of them, and the
@@ -255,14 +260,13 @@ function MessageBubbleBase({
           the feed, this would only repeat it. */}
       {!parts.plan && <TodoPanel todos={todos} />}
 
-      {/* 1. Thought process: the reasoning accordion comes first. */}
+      {/* DEVICE_QUESTION_TOP: the agent's question (and its collapsed "your answer" line) sits at the
+          top of the answer where it was asked, not buried under the whole response — Claude-style. */}
+      <DeviceQuestionCards message={message} />
+
+      {/* 1. Thought process: exactly one collapsible plate per answer, before the answer text. */}
       {showThinkingAccordion && (
-        <details className="thinking-details">
-          <summary className="thinking-details__summary">{t('message.showThinking')}</summary>
-          <div className="thinking-details__body">
-            {thinking || <span className="chat-muted">{t('message.thinking')}</span>}
-          </div>
-        </details>
+        <ThinkingStep text={thinking} running={streaming && phase === 'thinking'} />
       )}
 
       {/* 2. Chronological feed: reasoning rows, tool rows and the model's own text in the order
@@ -295,7 +299,8 @@ function MessageBubbleBase({
       {/* FILE_CARDS: добавлено 2026-09-24 — files produced in this turn, with a download button. */}
       <ProducedFiles files={files} chatId={chatId} onOpenFile={onOpenFile} />
 
-      {/* WEB_DEVICE: добавлено 2026-10-18 — ожидание ПК, вопросы агента и «Изменения на ПК». */}
+      {/* WEB_DEVICE: добавлено 2026-10-18 — ожидание ПК и «Изменения на ПК» под ответом.
+          Вопросы агента живут выше (DeviceQuestionCards), у начала ответа. */}
       <DeviceTurnExtras message={message} />
 
       {/* 5. Running light: last element of the message while generating, so it starts directly

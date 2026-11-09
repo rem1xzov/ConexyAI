@@ -16,6 +16,7 @@ using ConexyAI.Hub;
 using ConexyAI.Model;
 using ConexyAI.Repository;
 using ConexyAI.Service;
+using ConexyAI.Service.Prompts;
 using ConexyAI.Service.Web;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -39,6 +40,11 @@ internal static class AgentCapabilityTests
         TestRegistry.Add("agent proxy: live fetch through AGENT_PROXY_URL (skipped when unset)", AgentProxyLiveFetchAsync);
         TestRegistry.Add("agent proxy: live MCP tools/list through AGENT_PROXY_URL (skipped when unset)", AgentProxyLiveMcpAsync);
         TestRegistry.Add("agent web: HTML is cleaned into readable Markdown-like text", HtmlIsCleanedAsync);
+        // USER_LINKS/INIT_COMMAND: добавлено 2026-11-09.
+        TestRegistry.Add("agent links: pasted URLs are found, cleaned and a link-only message is recognised", UserLinksAreDetectedAsync);
+        TestRegistry.Add("agent links: a JavaScript page still yields its OpenGraph title and description", JavaScriptPageMetadataAsync);
+        TestRegistry.Add("agent init: /init expands into the CONEXY.md task and leaves other commands alone", InitCommandAsync);
+        TestRegistry.Add("agent links: a pasted link reaches the agent as an instruction to open it", UserLinkPromptReachesRunnerAsync);
         TestRegistry.Add("agent web: the guard, fetcher and vision service resolve from DI", WebServicesResolveFromDiAsync);
         TestRegistry.Add("agent chats: search_user_chats stays inside the user's own other chats", ChatSearchIsScopedAsync);
         TestRegistry.Add("agent chats: search_user_chats on PostgreSQL (ILIKE, Cyrillic case, literal wildcards)", ChatSearchOnPostgresAsync, PostgresSkipReason);
@@ -373,6 +379,93 @@ internal static class AgentCapabilityTests
             isHtml: true);
         Assert(decoded.Contains("Ёлка"), $"a legacy charset from http-equiv is decoded, got '{decoded}'");
         return Task.CompletedTask;
+    }
+
+    private static Task UserLinksAreDetectedAsync()
+    {
+        var links = WebLinks.Extract(
+            "Смотри макет https://www.figma.com/file/AbC123/My-Mockup?node-id=1-2, и ещё (https://example.com/docs).");
+        Assert(links.Count == 2, $"both links are found, got {links.Count}: {string.Join(", ", links)}");
+        Assert(links[0] == "https://www.figma.com/file/AbC123/My-Mockup?node-id=1-2",
+            $"a trailing comma stays out of the address, got '{links[0]}'");
+        Assert(links[1] == "https://example.com/docs", $"a closing parenthesis stays out, got '{links[1]}'");
+
+        var dupes = WebLinks.Extract("https://a.example/x https://a.example/x https://b.example/y", 2);
+        Assert(dupes.Count == 2, $"duplicates are collapsed and the cap holds, got {dupes.Count}");
+
+        Assert(WebLinks.IsLinkFocused("https://www.figma.com/file/AbC123/My-Mockup"),
+            "a message that is just a link is link-focused");
+        Assert(!WebLinks.IsLinkFocused(
+                "Пожалуйста, подробно объясни, как устроен этот проект, что за архитектура и какие в нём есть модули, " +
+                "а ещё расскажи про тесты, сборку, деплой и соглашения команды https://example.com/very/long/readme"),
+            "a link inside a long question does not count as link-focused");
+        Assert(WebLinks.Extract("без ссылок").Count == 0, "plain text has no links");
+
+        var fragment = PromptFragments.UserLinks(links);
+        Assert(fragment.Contains("fetch_web_page") && fragment.Contains("browser_open") && fragment.Contains("browser_screenshot"),
+            "the prompt tells the agent to read the page and, for mockups, to look at it in the browser");
+        Assert(links.All(link => fragment.Contains(link)), "every link reaches the prompt");
+        return Task.CompletedTask;
+    }
+
+    private static Task JavaScriptPageMetadataAsync()
+    {
+        const string html = """
+            <html><head>
+            <title>Figma</title>
+            <meta property="og:title" content="Mobile app — design" />
+            <meta property="og:description" content="Экраны онбординга и профиля в фиолетовой палитре" />
+            <meta property="og:site_name" content="Figma" />
+            <script>window.__APP__ = {}</script>
+            </head><body><div id="root"></div></body></html>
+            """;
+
+        var page = HtmlTextExtractor.Extract(html);
+        Assert(page.Description == "Экраны онбординга и профиля в фиолетовой палитре",
+            $"og:description is extracted, got '{page.Description}'");
+        Assert(page.SiteName == "Figma", $"og:site_name is extracted, got '{page.SiteName}'");
+        return Task.CompletedTask;
+    }
+
+    private static Task InitCommandAsync()
+    {
+        Assert(BuiltInCommands.IsInit("/init"), "the bare command is recognised");
+        Assert(BuiltInCommands.IsInit("  /init ui"), "the command with a focus is recognised after whitespace");
+        Assert(!BuiltInCommands.IsInit("/initialize"), "a longer word is not the command");
+        Assert(!BuiltInCommands.IsInit("init"), "the command needs the slash");
+
+        var expanded = BuiltInCommands.Expand("/init mobile app");
+        Assert(expanded.Contains("CONEXY.md") && expanded.Contains("mobile app"),
+            $"the focus is carried into the task, got: {expanded}");
+        Assert(expanded.Contains("не меняй", StringComparison.OrdinalIgnoreCase) || expanded.Contains("не меня", StringComparison.OrdinalIgnoreCase),
+            "the task forbids changing the application code");
+        Assert(BuiltInCommands.Expand("обычный вопрос") == "обычный вопрос", "other prompts pass through unchanged");
+        return Task.CompletedTask;
+    }
+
+    private static async Task UserLinkPromptReachesRunnerAsync()
+    {
+        var root = TempWorkspace();
+        try
+        {
+            var llm = new ScriptLlm(Text("Открыл ссылку и посмотрел макет."));
+            var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(),
+                prompt: "https://www.figma.com/file/AbC123/Mobile-app — что на макете?");
+            await runner.RunLoopAsync(job, context, Guard());
+
+            var system = llm.Requests[0]
+                .Where(message => message.Role == "system")
+                .Select(message => message.Content?.ToString() ?? string.Empty)
+                .ToList();
+            Assert(system.Any(text => text.Contains("[Ссылки от пользователя]") && text.Contains("figma.com/file/AbC123")),
+                "the pasted link is injected as an instruction to open it");
+            Assert(system.Any(text => text.Contains("browser_open") && text.Contains("browser_screenshot")),
+                "the model is told how to look at a mockup, not just read its text");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
     }
 
     // ---------------------------------------------------------------- chats

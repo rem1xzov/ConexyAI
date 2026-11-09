@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { TeamAgent, TurnBlock, TurnToolBlock } from '../types/chat';
+import type { TeamAgent, TurnBlock, TurnThoughtBlock, TurnToolBlock } from '../types/chat';
 import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
 import { ActionStepLine, type ActionKind, type ActionState } from './ActionStepLine';
 import { ChevronDownIcon, GlobeIcon } from './Icons';
@@ -232,6 +232,38 @@ function WebResearchGroup({ blocks, renderRow }: WebResearchGroupProps) {
   );
 }
 
+// THINKING_ONCE: Claude-style — one "thinking" plate per answer. Agent runs produce a reasoning
+// block per phase; left as-is they stack into a column of identical rows. All reasoning is merged
+// into the first plate (keeping its place in the chronology), the rest are dropped.
+function collapseThoughts(blocks: TurnBlock[]): TurnBlock[] {
+  const thoughts = blocks.filter((block): block is TurnThoughtBlock => block.type === 'thought');
+  if (thoughts.length <= 1) return blocks;
+
+  const content = thoughts.map((thought) => thought.content.trim()).filter(Boolean).join('\n\n');
+  const allClosed = thoughts.every((thought) => thought.durationMs !== undefined);
+  const merged: TurnThoughtBlock = {
+    ...thoughts[0],
+    content,
+    durationMs: allClosed
+      ? thoughts.reduce((total, thought) => total + (thought.durationMs ?? 0), 0)
+      : undefined,
+  };
+
+  const result: TurnBlock[] = [];
+  let placed = false;
+  for (const block of blocks) {
+    if (block.type !== 'thought') {
+      result.push(block);
+      continue;
+    }
+    if (!placed) {
+      result.push(merged);
+      placed = true;
+    }
+  }
+  return result;
+}
+
 export function AgentTimeline({
   blocks,
   messageId,
@@ -244,16 +276,16 @@ export function AgentTimeline({
 }: AgentTimelineProps) {
   const { t } = useTranslation();
 
-  const feed = blocks;
+  const feed = collapseThoughts(blocks);
   if (feed.length === 0 && !statusPill) return null;
 
   const lastIndex = feed.length - 1;
   // One "working" indicator at a time: the live status row waits until nothing else is running.
   const somethingRunning = feed.some((block, index) => {
     if (block.type === 'tool') return !isTerminalToolStatus(block.status);
-    // A thought counts as running only while it is the live one; a block left open by a finished
+    // A thought counts as running only while it is live; a block left open by a finished
     // turn must not keep the status row hidden forever.
-    if (block.type === 'thought') return streaming && index === lastIndex && block.durationMs === undefined;
+    if (block.type === 'thought') return streaming && block.durationMs === undefined;
     return false;
   });
   const showStatusRow = Boolean(statusPill) && !somethingRunning;
@@ -265,8 +297,9 @@ export function AgentTimeline({
           <ThinkingStep
             key={block.id}
             text={block.content}
-            // Only the very last block of a running turn is still being written in.
-            running={index === lastIndex && streaming && block.durationMs === undefined}
+            // THINKING_ONCE: the merged plate may sit above later text, so liveness comes from the
+            // block itself rather than from being the last item in the feed.
+            running={streaming && block.durationMs === undefined}
           />
         );
 

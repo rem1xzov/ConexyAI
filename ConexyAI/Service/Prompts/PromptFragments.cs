@@ -268,6 +268,22 @@ public static class PromptFragments
     public static bool RequiresFreshInfo(string? prompt) =>
         !string.IsNullOrWhiteSpace(prompt) && FreshInfoSignal.IsMatch(prompt);
 
+    // USER_LINKS: добавлено 2026-11-09 — «просто скинь ссылку»: агент открывает присланные адреса
+    // сам, а не отвечает по названию домена.
+    /// <summary>
+    /// Tells the model which links the user pasted this turn and how to inspect them (text, then the
+    /// browser for JavaScript pages and mockups). Added only when the message actually contains URLs.
+    /// </summary>
+    public static string UserLinks(IReadOnlyList<string> links) =>
+        "[Ссылки от пользователя]\n" +
+        "Пользователь прислал ссылки:\n" +
+        string.Join("\n", links.Select(link => "- " + link)) + "\n" +
+        "Открой их и работай с содержимым, а не с догадками по адресу:\n" +
+        "- `fetch_web_page` читает текст страницы: заголовок, описание, статью, документацию. Для Figma/Notion/веб-приложений он вернёт хотя бы название и описание файла.\n" +
+        "- Если страница собирается JavaScript или это макет/дизайн — открой её во встроенном браузере: `browser_open`, затем `browser_extract` (текст и элементы) и `browser_screenshot` (визуально). Так ты действительно видишь макет.\n" +
+        "- Страница требует входа в аккаунт или приватного доступа — скажи об этом прямо и предложи сделать её публичной или прислать скриншот/экспорт.\n" +
+        "Не пересказывай и не угадывай, что на странице, пока не открыл её.";
+
     // CONTENT_POLICY: добавлено 2026-09-29
     /// <summary>
     /// Единая контент-политика для ВСЕХ моделей и режимов: свобода обсуждать взрослые и острые темы.
