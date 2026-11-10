@@ -2943,7 +2943,7 @@ export default function App() {
       aria-label={t('chat.incognito')}
       title={t('chat.incognitoHint')}
     >
-      <GhostIcon size={15} />
+      <GhostIcon size={isMobile ? 22 : 15} />
       {!isMobile && <span>{t('chat.incognito')}</span>}
     </button>
   ) : incognitoActive && !isMobile ? (
