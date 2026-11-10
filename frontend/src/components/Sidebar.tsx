@@ -5,7 +5,7 @@ import type { UserProfile } from '../types/api';
 import { AccountWidget } from './AccountWidget';
 import { ConfirmDialog } from './Dialog';
 import {
-  MenuIcon,
+  MenuLinesIcon,
   SearchIcon,
   PlusIcon,
   ThreeDotsIcon,
@@ -176,7 +176,7 @@ export function Sidebar(props: SidebarProps) {
     <aside ref={asideRef} className={`sidebar ${open ? '' : 'sidebar--collapsed'}`}>
       <div className="sidebar__top">
         <button className="icon-btn" onClick={onToggle} title="Toggle sidebar" aria-label="Toggle sidebar">
-          <MenuIcon size={20} />
+          <MenuLinesIcon size={20} />
         </button>
       </div>
 

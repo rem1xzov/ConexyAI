@@ -9,7 +9,6 @@ interface ChatFeedProps {
   session: ChatSession | null;
   nickname?: string | null;
   onRegenerate?: (assistantMessageId: string) => void;
-  onResend?: (messageId: string) => void;
   onEditMessage?: (messageId: string, newContent: string) => void;
   // COMPOSER_EDIT: на телефоне редактирование открывается в поле ввода сообщения.
   onBeginEdit?: (messageId: string, content: string) => void;
@@ -42,7 +41,6 @@ export function ChatFeed({
   session,
   nickname,
   onRegenerate,
-  onResend,
   onEditMessage,
   onBeginEdit,
   onBranchChange,
@@ -229,7 +227,6 @@ export function ChatFeed({
             key={m.id}
             message={m}
             onRegenerate={onRegenerate}
-            onResend={onResend}
             onEditMessage={onEditMessage}
             onBeginEdit={onBeginEdit}
             onBranchChange={onBranchChange}

@@ -12101,8 +12101,9 @@ html[data-incognito='true'] .chat-surface-soft {
 }
 
 /* STATUS_BAR_MATCH: на Android полоса со временем и батареей — это фон страницы над шапкой.
-   Красим её тем же слоем, что и .chat-header (--bg-soft поверх градиента), чтобы шапка и
-   статус-бар были одним цветом. В браузере --safe-top = 0, полоса нулевой высоты. */
+   Красим её тем же стеком, что и .chat-header: фон рабочей области (--bg-main) под её
+   полупрозрачным --bg-soft. Раньше здесь был один --bg-soft, и полоса выходила светлее шапки.
+   В браузере --safe-top = 0, полоса нулевой высоты. */
 body::before {
   content: "";
   position: fixed;
@@ -12110,7 +12111,7 @@ body::before {
   left: 0;
   right: 0;
   height: var(--safe-top, 0px);
-  background: var(--bg-soft);
+  background: linear-gradient(var(--bg-soft), var(--bg-soft)), var(--bg-main);
   pointer-events: none;
   z-index: 0;
 }

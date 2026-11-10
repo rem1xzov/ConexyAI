@@ -2880,22 +2880,6 @@ export default function App() {
     );
   }, []);
 
-  const handleResend = useCallback((messageId: string) => {
-    const live = liveRef.current;
-    if (!live.token) return;
-    const session = live.sessions.find((s) => s.id === live.activeId);
-    if (!session) return;
-    if (sessionBusy(session)) {
-      live.showToast(live.t('sync.turnInFlight'));
-      return;
-    }
-    const index = session.messages.findIndex((m) => m.id === messageId);
-    const message = session.messages[index];
-    if (!message || message.role !== 'user') return;
-    const regenerate = !session.incognito && replacesLastTurn(session.messages, index);
-    void startCompletion(session.id, message.content, [], true, undefined, regenerate).then(notifyOutcome);
-  }, [startCompletion, notifyOutcome, sessionBusy]);
-
   const handleEditMessage = useCallback((messageId: string, newContent: string) => {
     const live = liveRef.current;
     if (!live.token) return;
@@ -3551,7 +3535,6 @@ export default function App() {
                     session={activeSession}
                     nickname={displayName ?? null}
                     onRegenerate={handleRegenerate}
-                    onResend={handleResend}
                     onEditMessage={handleEditMessage}
                     onBeginEdit={handleBeginEdit}
                     onBranchChange={handleBranchChange}

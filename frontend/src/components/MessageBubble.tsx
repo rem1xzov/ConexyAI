@@ -17,7 +17,6 @@ import { TodoPanel } from './TodoPanel';
 import { AssistantContent } from './artifacts/AssistantContent';
 import { ProducedFiles } from './ProducedFiles';
 import { MessageActions } from './MessageActions';
-import { UserMessageActions } from './UserMessageActions';
 // WEB_DEVICE: добавлено 2026-10-18
 import { DeviceTurnExtras, DeviceQuestionCards } from './DeviceTurnExtras';
 import { VariantPager } from './VariantPager';
@@ -26,7 +25,6 @@ import { CopyIcon, EditIcon, ShareIcon, TextSelectIcon } from './Icons';
 interface MessageBubbleProps {
   message: ChatMessage;
   onRegenerate?: (assistantMessageId: string) => void;
-  onResend?: (messageId: string) => void;
   onEditMessage?: (messageId: string, newContent: string) => void;
   // COMPOSER_EDIT: добавлено 2026-10-01 — на телефоне редактирование уезжает в поле ввода
   // сообщения (как в Gemini), а не живёт inline в пузыре.
@@ -85,7 +83,6 @@ function useTurnStart(messageId: string, status: ChatMessage['status'], createdA
 function MessageBubbleBase({
   message,
   onRegenerate,
-  onResend,
   onEditMessage,
   onBeginEdit,
   onBranchChange,
@@ -381,15 +378,7 @@ function MessageBubbleBase({
             </div>
           )}
         </div>
-        {/* BUGFIX_LAST_USER_ACTIONS: edit/resend only make sense for the current prompt, so the
-            row is rendered for the newest user message and nowhere else. */}
-        {showActions && !editing && isLastUserMessage && (
-          <UserMessageActions
-            content={content}
-            onResend={onResend ? () => onResend(message.id) : undefined}
-            onEdit={startEdit}
-          />
-        )}
+
         {message.branches && message.branches.length > 1 && (
           <VariantPager
             current={(message.activeBranch ?? 0) + 1}
