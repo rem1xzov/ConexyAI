@@ -3,6 +3,7 @@ using ConexyAI.Contract;
 using ConexyAI.Entity;
 using ConexyAI.Model;
 using ConexyAI.Repository;
+using ConexyAI.Service.Admin;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -36,6 +37,8 @@ public class PaymentService : IPaymentService
     private readonly PaymentPlansOptions _plans;
     private readonly YooKassaSettings _settings;
     private readonly ILogger<PaymentService> _logger;
+    // ADMIN_ALERTS: необязателен — тесты платят без push, прод получает уведомление владельцу.
+    private readonly IAdminNotifier? _adminNotifier;
 
     public PaymentService(
         IYooKassaClient client,
@@ -43,7 +46,8 @@ public class PaymentService : IPaymentService
         IUserRepository users,
         IOptions<PaymentPlansOptions> plans,
         IOptions<YooKassaSettings> settings,
-        ILogger<PaymentService> logger)
+        ILogger<PaymentService> logger,
+        IAdminNotifier? adminNotifier = null)
     {
         _client = client;
         _payments = payments;
@@ -51,6 +55,7 @@ public class PaymentService : IPaymentService
         _plans = plans.Value;
         _settings = settings.Value;
         _logger = logger;
+        _adminNotifier = adminNotifier;
     }
 
     public async Task<CreatePaymentResponse> CreateAsync(Guid userId, string planId, CancellationToken ct = default)
@@ -231,6 +236,10 @@ public class PaymentService : IPaymentService
         _logger.LogInformation(
             "YooKassa: payment {ProviderId} activated — user {UserId} is on {Tier} until {Expires:u}.",
             payment.ProviderPaymentId, payment.UserId, granted, user.SubscriptionExpiresAt);
+
+        // ADMIN_ALERTS: владелец узнаёт об оплате сразу, даже с закрытым приложением.
+        if (_adminNotifier is not null)
+            await _adminNotifier.PaymentAsync(payment.UserId, payment, granted.ToString(), CancellationToken.None);
     }
 
     // TOKEN_TOPUP: добавлено 2026-10-06
@@ -271,6 +280,10 @@ public class PaymentService : IPaymentService
         _logger.LogInformation(
             "YooKassa: payment {ProviderId} credited {Amount} tokens to {Pool} for user {UserId}.",
             payment.ProviderPaymentId, payment.TokenAmount, payment.Pool ?? "Coder", payment.UserId);
+
+        // ADMIN_ALERTS: пополнение токенов — тоже оплата, владелец получает push.
+        if (_adminNotifier is not null)
+            await _adminNotifier.PaymentAsync(payment.UserId, payment, null, CancellationToken.None);
     }
 
     // SEC_PAYMENT_RACE: если запись пользователя упала, снимаем захват — повторная доставка вебхука

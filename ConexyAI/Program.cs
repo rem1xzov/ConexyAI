@@ -271,6 +271,8 @@ builder.Services.AddSingleton<ConexyAI.Service.Push.IPushService>(sp =>
 builder.Services.AddSingleton<ConexyAI.Service.Phone.IPhoneToolBridge, ConexyAI.Service.Phone.PhoneToolBridge>();
 builder.Services.AddSingleton<ConexyAI.Service.Phone.IPhoneApprovalService, ConexyAI.Service.Phone.PhoneApprovalService>();
 builder.Services.AddSingleton<ConexyAI.Service.Phone.IPhoneNotifier, ConexyAI.Service.Phone.PhoneNotifier>();
+// ADMIN_ALERTS: добавлено 2026-11-09 — push владельцу об оплате и обращениях в поддержку.
+builder.Services.AddSingleton<ConexyAI.Service.Admin.IAdminNotifier, ConexyAI.Service.Admin.AdminNotifier>();
 builder.Services.AddScoped<IMobilePushTokenRepository, MobilePushTokenRepository>();
 builder.Services.AddScoped<IConexyBashService, ConexyBashService>();
 // TEST_RUNNER: добавлено 2026-10-04 — структурированный прогон тестов (run_tests).

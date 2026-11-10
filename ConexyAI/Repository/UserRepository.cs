@@ -89,6 +89,16 @@ public class UserRepository : IUserRepository
         return (items, total);
     }
 
+    // ADMIN_ALERTS: добавлено 2026-11-09
+    public async Task<IReadOnlyList<Guid>> GetAdminUserIdsAsync(CancellationToken ct = default)
+    {
+        return await _context.Users
+            .AsNoTracking()
+            .Where(u => u.IsAdmin)
+            .Select(u => u.Id)
+            .ToListAsync(ct);
+    }
+
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
         var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == id, ct);

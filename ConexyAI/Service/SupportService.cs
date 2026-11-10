@@ -3,6 +3,7 @@ using ConexyAI.Entity;
 using ConexyAI.Hub;
 using ConexyAI.Model;
 using ConexyAI.Repository;
+using ConexyAI.Service.Admin;
 using ConexyAI.Service.Prompts;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
@@ -66,17 +67,21 @@ public class SupportService : ISupportService
     // SUPPORT_BOT: бот ходит в модель без инструментов — только текст.
     private readonly IConexyLlmClient _llm;
     private readonly ILogger<SupportService> _logger;
+    // ADMIN_ALERTS: необязателен — тесты поддержки не шлют push, прод уведомляет владельца.
+    private readonly IAdminNotifier? _adminNotifier;
 
     public SupportService(
         ISupportRepository repository,
         IHubContext<ConexyHub> hubContext,
         IConexyLlmClient llm,
-        ILogger<SupportService> logger)
+        ILogger<SupportService> logger,
+        IAdminNotifier? adminNotifier = null)
     {
         _repository = repository;
         _hubContext = hubContext;
         _llm = llm;
         _logger = logger;
+        _adminNotifier = adminNotifier;
     }
 
     public async Task<SupportTicketDto> GetOrCreateTicketAsync(Guid userId, CancellationToken ct = default)
@@ -213,6 +218,17 @@ public class SupportService : ISupportService
         ticket.BotActive = false;
         await _repository.UpdateTicketAsync(ticket, ct);
         await AddSystemMessageAsync(ticketId, EscalationMessage, ct);
+
+        // ADMIN_ALERTS: push владельцу в мобильное приложение — пользователь просит оператора.
+        if (_adminNotifier is not null)
+        {
+            var full = await _repository.GetTicketWithMessagesAsync(ticketId, ct);
+            var lastUserText = full?.Messages
+                .LastOrDefault(m => m.AuthorType == SupportMessageAuthor.User)?.Content;
+            await _adminNotifier.SupportEscalatedAsync(
+                ticket.UserId, ticket.Id, ticket.Subject, lastUserText, CancellationToken.None);
+        }
+
         return await ReloadTicketDtoAsync(ticketId, ct);
     }
 

@@ -110,7 +110,8 @@ final class NotificationHelper {
         }
         ensureChannels(context);
 
-        if (type == null || !("confirm".equals(type) || "phone_needed".equals(type))) {
+        if (type == null || !("confirm".equals(type) || "phone_needed".equals(type)
+                || "admin_payment".equals(type) || "admin_support".equals(type))) {
             type = "completed";
         }
         actionId = nz(actionId);

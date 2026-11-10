@@ -34,4 +34,8 @@ public interface IUserRepository
     /// so far. Returns <c>false</c> when the user does not exist.
     /// </summary>
     Task<bool> BumpTokenVersionAsync(Guid userId, CancellationToken ct = default);
+
+    // ADMIN_ALERTS: добавлено 2026-11-09 — получатели уведомлений о платежах и обращениях в поддержку.
+    /// <summary>Ids of every user marked as an administrator (<see cref="User.IsAdmin"/>).</summary>
+    Task<IReadOnlyList<Guid>> GetAdminUserIdsAsync(CancellationToken ct = default);
 }
