@@ -12082,3 +12082,20 @@ html[data-incognito='true'] .chat-surface-soft {
     pointer-events: none;
   }
 }
+
+/* INCOGNITO_HEADER_BLEND: на телефоне призрак не рисует серый круг — он просто продолжает
+   чёрную шапку. Активное состояние по-прежнему подсвечивается фиолетовым. */
+.incognito-toggle--compact {
+  background: transparent;
+  border-color: transparent;
+}
+
+.incognito-toggle--compact:hover {
+  background: var(--bg-hover);
+  border-color: transparent;
+}
+
+.incognito-toggle--compact.incognito-toggle--on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
