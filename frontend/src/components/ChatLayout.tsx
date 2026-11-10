@@ -19,6 +19,8 @@ interface ChatLayoutProps {
   composerFocused?: boolean;
   /** Start-screen content (mark + greeting), shown centred above the composer. */
   hero?: ReactNode;
+  /** Real controls for the chat tab (response style + smart search), shown above the hint chips. */
+  options?: ReactNode;
   chips?: ChatQuickChip[];
   feed: ReactNode;
   composer: ReactNode;
@@ -36,7 +38,7 @@ interface ChatLayoutProps {
  * with the hero just above it and the chips below. When active: the feed takes the free space and
  * the spacers collapse, leaving the composer at the bottom.
  */
-export function ChatLayout({ empty, composerFocused = false, hero, chips = [], feed, composer }: ChatLayoutProps) {
+export function ChatLayout({ empty, composerFocused = false, hero, options, chips = [], feed, composer }: ChatLayoutProps) {
   const stageClass = [
     'chat-stage',
     empty ? 'chat-stage--empty' : 'chat-stage--active',
@@ -57,6 +59,7 @@ export function ChatLayout({ empty, composerFocused = false, hero, chips = [], f
 
       <div className="chat-stage__composer">
         {composer}
+        {options && <div className="chat-stage__options">{options}</div>}
         {chips.length > 0 && (
           <div className="chat-stage__chips">
             {chips.map((chip) =>

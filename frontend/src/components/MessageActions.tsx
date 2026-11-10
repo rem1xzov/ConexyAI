@@ -1,9 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { copyText } from '../utils/clipboard';
 import { exportDocument, type OfficeFormat } from '../api/conexyApi';
 import { triggerDownload } from '../utils/download';
-import { CheckIcon, CopyIcon, DownloadIcon, PlayIcon, RefreshIcon, ThumbsDownIcon, ThumbsUpIcon } from './Icons';
+import {
+  CheckIcon,
+  CopyIcon,
+  DownloadIcon,
+  PlayIcon,
+  RefreshIcon,
+  ThreeDotsIcon,
+  ThumbsDownIcon,
+  ThumbsUpIcon,
+} from './Icons';
 
 // OFFICE_FORMATS: добавлено 2026-09-23 — every model's answer can be saved as an office file.
 const EXPORT_FORMATS: { format: OfficeFormat; labelKey: string }[] = [
@@ -35,16 +44,35 @@ interface MessageActionsProps {
 type Feedback = 'like' | 'dislike' | null;
 
 /**
- * Compact action row shown under every assistant reply: copy raw markdown,
- * like/dislike (local UI state for now), and regenerate the last prompt.
+ * Action row under every assistant reply. Only the three actions people use most are on the
+ * surface (like, dislike, copy) plus an overflow menu, Gemini-style: export, regenerate and
+ * continue live behind "…" so the chat stays quiet on a phone.
  */
 export function MessageActions({ content, onRegenerate, onContinue }: MessageActionsProps) {
   const { t } = useTranslation();
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [copied, setCopied] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [exporting, setExporting] = useState<OfficeFormat | null>(null);
   const [exportFailed, setExportFailed] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target as Node | null;
+      if (target && menuRef.current && !menuRef.current.contains(target)) setMenuOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setMenuOpen(false);
+    }
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [menuOpen]);
 
   async function exportAs(format: OfficeFormat) {
     setExporting(format);
@@ -52,7 +80,7 @@ export function MessageActions({ content, onRegenerate, onContinue }: MessageAct
     try {
       const name = exportFileName(content);
       triggerDownload(await exportDocument(format, content, name), `${name}.${format}`);
-      setExportOpen(false);
+      setMenuOpen(false);
     } catch {
       setExportFailed(true);
     } finally {
@@ -71,6 +99,8 @@ export function MessageActions({ content, onRegenerate, onContinue }: MessageAct
     setFeedback((prev) => (prev === next ? null : next));
   }
 
+  const hasMenu = Boolean(onContinue || onRegenerate || EXPORT_FORMATS.length > 0);
+
   // BUGFIX_CONTINUE_CLICK: добавлено 2026-09-22 — у всех кнопок явный type="button". Без него
   // кнопка внутри формы по умолчанию считается submit и клик уходит в отправку формы, а не в
   // обработчик — именно так «Продолжить» могла выглядеть полностью нерабочей.
@@ -78,21 +108,13 @@ export function MessageActions({ content, onRegenerate, onContinue }: MessageAct
     <div className="message-actions">
       <button
         type="button"
-        className="message-actions__btn"
-        onClick={() => void copy()}
-        title={t('message.copy')}
-        aria-label={t('message.copy')}
-      >
-        {copied ? <CheckIcon size={15} /> : <CopyIcon size={15} />}
-      </button>
-      <button
-        type="button"
         className={`message-actions__btn ${feedback === 'like' ? 'message-actions__btn--active message-actions__btn--like' : ''}`}
         onClick={() => toggle('like')}
         title={t('message.goodResponse')}
         aria-label={t('message.goodResponse')}
+        aria-pressed={feedback === 'like'}
       >
-        <ThumbsUpIcon size={15} />
+        <ThumbsUpIcon size={16} />
       </button>
       <button
         type="button"
@@ -100,56 +122,81 @@ export function MessageActions({ content, onRegenerate, onContinue }: MessageAct
         onClick={() => toggle('dislike')}
         title={t('message.badResponse')}
         aria-label={t('message.badResponse')}
+        aria-pressed={feedback === 'dislike'}
       >
-        <ThumbsDownIcon size={15} />
+        <ThumbsDownIcon size={16} />
       </button>
-      {onContinue && (
-        <button
-          type="button"
-          className="message-actions__btn message-actions__btn--continue"
-          onClick={onContinue}
-          title={t('message.continue')}
-          aria-label={t('message.continue')}
-        >
-          <PlayIcon size={15} />
-          <span>{t('message.continue')}</span>
-        </button>
-      )}
       <button
         type="button"
-        className={`message-actions__btn ${exportOpen ? 'message-actions__btn--active' : ''}`}
-        onClick={() => setExportOpen((o) => !o)}
-        title={t('message.export')}
-        aria-label={t('message.export')}
-        aria-expanded={exportOpen}
+        className="message-actions__btn"
+        onClick={() => void copy()}
+        title={t('message.copy')}
+        aria-label={t('message.copy')}
       >
-        <DownloadIcon size={15} />
+        {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
       </button>
-      {exportOpen &&
-        EXPORT_FORMATS.map(({ format, labelKey }) => (
+
+      {hasMenu && (
+        <div className="message-actions__more" ref={menuRef}>
           <button
-            key={format}
             type="button"
-            className="message-actions__btn message-actions__btn--continue"
-            onClick={() => void exportAs(format)}
-            disabled={exporting !== null}
-            title={t('message.export')}
+            className={`message-actions__btn ${menuOpen ? 'message-actions__btn--active' : ''}`}
+            onClick={() => setMenuOpen((open) => !open)}
+            title={t('message.more')}
+            aria-label={t('message.more')}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
           >
-            <span>{exporting === format ? '…' : t(labelKey)}</span>
+            <ThreeDotsIcon size={16} />
           </button>
-        ))}
-      {exportFailed && <span className="message-actions__error">{t('message.exportFailed')}</span>}
-      {onRegenerate && (
-        <button
-          type="button"
-          className="message-actions__btn"
-          onClick={onRegenerate}
-          title={t('message.regenerate')}
-          aria-label={t('message.regenerate')}
-        >
-          <RefreshIcon size={15} />
-        </button>
+          {menuOpen && (
+            <div className="message-actions__menu" role="menu">
+              {onContinue && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="message-actions__menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onContinue();
+                  }}
+                >
+                  <PlayIcon size={15} />
+                  <span>{t('message.continue')}</span>
+                </button>
+              )}
+              {EXPORT_FORMATS.map(({ format, labelKey }) => (
+                <button
+                  key={format}
+                  type="button"
+                  role="menuitem"
+                  className="message-actions__menu-item"
+                  onClick={() => void exportAs(format)}
+                  disabled={exporting !== null}
+                >
+                  <DownloadIcon size={15} />
+                  <span>{exporting === format ? '…' : t(labelKey)}</span>
+                </button>
+              ))}
+              {onRegenerate && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="message-actions__menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onRegenerate();
+                  }}
+                >
+                  <RefreshIcon size={15} />
+                  <span>{t('message.regenerate')}</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       )}
+      {exportFailed && <span className="message-actions__error">{t('message.exportFailed')}</span>}
     </div>
   );
 }

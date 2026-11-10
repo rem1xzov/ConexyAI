@@ -248,7 +248,6 @@ export function Sidebar(props: SidebarProps) {
                           setOpenMenuId(null);
                         }}
                       >
-                        <span className={`status-dot status-dot--${s.status.toLowerCase()}`} />
                         <span className="chats__title">{s.title}</span>
                         {/* CHAT_PIN_ICON: булавка стоит в конце строки (как в референсе) — закреплённый
                             чат видно сразу, а не только по порядку в списке. */}

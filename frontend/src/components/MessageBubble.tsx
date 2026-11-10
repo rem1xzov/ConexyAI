@@ -97,6 +97,9 @@ function MessageBubbleBase({
 
   const isUser = message.role === 'user';
   const turnStart = useTurnStart(message.id, message.status, message.createdAt);
+  // MOTION: only a freshly created message animates in. Restored history must not replay the
+  // entrance every time the chat is opened.
+  const enterMotion = Date.now() - message.createdAt < 2500;
 
   const content = message.content ?? '';
   const thinking = message.thinking ?? '';
@@ -203,7 +206,7 @@ function MessageBubbleBase({
   // User message: pushed to the right edge of the centered column.
   if (isUser) {
     return (
-      <div className="w-full max-w-3xl mx-auto my-4 flex flex-col items-end px-2">
+      <div className={`w-full max-w-3xl mx-auto my-4 flex flex-col items-end px-2${enterMotion ? ' msg-enter' : ''}`}>
         <div className={`chat-surface rounded-2xl px-5 py-3.5 shadow-sm ${editing ? 'w-full max-w-[85%]' : 'w-fit max-w-[85%]'}`}>
           <div className="font-semibold text-xs chat-muted mb-1">{t('message.you')}</div>
           {/* ATTACHMENTS_IN_BUBBLE: the files travel with this message, inside its bubble —
@@ -254,7 +257,7 @@ function MessageBubbleBase({
 
   // Assistant message: centered full-width column.
   return (
-    <div className="w-full max-w-3xl mx-auto my-6 px-2">
+    <div className={`w-full max-w-3xl mx-auto my-6 px-2${enterMotion ? ' msg-enter' : ''}`}>
       {/* Agent task plan, kept above the working blocks so the required order
           pills -> running light -> answer text stays intact. Once the plan has a block of its own in
           the feed, this would only repeat it. */}

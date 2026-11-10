@@ -50,6 +50,7 @@ import { MenuIcon, PanelRightCloseIcon, PanelRightOpenIcon, GhostIcon } from './
 // LOGO_SWEEP / CLAUDE_LAYOUT: добавлено 2026-09-20
 import { ConexyLogo } from './components/ConexyLogo';
 import { ChatLayout, type ChatQuickChip } from './components/ChatLayout';
+import { ChatOptions } from './components/ChatOptions';
 // CURSOR_TRAIL: след из фирменных стрелок за курсором на пустом стартовом экране (только ПК).
 import { CursorTrail } from './components/CursorTrail';
 // GUEST_HERO: добавлено 2026-09-20
@@ -1996,8 +1997,6 @@ export default function App() {
   }, [token, userId]);
   const stageEmpty = chatEmpty && !authPending;
   const showIncognitoToggle = chatTab && chatEmpty && authenticated;
-  // The compact header mark appears as soon as the conversation starts.
-  const showHeaderLogo = chatTab && !chatEmpty;
 
   // TABS_UNIFIED: chips follow the tab. The chat tab offers real controls (model, smart
   // search); the agent tab shows passive hint chips instead — it runs autonomously and picks its
@@ -2006,26 +2005,7 @@ export default function App() {
   const quickChips: ChatQuickChip[] = !authenticated
     ? []
     : chatTab
-      ? [
-          {
-            key: 'flash',
-            label: t('chat.chipFlash'),
-            onClick: () => handleModelChange('ConexyV1-flash'),
-            active: model === 'ConexyV1-flash',
-          },
-          {
-            key: 'pro',
-            label: t('chat.chipPro'),
-            onClick: () => handleModelChange('ConexyV1-pro'),
-            active: model === 'ConexyV1-pro',
-          },
-          {
-            key: 'search',
-            label: t('chat.chipSmartSearch'),
-            onClick: () => setSmartSearch((v) => !v),
-            active: smartSearch,
-          },
-        ]
+      ? []
       : isAgent
         ? model === 'conexy-cowork'
           ? [
@@ -3299,13 +3279,6 @@ export default function App() {
             {isMobile && (
               <div className="chat-header">
                 <div className="chat-header__left">
-                  {showHeaderLogo && (
-                    <span className="chat-header__logo">
-                      {/* LOGO_SWEEP: the header mark stays static — the sweep only runs inside
-                          the message flow, under the running tool pills. */}
-                      <ConexyLogo size={32} />
-                    </span>
-                  )}
                   <ModelPicker
                     model={model}
                     onModelChange={handleModelChange}
@@ -3373,13 +3346,7 @@ export default function App() {
                 start-screen logo collapses into, the incognito control and the chat actions. */}
             {!isMobile && !isAgent && (
               <div className="chat-header chat-header--chat">
-                <div className="chat-header__left">
-                  {showHeaderLogo && (
-                    <span className="chat-header__logo">
-                      <ConexyLogo size={32} />
-                    </span>
-                  )}
-                </div>
+                <div className="chat-header__left" />
                 <div className="chat-header__actions">
                   {incognitoControl}
                   {chatActions}
@@ -3404,6 +3371,16 @@ export default function App() {
                     <span className="chat-hero-greeting">{greeting}</span>
                   </div>
                 )
+              }
+              options={
+                chatTab && authenticated ? (
+                  <ChatOptions
+                    mode={model === 'ConexyV1-pro' ? 'ConexyV1-pro' : 'ConexyV1-flash'}
+                    search={smartSearch}
+                    onMode={handleModelChange}
+                    onSearch={() => setSmartSearch((v) => !v)}
+                  />
+                ) : undefined
               }
               chips={quickChips}
               feed={
