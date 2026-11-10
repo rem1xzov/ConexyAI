@@ -13,6 +13,11 @@ interface ChatFeedProps {
   onEditMessage?: (messageId: string, newContent: string) => void;
   // COMPOSER_EDIT: на телефоне редактирование открывается в поле ввода сообщения.
   onBeginEdit?: (messageId: string, content: string) => void;
+  // BRANCHING / VERSIONS: переключение вариантов без запроса к серверу.
+  onBranchChange?: (userMessageId: string, index: number) => void;
+  onVersionChange?: (assistantMessageId: string, index: number) => void;
+  /** Сообщение, открытое в композере: остальные приглушаются. */
+  editingId?: string | null;
   // COMMAND_CONFIRM: добавлено 2026-09-20
   onCommandDecision?: CommandDecisionHandler;
   // NEW_CHAT_LOGO: добавлено 2026-09-20
@@ -40,6 +45,9 @@ export function ChatFeed({
   onResend,
   onEditMessage,
   onBeginEdit,
+  onBranchChange,
+  onVersionChange,
+  editingId,
   onCommandDecision,
   onNewChat,
   onContinue,
@@ -224,6 +232,9 @@ export function ChatFeed({
             onResend={onResend}
             onEditMessage={onEditMessage}
             onBeginEdit={onBeginEdit}
+            onBranchChange={onBranchChange}
+            onVersionChange={onVersionChange}
+            dimmed={Boolean(editingId && editingId !== m.id)}
             onCommandDecision={onCommandDecision}
             isLast={index === session.messages.length - 1}
             isLastUserMessage={index === lastUserIndex}

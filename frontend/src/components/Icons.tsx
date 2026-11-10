@@ -58,6 +58,26 @@ export function MenuIcon(props: IconProps) {
   );
 }
 
+// HEADER_MENU_LINES: две линии разной длины — меню-кнопка в шапке без плашки.
+export function MenuLinesIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <line x1="4" y1="9.5" x2="20" y2="9.5" strokeWidth={2.4} />
+      <line x1="4" y1="14.5" x2="13" y2="14.5" strokeWidth={2.4} />
+    </Icon>
+  );
+}
+
+// TEXT_SELECT: пунктирная рамка и «T» — пункт «Выбрать текст» в меню сообщения.
+export function TextSelectIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M4 4h3M10 4h4M17 4h3M20 7v3M20 14v3M17 20h3M10 20h4M4 20h3M4 14v3M4 7v3" />
+      <path d="M9 8h6M12 8v8" />
+    </Icon>
+  );
+}
+
 export function ThreeDotsIcon(props: IconProps) {
   return (
     <svg

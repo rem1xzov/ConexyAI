@@ -3,6 +3,27 @@ import type { BuildProblem, DeviceDiffPayload, DeviceQuestionPayload, TaskStatus
 
 export type MessageStatus = 'streaming' | 'complete' | 'error' | 'stopped';
 
+// BRANCHING / VERSIONS: редактирование и перегенерация хранятся как варианты в самом сообщении.
+// Ветки пользователя живут на user-сообщении, версии ответа — на assistant-сообщении.
+export interface AssistantVersion {
+  id: string;
+  content: string;
+  createdAt: number;
+}
+
+export interface UserBranch {
+  id: string;
+  text: string;
+  createdAt: number;
+  /** Снимок ответа, который принадлежал этой ветке (чтобы переключение не делало запрос). */
+  assistant?: {
+    content: string;
+    thinking?: string;
+    versions?: AssistantVersion[];
+    activeVersion?: number;
+  };
+}
+
 export type ChatSessionKind = 'chat' | 'projects' | 'students';
 
 export interface ChatMessage {
@@ -54,6 +75,12 @@ export interface ChatMessage {
   deviceQuestions?: DeviceQuestion[];
   /** Files the agent changed on the PC (OnDeviceDiff). */
   deviceDiff?: DeviceDiffPayload;
+  // BRANCHING: варианты текста пользователя и индекс активной ветки.
+  branches?: UserBranch[];
+  activeBranch?: number;
+  // VERSIONS: варианты ответа ассистента и индекс активной версии.
+  versions?: AssistantVersion[];
+  activeVersion?: number;
 }
 
 // WEB_DEVICE: добавлено 2026-10-18

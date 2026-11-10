@@ -12114,3 +12114,115 @@ body::before {
   pointer-events: none;
   z-index: 0;
 }
+
+
+/* MESSAGE_MENU: контекстное меню по долгому нажатию/правому клику на сообщение пользователя. */
+.message-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  width: 210px;
+  padding: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-solid);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  transform-origin: top right;
+  animation: menuIn 150ms var(--ease-out) both;
+}
+
+.message-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 16px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast) ease;
+}
+
+.message-menu__item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.message-menu__item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* VARIANTS: пагинатор веток пользователя и версий ответа. */
+.variant-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  user-select: none;
+}
+
+.variant-pager--user {
+  align-self: flex-end;
+}
+
+.variant-pager__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--motion-fast) ease, color var(--motion-fast) ease;
+}
+
+.variant-pager__btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.variant-pager__btn:disabled {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.variant-pager__label {
+  min-width: 34px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* COMPOSER_EDIT: остальные сообщения приглушаются, пока правится одно. */
+.msg--dimmed {
+  opacity: 0.35;
+  transition: opacity var(--motion-base) ease;
+  pointer-events: none;
+}
+
+/* HEADER_MENU_BARE: кнопка меню — только две линии, без плашки и обводки. */
+@media (max-width: 768px) {
+  .mobile-menu-btn {
+    border: none;
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-menu {
+    animation: none;
+  }
+}

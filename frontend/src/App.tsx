@@ -46,7 +46,7 @@ import { StatusBar, type AgentStatus } from './components/StatusBar';
 import { ConnectionBanner } from './components/ConnectionBanner';
 // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
 // import { LiveVoiceModal } from './components/LiveVoiceModal';
-import { MenuIcon, PanelRightCloseIcon, PanelRightOpenIcon, GhostIcon } from './components/Icons';
+import { MenuLinesIcon, PanelRightCloseIcon, PanelRightOpenIcon, GhostIcon } from './components/Icons';
 // LOGO_SWEEP / CLAUDE_LAYOUT: добавлено 2026-09-20
 import { ConexyLogo } from './components/ConexyLogo';
 import { ChatLayout, type ChatQuickChip } from './components/ChatLayout';
@@ -263,6 +263,16 @@ function turnPersisted(answer: ChatMessage | undefined): boolean {
   if (answer.taskId) return true;
   // No task id: either a transcript row from the server (stored) or a send that never got through.
   return !answer.awaitingTaskId && answer.status !== 'error';
+}
+
+// BRANCHING: снимок ответа для неактивной ветки — переключение не должно делать запрос.
+function snapshotAssistant(message: ChatMessage) {
+  return {
+    content: message.content,
+    thinking: message.thinking,
+    versions: message.versions,
+    activeVersion: message.activeVersion,
+  };
 }
 
 /**
@@ -998,6 +1008,12 @@ export default function App() {
       : undefined;
     setSessions((prev) => {
       let changed = false;
+      // VERSIONS: the finished answer replaces the placeholder of its own version, so switching
+      // versions later never shows an empty variant.
+      const stampVersion = (m: ChatMessage): ChatMessage => {
+        if (!m.versions?.length || m.activeVersion == null) return m;
+        return { ...m, versions: m.versions.map((v, i) => (i === m.activeVersion ? { ...v, content: m.content } : v)) };
+      };
       const next = updateMessage(prev, target.sessionId, target.messageId, (m) => {
         const eligible = m.status === 'streaming' || (opts.allowFromStopped === true && m.status === 'stopped');
         if (!eligible) return m;
@@ -1013,10 +1029,10 @@ export default function App() {
           // H7: the stored result is the FULL answer. The streamed text can miss tokens that went by
           // while the socket or the page was down, so it no longer wins over the result.
           const result = opts.result;
-          return { ...base, status: 'complete', content: result && result.trim() ? result : m.content, error: undefined };
+          return stampVersion({ ...base, status: 'complete', content: result && result.trim() ? result : m.content, error: undefined });
         }
-        if (outcome === 'stopped') return { ...base, status: 'stopped' };
-        return { ...base, status: 'error', error: opts.error || translate('agent.taskFailed') };
+        if (outcome === 'stopped') return stampVersion({ ...base, status: 'stopped' });
+        return stampVersion({ ...base, status: 'error', error: opts.error || translate('agent.taskFailed') });
       });
       if (!changed) return prev;
       const status = outcome === 'complete' ? 'Completed' : outcome === 'stopped' ? 'Stopped' : 'Failed';
@@ -2413,6 +2429,12 @@ export default function App() {
     // REGENERATE_REPLACES_TURN: добавлено 2026-09-24 (C-10) — the turn replaces the chat's last
     // stored turn (regenerate / resend / edit of the last user message).
     regenerate?: boolean,
+    // BRANCHING / VERSIONS: replace this existing assistant bubble in place (branch edit / regenerate)
+    // instead of appending a new message after the chat.
+    existingAssistantId?: string,
+    // VERSIONS: a regeneration keeps the version list already put on the message; a branch edit starts
+    // a new answer from scratch.
+    keepVersions = false,
   ): Promise<SendOutcome> => {
     const live = liveRef.current;
     const turns = registryRef.current!;
@@ -2434,7 +2456,7 @@ export default function App() {
     const continueFrom = continueTarget?.content;
     const previousSessionStatus = session?.status ?? 'Idle';
 
-    const assistantId = continueMessageId ?? uid();
+    const assistantId = continueMessageId ?? existingAssistantId ?? uid();
     // Registered BEFORE the first await, so a second Enter in the same tick is already refused.
     const ctx: TurnContext = { sessionId, messageId: assistantId, startedAt: Date.now() };
     turns.begin(ctx);
@@ -2531,9 +2553,27 @@ export default function App() {
                 ? { ...m, status: 'streaming', error: undefined, taskId: undefined, awaitingTaskId: true, currentAction: attachmentAction ?? m.currentAction }
                 : m,
             )
-          : appendUserMessage
-            ? [...s.messages, userMsg, assistantMsg]
-            : [...s.messages, assistantMsg],
+          : existingAssistantId
+            ? s.messages.map((m) =>
+                m.id === existingAssistantId
+                  ? {
+                      ...m,
+                      ...assistantMsg,
+                      id: m.id,
+                      createdAt: m.createdAt,
+                      blocks: undefined,
+                      steps: undefined,
+                      taskId: undefined,
+                      deviceQuestions: undefined,
+                      deviceDiff: undefined,
+                      versions: keepVersions ? m.versions : undefined,
+                      activeVersion: keepVersions ? m.activeVersion : undefined,
+                    }
+                  : m,
+              )
+            : appendUserMessage
+              ? [...s.messages, userMsg, assistantMsg]
+              : [...s.messages, assistantMsg],
       })),
     );
 
@@ -2549,7 +2589,13 @@ export default function App() {
                   ? { ...m, status: continueTarget?.status ?? 'stopped', taskId: continueTarget?.taskId, awaitingTaskId: undefined }
                   : m,
               )
-            : s.messages.filter((m) => m.id !== userMsg.id && m.id !== assistantMsg.id),
+            : existingAssistantId
+              ? s.messages.map((m) =>
+                  m.id === existingAssistantId
+                    ? { ...m, status: 'stopped', taskId: undefined, awaitingTaskId: undefined, currentAction: null }
+                    : m,
+                )
+              : s.messages.filter((m) => m.id !== userMsg.id && m.id !== assistantMsg.id),
         })),
       );
     };
@@ -2745,6 +2791,28 @@ export default function App() {
     }
     const idx = session.messages.findIndex((m) => m.id === assistantMessageId);
     if (idx < 0) return;
+    const target = session.messages[idx];
+    if (idx !== session.messages.length - 1) {
+      live.showToast(live.t('message.editLastOnly'));
+      return;
+    }
+
+    // VERSIONS: каждая перегенерация — новый вариант ответа (до 6 штук).
+    const versions = target.versions?.length
+      ? target.versions
+      : [{ id: uid(), content: target.content, createdAt: target.createdAt }];
+    if (versions.length >= 6) {
+      live.showToast(live.t('message.regenerateLimit'));
+      return;
+    }
+    const nextVersions = [...versions, { id: uid(), content: '', createdAt: Date.now() }];
+    const activeVersion = nextVersions.length - 1;
+    setSessions((prev) =>
+      updateSession(prev, session.id, (s) => ({
+        ...s,
+        messages: s.messages.map((m) => (m.id === target.id ? { ...m, versions: nextVersions, activeVersion } : m)),
+      })),
+    );
 
     // Find the user prompt this reply was answering.
     let prompt = '';
@@ -2758,9 +2826,59 @@ export default function App() {
     if (!prompt.trim()) return;
 
     // C-10: only the answer of the chat's LAST turn can replace that turn on the server.
-    const regenerate = !session.incognito && idx === session.messages.length - 1 && turnPersisted(session.messages[idx]);
-    void startCompletion(session.id, prompt, [], false, undefined, regenerate).then(notifyOutcome);
+    const regenerate = !session.incognito && turnPersisted(target);
+    void startCompletion(session.id, prompt, [], false, undefined, regenerate, target.id, true).then(notifyOutcome);
   }, [startCompletion, notifyOutcome, sessionBusy]);
+
+  // VERSIONS: переключение вариантов ответа — только локальное состояние, без запроса.
+  const handleVersionChange = useCallback((assistantMessageId: string, index: number) => {
+    const live = liveRef.current;
+    const session = live.sessions.find((s) => s.id === live.activeId);
+    if (!session) return;
+    setSessions((prev) =>
+      updateSession(prev, session.id, (s) => ({
+        ...s,
+        messages: s.messages.map((m) => {
+          if (m.id !== assistantMessageId || !m.versions || index < 0 || index >= m.versions.length) return m;
+          return { ...m, content: m.versions[index].content, activeVersion: index };
+        }),
+      })),
+    );
+  }, []);
+
+  // BRANCHING: переключение ветки пользователя — меняет и текст сообщения, и ответ под ним.
+  const handleBranchChange = useCallback((userMessageId: string, index: number) => {
+    const live = liveRef.current;
+    const session = live.sessions.find((s) => s.id === live.activeId);
+    if (!session) return;
+    const userIndex = session.messages.findIndex((m) => m.id === userMessageId);
+    const user = session.messages[userIndex];
+    if (!user?.branches || index < 0 || index >= user.branches.length) return;
+    const assistantMessage = session.messages[userIndex + 1]?.role === 'assistant' ? session.messages[userIndex + 1] : undefined;
+    const active = user.activeBranch ?? 0;
+    const branches = user.branches.map((branch, i) =>
+      i === active && assistantMessage ? { ...branch, assistant: snapshotAssistant(assistantMessage) } : branch,
+    );
+    const target = branches[index];
+    setSessions((prev) =>
+      updateSession(prev, session.id, (s) => ({
+        ...s,
+        messages: s.messages.map((m) => {
+          if (m.id === user.id) return { ...m, content: target.text, branches, activeBranch: index };
+          if (assistantMessage && m.id === assistantMessage.id) {
+            return {
+              ...m,
+              content: target.assistant?.content ?? '',
+              thinking: target.assistant?.thinking,
+              versions: target.assistant?.versions,
+              activeVersion: target.assistant?.activeVersion,
+            };
+          }
+          return m;
+        }),
+      })),
+    );
+  }, []);
 
   const handleResend = useCallback((messageId: string) => {
     const live = liveRef.current;
@@ -2801,8 +2919,52 @@ export default function App() {
 
   const handleSubmitEdit = useCallback((messageId: string, text: string) => {
     setComposerEdit(null);
-    handleEditMessage(messageId, text);
-  }, [handleEditMessage]);
+    const live = liveRef.current;
+    if (!live.token) return;
+    const session = live.sessions.find((s) => s.id === live.activeId);
+    if (!session) return;
+    if (sessionBusy(session)) {
+      live.showToast(live.t('sync.turnInFlight'));
+      return;
+    }
+    const index = session.messages.findIndex((m) => m.id === messageId);
+    const message = session.messages[index];
+    if (!message || message.role !== 'user') return;
+    // BRANCHING: править можно текущий (последний) ход — сервер умеет заменять только его.
+    const lastUserIndex = session.messages.reduce((last, m, i) => (m.role === 'user' ? i : last), -1);
+    if (index !== lastUserIndex) {
+      live.showToast(live.t('message.editLastOnly'));
+      return;
+    }
+    const assistantMessage = session.messages[index + 1]?.role === 'assistant' ? session.messages[index + 1] : undefined;
+
+    const active = message.activeBranch ?? 0;
+    const branches = message.branches?.length
+      ? [...message.branches]
+      : [{ id: message.id, text: message.content, createdAt: message.createdAt, assistant: assistantMessage ? snapshotAssistant(assistantMessage) : undefined }];
+    // Перед созданием новой ветки сохраняем текущий ответ в активной.
+    if (branches[active]) {
+      branches[active] = {
+        ...branches[active],
+        text: message.content,
+        assistant: assistantMessage ? snapshotAssistant(assistantMessage) : branches[active].assistant,
+      };
+    }
+    branches.push({ id: uid(), text, createdAt: Date.now() });
+    const newIndex = branches.length - 1;
+
+    setSessions((prev) =>
+      updateSession(prev, session.id, (s) => ({
+        ...s,
+        messages: s.messages.map((m) =>
+          m.id === message.id ? { ...m, content: text, branches, activeBranch: newIndex } : m,
+        ),
+      })),
+    );
+
+    const regenerate = !session.incognito && replacesLastTurn(session.messages, index);
+    void startCompletion(session.id, text, [], false, undefined, regenerate, assistantMessage?.id).then(notifyOutcome);
+  }, [startCompletion, notifyOutcome, sessionBusy]);
 
   const handleCancelEdit = useCallback(() => setComposerEdit(null), []);
 
@@ -3249,7 +3411,7 @@ export default function App() {
           aria-label={t('sidebar.menu')}
           type="button"
         >
-          <MenuIcon size={20} />
+          <MenuLinesIcon size={24} />
         </button>
       )}
       {isMobile && (
@@ -3392,6 +3554,9 @@ export default function App() {
                     onResend={handleResend}
                     onEditMessage={handleEditMessage}
                     onBeginEdit={handleBeginEdit}
+                    onBranchChange={handleBranchChange}
+                    onVersionChange={handleVersionChange}
+                    editingId={composerEdit?.id ?? null}
                     onCommandDecision={handleCommandDecision}
                     onNewChat={handleNewChat}
                     onContinue={handleContinue}

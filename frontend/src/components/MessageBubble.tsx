@@ -1,10 +1,11 @@
-import { memo, useMemo, useState, type KeyboardEvent } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatMessage } from '../types/chat';
 import type { CommandDecisionHandler } from '../types/signalr';
 import { assistantPhase } from '../utils/assistantPhase';
 import { artifactsToMarkdown } from '../utils/artifacts';
 import { producedFiles } from '../utils/producedFiles';
+import { copyText } from '../utils/clipboard';
 import { ConexyLogo } from './ConexyLogo';
 import { ThinkingStep } from './ThinkingStep';
 import { VisionGallery } from './VisionGallery';
@@ -17,9 +18,10 @@ import { AssistantContent } from './artifacts/AssistantContent';
 import { ProducedFiles } from './ProducedFiles';
 import { MessageActions } from './MessageActions';
 import { UserMessageActions } from './UserMessageActions';
-import { useIsMobile } from '../hooks/useMediaQuery';
 // WEB_DEVICE: добавлено 2026-10-18
 import { DeviceTurnExtras, DeviceQuestionCards } from './DeviceTurnExtras';
+import { VariantPager } from './VariantPager';
+import { CopyIcon, EditIcon, ShareIcon, TextSelectIcon } from './Icons';
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -30,6 +32,12 @@ interface MessageBubbleProps {
   // сообщения (как в Gemini), а не живёт inline в пузыре.
   /** Mobile: open this user message for editing inside the composer. */
   onBeginEdit?: (messageId: string, content: string) => void;
+  /** Switch the visible user-message branch (no request). */
+  onBranchChange?: (userMessageId: string, index: number) => void;
+  /** Switch the visible assistant version (no request). */
+  onVersionChange?: (assistantMessageId: string, index: number) => void;
+  /** True while another message is being edited in the composer: this one fades. */
+  dimmed?: boolean;
   // COMMAND_CONFIRM: добавлено 2026-09-20
   onCommandDecision?: CommandDecisionHandler;
   // NEW_CHAT_LOGO: добавлено 2026-09-20
@@ -80,6 +88,9 @@ function MessageBubbleBase({
   onResend,
   onEditMessage,
   onBeginEdit,
+  onBranchChange,
+  onVersionChange,
+  dimmed = false,
   onCommandDecision,
   isLast = false,
   isLastUserMessage = false,
@@ -90,10 +101,15 @@ function MessageBubbleBase({
   agentTurn = false,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
-  // COMPOSER_EDIT: на телефоне правим сообщение в композере, на десктопе — inline в пузыре.
-  const isMobile = useIsMobile();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  // MESSAGE_MENU: контекстное меню по долгому нажатию/правому клику на пузыре пользователя.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuCopied, setMenuCopied] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const pressTimer = useRef<number | null>(null);
+  const pressOrigin = useRef<{ x: number; y: number } | null>(null);
 
   const isUser = message.role === 'user';
   const turnStart = useTurnStart(message.id, message.status, message.createdAt);
@@ -173,8 +189,8 @@ function MessageBubbleBase({
   const exportContent = useMemo(() => (isUser ? content : artifactsToMarkdown(content)), [isUser, content]);
 
   function startEdit() {
-    // COMPOSER_EDIT: на узком экране передаём сообщение наверх — его откроет композер.
-    if (isMobile && onBeginEdit) {
+    // COMPOSER_EDIT: правка открывается в поле ввода (как в Gemini/DeepSeek), а не inline в пузыре.
+    if (onBeginEdit) {
       onBeginEdit(message.id, content);
       return;
     }
@@ -203,11 +219,106 @@ function MessageBubbleBase({
     }
   }
 
+  // MESSAGE_MENU: вне меню или Escape — закрыть; долгое нажатие на пузыре — открыть.
+  useEffect(() => {
+    if (!menuOpen) return;
+    function closeOnOutside(event: PointerEvent) {
+      if (menuRef.current && event.target instanceof Node && !menuRef.current.contains(event.target)) {
+        setMenuOpen(false);
+      }
+    }
+    function closeOnEscape(event: globalThis.KeyboardEvent) {
+      if (event.key === 'Escape') setMenuOpen(false);
+    }
+    document.addEventListener('pointerdown', closeOnOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [menuOpen]);
+
+  function cancelPress() {
+    if (pressTimer.current !== null) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+    pressOrigin.current = null;
+  }
+
+  function beginPress(x: number, y: number) {
+    cancelPress();
+    pressOrigin.current = { x, y };
+    pressTimer.current = window.setTimeout(() => {
+      pressTimer.current = null;
+      setMenuOpen(true);
+      navigator.vibrate?.(15);
+    }, 450);
+  }
+
+  function movePress(x: number, y: number) {
+    if (pressTimer.current === null) return;
+    const origin = pressOrigin.current;
+    if (origin && Math.hypot(x - origin.x, y - origin.y) > 10) cancelPress();
+  }
+
+  async function menuCopy() {
+    if (await copyText(content)) {
+      setMenuCopied(true);
+      window.setTimeout(() => setMenuCopied(false), 1200);
+    }
+    setMenuOpen(false);
+  }
+
+  function menuSelectText() {
+    const element = contentRef.current;
+    if (element) {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+    setMenuOpen(false);
+  }
+
+  async function menuShare() {
+    setMenuOpen(false);
+    try {
+      if (navigator.share) await navigator.share({ text: content });
+      else await copyText(content);
+    } catch {
+      // Пользователь отменил системный share — ничего не делаем.
+    }
+  }
+
+  function menuEdit() {
+    if (!isLastUserMessage) return;
+    setMenuOpen(false);
+    onBeginEdit?.(message.id, content);
+  }
+
   // User message: pushed to the right edge of the centered column.
   if (isUser) {
     return (
-      <div className={`w-full max-w-3xl mx-auto my-4 flex flex-col items-end px-2${enterMotion ? ' msg-enter' : ''}`}>
-        <div className={`chat-surface rounded-2xl px-5 py-3.5 shadow-sm ${editing ? 'w-full max-w-[85%]' : 'w-fit max-w-[85%]'}`}>
+      <div className={`w-full max-w-3xl mx-auto my-4 flex flex-col items-end px-2${enterMotion ? ' msg-enter' : ''}${dimmed ? ' msg--dimmed' : ''}`}>
+        <div
+          className={`user-bubble relative chat-surface rounded-2xl px-5 py-3.5 shadow-sm ${editing ? 'w-full max-w-[85%]' : 'w-fit max-w-[85%]'}`}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            setMenuOpen(true);
+          }}
+          onTouchStart={(event) => {
+            const touch = event.touches[0];
+            if (touch) beginPress(touch.clientX, touch.clientY);
+          }}
+          onTouchMove={(event) => {
+            const touch = event.touches[0];
+            if (touch) movePress(touch.clientX, touch.clientY);
+          }}
+          onTouchEnd={cancelPress}
+          onTouchCancel={cancelPress}
+        >
           <div className="font-semibold text-xs chat-muted mb-1">{t('message.you')}</div>
           {/* ATTACHMENTS_IN_BUBBLE: the files travel with this message, inside its bubble —
               images as a compact grid, anything else as a file chip. */}
@@ -239,7 +350,35 @@ function MessageBubbleBase({
               </div>
             </div>
           ) : (
-            <div className="whitespace-pre-wrap text-base leading-relaxed break-words">{content}</div>
+            <div ref={contentRef} className="whitespace-pre-wrap text-base leading-relaxed break-words">{content}</div>
+          )}
+
+          {menuOpen && (
+            <div className="message-menu" ref={menuRef} role="menu">
+              <button type="button" role="menuitem" className="message-menu__item" onClick={() => void menuCopy()}>
+                <CopyIcon size={18} />
+                <span>{menuCopied ? t('message.copied') : t('message.copy')}</span>
+              </button>
+              <button type="button" role="menuitem" className="message-menu__item" onClick={menuSelectText}>
+                <TextSelectIcon size={18} />
+                <span>{t('message.selectText')}</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="message-menu__item"
+                onClick={menuEdit}
+                disabled={!isLastUserMessage}
+                title={isLastUserMessage ? undefined : t('message.editLastOnly')}
+              >
+                <EditIcon size={18} />
+                <span>{t('message.edit')}</span>
+              </button>
+              <button type="button" role="menuitem" className="message-menu__item" onClick={() => void menuShare()}>
+                <ShareIcon size={18} />
+                <span>{t('message.share')}</span>
+              </button>
+            </div>
           )}
         </div>
         {/* BUGFIX_LAST_USER_ACTIONS: edit/resend only make sense for the current prompt, so the
@@ -251,13 +390,21 @@ function MessageBubbleBase({
             onEdit={startEdit}
           />
         )}
+        {message.branches && message.branches.length > 1 && (
+          <VariantPager
+            current={(message.activeBranch ?? 0) + 1}
+            total={message.branches.length}
+            onChange={(index) => onBranchChange?.(message.id, index)}
+            className="variant-pager--user"
+          />
+        )}
       </div>
     );
   }
 
   // Assistant message: centered full-width column.
   return (
-    <div className={`w-full max-w-3xl mx-auto my-6 px-2${enterMotion ? ' msg-enter' : ''}`}>
+    <div className={`w-full max-w-3xl mx-auto my-6 px-2${enterMotion ? ' msg-enter' : ''}${dimmed ? ' msg--dimmed' : ''}`}>
       {/* Agent task plan, kept above the working blocks so the required order
           pills -> running light -> answer text stays intact. Once the plan has a block of its own in
           the feed, this would only repeat it. */}
@@ -331,10 +478,18 @@ function MessageBubbleBase({
       {showActions && (
         <MessageActions
           content={exportContent}
-          onRegenerate={onRegenerate ? () => onRegenerate(message.id) : undefined}
+          onRegenerate={isLast && onRegenerate ? () => onRegenerate(message.id) : undefined}
           onContinue={
             message.status === 'stopped' && onContinue ? () => onContinue(message.id) : undefined
           }
+        />
+      )}
+
+      {message.versions && message.versions.length > 1 && !streaming && (
+        <VariantPager
+          current={(message.activeVersion ?? 0) + 1}
+          total={message.versions.length}
+          onChange={(index) => onVersionChange?.(message.id, index)}
         />
       )}
 
