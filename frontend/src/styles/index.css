@@ -12099,3 +12099,18 @@ html[data-incognito='true'] .chat-surface-soft {
   background: var(--accent-soft);
   border-color: var(--accent);
 }
+
+/* STATUS_BAR_MATCH: на Android полоса со временем и батареей — это фон страницы над шапкой.
+   Красим её тем же слоем, что и .chat-header (--bg-soft поверх градиента), чтобы шапка и
+   статус-бар были одним цветом. В браузере --safe-top = 0, полоса нулевой высоты. */
+body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--safe-top, 0px);
+  background: var(--bg-soft);
+  pointer-events: none;
+  z-index: 0;
+}
