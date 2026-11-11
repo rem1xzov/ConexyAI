@@ -29,8 +29,111 @@ public sealed class ClientConfig
     /// <summary>PC_CONTROL: агент управляет мышью и клавиатурой без подтверждения каждого действия.</summary>
     public bool FullPcControl { get; set; }
 
+    /// <summary>EFFORT: low | high — сколько «думает» модель на каждом шаге агента (medium = high).</summary>
+    public string? ReasoningEffort { get; set; }
+
+    public static string LoadEffort()
+    {
+        if (Environment.GetEnvironmentVariable("CONEXY_EFFORT") is { Length: > 0 } fromEnv)
+            return NormalizeEffort(fromEnv);
+        try
+        {
+            if (File.Exists(FilePath)
+                && JsonSerializer.Deserialize<ClientConfig>(File.ReadAllText(FilePath))?.ReasoningEffort is { Length: > 0 } stored)
+                return NormalizeEffort(stored);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) { }
+        return "high";
+    }
+
+    public static void SaveEffort(string? value)
+    {
+        ClientConfig config;
+        try
+        {
+            config = File.Exists(FilePath)
+                ? JsonSerializer.Deserialize<ClientConfig>(File.ReadAllText(FilePath)) ?? new ClientConfig()
+                : new ClientConfig();
+        }
+        catch (JsonException)
+        {
+            config = new ClientConfig();
+        }
+        config.ReasoningEffort = NormalizeEffort(value);
+        config.Save();
+    }
+
+    public static string NormalizeEffort(string? value) => value?.Trim().ToLowerInvariant() switch
+    {
+        "low" => "low",
+        // Апстрим поддерживает low/high; medium не отправляем, иначе сервер превратит его в null.
+        "medium" or "med" => "high",
+        _ => "high",
+    };
+
     /// <summary>TELEGRAM_PROXY: свой прокси для Telegram (socks5://… или http://…), в защищённом виде. "off" — напрямую.</summary>
     public string? ProtectedProxy { get; set; }
+
+    /// <summary>
+    /// HTTP_PROXY: прокси для запросов к серверу и SignalR (корпоративные сети). Хранится зашифрованно;
+    /// переменные CONEXY_HTTP_PROXY / HTTPS_PROXY / HTTP_PROXY имеют приоритет.
+    /// </summary>
+    public string? ProtectedHttpProxy { get; set; }
+
+    /// <summary>HTTP-прокси из переменных окружения или из файла (null — напрямую).</summary>
+    public static string? LoadHttpProxy()
+    {
+        foreach (var name in new[] { "CONEXY_HTTP_PROXY", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy" })
+        {
+            if (Environment.GetEnvironmentVariable(name) is { Length: > 0 } fromEnv)
+                return fromEnv.Trim();
+        }
+        return ReadHttpProxyFromFile();
+    }
+
+    private static string? ReadHttpProxyFromFile()
+    {
+        try
+        {
+            if (!File.Exists(FilePath)
+                || JsonSerializer.Deserialize<ClientConfig>(File.ReadAllText(FilePath))?.ProtectedHttpProxy is not { Length: > 0 } stored)
+                return null;
+            var raw = Convert.FromBase64String(stored);
+            if (OperatingSystem.IsWindows())
+                raw = ProtectedData.Unprotect(raw, null, DataProtectionScope.CurrentUser);
+            return Encoding.UTF8.GetString(raw);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or CryptographicException or FormatException)
+        {
+            return null;
+        }
+    }
+
+    public static void SaveHttpProxy(string? value)
+    {
+        ClientConfig config;
+        try
+        {
+            config = File.Exists(FilePath)
+                ? JsonSerializer.Deserialize<ClientConfig>(File.ReadAllText(FilePath)) ?? new ClientConfig()
+                : new ClientConfig();
+        }
+        catch (JsonException)
+        {
+            config = new ClientConfig();
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+            config.ProtectedHttpProxy = null;
+        else
+        {
+            var raw = Encoding.UTF8.GetBytes(value.Trim());
+            if (OperatingSystem.IsWindows())
+                raw = ProtectedData.Protect(raw, null, DataProtectionScope.CurrentUser);
+            config.ProtectedHttpProxy = Convert.ToBase64String(raw);
+        }
+        config.Save();
+    }
 
     public static string? LoadProxy()
     {

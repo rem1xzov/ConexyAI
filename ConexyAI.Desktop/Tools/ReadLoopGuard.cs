@@ -302,6 +302,17 @@ public sealed partial class ReadLoopGuard
             if (args.Str(key) is { } value)
                 parts.Add(key + "=" + value);
         }
+        // GREP_MODES: «где встречается», «сколько раз» и «с игнорируемыми» — разные вопросы,
+        // даже если шаблон один. Иначе третий grep по тому же шаблону блокировался как повтор.
+        if (tool == "grep")
+        {
+            if (args.Str("output_mode") is { } mode)
+                parts.Add("mode=" + mode);
+            if (args.Bool("include_ignored") is { } ignored)
+                parts.Add("ignored=" + ignored);
+            if (args.Int("context_lines") is { } context)
+                parts.Add("context=" + context);
+        }
         // PAGING: у file_read страницы — штатный способ читать большой файл: offset/limit входят в ключ,
         // иначе третий offset считался бы повтором того же чтения.
         if (tool is "file_read" or "file_read_bytes")

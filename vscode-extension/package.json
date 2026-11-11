@@ -1,0 +1,87 @@
+{
+  "name": "conexy-vscode",
+  "displayName": "ConexyAI",
+  "description": "Агент ConexyAI прямо в VS Code: терминал, вопросы по коду и проверка изменений.",
+  "version": "0.1.0",
+  "publisher": "conexyai",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "conexy",
+    "coding"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "conexy.openTerminal",
+        "title": "Conexy: Открыть агента в терминале",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "conexy.ask",
+        "title": "Conexy: Спросить агента"
+      },
+      {
+        "command": "conexy.explainSelection",
+        "title": "Conexy: Объяснить выделенное"
+      },
+      {
+        "command": "conexy.reviewChanges",
+        "title": "Conexy: Проверить незакоммиченные изменения"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "conexy.explainSelection",
+          "when": "editorHasSelection",
+          "group": "navigation@90"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ConexyAI",
+      "properties": {
+        "conexy.executable": {
+          "type": "string",
+          "default": "conexy",
+          "description": "Путь к клиенту ConexyAI. По умолчанию — из PATH."
+        },
+        "conexy.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Дополнительные аргументы для каждого неинтерактивного запуска, например [\"--effort\", \"low\"] или [\"--permission-mode\", \"plan\"]."
+        },
+        "conexy.autoApprove": {
+          "type": "boolean",
+          "default": false,
+          "description": "Разрешать агенту выполнять команды без подтверждения (флаг --auto). Осторожно: только для доверенных проектов."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.6.3"
+  }
+}

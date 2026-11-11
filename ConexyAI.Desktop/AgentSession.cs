@@ -55,6 +55,23 @@ public sealed class AgentSession : IAsyncDisposable
 
     /// <summary>Текст ответа агента за последний ход (для /compact и режима плана).</summary>
     public string LastAnswer => _answer.ToString();
+
+    /// <summary>HEADLESS: id последней задачи на сервере (для JSON-результата и остановки).</summary>
+    public Guid? LastTaskId { get; private set; }
+
+    /// <summary>HEADLESS: не рисуем TUI, а отдаём события наружу.</summary>
+    public bool Headless { get; set; }
+
+    /// <summary>HEADLESS: события хода для --output-format stream-json.</summary>
+    public Action<AgentEvent>? Event { get; set; }
+
+    /// <summary>--max-turns: максимальное число вызовов инструментов за ход (0 — без лимита).</summary>
+    public int MaxToolCalls { get; set; }
+
+    /// <summary>--effort: low | medium | high — сколько «думает» модель на каждом шаге.</summary>
+    public string Effort { get; set; } = Environment.GetEnvironmentVariable("CONEXY_EFFORT") ?? "high";
+
+    private int _toolCalls;
     private readonly System.Text.StringBuilder _answer = new();
 
     /// <summary>
@@ -83,7 +100,13 @@ public sealed class AgentSession : IAsyncDisposable
         _device = device;
 
         _hub = new HubConnectionBuilder()
-            .WithUrl($"{server.BaseUrl}/hubs/conexy", options => options.AccessTokenProvider = async () => await server.GetTokenAsync())
+            .WithUrl($"{server.BaseUrl}/hubs/conexy", options =>
+            {
+                options.AccessTokenProvider = async () => await server.GetTokenAsync();
+                // HTTP_PROXY: SignalR и WebSocket идут через тот же прокси, что и HTTP-запросы.
+                if (server.Proxy is { } proxy)
+                    options.Proxy = proxy;
+            })
             // WEB_DEVICE: изменено 2026-10-18 — переподключаемся бесконечно (демон живёт сутками).
             .WithAutomaticReconnect(new ForeverRetryPolicy())
             .Build();
@@ -121,6 +144,11 @@ public sealed class AgentSession : IAsyncDisposable
                 return;
             _streamedAnything = true;
             _answer.Append(delta);
+            if (Headless)
+            {
+                Event?.Invoke(new AgentContent(delta));
+                return;
+            }
             Ui.Idle();
             if (_needBullet)
             {
@@ -236,7 +264,9 @@ public sealed class AgentSession : IAsyncDisposable
         _streamedAnything = false;
         _needBullet = true;
         _answer.Clear();
-        Ui.Busy();
+        _toolCalls = 0;
+        if (!Headless)
+            Ui.Busy();
 
         _tools!.Checkpoints.BeginTurn(prompt);
         // LOOP_GUARD: новый ход — новый счётчик чтений.
@@ -252,7 +282,8 @@ public sealed class AgentSession : IAsyncDisposable
         var taskId = await _server.StartRunAsync(
             prompt, _chatId!.Value, Orchestra && Mode == "coder", Attachments.Pending.ToList(), ct,
             model: Mode == "cowork" ? "conexy-cowork" : "conexy-coder",
-            deviceTools: Local?.Specs());
+            deviceTools: Local?.Specs(), effort: Effort);
+        LastTaskId = taskId;
         Attachments.Clear(); // ушли с этим ходом — следующему сообщению не нужны
         await _hub.InvokeAsync("JoinTask", taskId, ct);
 
@@ -272,12 +303,15 @@ public sealed class AgentSession : IAsyncDisposable
         {
             _inTurn = false;
             _turnCts.Cancel();
-            Ui.Idle();
-            Ui.TeamEnd();
-            Ui.FlushText();
-            Console.WriteLine();
-            // ATTENTION_BADGE: агент закончил, а окно не на переднем плане — на круге загорается значок.
-            Attention.SetIfUnfocused("Агент закончил работу");
+            if (!Headless)
+            {
+                Ui.Idle();
+                Ui.TeamEnd();
+                Ui.FlushText();
+                Console.WriteLine();
+                // ATTENTION_BADGE: агент закончил, а окно не на переднем плане — на круге загорается значок.
+                Attention.SetIfUnfocused("Агент закончил работу");
+            }
         }
     }
 
@@ -294,9 +328,14 @@ public sealed class AgentSession : IAsyncDisposable
 
                 if (!_streamedAnything && !string.IsNullOrEmpty(run.Result))
                 {
-                    Ui.AssistantStart();
-                    Ui.Md.Feed(run.Result);
-                    Ui.FlushText();
+                    if (Headless)
+                        Event?.Invoke(new AgentContent(run.Result));
+                    else
+                    {
+                        Ui.AssistantStart();
+                        Ui.Md.Feed(run.Result);
+                        Ui.FlushText();
+                    }
                 }
                 _turn?.TrySetResult(run.Status == "Completed" ? null : $"Задача завершилась со статусом {run.Status}.");
                 return;
@@ -335,13 +374,21 @@ public sealed class AgentSession : IAsyncDisposable
         switch (Prop(payload, "status"))
         {
             case "started":
-                Ui.ToolCall($"{tool} {Prop(payload, "command")}");
+                Event?.Invoke(new AgentTool(tool, "started", Prop(payload, "command"), false));
+                if (!Headless)
+                    Ui.ToolCall($"{tool} {Prop(payload, "command")}");
                 break;
             case "completed" or "failed":
-                Ui.Idle();
-                Ui.ShowToolResult(new ToolResult(Prop(payload, "summary") ?? string.Empty, Prop(payload, "status") == "failed"));
-                _needBullet = true;
-                Ui.Busy();
+                var summary = Prop(payload, "summary") ?? string.Empty;
+                var failed = Prop(payload, "status") == "failed";
+                Event?.Invoke(new AgentTool(tool, "completed", summary, failed));
+                if (!Headless)
+                {
+                    Ui.Idle();
+                    Ui.ShowToolResult(new ToolResult(summary, failed));
+                    _needBullet = true;
+                    Ui.Busy();
+                }
                 break;
         }
     }
@@ -378,7 +425,12 @@ public sealed class AgentSession : IAsyncDisposable
         var agentId = Prop(payload, "agentId");
         if (agentId is null or "lead")
             return;
-        Ui.AgentStatus(agentId, Prop(payload, "agentRole") ?? agentId, Prop(payload, "stage") ?? string.Empty, Prop(payload, "label") ?? string.Empty);
+        var stage = Prop(payload, "stage") ?? string.Empty;
+        var label = Prop(payload, "label") ?? string.Empty;
+        Event?.Invoke(new AgentStatus(stage, label));
+        if (Headless)
+            return;
+        Ui.AgentStatus(agentId, Prop(payload, "agentRole") ?? agentId, stage, label);
     }
 
     private async Task<ToolResult> TelegramLoginToolAsync(string tool, string argumentsJson)
@@ -411,6 +463,20 @@ public sealed class AgentSession : IAsyncDisposable
 
     private async Task OnExecuteToolAsync(Guid callId, Guid taskId, string tool, string argumentsJson)
     {
+        // HEADLESS: зашитый max-turns в терминах клиента — число вызовов инструментов за ход.
+        // Служебные project_rules/turn_diff не считаем: это не шаги задачи.
+        if (MaxToolCalls > 0 && tool is not ("project_rules" or "turn_diff")
+            && Interlocked.Increment(ref _toolCalls) > MaxToolCalls)
+        {
+            await SendResultAsync(callId, ToolResult.Fail(
+                $"Лимит шагов (--max-turns {MaxToolCalls}) исчерпан. Останови работу и дай итог."));
+            _turn?.TrySetResult($"Достигнут лимит шагов (--max-turns {MaxToolCalls}).");
+            if (LastTaskId is { } running)
+                _ = _hub.InvokeAsync("StopGeneration", running);
+            _turnCts?.Cancel();
+            return;
+        }
+
         // TELEGRAM_LOGIN: вход в Telegram, запущенный из настроек сайта/телефона — без проекта и подтверждений.
         if (tool.StartsWith("telegram_login_", StringComparison.Ordinal))
         {
@@ -423,6 +489,7 @@ public sealed class AgentSession : IAsyncDisposable
 
         (string Id, string Role)? agent = _callAgents.TryRemove(callId, out var a) ? a : null;
         Ui.CurrentAgent.Value = agent;
+        Event?.Invoke(new AgentTool(tool, "started", ShortArguments(argumentsJson), false));
 
         // WEB_DEVICE: добавлено 2026-10-18 — выбор проекта и того, кто подтверждает (консоль или сайт).
         var remote = _callRemote.TryRemove(callId, out _) || _device.Daemon;
@@ -455,6 +522,8 @@ public sealed class AgentSession : IAsyncDisposable
         if (firstCallOfTask && runner is not null)
             runner.ResetReadGuard();
         if (firstCallOfTask && !_device.Daemon)
+            Event?.Invoke(new AgentStatus("task", $"задача с сайта {taskId.ToString()[..8]} на {runner?.Root ?? "—"}"));
+        if (firstCallOfTask && !_device.Daemon && !Headless)
             Ui.Info($"  ◦ с сайта выполняется задача {taskId.ToString()[..8]} на этом ПК ({runner?.Root ?? "—"})");
 
         ToolResult result;
@@ -483,15 +552,23 @@ public sealed class AgentSession : IAsyncDisposable
             // Задачи с сайта не печатают результат в консоль (их видно на сайте); демон пишет в журнал.
             if (_device.Daemon && tool is not ("project_rules" or "turn_diff"))
                 _device.Log($"  → {(result.IsError ? "ошибка" : "ok")}: {FirstLine(result.Output)}");
+            Event?.Invoke(new AgentTool(tool, "completed", FirstLine(result.Output), result.IsError));
             await SendResultAsync(callId, result);
             return;
         }
+
+        Event?.Invoke(new AgentTool(tool, "completed", Truncate(result.Output, 2000), result.IsError));
 
         var shown = result.Output.StartsWith("IMAGE_BASE64:", StringComparison.Ordinal)
             ? ToolResult.Ok($"скриншот снят ({result.Output.Length * 3 / 4 / 1024} КБ), отправлен агенту")
             : result.Output.StartsWith("FILE_BASE64:", StringComparison.Ordinal)
                 ? ToolResult.Ok($"файл прочитан ({result.Output.Length * 3 / 4 / 1024} КБ), отправлен агенту")
                 : result;
+        if (Headless)
+        {
+            await SendResultAsync(callId, result);
+            return;
+        }
         if (agent is { } worker)
         {
             // Итог субагента — в его карточку на панели команды.
@@ -517,6 +594,12 @@ public sealed class AgentSession : IAsyncDisposable
         return line.Length > 160 ? line[..160] + "…" : line;
     }
 
+    internal static string Truncate(string text, int max) =>
+        text.Length <= max ? text : text[..max] + "…";
+
+    private static string ShortArguments(string argumentsJson) =>
+        argumentsJson.Length <= 300 ? argumentsJson : argumentsJson[..300] + "…";
+
     private async Task SendResultAsync(Guid callId, ToolResult result)
     {
         // Результат не должен теряться при кратком разрыве: ждём переподключения и повторяем.
@@ -535,6 +618,8 @@ public sealed class AgentSession : IAsyncDisposable
             {
                 if (_device.Daemon)
                     _device.Log("Не удалось отправить результат инструмента: " + ex.Message);
+                else if (Headless)
+                    Console.Error.WriteLine("Не удалось отправить результат инструмента: " + ex.Message);
                 else
                     Ui.Error("Не удалось отправить результат инструмента: " + ex.Message);
                 return;
@@ -551,6 +636,12 @@ public sealed class AgentSession : IAsyncDisposable
         _lifetime.Dispose();
     }
 }
+
+/// <summary>HEADLESS: событие хода для --output-format stream-json.</summary>
+public abstract record AgentEvent;
+public sealed record AgentContent(string Delta) : AgentEvent;
+public sealed record AgentTool(string Name, string Stage, string? Detail, bool IsError) : AgentEvent;
+public sealed record AgentStatus(string Stage, string Label) : AgentEvent;
 
 // WEB_DEVICE: добавлено 2026-10-18
 /// <summary>Переподключение без предела попыток: 0, 2, 4, 8 … с, не реже раза в минуту.</summary>

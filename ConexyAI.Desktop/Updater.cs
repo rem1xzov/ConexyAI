@@ -25,9 +25,15 @@ public static class Updater
     private const string ReleasesPage = "https://github.com/rem1xzov/ConexyAI/releases";
     private const int MaxRedirects = 5;
 
-    internal static bool IsAllowedDownloadUrl(Uri? uri) =>
+    internal static bool IsAllowedDownloadUrl(Uri? uri) => IsAllowedDownloadUrl(uri, signedManifest: false);
+
+    /// <summary>
+    /// Для подписанного манифеста доверие даёт подпись, а не хост: разрешаем любой https на 443
+    /// (своё зеркало, CDN, S3). Для GitHub-фолбэка — только известные хосты.
+    /// </summary>
+    internal static bool IsAllowedDownloadUrl(Uri? uri, bool signedManifest) =>
         uri is { IsAbsoluteUri: true, Scheme: "https" } && uri.IsDefaultPort
-        && AllowedDownloadHosts.Contains(uri.Host, StringComparer.OrdinalIgnoreCase);
+        && (signedManifest || AllowedDownloadHosts.Contains(uri.Host, StringComparer.OrdinalIgnoreCase));
 
     /// <summary>
     /// Ожидаемый SHA-256 (hex) ассета с таким <c>browser_download_url</c> или null, если такого ассета/digest нет.
@@ -54,9 +60,12 @@ public static class Updater
             {
                 if (!asset.TryGetProperty("browser_download_url", out var link) || link.GetString() != url)
                     continue;
-                // Имя принимаем любое из известных: у релиза может лежать и новый файл, и старая копия.
+                // Имя принимаем любое из conexy*, кроме служебных файлов: у релиза может лежать и новый файл,
+                // и старая копия, а RID теперь несколько (win-x64, linux-x64, osx-arm64 …).
                 var name = asset.TryGetProperty("name", out var n) ? n.GetString() : null;
-                if (name is not ("conexy.exe" or "conexy-win-x64.exe"))
+                if (name is null || !name.StartsWith("conexy", StringComparison.OrdinalIgnoreCase)
+                    || name.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+                    || name.EndsWith(".pem", StringComparison.OrdinalIgnoreCase))
                     continue;
                 var digest = asset.TryGetProperty("digest", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() : null;
                 if (digest is null || !digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
@@ -90,7 +99,10 @@ public static class Updater
         catch (UnauthorizedAccessException) { }
     }
 
-    /// <summary>Информация о новой версии или null: новее нет, сервер молчит или запуск не из exe.</summary>
+    /// <summary>
+    /// Проверка обновления. Сначала — подписанный манифест на своём домене
+    /// (<c>{сервер}/downloads/latest.json</c>), затем — GitHub-релиз с digest из GitHub API.
+    /// </summary>
     public static async Task<ClientInfo?> CheckAsync(ServerClient server)
     {
         if (ExePath is null)
@@ -100,13 +112,24 @@ public static class Updater
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
             var info = await server.GetClientInfoAsync(cts.Token);
+            if (!Version.TryParse(Ui.Version, out var currentVersion))
+                return null;
+            var current = Norm(currentVersion);
+
+            // UPDATE_MIRROR: подписанный манифест важнее того, что ответил сервер.
+            try
+            {
+                if (await MirrorAsync(server.BaseUrl, current, cts.Token) is { } mirror)
+                    return mirror;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+            {
+                // Зеркала нет / оно недоступно — работаем как раньше, через GitHub.
+            }
+
             if (info?.Version is null || info.DownloadUrl is null)
                 return null;
-            // 0.9.11 и 0.9.11.0 — одна версия: без нормализации Version считает «0.9.11.0» новее «0.9.11».
-            static Version Norm(Version v) => new(v.Major, v.Minor, Math.Max(v.Build, 0), Math.Max(v.Revision, 0));
-            return Version.TryParse(info.Version, out var latest)
-                   && Version.TryParse(Ui.Version, out var current)
-                   && Norm(latest) > Norm(current)
+            return Version.TryParse(info.Version, out var latest) && Norm(latest) > current
                 ? info
                 : null;
         }
@@ -114,6 +137,48 @@ public static class Updater
         {
             return null;
         }
+    }
+
+    /// <summary>0.9.11 и 0.9.11.0 — одна версия: без нормализации Version считает «0.9.11.0» новее «0.9.11».</summary>
+    private static Version Norm(Version v) => new(v.Major, v.Minor, Math.Max(v.Build, 0), Math.Max(v.Revision, 0));
+
+    /// <summary>
+    /// latest.json с зеркала: версия должна быть новее, подпись — валидной, файл для текущего RID —
+    /// на https. Ошибка подписи — это отсутствие обновления, а не повод взять что-то другое с того же хоста.
+    /// </summary>
+    private static async Task<ClientInfo?> MirrorAsync(string baseUrl, Version current, CancellationToken ct)
+    {
+        var url = Environment.GetEnvironmentVariable("CONEXY_UPDATE_MANIFEST") is { Length: > 0 } custom
+            ? custom
+            : baseUrl.TrimEnd('/') + "/downloads/latest.json";
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var manifestUri) || !IsAllowedDownloadUrl(manifestUri, signedManifest: true))
+            return null;
+
+        using var http = CreateHttpClient(TimeSpan.FromSeconds(6));
+        var json = await http.GetStringAsync(manifestUri, ct);
+        var manifest = UpdateSigning.Parse(json);
+        if (manifest is null || !UpdateSigning.Verify(manifest))
+            return null;
+        if (!Version.TryParse(manifest.Version, out var latest) || Norm(latest) <= current)
+            return null;
+        if (!manifest.Files.TryGetValue(UpdateSigning.CurrentRid, out var file)
+            || !Uri.TryCreate(file.Url, UriKind.Absolute, out var fileUri)
+            || !IsAllowedDownloadUrl(fileUri, signedManifest: true)
+            || file.Sha256.Length != 64
+            || !file.Sha256.All(Uri.IsHexDigit))
+            return null;
+        return new ClientInfo(file.Url, manifest.Version, Sha256: file.Sha256.ToLowerInvariant());
+    }
+
+    private static HttpClient CreateHttpClient(TimeSpan timeout)
+    {
+        var handler = new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(10), AllowAutoRedirect = true };
+        if (NetProxy.FromUrl(ClientConfig.LoadHttpProxy()) is { } proxy)
+        {
+            handler.Proxy = proxy;
+            handler.UseProxy = true;
+        }
+        return new HttpClient(handler) { Timeout = timeout };
     }
 
     /// <summary>Служебный вход для проверки докачки: conexy downloadtest &lt;url&gt; &lt;файл&gt; &lt;версия&gt;.</summary>
@@ -178,7 +243,7 @@ public static class Updater
     /// («unexpected EOF», «response ended prematurely»), и скачивание с нуля не доходило до конца. Теперь при обрыве
     /// запрашиваем остаток (HTTP Range), а частичный файл переживает и перезапуск клиента (помечен версией).
     /// </summary>
-    private static async Task<bool> DownloadResumableAsync(string url, string target, string version)
+    private static async Task<bool> DownloadResumableAsync(string url, string target, string version, bool signedManifest = false)
     {
         var marker = target + ".version";
         if (File.Exists(target) && (!File.Exists(marker) || File.ReadAllText(marker).Trim() != version))
@@ -186,7 +251,14 @@ public static class Updater
         File.WriteAllText(marker, version);
 
         // UPDATE_INTEGRITY: редиректы (github.com → *.githubusercontent.com) вручную, каждый хост по белому списку.
-        using var http = new HttpClient(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(20), AllowAutoRedirect = false })
+        var handler = new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(20), AllowAutoRedirect = false };
+        // HTTP_PROXY: скачивание обновлений тоже идёт через прокси, если он задан.
+        if (NetProxy.FromUrl(ClientConfig.LoadHttpProxy()) is { } proxy)
+        {
+            handler.Proxy = proxy;
+            handler.UseProxy = true;
+        }
+        using var http = new HttpClient(handler)
         {
             Timeout = Timeout.InfiniteTimeSpan, // зависание ловит IdleTimeout на каждом чтении
         };
@@ -204,9 +276,11 @@ public static class Updater
                 HttpResponseMessage? hopResponse = null;
                 for (var hop = 0; ; hop++)
                 {
-                    if (!IsAllowedDownloadUrl(current))
+                    if (!IsAllowedDownloadUrl(current, signedManifest))
                     {
-                        Ui.Error($"Обновление отклонено: адрес скачивания не с GitHub ({current.Host}).");
+                        Ui.Error(signedManifest
+                            ? $"Обновление отклонено: зеркало перенаправило на небезопасный адрес ({current.Host})."
+                            : $"Обновление отклонено: адрес скачивания не с GitHub ({current.Host}).");
                         return false;
                     }
                     using var request = new HttpRequestMessage(HttpMethod.Get, current);
@@ -269,12 +343,12 @@ public static class Updater
         }
         Console.WriteLine();
 
-        // Проверка целостности: нужный размер и заголовок exe (MZ), чтобы не подменить рабочую программу обрывком.
+        // Проверка целостности: размер и сигнатура исполняемого файла текущей ОС.
         var size = new FileInfo(target).Length;
-        var header = new byte[2];
+        var header = new byte[4];
         await using (var check = File.OpenRead(target))
             _ = await check.ReadAsync(header);
-        if ((total > 0 && size != total) || header[0] != (byte)'M' || header[1] != (byte)'Z')
+        if ((total > 0 && size != total) || !LooksLikeExecutable(header))
         {
             File.Delete(target);
             Ui.Error($"Скачанный файл повреждён ({size} из {total} байт) — повторите /update.");
@@ -282,6 +356,23 @@ public static class Updater
         }
         File.Delete(marker);
         return true;
+    }
+
+    /// <summary>CROSS_PLATFORM: exe — MZ, Linux — ELF, macOS — Mach-O (тонкий или fat).</summary>
+    internal static bool LooksLikeExecutable(ReadOnlySpan<byte> header)
+    {
+        if (OperatingSystem.IsWindows())
+            return header.Length >= 2 && header[0] == (byte)'M' && header[1] == (byte)'Z';
+        if (OperatingSystem.IsLinux())
+            return header.Length >= 4 && header[0] == 0x7F && header[1] == (byte)'E' && header[2] == (byte)'L' && header[3] == (byte)'F';
+        if (OperatingSystem.IsMacOS())
+        {
+            if (header.Length < 4)
+                return false;
+            var magic = (uint)(header[0] << 24 | header[1] << 16 | header[2] << 8 | header[3]);
+            return magic is 0xFEEDFACE or 0xFEEDFACF or 0xCEFAEDFE or 0xCFFAEDFE or 0xCAFEBABE or 0xBEBAFECA;
+        }
+        return header.Length > 0;
     }
 
     /// <summary>Скачивает и подменяет exe, затем запускает новую версию и ждёт её завершения. Возвращает её код выхода.</summary>
@@ -292,34 +383,42 @@ public static class Updater
             return null;
 
         var fresh = exe + ".new";
+        var signedManifest = info.Sha256 is { Length: 64 } && info.Sha256.All(Uri.IsHexDigit);
         try
         {
-            // UPDATE_INTEGRITY: до скачивания — адрес с GitHub и известный digest ассета.
-            if (!Uri.TryCreate(info.DownloadUrl, UriKind.Absolute, out var downloadUri) || !IsAllowedDownloadUrl(downloadUri))
+            // UPDATE_INTEGRITY: подписанный манифест даёт и ссылку, и SHA-256; иначе — GitHub + digest.
+            if (!Uri.TryCreate(info.DownloadUrl, UriKind.Absolute, out var downloadUri)
+                || !IsAllowedDownloadUrl(downloadUri, signedManifest))
             {
-                Ui.Error("Обновление отклонено: сервер дал ссылку не на релиз GitHub. Скачайте версию вручную со страницы релизов.");
-                return null;
-            }
-            string? expected;
-            try
-            {
-                using var apiCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                expected = await ExpectedSha256Async(info.DownloadUrl, apiCts.Token);
-            }
-            catch (Exception ex) when (ex is JsonException or HttpRequestException or TaskCanceledException)
-            {
-                Ui.Error("Не удалось проверить обновление через GitHub API: " + ex.Message + ". Обновление пропущено.");
-                return null;
-            }
-            if (expected is null)
-            {
-                Ui.Error($"Обновление отклонено: в релизах GitHub нет {AssetName} с этой ссылкой и контрольной суммой SHA-256. " +
-                         $"Скачайте вручную: {ReleasesPage}");
+                Ui.Error(signedManifest
+                    ? "Обновление отклонено: зеркало дало ссылку не по https. Скачайте версию вручную."
+                    : "Обновление отклонено: сервер дал ссылку не на релиз GitHub. Скачайте версию вручную со страницы релизов.");
                 return null;
             }
 
+            string? expected = signedManifest ? info.Sha256!.ToLowerInvariant() : null;
+            if (expected is null)
+            {
+                try
+                {
+                    using var apiCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    expected = await ExpectedSha256Async(info.DownloadUrl, apiCts.Token);
+                }
+                catch (Exception ex) when (ex is JsonException or HttpRequestException or TaskCanceledException)
+                {
+                    Ui.Error("Не удалось проверить обновление через GitHub API: " + ex.Message + ". Обновление пропущено.");
+                    return null;
+                }
+                if (expected is null)
+                {
+                    Ui.Error($"Обновление отклонено: в релизах GitHub нет {AssetName} с этой ссылкой и контрольной суммой SHA-256. " +
+                             $"Скачайте вручную: {ReleasesPage}");
+                    return null;
+                }
+            }
+
             Console.WriteLine($"Скачиваю v{info.Version}…");
-            if (!await DownloadResumableAsync(info.DownloadUrl, fresh, info.Version ?? "?"))
+            if (!await DownloadResumableAsync(info.DownloadUrl, fresh, info.Version ?? "?", signedManifest))
                 return null;
 
             if (await Sha256Async(fresh) != expected)

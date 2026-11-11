@@ -12,6 +12,19 @@ const string Usage = """
       conexy [--dir <папка>]                        чат с агентом; рабочая папка — текущая или --dir
       conexy logout                                 забыть ключ
       conexy selftest                               проверить локальные инструменты без сервера
+      conexy doctor [--json]                        проверить вход, сервер, SignalR, папку и обновления
+      conexy proxy [set <url>|off]                     прокси для сервера и SignalR (или CONEXY_HTTP_PROXY)
+      conexy hooks [trust|status|forget]               хуки проекта .conexy/hooks.json
+
+    Для CI и скриптов (без TUI):
+      conexy -p "<задача>" [--dir <папка>]           один ход агента, результат в stdout
+        --output-format text|json|stream-json         text — только ответ, json — один объект,
+                                                      stream-json — события по строке (JSONL)
+        --permission-mode default|auto|plan           auto — команды без подтверждения, plan — только план
+        --max-turns <N>                               лимит шагов инструментов за ход
+        --effort low|high                              сколько «думает» модель (по умолчанию high)
+        --agent coder|cowork · --team · --with-mcp · --no-hooks · --timeout <сек>
+        stdin дописывается к запросу: git diff | conexy -p "review this"
 
     Задачи с сайта на этом ПК:
       conexy projects                               список проектов, доступных сайту
@@ -57,6 +70,10 @@ return exitCode;
 
 static async Task<int> RunAsync(string[] args)
 {
+// HEADLESS: -p/--print — неинтерактивный режим для CI; TUI не запускается вовсе.
+if (args.Contains("-p") || args.Contains("--print"))
+    return await Headless.RunAsync(args);
+
 var command = args.FirstOrDefault(a => !a.StartsWith("--"));
 try
 {
@@ -69,10 +86,25 @@ try
         case "selftest":
             return await SelfTest.RunAsync(args);
 
+        case "doctor":
+            return await Doctor.RunAsync(args);
+
         case "logout":
             ClientConfig.Delete();
             Console.WriteLine("Ключ удалён.");
             return 0;
+
+        case "proxy":
+            return ProxyCommand(args);
+
+        case "hooks":
+            return HooksCommand(args);
+
+        case "updatesign":
+            return UpdateSigning.Command(args);
+
+        case "updateverify":
+            return UpdateSigning.VerifyCommand(args);
 
         case "login":
             return await LoginAsync(args);
@@ -368,8 +400,75 @@ static async Task<int> LoginAsync(string[] args)
     config.ServerUrl = url.TrimEnd('/');
     config.SetKey(key.Trim());
     config.Save();
+    if (Option(args, "--proxy") is { } proxy)
+    {
+        if (!NetProxy.IsValid(proxy))
+        {
+            Console.Error.WriteLine("Неверный прокси: нужен http://, https://, socks4:// или socks5://.");
+            return 1;
+        }
+        ClientConfig.SaveHttpProxy(proxy);
+        Console.WriteLine("Прокси сохранён: " + NetProxy.Describe(proxy));
+    }
     Console.WriteLine("Готово: ключ принят и сохранён. Запускайте: conexy");
     return 0;
+}
+
+static int ProxyCommand(string[] args)
+{
+    var value = args.SkipWhile(a => !a.Equals("proxy", StringComparison.OrdinalIgnoreCase)).Skip(1).FirstOrDefault();
+    if (value is "set")
+        value = args.SkipWhile(a => !a.Equals("set", StringComparison.OrdinalIgnoreCase)).Skip(1).FirstOrDefault();
+    if (string.IsNullOrWhiteSpace(value) || value is "status")
+    {
+        var current = ClientConfig.LoadHttpProxy();
+        Console.WriteLine("HTTP-прокси: " + NetProxy.Describe(current));
+        Console.WriteLine("Задать: conexy proxy set http://user:pass@proxy:3128 · Убрать: conexy proxy off");
+        Console.WriteLine("Переменные CONEXY_HTTP_PROXY / HTTPS_PROXY / HTTP_PROXY важнее файла.");
+        return 0;
+    }
+    if (value is "off")
+    {
+        ClientConfig.SaveHttpProxy(null);
+        Console.WriteLine("Прокси убран: клиент ходит напрямую.");
+        return 0;
+    }
+    if (!NetProxy.IsValid(value))
+    {
+        Console.Error.WriteLine("Неверный прокси: нужен http://, https://, socks4:// или socks5://.");
+        return 1;
+    }
+    ClientConfig.SaveHttpProxy(value);
+    Console.WriteLine("Прокси сохранён: " + NetProxy.Describe(value) + ". Перезапустите клиент.");
+    return 0;
+}
+
+static int HooksCommand(string[] args)
+{
+    var sub = args.SkipWhile(a => !a.Equals("hooks", StringComparison.OrdinalIgnoreCase)).Skip(1).FirstOrDefault() ?? "status";
+    var root = Path.GetFullPath(Option(args, "--dir") ?? Directory.GetCurrentDirectory());
+    var file = HookRunner.FilePathFor(root);
+    switch (sub.ToLowerInvariant())
+    {
+        case "trust":
+            if (!File.Exists(file))
+            {
+                Console.Error.WriteLine("Нет файла " + file);
+                return 1;
+            }
+            HookTrust.Trust(root);
+            Console.WriteLine("Хуки проекта доверены: " + root);
+            return 0;
+        case "forget":
+            HookTrust.Forget(root);
+            Console.WriteLine("Доверие хукам снято: " + root);
+            return 0;
+        default:
+            Console.WriteLine("Файл хуков: " + (File.Exists(file) ? file : "нет") );
+            Console.WriteLine("Доверие: " + (File.Exists(file) && HookTrust.IsTrusted(root, HookTrust.Hash(file)) ? "есть" : "нет"));
+            Console.WriteLine("Доверить: conexy hooks trust · Снять: conexy hooks forget");
+            return 0;
+    }
 }
 
 static async Task<int> ChatAsync(string[] args)
@@ -481,6 +580,9 @@ static async Task<int> ChatAsync(string[] args)
     }
 
     var approver = new ConsoleApprover { AutoMode = args.Contains("--auto") };
+    // EFFORT: флаг на запуск важнее сохранённого значения; /effort меняет его на лету.
+    if (Option(args, "--effort") is { } effortFlag)
+        ClientConfig.SaveEffort(effortFlag);
     var store = ChatStore.Load();
     // LOCAL_MCP: Google и локальные MCP-серверы живут весь сеанс (не перезапускаются при смене чата).
     await using var local = new LocalTools(approver);
@@ -674,6 +776,7 @@ static void PrintHelp()
         ("Чат и агент", [
             ("/chats", "все чаты (общие с сайтом): переключиться или создать; у каждого своя папка"),
             ("/agent coder|cowork", "Coder — код и терминал; Cowork — исследования, документы, почта (платные тарифы)"),
+            ("/effort [low|high]", "сколько «думает» модель на каждом шаге; high — качество, low — дешевле и быстрее"),
             ("/compact [фокус]", "сжать длинный чат в пересказ и продолжить в новом — дешевле"),
             ("/init [фокус]", "изучить проект и создать CONEXY.md — правила, которые агент читает в каждом запуске"),
             ("/usage", "тариф и расход токенов"),
@@ -683,6 +786,7 @@ static void PrintHelp()
             ("/team on|off", "оркестр: ведущий агент собирает команду субагентов (ProMax, Ultra, Admin); действует в чате до /team off"),
             ("/auto", "выполнять команды без подтверждения — вкл/выкл (или флаг --auto)"),
             ("/proxy [url|off|reset]", "прокси для Telegram (если он заблокирован); по умолчанию у администратора — прокси сервера"),
+            ("/http-proxy [url|off]", "прокси для сервера и SignalR (корпоративная сеть); нужен перезапуск клиента"),
             ("/bubble", "круг с логотипом на рабочем столе: клик открывает Conexy, файлы можно бросить на него"),
             ("/control on|off", "полный доступ к ПК: агент сам открывает программы и сайты, кликает, печатает, жмёт клавиши без вопросов; вы видите всё на экране. Стоп — курсор в левый верхний угол"),
             ("/permissions", "команды без вопроса в этом проекте\nadd <команда> · remove N · clear"),
@@ -770,7 +874,11 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
         line => { if (ToolCallContext.Current is not { Remote: true }) Ui.ToolCall(line); },
         server.GetGitHubTokenAsync, local, root);
     var tools = new ToolRunner(root, device.Approver, Ui.ToolCall, server.GetGitHubTokenAsync, local);
-    await using var session = new AgentSession(server, tools, chatId, device) { Local = local };
+    await using var session = new AgentSession(server, tools, chatId, device)
+    {
+        Local = local,
+        Effort = ClientConfig.LoadEffort(),
+    };
     try
     {
         await session.ConnectAsync(CancellationToken.None);
@@ -914,6 +1022,21 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                           + (session.Orchestra ? " Оркестр работает только в Coder." : string.Empty)
                         : "Агент: Coder — код, файлы и терминал.");
                     break;
+                case "/effort":
+                {
+                    var value = arg.Trim().ToLowerInvariant();
+                    if (value is "low" or "high")
+                    {
+                        session.Effort = value;
+                        ClientConfig.SaveEffort(value);
+                        Ui.Info("  Усилие модели: " + value + " (сохранено).");
+                    }
+                    else
+                    {
+                        Ui.Info("  Текущее усилие: " + session.Effort + " · /effort low|high");
+                    }
+                    break;
+                }
                 case "/google":
                     await GoogleCommandAsync(server, local, arg);
                     break;
@@ -950,6 +1073,31 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                         ? "Режим плана: агент только изучает проект и предлагает план, правки и изменяющие команды заблокированы. После ответа можно одобрить план. /plan — выключить."
                         : "Режим плана выключен: агент снова может менять файлы.");
                     break;
+                // HTTP_PROXY: прокси для сервера и SignalR (корпоративная сеть).
+                case "/http-proxy":
+                {
+                    var value = arg.Trim();
+                    if (value.Length == 0 || value is "status")
+                    {
+                        Ui.Info("  HTTP-прокси: " + NetProxy.Describe(ClientConfig.LoadHttpProxy()));
+                        Ui.Info("  /http-proxy <url> — задать · /http-proxy off — напрямую. Нужен перезапуск клиента.");
+                    }
+                    else if (value is "off")
+                    {
+                        ClientConfig.SaveHttpProxy(null);
+                        Ui.Info("  Прокси убран. Перезапустите conexy.");
+                    }
+                    else if (!NetProxy.IsValid(value))
+                    {
+                        Ui.Error("Нужен http://, https://, socks4:// или socks5://.");
+                    }
+                    else
+                    {
+                        ClientConfig.SaveHttpProxy(value);
+                        Ui.Info("  Прокси сохранён: " + NetProxy.Describe(value) + ". Перезапустите conexy.");
+                    }
+                    break;
+                }
                 // TELEGRAM_PROXY: свой прокси для Telegram на этом ПК.
                 case "/proxy":
                 {

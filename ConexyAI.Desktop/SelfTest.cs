@@ -1,4 +1,5 @@
 using ConexyAI.Desktop.Tools;
+using System.Security.Cryptography;
 
 namespace ConexyAI.Desktop;
 
@@ -159,6 +160,32 @@ public static class SelfTest
             Console.WriteLine($"{(secretsOk ? "PASS" : "FAIL")}  secret masking and https-only server url");
             if (!secretsOk) failures++;
 
+            // UPDATE_MIRROR: манифест обновления проверяется встроенным ключом; любая правка ломает подпись.
+            var manifest = new UpdateSigning.Manifest
+            {
+                Version = "9.9.9",
+                Files = { ["win-x64"] = new UpdateSigning.FileEntry
+                {
+                    Url = "https://conexyai.ru/downloads/conexy-win-x64.exe",
+                    Sha256 = new string('a', 64),
+                    Size = 123,
+                } },
+            };
+            using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            manifest.Signature = Convert.ToBase64String(signingKey.SignData(UpdateSigning.Canonical(manifest), HashAlgorithmName.SHA256));
+            var publicPem = signingKey.ExportSubjectPublicKeyInfoPem();
+            var manifestOk = UpdateSigning.Verify(manifest, publicPem)
+                             && !UpdateSigning.Verify(manifest) // ключ из сборки — другой
+                             && UpdateSigning.Parse(UpdateSigning.Serialize(manifest)) is { } roundtrip
+                             && UpdateSigning.Verify(roundtrip, publicPem);
+            manifest.Files["win-x64"].Size = 124;
+            manifestOk &= !UpdateSigning.Verify(manifest, publicPem);
+            manifest.Files["win-x64"].Size = 123;
+            manifest.Version = "9.9.8";
+            manifestOk &= !UpdateSigning.Verify(manifest, publicPem);
+            Console.WriteLine($"{(manifestOk ? "PASS" : "FAIL")}  signed update manifest");
+            if (!manifestOk) failures++;
+
             var approved = new ToolRunner(root, new FixedApprover(true), _ => { });
             await Check("shell approved", approved, "bash", System.Text.Json.JsonSerializer.Serialize(new { command = echo }), r => !r.IsError && r.Output.Contains("hi"));
             await Check("shell exit code", approved, "bash", System.Text.Json.JsonSerializer.Serialize(new { command = "exit 3" }), r => r.IsError && r.Output.Contains("Exit code: 3"));
@@ -173,12 +200,61 @@ public static class SelfTest
                 r => r.Output.Contains("ctx.txt-1- before") && r.Output.Contains("ctx.txt:2: needle") && r.Output.Contains("ctx.txt-3- after"));
             await Check("grep respects .gitignore", runner, "grep", """{"pattern":"needle","output_mode":"files"}""",
                 r => r.Output.Contains("ctx.txt") && !r.Output.Contains("g.txt") && !r.Output.Contains("run.log"));
+            // GREP_MODES: тот же шаблон в другом режиме — другой вопрос, LOOP_GUARD не должен его блокировать.
             await Check("grep include_ignored", runner, "grep", """{"pattern":"needle","output_mode":"count","include_ignored":true}""",
                 r => r.Output.Contains("generated/g.txt: 1") && r.Output.Contains("run.log: 1"));
+
+            // HOOKS: .conexy/hooks.json выполняется только в доверенной папке; PreToolUse может блокировать,
+            // PostToolUse — дописать замечание. Недоверенный файл не выполняется вообще.
+            var hookRoot = Path.Combine(root, "hookproj");
+            Directory.CreateDirectory(Path.Combine(hookRoot, ".conexy"));
+            var preScript = OperatingSystem.IsWindows() ? "pre.ps1" : "pre.sh";
+            var postScript = OperatingSystem.IsWindows() ? "post.ps1" : "post.sh";
+            File.WriteAllText(Path.Combine(hookRoot, ".conexy", preScript), OperatingSystem.IsWindows()
+                ? "[Console]::Error.WriteLine('blocked by project hook'); exit 2\n"
+                : "echo 'blocked by project hook' >&2; exit 2\n");
+            File.WriteAllText(Path.Combine(hookRoot, ".conexy", postScript), OperatingSystem.IsWindows()
+                ? "[Console]::In.ReadToEnd() | Out-Null; Write-Output '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"hook-note\"}}'\n"
+                : "cat >/dev/null; printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"hook-note\"}}'\n");
+            var hookShell = OperatingSystem.IsWindows() ? "powershell" : "sh";
+            File.WriteAllText(Path.Combine(hookRoot, ".conexy", "hooks.json"), System.Text.Json.JsonSerializer.Serialize(new
+            {
+                hooks = new
+                {
+                    PreToolUse = new[] { new { matcher = "file_write", hooks = new[] { new { type = "command", command = ".conexy/" + preScript, shell = hookShell } } } },
+                    PostToolUse = new[] { new { matcher = "file_read", hooks = new[] { new { type = "command", command = ".conexy/" + postScript, shell = hookShell } } } },
+                },
+            }));
+            File.WriteAllText(Path.Combine(hookRoot, "data.txt"), "hook data\n");
+            var previousTrust = Environment.GetEnvironmentVariable("CONEXY_TRUST_HOOKS");
+            try
+            {
+                Environment.SetEnvironmentVariable("CONEXY_TRUST_HOOKS", "1");
+                var hooked = new ToolRunner(hookRoot, new FixedApprover(true), _ => { });
+                await Check("hooks block a tool", hooked, "file_write", """{"path":"new.txt","content":"x"}""",
+                    r => r.IsError && r.Output.Contains("blocked by project hook"));
+                await Check("hooks append post context", hooked, "file_read", """{"path":"data.txt"}""",
+                    r => !r.IsError && r.Output.Contains("hook data") && r.Output.Contains("hook-note"));
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("CONEXY_TRUST_HOOKS", previousTrust);
+            }
+            var untrusted = new ToolRunner(hookRoot, new FixedApprover(true), _ => { });
+            await Check("untrusted hooks are not executed", untrusted, "file_write", """{"path":"new.txt","content":"x"}""",
+                r => !r.IsError);
+            var matcherOk = HookRunner.Matches("file_write|apply_patch", "apply_patch")
+                            && HookRunner.Matches("*", "bash")
+                            && !HookRunner.Matches("file_write", "bash")
+                            && HookRunner.Matches("^local__.*", "local__google__send");
+            Console.WriteLine($"{(matcherOk ? "PASS" : "FAIL")}  hook matchers");
+            if (!matcherOk) failures++;
 
             // /rewind: правка и созданный файл за ход откатываются.
             var rewind = new ToolRunner(root, new FixedApprover(true), _ => { });
             File.WriteAllText(Path.Combine(root, "keep.txt"), "original");
+            // EDIT_AFTER_READ: существующий файл сначала читаем — так же, как это делает агент.
+            await rewind.RunAsync("file_read", """{"path":"keep.txt"}""", CancellationToken.None);
             rewind.Checkpoints.BeginTurn("правка");
             await rewind.RunAsync("file_write", """{"path":"keep.txt","content":"changed"}""", CancellationToken.None);
             await rewind.RunAsync("file_write", """{"path":"new/created.txt","content":"x"}""", CancellationToken.None);
@@ -233,6 +309,7 @@ public static class SelfTest
 
             var web = new ToolRunner(root, new FixedApprover(true), _ => { });
             File.WriteAllText(Path.Combine(root, "web.txt"), "one\ntwo\n");
+            await web.RunAsync("file_read", """{"path":"web.txt"}""", CancellationToken.None);
             var task = Guid.NewGuid();
             ToolCallContext.Current = new ToolCallInfo(task, true, web.Root);
             try

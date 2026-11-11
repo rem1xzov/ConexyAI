@@ -13,7 +13,7 @@ public sealed record ChatItem(
 
 public sealed record TranscriptMessage(string Role, string Content, DateTime CreatedAt);
 
-public sealed record ClientInfo(string? DownloadUrl, string? Version, string? GoogleClientId = null, string? GoogleClientSecret = null);
+public sealed record ClientInfo(string? DownloadUrl, string? Version, string? GoogleClientId = null, string? GoogleClientSecret = null, string? Sha256 = null);
 
 /// <summary>
 /// Тариф и расход токенов: те же счётчики, что и на сайте. У Coder и Cowork разные пулы; «использовано» —
@@ -39,18 +39,30 @@ public sealed class ServerClient : IDisposable
 
     private readonly string _key;
     private readonly HttpClient _http;
+    private readonly IWebProxy? _proxy;
     private readonly SemaphoreSlim _tokenLock = new(1, 1);
     private string? _token;
     private DateTime _tokenExpiresUtc;
 
     public string BaseUrl { get; }
 
+    /// <summary>HTTP_PROXY: прокси, с которым создан клиент (null — напрямую/системный).</summary>
+    public IWebProxy? Proxy => _proxy;
+
     public ServerClient(string baseUrl, string key)
     {
         BaseUrl = baseUrl.TrimEnd('/');
         _key = key;
         // TIMEOUT_VISIBLE: 60 секунд пустого окна при зависшем запросе — слишком долго.
-        _http = new HttpClient { BaseAddress = new Uri(BaseUrl + "/"), Timeout = TimeSpan.FromSeconds(30) };
+        var handler = new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(20) };
+        // HTTP_PROXY: корпоративная сеть без прокси не увидит conexyai.ru. Переменные окружения важнее файла.
+        _proxy = NetProxy.FromUrl(ClientConfig.LoadHttpProxy());
+        if (_proxy is not null)
+        {
+            handler.Proxy = _proxy;
+            handler.UseProxy = true;
+        }
+        _http = new HttpClient(handler) { BaseAddress = new Uri(BaseUrl + "/"), Timeout = TimeSpan.FromSeconds(30) };
         Current = this;
     }
 
@@ -106,7 +118,7 @@ public sealed class ServerClient : IDisposable
     /// <summary>Ставит задачу в очередь. Сообщение об ошибке сервера (лимиты, занятость) — в исключении.</summary>
     public async Task<Guid> StartRunAsync(
         string prompt, Guid chatId, bool orchestra, IReadOnlyList<PendingAttachment> attachments, CancellationToken ct,
-        string model = "conexy-coder", IReadOnlyList<Mcp.LocalToolSpec>? deviceTools = null)
+        string model = "conexy-coder", IReadOnlyList<Mcp.LocalToolSpec>? deviceTools = null, string effort = "high")
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "api/conexy/run")
         {
@@ -120,7 +132,7 @@ public sealed class ServerClient : IDisposable
                 chatId = chatId.ToString(),
                 chatKind = "projects",
                 useDevice = true,
-                reasoningEffort = "high",
+                reasoningEffort = NormalizeEffort(effort),
                 orchestra,
                 attachments = attachments.Count == 0
                     ? null
@@ -148,6 +160,13 @@ public sealed class ServerClient : IDisposable
         var run = JsonSerializer.Deserialize<RunBody>(text, Json) ?? throw new InvalidOperationException("Пустой ответ сервера.");
         return run.Id;
     }
+
+    private static string NormalizeEffort(string? effort) => effort?.Trim().ToLowerInvariant() switch
+    {
+        "low" => "low",
+        "medium" or "med" => "medium",
+        _ => "high",
+    };
 
     public async Task<RunResult?> GetRunAsync(Guid taskId, CancellationToken ct)
     {

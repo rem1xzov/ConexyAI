@@ -469,7 +469,7 @@ public sealed partial class ShellTool
 
     private static string PowerShellExe => Pwsh.Value ?? "powershell.exe";
 
-    private static string? FindPwsh()
+    internal static string? FindPwsh()
     {
         if (!OperatingSystem.IsWindows())
             return null;

@@ -2271,24 +2271,45 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     "редактор или команда. Не читай те же файлы снова — применяй прочитанное."));
             }
 
-            // LOOP_GUARD: несколько отказов подряд — модель топчется на месте. Отключаем инструменты,
-            // чтобы следующий ход был именно итогом, а не новой попыткой того же самого.
+            // LOOP_GUARD: несколько отказов подряд — модель топчется на месте.
+            // WRITE_ONLY: сначала не отключаем всё, а оставляем только правку файлов — чаще всего агенту
+            // не хватало одного шага «перестань читать и измени файл». Если и это проигнорировано — итог текстом.
             if (!finalAnswerForced && loopGuard.ShouldStop)
             {
-                finalAnswerForced = true;
-                _logger.LogWarning(
-                    "Agent loop guard stopped the run: {Refusals} refusals without progress. task={TaskId}",
-                    loopGuard.Refusals, taskId);
-                await group.SendAsync(
-                    "OnLog",
-                    $"[Loop Guard] {loopGuard.Refusals} повтор(ов) без нового результата — инструменты отключены, прошу итог.",
-                    ct);
-                await SendAgentStatusAsync(taskId, "thinking", "Подвожу итог…", ct: ct);
-                messages.Add(new ChatMessage("system",
-                    "[Loop Guard] " + AgentLoopGuard.LoopStopRefusal +
-                    " Инструменты отключены: не пиши вызовы инструментов и служебную разметку — только текст. " +
-                    "Не проси перезапустить Conexy, не пиши «что нужно от тебя», не проси прислать «продолжай»: " +
-                    "перечисли, что уже сделано и что осталось, и заканчивай — продолжить можно новым сообщением."));
+                if (!loopGuard.WriteOnly)
+                {
+                    var refusals = loopGuard.Refusals;
+                    loopGuard.EnterWriteOnly();
+                    _logger.LogWarning(
+                        "Agent loop guard: entering write-only after {Refusals} refusals. task={TaskId}",
+                        refusals, taskId);
+                    await group.SendAsync(
+                        "OnLog",
+                        "[Loop Guard] Хватит читать — доступна только правка файлов.",
+                        ct);
+                    await SendAgentStatusAsync(taskId, "thinking", "Перехожу к правке…", ct: ct);
+                    messages.Add(new ChatMessage("system",
+                        "[Loop Guard] " + AgentLoopGuard.WriteOnlyRefusal +
+                        " Сначала правка, потом — короткий итог. Не заканчивай ход без правки, если задача её требует."));
+                }
+                else
+                {
+                    finalAnswerForced = true;
+                    _logger.LogWarning(
+                        "Agent loop guard stopped the run: {Refusals} refusals without progress. task={TaskId}",
+                        loopGuard.Refusals, taskId);
+                    await group.SendAsync(
+                        "OnLog",
+                        $"[Loop Guard] {loopGuard.Refusals} повтор(ов) без нового результата — прошу итог.",
+                        ct);
+                    await SendAgentStatusAsync(taskId, "thinking", "Подвожу итог…", ct: ct);
+                    messages.Add(new ChatMessage("system",
+                        "[Loop Guard] " + AgentLoopGuard.LoopStopRefusal +
+                        " Этот ход завершён: не пиши вызовы инструментов и служебную разметку — только текст. " +
+                        "Не проси перезапустить Conexy, не пиши «что нужно от тебя», не проси прислать «продолжай»: " +
+                        "перечисли, что уже сделано и что осталось. Если задача требовала правки, а ты её не сделал — " +
+                        "честно назови это главной причиной, а не «отключённые инструменты»."));
+                }
             }
 
             // AGENT_TOOL_FAILURES: и жёсткая верхняя граница. Дальше модели не даётся шанса крутить

@@ -74,6 +74,15 @@ public sealed partial class AgentLoopGuard
         "Ты уже читал этот файл/объект несколько раз, и данные у тебя есть. Хватит читать — примени то, что уже " +
         "прочитал: внеси правку, выполни команду или дай итог. Повторное чтение с другими параметрами нового не даст.";
 
+    /// <summary>
+    /// WRITE_ONLY: после петли чтения инструменты не отключаются полностью — правка остаётся доступной.
+    /// Раньше сообщение «инструменты отключены» заставляло модель сдаться, не попробовав правку.
+    /// </summary>
+    public const string WriteOnlyRefusal =
+        "Хватит исследовать: чтение и команды остановлены до конца этого хода. Доступна только правка файлов " +
+        "(file_patch, apply_patch, str_replace_editor, file_write). Сделай правку по уже собранному плану, " +
+        "затем дай итог. Не пиши, что инструменты отключены: правка работает.";
+
     /// <summary>Текст отказа, когда исчерпан бюджет чтения за прогон.</summary>
     public const string ReadBudgetRefusal =
         "Бюджет чтения на этот запуск исчерпан. Больше не читай — действуй: правка файла или команда, затем проверка.";
@@ -182,6 +191,7 @@ public sealed partial class AgentLoopGuard
     private readonly Dictionary<string, int> _targets = new(StringComparer.Ordinal);
     // READ_INSIST: объекты, по которым отказ уже выдан — повтор по тому же объекту и есть петля.
     private readonly HashSet<string> _refusedReadTargets = new(StringComparer.Ordinal);
+    private bool _writeOnly;
 
     public AgentLoopGuard(
         int repeatThreshold = RepeatThreshold,
@@ -203,6 +213,33 @@ public sealed partial class AgentLoopGuard
     /// <summary>Пора заканчивать: модель проигнорировала отказы и продолжает топтаться на месте.</summary>
     public bool ShouldStop => Refusals >= StopAfterRefusals;
 
+    /// <summary>Сейчас разрешена только правка файлов (после петли чтения).</summary>
+    public bool WriteOnly => _writeOnly;
+
+    /// <summary>
+    /// Переход в режим «только правка»: счётчики сбрасываются, чтения и команды получают отказ,
+    /// правка выполняется. Если модель проигнорирует и это (ещё 3 отказа) — завершаем ход текстом.
+    /// </summary>
+    public void EnterWriteOnly()
+    {
+        _writeOnly = true;
+        Refusals = 0;
+        _targets.Clear();
+        _refusedReadTargets.Clear();
+        _recent.Clear();
+    }
+
+    /// <summary>Инструмент меняет файл — в режиме write-only только они и разрешены.</summary>
+    public static bool IsWriteTool(string tool, string arguments)
+    {
+        if (tool is "file_write" or "file_patch" or "apply_patch" or "file_write_bytes" or "pc_copy_to_project"
+            or "download_file" or "create_document")
+            return true;
+        if (tool != "str_replace_editor")
+            return false;
+        return ReadCommand(arguments) != "view";
+    }
+
     /// <summary>
     /// Открывает новый бюджет интернет-обращений — вызывается в начале каждого хода модели. За один
     /// ответ (ход) разрешено не больше <see cref="WebCallBudget"/> обращений, но на следующем шаге
@@ -221,6 +258,15 @@ public sealed partial class AgentLoopGuard
         // плана с одинаковым ответом «План обновлён» считалось топтанием на месте и отключало все инструменты.
         if (BookkeepingTools.Contains(tool))
             return null;
+
+        // WRITE_ONLY: после петли чтения разрешаем только правку; чтения и команды — отказ.
+        if (_writeOnly)
+        {
+            if (IsWriteTool(tool, arguments))
+                return null;
+            Refusals++;
+            return WriteOnlyRefusal;
+        }
 
         if (IsRead(tool, arguments) && _targets.GetValueOrDefault(Target(tool, arguments)) >= ReadTargetThreshold)
         {
@@ -274,6 +320,15 @@ public sealed partial class AgentLoopGuard
         // сравнение «одинаковый результат» для следующих настоящих инструментов.
         if (BookkeepingTools.Contains(tool))
             return;
+        // WRITE_ONLY: успешная правка — прогресс, режим снимается и счётчики обнуляются.
+        if (_writeOnly && IsWriteTool(tool, arguments))
+        {
+            _writeOnly = false;
+            Refusals = 0;
+            _targets.Clear();
+            _recent.Clear();
+            return;
+        }
         _recent.Add(new Call(tool, arguments, Hash(output)));
         // Любая правка/команда — прогресс: счётчики чтения обнуляются, перечитывать после правки нормально.
         if (IsProgressTool(tool, arguments))

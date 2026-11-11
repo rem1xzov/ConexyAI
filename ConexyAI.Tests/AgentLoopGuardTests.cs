@@ -20,8 +20,44 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("loop guard: different arguments with the same output stop the run", NoProgressAsync);
         TestRegistry.Add("loop guard: re-reading the same file with new ranges is refused until an edit", ReadTargetAsync);
         TestRegistry.Add("loop guard: plan and question tools never count as a loop", BookkeepingAsync);
+        TestRegistry.Add("loop guard: after a read loop only file edits are allowed", WriteOnlyAsync);
         TestRegistry.Add("loop guard: reading the same file through bash with new offsets is a loop", ShellReadAsync);
         TestRegistry.Add("verify gate: a success claim without any check is caught", UnverifiedClaimsAsync);
+    }
+
+    // WRITE_ONLY: сообщение «инструменты отключены» заставляло агента сдаться, не попробовав правку.
+    // Теперь после петли чтения чтения и команды запрещены, а правка — работает.
+    private static Task WriteOnlyAsync()
+    {
+        var guard = new AgentLoopGuard();
+        guard.EnterWriteOnly();
+        Assert(guard.WriteOnly, "the guard must be in write-only mode");
+        Assert(guard.Refuse("file_read", """{"path":"a.cs"}""") == AgentLoopGuard.WriteOnlyRefusal,
+            "reading is refused in write-only mode");
+        Assert(guard.Refuse("bash", """{"command":"npm test"}""") == AgentLoopGuard.WriteOnlyRefusal,
+            "commands are refused in write-only mode");
+        Assert(guard.Refuse("file_write", """{"path":"a.cs","content":"x"}""") is null,
+            "file edits are allowed in write-only mode");
+        Assert(guard.Refuse("str_replace_editor", """{"command":"view","path":"a.cs"}""") == AgentLoopGuard.WriteOnlyRefusal,
+            "viewing is still reading");
+        Assert(guard.Refuse("str_replace_editor", """{"command":"str_replace","path":"a.cs"}""") is null,
+            "str_replace is an edit");
+        Assert(guard.Refuse("create_document", """{"path":"report.docx","content":"# Итог"}""") is null,
+            "creating an office document is a write");
+        Assert(guard.Refuse("read_document_file", """{"path":"report.docx"}""") == AgentLoopGuard.WriteOnlyRefusal,
+            "reading a document is still reading");
+
+        guard.Record("file_write", """{"path":"a.cs","content":"x"}""", "ok");
+        Assert(!guard.WriteOnly && !guard.ShouldStop, "a successful edit exits write-only mode");
+        Assert(guard.Refuse("file_read", """{"path":"a.cs"}""") is null, "reads work again after the edit");
+
+        // Если модель игнорирует и это — после трёх отказов ход всё равно завершается.
+        var stubborn = new AgentLoopGuard();
+        stubborn.EnterWriteOnly();
+        for (var i = 0; i < AgentLoopGuard.StopAfterRefusals; i++)
+            stubborn.Refuse("bash", """{"command":"ls"}""");
+        Assert(stubborn.ShouldStop && stubborn.WriteOnly, "ignored write-only refusals still end the run");
+        return Task.CompletedTask;
     }
 
     // VERIFY_CLAIMS: «всё работает» после правок без сборки/запуска — ложный отчёт, который видел пользователь.

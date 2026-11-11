@@ -32,5 +32,11 @@ publish/
 eval-results/
 eval-run*.log
 
-# Agent run logs (local only)
+# Local agent run logs (local only)
 *.log
+
+# Update signing: private key stays on the release machine, never in git
+.update-signing-key*.pem
+tmp-release/
+installer/Output/
+vscode-extension/out/

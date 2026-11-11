@@ -15,6 +15,8 @@ public sealed class ToolRunner
     private readonly Action<string> _log;
     private readonly Mcp.LocalTools? _local;
     private readonly ICommandApprover _approver;
+    // HOOKS: хуки проекта (.conexy/hooks.json) — только для доверенной папки.
+    private readonly HookRunner? _hooks;
     // LOOP_GUARD: счётчик чтений без правок — заслон работает даже со старой версией сервера.
     private readonly ReadLoopGuard _readGuard = new();
     // BUILD_FILES_GUARD: агент менял файлы сборки/тестов — run_tests/get_diagnostics только с подтверждения.
@@ -38,6 +40,7 @@ public sealed class ToolRunner
     {
         _local = local;
         _approver = approver;
+        _hooks = HookRunner.Load(workspaceRoot, log);
         _guard = new PathGuard(workspaceRoot);
         // WEB_DEVICE: добавлено 2026-10-18 — правки веб-задач не попадают в /rewind локального сеанса.
         _guard.BeforeWrite = path =>
@@ -94,6 +97,18 @@ public sealed class ToolRunner
             // DAEMON_LOG_MASK: в журнал демона не пишем токены из команд и URL.
             _log(SecretMask.Mask(Describe(tool, args)));
 
+            // HOOKS: PreToolUse может заблокировать вызов до любых действий и добавить контекст.
+            string? hookContext = null;
+            if (_hooks is { Enabled: true } && tool is not ("project_rules" or "turn_diff"))
+            {
+                if (await _hooks.BeforeAsync(tool, argumentsJson, ct) is { } hookDecision)
+                {
+                    if (hookDecision.Denied)
+                        return ToolResult.Fail(hookDecision.Reason ?? "Вызов заблокирован хуком проекта.");
+                    hookContext = hookDecision.Context;
+                }
+            }
+
             // LOCAL_MCP: Google и локальные MCP-серверы.
             if (tool.StartsWith("local__", StringComparison.Ordinal))
                 return _local is null
@@ -136,6 +151,24 @@ public sealed class ToolRunner
             // LOOP_GUARD: считаем только реально выполненные вызовы.
             if (!result.IsError)
                 _readGuard.Record(tool, args);
+
+            // HOOKS: контекст PreToolUse — рядом с результатом, как в Claude Code.
+            if (hookContext is { Length: > 0 })
+                result = result with { Output = hookContext.Trim() + "\n\n" + result.Output };
+
+            // HOOKS: PostToolUse/PostToolUseFailure может дописать модели замечание.
+            if (_hooks is { Enabled: true } && tool is not ("project_rules" or "turn_diff"))
+            {
+                try
+                {
+                    if (await _hooks.AfterAsync(tool, argumentsJson, result.IsError, ct) is { Length: > 0 } note)
+                        result = result with { Output = result.Output + note };
+                }
+                catch (OperationCanceledException)
+                {
+                    // Отмена хода не должна подменять уже полученный результат инструмента.
+                }
+            }
             return result;
         }
         catch (ToolException ex)
