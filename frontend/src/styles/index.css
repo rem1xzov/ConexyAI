@@ -11695,8 +11695,11 @@ html[data-incognito='true'] .chat-surface-soft {
 
 .chat-options {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
+  /* CHAT_OPTIONS_STACK: как на телефоне — переключатели стоят в столбик (стиль ответа над умным
+     поиском), а не в один ряд: так они не растягиваются в широкую полосу на ПК. */
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: center;
   justify-content: center;
   gap: 10px;
   animation: fade-in var(--motion-base) var(--ease-out) both;
