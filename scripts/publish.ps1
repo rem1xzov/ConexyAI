@@ -123,6 +123,10 @@ foreach ($rid in $Rids) {
     $target = if ($rid -like "win-*") { Join-Path $out "conexy-$rid.exe" } else { Join-Path $out "conexy-$rid" }
     Copy-Item $produced $target -Force
     if ($rid -like "win-*") { Sign-File $target }
+    if ($rid -eq "win-x64") {
+        # BACKCOMPAT: сервер и клиенты 0.9.28 ищут ассет с именем conexy.exe.
+        Copy-Item $target (Join-Path $out "conexy.exe") -Force
+    }
     Write-Host "  -> $(Split-Path $target -Leaf) ($([math]::Round((Get-Item $target).Length / 1MB, 1)) МБ)" -ForegroundColor Green
 }
 

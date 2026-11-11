@@ -49,6 +49,11 @@ for rid in $RIDS; do
   rm -rf "$OUT/$rid"
 done
 
+# BACKCOMPAT: сервер и клиенты 0.9.28 ищут ассет с именем conexy.exe.
+if [ -f "$OUT/conexy-win-x64.exe" ]; then
+  cp "$OUT/conexy-win-x64.exe" "$OUT/conexy.exe"
+fi
+
 if [ -n "$KEY" ]; then
   echo "=== manifest ==="
   "$DOTNET" run --project ConexyAI.Desktop/ConexyAI.Desktop.csproj -c Release -- \
