@@ -177,6 +177,36 @@ function githubErrorMessage(code: string | null, t: Translate): string {
   return t('errors.github_auth');
 }
 
+// DOMAIN_SSO: сессия одна на оба домена продукта. Cookie сессии нельзя сделать общей для разных
+// доменов (браузер не отдаёт её соседу), поэтому при отсутствии входа просим одноразовый код у
+// соседнего домена: он выдаёт его, только если там человек вошёл, и мы возвращаемся сюда уже с
+// сессией. Если и там входа нет, сосед отвечает `?sso=none` — тогда второй раз не стучимся, чтобы
+// не получить пинг-понг между доменами.
+const PRODUCT_PARTNER_HOSTS: Record<string, string> = {
+  'conexy.ru': 'conexyai.ru',
+  'www.conexy.ru': 'conexyai.ru',
+  'conexyai.ru': 'conexy.ru',
+  'www.conexyai.ru': 'conexy.ru',
+};
+const SSO_ATTEMPT_KEY = 'conexy_sso_attempted';
+
+/** Sends the browser to the partner domain for a session handoff; false when it is not worth it. */
+function redirectForDomainSso(): boolean {
+  const partner = PRODUCT_PARTNER_HOSTS[window.location.hostname.toLowerCase()];
+  if (!partner) return false;
+  if (new URLSearchParams(window.location.search).get('sso') === 'none') return false;
+  try {
+    if (window.sessionStorage.getItem(SSO_ATTEMPT_KEY)) return false;
+    window.sessionStorage.setItem(SSO_ATTEMPT_KEY, '1');
+  } catch {
+    // Storage может быть запрещён (приватный режим): сервер всё равно не пустит в цикл — он
+    // отвечает `sso=none`, а на это мы больше не реагируем.
+  }
+  const target = encodeURIComponent(window.location.href);
+  window.location.href = `https://${partner}/api/auth/domain/start?to=${target}`;
+  return true;
+}
+
 /**
  * Authentication hook. On mount it first tries the httpOnly session cookie (GitHub OAuth or
  * email login) via <c>GET /api/auth/session</c>; the JWT is persisted to localStorage for the
@@ -286,6 +316,18 @@ export function useAuth() {
       window.history.replaceState(null, '', window.location.pathname + window.location.hash);
     }
 
+    // DOMAIN_SSO: соседний домен ответил «входа нет» — убираем пометку из адреса, чтобы она не
+    // осела в закладке или в ссылке, которой человек поделится.
+    if (query.get('sso') === 'none') {
+      query.delete('sso');
+      const rest = query.toString();
+      window.history.replaceState(
+        null,
+        '',
+        window.location.pathname + (rest ? `?${rest}` : '') + window.location.hash,
+      );
+    }
+
     const init = async () => {
       // MOBILE_HANDOFF: приложение вернулось из системного браузера с одноразовым кодом.
       // Меняем его на сессию и убираем код из адреса, чтобы он не осел в истории.
@@ -323,6 +365,9 @@ export function useAuth() {
       } catch (e) {
         if (cancelled) return;
         if (statusOf(e) === 401) {
+          // DOMAIN_SSO: на этом домене входа нет — возможно, он есть на соседнем. Уходим на
+          // переход за одноразовым кодом и возвращаемся сюда уже с сессией.
+          if (!storedToken && redirectForDomainSso()) return;
           // SESSION_COOKIE_LOST: 401 от /auth/session означает только «нет валидной cookie» — а не
           // «нет аккаунта». Cookie живёт отдельно от токена: её могут не проставить (http вместо https
           // для Secure-cookie), потерять (блокировка cookie, ITP в Safari, чистка браузера) или она

@@ -50,9 +50,9 @@ builder.Services.AddSignalR(options =>
 builder.Services.AddSingleton<Microsoft.AspNetCore.SignalR.IHubContext<ConexyHub>, ScopeTaggingHubContext>();
 
 // CORS: the production frontend is served from https://conexyai.ru and https://conexy.ru
-// (both, plus www) by nginx and calls the API same-origin via the /api + /hubs proxy, so CORS
-// mainly matters for the local Vite dev server. We intentionally avoid AllowAnyOrigin() +
-// AllowCredentials() (insecure).
+// (both, plus www — see ProductDomains) by nginx and calls the API same-origin via the /api +
+// /hubs proxy, so CORS mainly matters for the local Vite dev server. We intentionally avoid
+// AllowAnyOrigin() + AllowCredentials() (insecure).
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
@@ -60,8 +60,7 @@ builder.Services.AddCors(options =>
         policy.SetIsOriginAllowed(origin =>
         {
             // Production origins: both domains are first-class hosts of the same app.
-            if (origin == "https://conexyai.ru" || origin == "https://www.conexyai.ru"
-                || origin == "https://conexy.ru" || origin == "https://www.conexy.ru")
+            if (ProductDomains.IsKnownOrigin(origin))
                 return true;
 
             // Local development only: allow any localhost/127.0.0.1 origin (Vite dev server).

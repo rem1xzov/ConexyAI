@@ -42,6 +42,14 @@ public class AuthController : ControllerBase
     private static readonly TimeSpan MobileHandoffTtl = TimeSpan.FromMinutes(2);
     private static readonly ConcurrentDictionary<string, (TokenResponse Token, string Challenge, DateTime ExpiresUtc)> MobileHandoffs = new();
 
+    // DOMAIN_SSO: сессия одна на оба домена продукта (conexyai.ru и conexy.ru). Cookie __Host-
+    // привязана к одному хосту, и браузер не отдаст её соседнему домену — переносить надо явно:
+    // домен, где вход есть, выдаёт одноразовый код и уводит на другой, тот ставит у себя такую же
+    // cookie и возвращает человека на ту же страницу. Код живёт две минуты и сжигается при первом
+    // использовании (как mobile handoff), а адреса берутся только из ProductDomains.
+    private static readonly TimeSpan DomainHandoffTtl = TimeSpan.FromMinutes(2);
+    private static readonly ConcurrentDictionary<string, (Guid UserId, DateTime ExpiresUtc)> DomainHandoffs = new();
+
     private readonly ITokenService _tokenService;
     private readonly IWebHostEnvironment _environment;
     // GITHUB_OAUTH: добавлено 2026-09-19
@@ -195,6 +203,90 @@ public class AuthController : ControllerBase
 
         return Ok(entry.Token);
     }
+
+    // DOMAIN_SSO: первый шаг переноса сессии. Вызывается обычным переходом браузера (не fetch),
+    // поэтому cookie этого домена приходит сама. Есть вход — выдаём код и уводим на соседний
+    // домен; нет входа — возвращаем человека туда, откуда он пришёл, с пометкой sso=none.
+    /// <summary>Issues a one-time session handoff code to the other product domain.</summary>
+    [HttpGet("domain/start")]
+    [EnableRateLimiting(AuthRateLimitPolicies.DomainSso)]
+    public async Task<IActionResult> DomainStart([FromQuery] string? to, CancellationToken ct)
+    {
+        if (!TryParseDomainTarget(to, out var host, out var path))
+            return BadRequest(new { error = "unsupported_target" });
+
+        if (Request.Cookies[AuthCookieName] is not { Length: > 0 } cookie
+            || await ValidateCookieTokenAsync(cookie, ct) is not { } session
+            || !session.Principal.TryGetUserId(out var userId))
+        {
+            // И здесь никто не вошёл — приложение не должно ходить между доменами бесконечно.
+            Response.Headers.CacheControl = "no-store";
+            return Redirect(AppendQuery($"https://{host}{path}", "sso=none"));
+        }
+
+        var now = DateTime.UtcNow;
+        foreach (var stale in DomainHandoffs.Where(pair => pair.Value.ExpiresUtc < now).Select(pair => pair.Key).ToList())
+            DomainHandoffs.TryRemove(stale, out _);
+
+        var code = GenerateState();
+        DomainHandoffs[code] = (userId, now.Add(DomainHandoffTtl));
+        Response.Headers.CacheControl = "no-store";
+        return Redirect($"https://{host}/api/auth/domain/consume?code={code}&next={Uri.EscapeDataString(path)}");
+    }
+
+    // DOMAIN_SSO: второй шаг — соседний домен меняет код на свою обычную cookie сессии.
+    /// <summary>Exchanges the handoff code for a session cookie on this domain.</summary>
+    [HttpGet("domain/consume")]
+    [EnableRateLimiting(AuthRateLimitPolicies.DomainSso)]
+    public async Task<IActionResult> DomainConsume(
+        [FromQuery] string? code, [FromQuery] string? next, CancellationToken ct)
+    {
+        // Куда вернуть человека — только свой путь: абсолютный чужой адрес превратил бы это
+        // в открытый редирект (см. ProductDomains.SafeLocalPath).
+        var landing = ProductDomains.SafeLocalPath(next);
+
+        // Код одноразовый: TryRemove сжигает его даже при просроченном сроке — перебирать нечего.
+        if (code is not { Length: > 0 } || !DomainHandoffs.TryRemove(code, out var entry) || entry.ExpiresUtc < DateTime.UtcNow)
+            return Redirect(AppendQuery(landing, "sso=none"));
+
+        var user = await _userRepository.GetByIdAsync(entry.UserId, ct);
+        if (user is null)
+            return Redirect(AppendQuery(landing, "sso=none"));
+
+        // Токен собираем по человеку из БД, как при обычном входе: версия токена и права — на текущий момент.
+        SetAuthCookie(_tokenService.CreateToken(user));
+        Response.Headers.CacheControl = "no-store";
+        // Код ехал в адресе: дальше он не должен утечь ни в Referer, ни в чужие логи.
+        Response.Headers["Referrer-Policy"] = "no-referrer";
+        _logger.LogInformation("Domain SSO: session handed over to {Host} for user {UserId}.", Request.Host.Host, entry.UserId);
+        return Redirect(landing);
+    }
+
+    /// <summary>
+    /// Разбирает адрес, на который надо вернуть человека после переноса: только https, только наши
+    /// домены и только не тот, на котором обрабатывается запрос (иначе редирект ушёл бы сам в себя).
+    /// </summary>
+    private bool TryParseDomainTarget(string? to, out string host, out string path)
+    {
+        host = string.Empty;
+        path = "/";
+        if (!Uri.TryCreate(to, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+            return false;
+        if (!ProductDomains.IsKnownHost(uri.Host))
+            return false;
+        if (string.Equals(uri.Host, Request.Host.Host, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        host = uri.Host.ToLowerInvariant();
+        // Фрагмент тоже возвращаем: приложение живёт на хеш-маршрутах (#/admin), и без него
+        // человек после переноса оказался бы не на той странице.
+        path = uri.PathAndQuery.Length > 0 ? uri.PathAndQuery : "/";
+        path += uri.Fragment;
+        return true;
+    }
+
+    private static string AppendQuery(string url, string query) =>
+        url + (url.Contains('?') ? '&' : '?') + query;
 
     /// <summary>RFC 7636 S256 challenge: base64url (no padding) of a SHA-256 digest = 43 characters.</summary>
     public static bool IsValidCodeChallenge(string? challenge) =>

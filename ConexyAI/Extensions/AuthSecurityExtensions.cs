@@ -39,6 +39,11 @@ public static class AuthRateLimitPolicies
     /// <summary>GET /api/auth/github/login + /callback — per client IP.</summary>
     public const string GitHubOAuth = "auth-github";
 
+    // DOMAIN_SSO: добавлено 2026-11-11 — GET /api/auth/domain/start + /consume. Свой лимит, чтобы
+    // перенос сессии не съедал окно обычного входа через GitHub (и наоборот).
+    /// <summary>GET /api/auth/domain/start + /consume — per client IP.</summary>
+    public const string DomainSso = "auth-domain-sso";
+
     /// <summary>POST /api/device/token — per client IP (обмен ключа десктопа на JWT).</summary>
     public const string DeviceToken = "device-token";
 
@@ -269,6 +274,10 @@ public static class AuthSecurityExtensions
             ctx => FixedWindow(ClientPartitionKey(ctx), permits: 20, TimeSpan.FromMinutes(10)));
         options.AddPolicy(AuthRateLimitPolicies.GitHubOAuth,
             ctx => FixedWindow(ClientPartitionKey(ctx), permits: 20, TimeSpan.FromMinutes(1)));
+        // DOMAIN_SSO: один-два перехода на загрузку страницы, но за одним NAT-адресом может быть
+        // целый офис — окно просторнее, чем у входа, и отдельное от него.
+        options.AddPolicy(AuthRateLimitPolicies.DomainSso,
+            ctx => FixedWindow(ClientPartitionKey(ctx), permits: 60, TimeSpan.FromMinutes(1)));
         // DESKTOP_AGENT: 20 обменов ключа в минуту с IP — хватает на переподключения, не хватает на перебор.
         options.AddPolicy(AuthRateLimitPolicies.DeviceToken,
             ctx => FixedWindow(ClientPartitionKey(ctx), permits: 20, TimeSpan.FromMinutes(1)));
