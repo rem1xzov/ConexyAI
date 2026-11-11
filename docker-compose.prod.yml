@@ -227,6 +227,8 @@ services:
     volumes:
       # Сертификаты Let's Encrypt с хоста (HTTPS терминируется в контейнерном nginx, см. frontend/nginx.conf).
       - /etc/letsencrypt:/etc/letsencrypt:ro
+      # UPDATE_MIRROR: подписанный latest.json и бинарники; папка на хосте, чтобы переживать пересоздание контейнера.
+      - ${DOWNLOADS_DIR:-/root/conexyai/downloads}:/usr/share/nginx/html/downloads:ro
     networks:
       frontend:
         # SEC_FORWARDED_HEADERS: фиксированный адрес — бэкенд доверяет X-Forwarded-* только ему (TrustedProxies).
