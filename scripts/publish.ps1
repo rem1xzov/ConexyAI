@@ -9,16 +9,33 @@
 [CmdletBinding()]
 param(
     [string]$Version,
-    [string[]]$Rids = @("win-x64", "linux-x64", "osx-x64", "osx-arm64"),
-    [string]$Output = "dist",
-    [string]$UrlBase = "https://conexyai.ru/downloads",
-    [string]$SigningKey = ".update-signing-key.pem",
+    [string[]]$Rids,
+    [string]$Output,
+    [string]$UrlBase,
+    [string]$SigningKey,
     [string]$PfxPath,
     [System.Security.SecureString]$PfxPassword,
     [string]$CertThumbprint,
-    [string]$TimestampUrl = "http://timestamp.digicert.com",
+    [string]$TimestampUrl,
     [switch]$SkipManifest
 )
+
+# ENV: всё можно задать переменными, чтобы на сервере была одна команда без аргументов.
+if (-not $Version -and $env:CONEXY_VERSION) { $Version = $env:CONEXY_VERSION }
+if (-not $Rids -or $Rids.Count -eq 0) {
+    if ($env:CONEXY_RIDS) { $Rids = @($env:CONEXY_RIDS -split "[,; ]+" | Where-Object { $_ }) }
+    else { $Rids = @("win-x64", "linux-x64", "osx-x64", "osx-arm64") }
+}
+if (-not $Output) { $Output = if ($env:CONEXY_OUTPUT) { $env:CONEXY_OUTPUT } else { "dist" } }
+if (-not $UrlBase) { $UrlBase = if ($env:CONEXY_URL_BASE) { $env:CONEXY_URL_BASE } else { "https://conexyai.ru/downloads" } }
+if (-not $SigningKey) { $SigningKey = if ($env:CONEXY_SIGNING_KEY) { $env:CONEXY_SIGNING_KEY } else { ".update-signing-key.pem" } }
+if (-not $PfxPath -and $env:CONEXY_PFX_PATH) { $PfxPath = $env:CONEXY_PFX_PATH }
+if (-not $CertThumbprint -and $env:CONEXY_CERT_THUMBPRINT) { $CertThumbprint = $env:CONEXY_CERT_THUMBPRINT }
+if (-not $PfxPassword -and $env:CONEXY_PFX_PASSWORD) {
+    $PfxPassword = ConvertTo-SecureString $env:CONEXY_PFX_PASSWORD -AsPlainText -Force
+}
+if (-not $TimestampUrl) { $TimestampUrl = if ($env:CONEXY_TIMESTAMP_URL) { $env:CONEXY_TIMESTAMP_URL } else { "http://timestamp.digicert.com" } }
+if ($env:CONEXY_SKIP_MANIFEST -eq "1") { $SkipManifest = [System.Management.Automation.SwitchParameter]::new($true) }
 
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path

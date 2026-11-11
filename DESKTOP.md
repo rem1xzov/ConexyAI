@@ -134,13 +134,29 @@ openssl ecparam -name prime256v1 -genkey -noout -out .update-signing-key.pem
 
 ### Сборка
 
+Можно без аргументов — всё берётся из env:
+
+```bash
+export CONEXY_VERSION=0.9.29
+export CONEXY_PFX_PATH=/secure/conexy.pfx
+export CONEXY_PFX_PASSWORD='пароль-от-pfx'
+export CONEXY_TIMESTAMP_URL=http://timestamp.<ваш-УЦ>
+export CONEXY_SIGNING_KEY=/secure/.update-signing-key.pem
+export CONEXY_URL_BASE=https://conexyai.ru/downloads
+pwsh scripts/publish.ps1
+```
+
+Или аргументами:
+
 ```powershell
 pwsh scripts/publish.ps1 -Version 0.9.29 `
   -PfxPath C:\keys\conexy.pfx -PfxPassword (Read-Host -AsSecureString) `
   -TimestampUrl http://timestamp.<ваш-УЦ>
 ```
 
-`-TimestampUrl` можно не задавать — по умолчанию DigiCert; для российского УЦ укажите его TSA.
+Переменные: `CONEXY_VERSION`, `CONEXY_RIDS` (через запятую), `CONEXY_OUTPUT`, `CONEXY_URL_BASE`,
+`CONEXY_SIGNING_KEY`, `CONEXY_PFX_PATH`, `CONEXY_PFX_PASSWORD`, `CONEXY_CERT_THUMBPRINT`,
+`CONEXY_TIMESTAMP_URL`, `CONEXY_SKIP_MANIFEST=1`. Аргументы важнее env.
 
 Скрипт:
 
