@@ -17,7 +17,12 @@ namespace ConexyAI.Service.Payments;
 public interface IPaymentService
 {
     /// <summary>Создаёт платёж и возвращает ссылку для редиректа пользователя.</summary>
-    Task<CreatePaymentResponse> CreateAsync(Guid userId, string planId, CancellationToken ct = default);
+    /// <param name="returnUrlBase">
+    /// YOOKASSA_MULTIDOMAIN: адрес сайта, на который ЮKassa вернёт человека после оплаты. Берётся из
+    /// хоста запроса (см. PaymentsController), поэтому покупка, начатая на conexy.ru, возвращает туда же.
+    /// Пусто — адрес из настройки YooKassa:ReturnUrlBase.
+    /// </param>
+    Task<CreatePaymentResponse> CreateAsync(Guid userId, string planId, CancellationToken ct = default, string? returnUrlBase = null);
 
     /// <summary>Статус своего платежа (для страницы возврата). <c>null</c> — платежа нет/чужой.</summary>
     Task<PaymentStatusResponse?> GetStatusAsync(Guid userId, Guid paymentId, CancellationToken ct = default);
@@ -58,7 +63,7 @@ public class PaymentService : IPaymentService
         _adminNotifier = adminNotifier;
     }
 
-    public async Task<CreatePaymentResponse> CreateAsync(Guid userId, string planId, CancellationToken ct = default)
+    public async Task<CreatePaymentResponse> CreateAsync(Guid userId, string planId, CancellationToken ct = default, string? returnUrlBase = null)
     {
         var plan = _plans.Find(planId)
             ?? throw new ArgumentException($"Неизвестный тариф '{planId}'.");
@@ -98,7 +103,7 @@ public class PaymentService : IPaymentService
         var request = new YooKassaPaymentRequest(
             AmountRub: plan.AmountRub,
             Description: string.IsNullOrWhiteSpace(plan.Title) ? $"Тариф {plan.Tier}" : plan.Title,
-            ReturnUrl: BuildReturnUrl(payment.Id),
+            ReturnUrl: BuildReturnUrl(payment.Id, returnUrlBase),
             Metadata: new Dictionary<string, string>
             {
                 ["paymentId"] = payment.Id.ToString(),
@@ -306,11 +311,13 @@ public class PaymentService : IPaymentService
     private static bool IsProOrHigher(SubscriptionTier tier) =>
         tier is SubscriptionTier.Pro or SubscriptionTier.ProMax or SubscriptionTier.Ultra;
 
-    private string BuildReturnUrl(Guid paymentId)
+    private string BuildReturnUrl(Guid paymentId, string? returnUrlBase)
     {
-        var baseUrl = string.IsNullOrWhiteSpace(_settings.ReturnUrlBase)
-            ? "https://conexyai.ru/"
-            : _settings.ReturnUrlBase;
+        var baseUrl = !string.IsNullOrWhiteSpace(returnUrlBase)
+            ? returnUrlBase
+            : string.IsNullOrWhiteSpace(_settings.ReturnUrlBase)
+                ? "https://conexyai.ru/"
+                : _settings.ReturnUrlBase;
         // SPA читает эти параметры при загрузке и открывает окно статуса платежа.
         var separator = baseUrl.Contains('?') ? '&' : '?';
         return $"{baseUrl}{separator}payment=return&pid={paymentId}";

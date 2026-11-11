@@ -49,7 +49,7 @@ public class PaymentsController : ControllerBase
 
         try
         {
-            return Ok(await _payments.CreateAsync(userId, request.Plan, ct));
+            return Ok(await _payments.CreateAsync(userId, request.Plan, ct, PaymentReturnBaseUrl()));
         }
         catch (ArgumentException ex)
         {
@@ -64,6 +64,20 @@ public class PaymentsController : ControllerBase
         {
             return StatusCode(StatusCodes.Status502BadGateway, new { error = "PAYMENT_PROVIDER_ERROR", message = ex.Message });
         }
+    }
+
+    /// <summary>
+    /// YOOKASSA_MULTIDOMAIN: адрес возврата после оплаты — тот домен, на котором человек платит.
+    /// Раньше он всегда был conexyai.ru, и покупка с conexy.ru заканчивалась на чужом домене, где
+    /// сессии нет (cookie __Host- живёт только на одном хосте). Незнакомый хост не принимаем:
+    /// return_url уходит в ЮKassa, подставлять туда что угодно из запроса нельзя.
+    /// </summary>
+    private string? PaymentReturnBaseUrl()
+    {
+        var host = Request.Host.Host;
+        return host is "conexyai.ru" or "www.conexyai.ru" or "conexy.ru" or "www.conexy.ru"
+            ? $"https://{host}/"
+            : null;
     }
 
     /// <summary>Статус своего платежа — для страницы возврата после оплаты.</summary>

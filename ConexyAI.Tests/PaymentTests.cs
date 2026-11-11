@@ -26,6 +26,8 @@ internal static class PaymentTests
         TestRegistry.Add("payments: an unconfirmed payment grants nothing", UnconfirmedGrantsNothingAsync);
         TestRegistry.Add("payments: an expired paid tier falls back to Free", ExpiredTierAsync);
         TestRegistry.Add("payments: the summary returns only successful payments inside the period", SummaryPeriodAsync);
+        // YOOKASSA_MULTIDOMAIN: покупка с conexy.ru должна возвращать на conexy.ru.
+        TestRegistry.Add("payments: the return url follows the domain the buyer used", ReturnUrlFollowsDomainAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -187,6 +189,30 @@ internal static class PaymentTests
         Assert(rows.All(r => r.Email == "buyer@example.com"), "the buyer email must be resolved for every row");
     }
 
+    private static async Task ReturnUrlFollowsDomainAsync()
+    {
+        var dbName = "payments_" + Guid.NewGuid().ToString("N");
+        await using var context = NewContext(dbName);
+        var firstUser = Guid.NewGuid();
+        var secondUser = Guid.NewGuid();
+        context.Users.Add(new User { Id = firstUser, Email = "buyer@example.com", SubscriptionTier = SubscriptionTier.Free });
+        context.Users.Add(new User { Id = secondUser, Email = "buyer2@example.com", SubscriptionTier = SubscriptionTier.Free });
+        await context.SaveChangesAsync();
+
+        var client = new FakeYooKassa();
+        var service = NewService(context, client);
+
+        // Покупка на новом домене — возврат туда же, где человек платит (его cookie и сессия).
+        await service.CreateAsync(firstUser, "Pro", default, "https://conexy.ru/");
+        Assert(client.LastReturnUrl?.StartsWith("https://conexy.ru/?payment=return&pid=", StringComparison.Ordinal) == true,
+            $"the return url must stay on the buying domain, got {client.LastReturnUrl}");
+
+        // Без подсказки о домене остаётся настроенный канонический адрес.
+        await service.CreateAsync(secondUser, "ProMax", default);
+        Assert(client.LastReturnUrl?.StartsWith("https://conexyai.ru/?payment=return&pid=", StringComparison.Ordinal) == true,
+            $"without a hint the configured base must be used, got {client.LastReturnUrl}");
+    }
+
     private static DbConexy NewContext(string dbName) =>
         new(new DbContextOptionsBuilder<DbConexy>().UseTestDatabase(dbName).Options);
 
@@ -211,11 +237,17 @@ internal static class PaymentTests
     {
         public string Status { get; set; } = "succeeded";
 
+        /// <summary>Адрес возврата последнего созданного платежа — проверяется в тесте доменов.</summary>
+        public string? LastReturnUrl { get; private set; }
+
         public bool IsConfigured => true;
 
         public Task<YooKassaPayment> CreatePaymentAsync(
-            YooKassaPaymentRequest request, string idempotenceKey, CancellationToken ct = default) =>
-            Task.FromResult(new YooKassaPayment("pay_created", "pending", "https://pay.example/1"));
+            YooKassaPaymentRequest request, string idempotenceKey, CancellationToken ct = default)
+        {
+            LastReturnUrl = request.ReturnUrl;
+            return Task.FromResult(new YooKassaPayment("pay_created_" + Guid.NewGuid().ToString("N"), "pending", "https://pay.example/1"));
+        }
 
         public Task<YooKassaPayment?> GetPaymentAsync(string paymentId, CancellationToken ct = default) =>
             Task.FromResult<YooKassaPayment?>(new YooKassaPayment(paymentId, Status, null));
