@@ -120,6 +120,31 @@ winget, демон, вход, тариф, обновление и SignalR. Ни�
 
 ## 5. Релиз: подпись, установщик, зеркало
 
+### GitHub Actions (без сервера и SSH)
+
+В репозитории есть `.github/workflows/release.yml`. Достаточно поставить тег:
+
+```bash
+git tag v0.9.29
+git push origin v0.9.29
+```
+
+Сборка сама соберёт все RID, подпишет (если заданы secrets), соберёт установщик, приложит файлы к GitHub-релизу и загрузит их на зеркало.
+
+Secrets в GitHub → Settings → Secrets and variables → Actions:
+
+| Secret | Что это |
+|---|---|
+| `WINDOWS_CERT_PFX_BASE64` | `[Convert]::ToBase64String([IO.File]::ReadAllBytes('conexy.pfx'))` |
+| `WINDOWS_CERT_PASSWORD` | пароль PFX |
+| `UPDATE_SIGNING_KEY_BASE64` | base64 от `.update-signing-key.pem` |
+| `DEPLOY_HOST` | хост зеркала (без него шаг загрузки пропускается) |
+| `DEPLOY_USER` | SSH-пользователь |
+| `DEPLOY_PATH` | папка на сервере, например `/var/www/conexyai/downloads/` |
+| `DEPLOY_SSH_KEY` | приватный deploy-ключ SSH (не пароль) |
+
+Без `WINDOWS_CERT_PFX_BASE64` exe будут неподписанными; без `UPDATE_SIGNING_KEY_BASE64` не будет `latest.json`.
+
 ### Ключ подписи манифеста
 
 Один раз на машине релиза:

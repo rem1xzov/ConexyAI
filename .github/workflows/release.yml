@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия без v, например 0.9.29"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Prepare signing material
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          SIGNING_KEY_BASE64: ${{ secrets.UPDATE_SIGNING_KEY_BASE64 }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $version = if ($env:INPUT_VERSION) { $env:INPUT_VERSION } else { $env:REF_NAME.TrimStart("v") }
+          "CONEXY_VERSION=$version" >> $env:GITHUB_ENV
+
+          if ($env:PFX_BASE64) {
+            $pfx = Join-Path $env:RUNNER_TEMP "conexy.pfx"
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+            "CONEXY_PFX_PATH=$pfx" >> $env:GITHUB_ENV
+            "CONEXY_PFX_PASSWORD=$($env:PFX_PASSWORD)" >> $env:GITHUB_ENV
+          }
+
+          if ($env:SIGNING_KEY_BASE64) {
+            $key = Join-Path $env:RUNNER_TEMP ".update-signing-key.pem"
+            [IO.File]::WriteAllBytes($key, [Convert]::FromBase64String($env:SIGNING_KEY_BASE64))
+            "CONEXY_SIGNING_KEY=$key" >> $env:GITHUB_ENV
+          } else {
+            "CONEXY_SKIP_MANIFEST=1" >> $env:GITHUB_ENV
+          }
+
+      - name: Build
+        shell: pwsh
+        run: pwsh scripts/publish.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conexy-release
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $files = Get-ChildItem dist | ForEach-Object { $_.FullName }
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @files --clobber
+          } else {
+            gh release create $tag @files --title "ConexyAI $tag" --notes "Release $tag"
+          }
+
+      - name: Upload to mirror
+        if: env.DEPLOY_HOST != ''
+        shell: pwsh
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          $key = Join-Path $env:RUNNER_TEMP "deploy_key"
+          [IO.File]::WriteAllText($key, $env:DEPLOY_SSH_KEY)
+          $target = "$($env:DEPLOY_USER)@$($env:DEPLOY_HOST):$($env:DEPLOY_PATH)"
+          $files = Get-ChildItem dist |
+            Where-Object { $_.Name -ne "latest.json" } |
+            Sort-Object Name |
+            ForEach-Object { $_.FullName }
+          scp -i $key -o StrictHostKeyChecking=accept-new @files $target
+          $latest = Join-Path "dist" "latest.json"
+          if (Test-Path $latest) {
+            scp -i $key -o StrictHostKeyChecking=accept-new $latest $target
+          }
