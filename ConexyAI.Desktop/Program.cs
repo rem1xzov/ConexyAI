@@ -588,7 +588,16 @@ static async Task<int> ChatAsync(string[] args)
     await using var local = new LocalTools(approver);
     foreach (var line in await local.StartAsync(CancellationToken.None))
         Ui.Info("  " + line);
-    var chatId = store.ChatFor(root, ChatIdFor(root));
+    // NEW_CHAT_ON_START: каждый запуск клиента — свежий чат. Раньше подхватывался последний чат этой
+    // папки, и «Подключаюсь к …» продолжало вчерашнюю переписку вместо новой задачи. Прошлый чат никуда
+    // не девается: он открывается через /chats (общие с сайтом).
+    var previousChat = store.ChatFor(root, ChatIdFor(root));
+    var chatId = Guid.NewGuid();
+    // Режим агента и оркестр — это настройки работы, а не история чата: переносим их в новый чат,
+    // чтобы не включать заново при каждом запуске.
+    if (store.Team.Contains(previousChat)) store.SetTeam(chatId, true);
+    if (store.ModeOf(previousChat) is var previousMode && previousMode != "coder")
+        store.SetMode(chatId, previousMode);
     var firstBanner = true;
     while (true)
     {
