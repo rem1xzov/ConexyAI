@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -1587,7 +1587,7 @@ async Task TestCoworkToolsAndNoCodeAuditAsync()
             FirstTurnCalls = new()
             {
                 // Not offered to Cowork, but a model can still name it: it must be refused, not run.
-                new("call_bash", "function", new LlmFunctionCall("bash", "{\"command\":\"echo SHOULD_NOT_RUN\"}")),
+                new("call_bash", "function", new LlmFunctionCall("bash", "{\"description\":\"Run the command\",\"command\":\"echo SHOULD_NOT_RUN\"}")),
                 new("call_doc", "function", new LlmFunctionCall("str_replace_editor",
                     "{\"command\":\"create\",\"path\":\"svodka.md\",\"file_text\":\"# Сводка\\n- пункт\"}")),
             },

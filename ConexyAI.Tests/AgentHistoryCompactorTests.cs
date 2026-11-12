@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using ConexyAI.Contract;
 using ConexyAI.Service;
 
@@ -22,7 +22,7 @@ internal static class AgentHistoryCompactorTests
         {
             var id = "call_" + i;
             messages.Add(new ChatMessage("assistant", "шаг " + i,
-                [new LlmToolCall(id, "function", new LlmFunctionCall("bash", "{\"command\":\"build\"}"))]));
+                [new LlmToolCall(id, "function", new LlmFunctionCall("bash", "{\"description\":\"Run the command\",\"command\":\"build\"}"))]));
             messages.Add(new ChatMessage("tool", new string('x', outputChars), ToolCallId: id));
         }
         return messages;

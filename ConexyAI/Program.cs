@@ -433,6 +433,12 @@ builder.Services.AddHttpClient<IYooKassaClient, YooKassaClient>((sp, client) =>
 
 var app = builder.Build();
 
+// TOOL_CATALOG_CHECK: схема инструментов — контракт для модели. Если он разъехался (нет описания
+// параметра, лишний ключ разрешён, дубль имени), модель начнёт ошибаться в вызовах — говорим об этом
+// при старте, а не после живого прогона.
+foreach (var problem in ConexyAI.Service.AgentToolCatalog.Validate())
+    app.Logger.LogWarning("Tool catalog: {Problem}", problem);
+
 await using (var scope = app.Services.CreateAsyncScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<DbConexy>();

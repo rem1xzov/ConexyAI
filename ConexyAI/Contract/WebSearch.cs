@@ -40,7 +40,8 @@ public static class WebSearchTool
                 {
                     query = new { type = "string", description = "Search query, short and specific" }
                 },
-                required = new[] { "query" }
+                required = new[] { "query" },
+                additionalProperties = false
             }
         }
     };
@@ -76,7 +77,8 @@ public static class FetchWebPageTool
                     url = new { type = "string", description = "Absolute http(s) URL of the page, e.g. a URL from web_search results" },
                     max_chars = new { type = "integer", description = "Maximum characters of page text to return (default 12000, max 40000)" }
                 },
-                required = new[] { "url" }
+                required = new[] { "url" },
+                additionalProperties = false
             }
         }
     };

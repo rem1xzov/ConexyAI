@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -76,7 +76,7 @@ internal static class AgentCapabilityTests
                 TestRegistry.Add("agent mcp SEC_MCP_SSRF: internal user MCP URLs are refused, error bodies are not echoed", McpUserServerSsrfIsRejectedAsync);
         TestRegistry.Add("agent mcp: tool order is sorted so the prompt prefix stays cacheable", McpToolOrderIsStableAsync);
         TestRegistry.Add("agent prompts: charters carry deep research, fetch_web_page, the plan rule and artifacts", ChartersAsync);
-        TestRegistry.Add("agent tools: the coder set is narrowed to the task (no browser/github/docs for a file fix)", ToolRoutingNarrowsCoderAsync);
+        TestRegistry.Add("agent tools: the tool set follows capabilities, not prompt wording", ToolSetDoesNotDependOnPromptAsync);
         TestRegistry.Add("agent tools: a browser task keeps the browser tools, and Cowork is never narrowed", ToolRoutingKeepsRelevantAsync);
         TestRegistry.Add("agent limits: an exhausted token budget does not stop the run, it finishes and reports", SoftTokenLimitAsync);
     }
@@ -690,7 +690,7 @@ internal static class AgentCapabilityTests
                 Output = "  Determining projects to restore...\nProgram.cs(12,5): error CS1002: ; expected\n\nBuild FAILED.",
             });
             var llm = new ScriptLlm(
-                Turn(Call("call_b", "bash", "{\"command\":\"dotnet build\"}")),
+                Turn(Call("call_b", "bash", "{\"description\":\"Run the command\",\"command\":\"dotnet build\"}")),
                 Text("Готово, всё собрано."));
             var hub = new RecordingHubContext();
             var (runner, job, context) = CreateRunner(root, llm, hub, bash: bash, maxSelfCorrections: 2);
@@ -700,7 +700,7 @@ internal static class AgentCapabilityTests
             Assert(llm.Requests.Count == 5, $"one tool turn + two push-backs + the final turn, was {llm.Requests.Count}");
             var pushBack = llm.Requests[2].Last();
             Assert(pushBack.Role == "system" && (pushBack.Text ?? "").Contains("[Self-Correction 1/2]") && pushBack.Text!.Contains("error CS1002") &&
-                   pushBack.Text.Contains("dotnet build") && pushBack.Text.Contains("str_replace_editor"),
+                   pushBack.Text.Contains("dotnet build") && pushBack.Text.Contains("edit"),
                 $"the push-back quotes the failing command and its output, got '{pushBack.Text}'");
             Assert((llm.Requests[3].Last().Text ?? "").Contains("[Self-Correction 2/2]"), "the second push-back is numbered");
             Assert(result.Contains("Готово, всё собрано.") && result.Contains("Проверка не пройдена") && result.Contains("error CS1002"),
@@ -727,9 +727,9 @@ internal static class AgentCapabilityTests
                 ? new BashToolResult { Success = false, ExitCode = 1, Output = "src/App.tsx(3,7): error TS2322: Type 'string' is not assignable to type 'number'." }
                 : new BashToolResult { Success = true, ExitCode = 0, Output = "vite v6 building for production...\n✓ built in 1.2s" });
             var llm = new ScriptLlm(
-                Turn(Call("call_1", "bash", "{\"command\":\"cd frontend && npm run build\"}")),
+                Turn(Call("call_1", "bash", "{\"description\":\"Run the command\",\"command\":\"cd frontend && npm run build\"}")),
                 Text("Готово."),
-                Turn(Call("call_2", "bash", "{\"command\":\"cd frontend && npm run build\"}")),
+                Turn(Call("call_2", "bash", "{\"description\":\"Run the command\",\"command\":\"cd frontend && npm run build\"}")),
                 Text("Готово, сборка зелёная."));
             var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(), bash: bash);
 
@@ -744,7 +744,7 @@ internal static class AgentCapabilityTests
 
             // A command that never ran (sandbox down) says nothing about the code.
             var down = new ScriptedBashService(_ => new BashToolResult { Success = false, ExitCode = -1, Output = "Sandbox unavailable", ErrorType = "sandbox_unavailable" });
-            var downLlm = new ScriptLlm(Turn(Call("call_1", "bash", "{\"command\":\"dotnet test\"}")), Text("Не удалось запустить тесты: песочница недоступна."));
+            var downLlm = new ScriptLlm(Turn(Call("call_1", "bash", "{\"description\":\"Run the command\",\"command\":\"dotnet test\"}")), Text("Не удалось запустить тесты: песочница недоступна."));
             var (downRunner, downJob, downContext) = CreateRunner(root, downLlm, new RecordingHubContext(), bash: down);
             await downRunner.RunLoopAsync(downJob, downContext, Guard());
             Assert(downLlm.Requests.Count == 2, "an unavailable sandbox does not turn the build red");
@@ -1540,7 +1540,7 @@ internal static class AgentCapabilityTests
         {
             var bash = new ScriptedBashService(_ => new BashToolResult { Success = true, ExitCode = 0, Output = "ok" });
             var llm = new ScriptLlm(
-                Turn(Call("c1", "bash", "{\"command\":\"echo hi\"}")),
+                Turn(Call("c1", "bash", "{\"description\":\"Run the command\",\"command\":\"echo hi\"}")),
                 Text("Готово, задача выполнена."));
             var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(),
                 bash: bash, subscription: new TinyBudgetSubscriptionService());
@@ -1657,28 +1657,35 @@ internal static class AgentCapabilityTests
         }
     }
 
-    // TOOL_ROUTING: добавлено 2026-10-06
-    /// <summary>Задача про файл не должна получать браузер/документы/GitHub — их схемы стоят токенов.</summary>
-    private static async Task ToolRoutingNarrowsCoderAsync()
+    // TOOL_SET_STABLE: набор зависит от профиля и доступных возможностей (Chromium, сервис превью,
+    // устройство), но НЕ от слов промпта. Раньше браузер/документы/GitHub вырезались по ключевым
+    // словам задачи: короткий follow-up («просто сделай») терял признак, инструмент исчезал из
+    // набора, и модель честно писала «инструмент не выдан» вместо того, чтобы работать.
+    private static async Task ToolSetDoesNotDependOnPromptAsync()
     {
         var root = TempWorkspace();
         try
         {
-            // Прогон завершается текстом на первом же шаге — нам важны только предложенные схемы.
-            var llm = new ScriptLlm(Text("Готово."));
-            var (runner, job, context) = CreateRunner(root, llm, new RecordingHubContext(),
+            var fileLlm = new ScriptLlm(Text("Готово."));
+            var (fileRunner, fileJob, fileContext) = CreateRunner(root, fileLlm, new RecordingHubContext(),
                 ConexyModelType.ConexyCoder, prompt: "Поправь опечатку в README.md");
-            await runner.RunLoopAsync(job, context, Guard());
+            await fileRunner.RunLoopAsync(fileJob, fileContext, Guard());
 
-            Assert(llm.AdvertisedTools.Contains("str_replace_editor"), "a file task keeps the editor");
-            Assert(llm.AdvertisedTools.Contains("bash"), "a file task keeps bash");
-            Assert(!llm.AdvertisedTools.Any(t => t.StartsWith("browser_", StringComparison.Ordinal)),
-                "a non-browser task must not be offered browser_* tools");
-            Assert(!llm.AdvertisedTools.Contains("create_document") && !llm.AdvertisedTools.Contains("read_document_file"),
-                "a non-document task must not be offered document tools");
+            var webLlm = new ScriptLlm(Text("Готово."));
+            var (webRunner, webJob, webContext) = CreateRunner(root, webLlm, new RecordingHubContext(),
+                ConexyModelType.ConexyCoder, prompt: "Собери React-страницу и проверь её вид в браузере");
+            await webRunner.RunLoopAsync(webJob, webContext, Guard());
+
+            Assert(fileLlm.AdvertisedTools.SequenceEqual(webLlm.AdvertisedTools),
+                "the same capabilities must advertise the same tools regardless of the prompt wording: " +
+                $"[{string.Join(", ", fileLlm.AdvertisedTools)}] vs [{string.Join(", ", webLlm.AdvertisedTools)}]");
+            Assert(fileLlm.AdvertisedTools.Contains("edit") && fileLlm.AdvertisedTools.Contains("bash"),
+                "the core file and shell tools are offered to a file task");
+            Assert(fileLlm.AdvertisedTools.Contains("create_document") && fileLlm.AdvertisedTools.Contains("read_document_file"),
+                "document tools stay offered to every coder task");
             // TOOL_ROUTING_SAFE: github-инструменты у Coder не режутся — иначе короткий follow-up
             // («просто сделай») терял их и git-задача проваливалась.
-            Assert(llm.AdvertisedTools.Contains("github_action") && llm.AdvertisedTools.Contains("github_api"),
+            Assert(fileLlm.AdvertisedTools.Contains("github_action") && fileLlm.AdvertisedTools.Contains("github_api"),
                 "github tools stay available for every coder task");
         }
         finally
@@ -1699,7 +1706,7 @@ internal static class AgentCapabilityTests
             await webRunner.RunLoopAsync(webJob, webContext, Guard());
             // browser_* предлагаются только при доступном Chromium, а здесь его нет; но браузерный
             // признак не должен убирать обычные инструменты правки.
-            Assert(webLlm.AdvertisedTools.Contains("str_replace_editor"), "a web task still keeps the editor");
+            Assert(webLlm.AdvertisedTools.Contains("edit"), "a web task still keeps the editor");
 
             var coworkLlm = new ScriptLlm(Text("Готово."));
             var (coworkRunner, coworkJob, coworkContext) = CreateRunner(root, coworkLlm, new RecordingHubContext(),
