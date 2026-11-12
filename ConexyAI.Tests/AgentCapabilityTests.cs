@@ -1135,7 +1135,7 @@ internal static class AgentCapabilityTests
 
             await runner.RunLoopAsync(job, context, Guard());
 
-            Assert(llm.AdvertisedTools.Contains("view_image"), "the coder tool set advertises view_image");
+            Assert(llm.AdvertisedTools.Contains("read_image"), "the coder tool set advertises read_image");
             var second = llm.Requests[1];
             Assert(second.Any(m => m.Role == "user" && m.Content is not string),
                 "view_image brings the workspace image into the model context as a content block");

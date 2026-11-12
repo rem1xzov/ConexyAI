@@ -34,7 +34,7 @@ internal static class AgentToolCatalogTests
                  {
                      "read", "write", "edit", "apply_patch", "grep", "glob",
                      "bash", "run_tests", "get_diagnostics", "todo_write", "web_search", "fetch_web_page",
-                     "github_action", "github_api", "create_document", "read_document_file", "view_image",
+                     "github_action", "github_api", "create_document", "read_document_file", "read_image",
                  })
         {
             Assert(names.Contains(required), $"the catalog must offer {required}");

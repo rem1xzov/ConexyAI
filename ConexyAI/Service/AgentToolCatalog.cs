@@ -180,7 +180,7 @@ public static class AgentToolCatalog
             "paginated: at most 2000 lines per call — continue with `offset`/`limit` instead of " +
             "re-reading from the start. Read a file before editing it, unless you created or just " +
             "edited it in this session. Not for .docx/.xlsx/.pptx/.pdf (`read_document_file`), " +
-            "images (`view_image`) or office binaries.",
+            "images (`read_image`) or office binaries.",
             Object(new()
             {
                 ["file_path"] = Str("Relative path inside the workspace, e.g. 'src/App.tsx'."),
@@ -313,8 +313,10 @@ public static class AgentToolCatalog
             })),
 
         // ---------------------------------------------------------------- images
-        Tool("view_image",
-            "Look at an image: a design mock, a screenshot of a bug, a diagram. Pass `path` for an " +
+        // HARNESS_ALIASES: у harness картинку читает `read_image`; имя и параметр те же, чтобы модель не
+        // путалась между двумя наборами схем.
+        Tool("read_image",
+            "Look at an image: a design mock, a screenshot of a bug, a diagram. Pass `file_path` for an " +
             "image of the workspace or `name` for an image attached to the current message. " +
             "Supported: png, jpg, jpeg, webp, gif, bmp, up to 8 MB. Attachments are also saved into " +
             "the workspace root, so they can be reopened by path. Use it whenever the user says " +
@@ -322,7 +324,7 @@ public static class AgentToolCatalog
             "as binary.",
             Object(new()
             {
-                ["path"] = Str("Relative path to an image file in the workspace."),
+                ["file_path"] = Str("Relative path to an image file in the workspace."),
                 ["name"] = Str("File name of an image attached to the current message."),
             })),
 
@@ -490,6 +492,7 @@ public static class AgentToolCatalog
         ["write"] = "Use `write` only for new files or a deliberate full rewrite; for a change inside an existing file use `edit`.",
         ["edit"] = "Use `edit` for a targeted change: read the fragment first, then replace exactly what you saw. If it is not unique, widen it or use `apply_patch`.",
         ["apply_patch"] = "Use `apply_patch` when a change spans several hunks or files; a hunk that does not match changes nothing.",
+        ["read_image"] = "Use `read_image` to look at a mock, a screenshot or a diagram; text tools show images as binary.",
         ["grep"] = "Use `grep` to find code by content; do not escape to the shell for search.",
         ["glob"] = "Use `glob` to discover file paths before reading them.",
         ["bash"] = "Use `bash` for builds, package managers, git and tests; reading, searching and writing files goes through `read`, `grep`, `edit` and `apply_patch`.",
@@ -516,6 +519,7 @@ public static class AgentToolCatalog
         ["read"] = "file_read",
         ["write"] = "file_write",
         ["edit"] = "str_replace_editor",
+        ["read_image"] = "view_image",
         ["shell"] = "bash",
     };
 
@@ -556,6 +560,10 @@ public static class AgentToolCatalog
                     mapped["path"] = Take("file_path", "path");
                     mapped["old_str"] = Take("old_string", "old_str");
                     mapped["new_str"] = Take("new_string", "new_str");
+                    break;
+                case "read_image":
+                    mapped["path"] = Take("file_path", "path");
+                    mapped["name"] = Take("name", "name");
                     break;
                 default: // shell -> bash: аргументы совпадают
                     foreach (var property in source.EnumerateObject())
