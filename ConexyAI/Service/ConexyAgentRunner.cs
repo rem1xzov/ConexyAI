@@ -698,6 +698,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
         - Чтение файлов и диагностика — это не результат. Ход без единой успешной правки на просьбу изменить код система автоматически вернёт тебе.
         - Сказал «внёс правку» — значит инструмент правки реально вернул успех в этом ходе.
 
+        ## Вложения и файлы
+        - Файлы, которые пользователь прислал в этом сообщении, уже лежат в рабочей папке под исходными именами (они перечислены в системном сообщении). Читай их сразу по имени: `file_read`, `read_document_file` или `view`.
+        - НЕ ищи вложение по диску (`glob`/`workspace_list_files` по всему ПК, `Get-ChildItem -Recurse`, поиск по домашней папке) и не проси пользователя прислать файл повторно: он уже доступен.
+        - «Файл не найден» без попытки открыть его по данному имени — не результат, а брошенная работа: систему вернёт тебя на доработку.
+
         ## Цикл работы
         1. Разберись в задаче; факты не выдумывай (см. «Критерий готово»).
         2. Многошаговая работа (>1 файла или цикл «сборка → правка») начинается с `todo_write`: шаги `pending`, первый `in_progress`, после каждого этапа обнови статусы. Точечная правка одного файла — без плана.
@@ -1137,6 +1142,19 @@ public class ConexyAgentRunner : IConexyAgentRunner
     /// «ни один файл не изменён»: модель не врёт — она правда не сделала, и повторный запрос
     /// ничего не изменит, только сожжёт контекст.
     /// </summary>
+    // GIVE_UP_GATE: «файл не нашёл», «ничего не сделано» — это не внешняя причина, а брошенная работа.
+    // Раньше такие фразы попадали в DenialMarkers и гейт «нет правки» их пропускал: агент искал вложение
+    // по всему диску, не находил и закрывал ход отчётом. Теперь ход возвращается на доработку.
+    private static readonly string[] GiveUpMarkers =
+    {
+        "ничего не сделано", "ничего не делал", "ничего не изменено", "не смог найти файл",
+        "файл не найден", "не нашёл файл", "не нашел файл", "не удалось найти файл",
+        "не смог открыть файл", "файла нет по пути", "not found the file",
+    };
+
+    private static bool IsGiveUp(string? text) =>
+        !string.IsNullOrWhiteSpace(text) && GiveUpMarkers.Any(m => text.Contains(m, StringComparison.OrdinalIgnoreCase));
+
     private static bool HasHonestFailure(string? text) =>
         !string.IsNullOrWhiteSpace(text) &&
         DenialMarkers.Any(m => text.Contains(m, StringComparison.OrdinalIgnoreCase));
@@ -1381,6 +1399,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var insertAt = messages.Count > 0 && messages[0].Role == "system" ? 1 : 0;
             messages.Insert(insertAt, new ChatMessage("system", PromptFragments.UserLinks(userLinks)));
             await group.SendAsync("OnLog", $"[Links] {string.Join(", ", userLinks)}", ct);
+        }
+
+        // ATTACHMENTS_ON_DEVICE: точные имена вложений в рабочей папке — чтобы агент читал файл с первого
+        // шага, а не искал его по диску.
+        if (_job.AttachmentsNote is { Length: > 0 } attachmentsNote)
+        {
+            var insertAt = messages.Count > 0 && messages[0].Role == "system" ? 1 : 0;
+            messages.Insert(insertAt, new ChatMessage("system", attachmentsNote));
+            await group.SendAsync("OnLog", "[Attachments] " + attachmentsNote, ct);
         }
 
         // AGENT_HOOKS: добавлено 2026-10-04 — хуки проекта (.conexy/hooks.json). Только для режима с
@@ -1768,10 +1795,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
 
                 // NO_EDIT_GATE: ход закрывается без единой правки, хотя просили изменить код или ответ хвастается правками.
-                if (_profile.AuditsCode && changedFiles.Count == 0 && step < stepLimit && !finalAnswerForced
+                if ((_profile.AuditsCode || job.AttachmentsNote is not null) && changedFiles.Count == 0
+                    && step < stepLimit && !finalAnswerForced
                     && noEditNudges < MaxNoEditNudges
-                    && !HasHonestFailure(finalText)
-                    && (LooksLikeEditDemand(job.Prompt) || ClaimsEdits(finalText)))
+                    && (IsGiveUp(finalText) || !HasHonestFailure(finalText))
+                    && (LooksLikeEditDemand(job.Prompt) || ClaimsEdits(finalText) || job.AttachmentsNote is not null))
                 {
                     noEditNudges++;
                     _logger.LogWarning(

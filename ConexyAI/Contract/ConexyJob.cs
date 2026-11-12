@@ -2,6 +2,9 @@
 
 namespace ConexyAI.Contract;
 
+// ATTACHMENTS_ON_DEVICE: заметка о том, где уже лежат вложения пользователя (имена файлов в рабочей
+// папке текущего прогона). Без неё агент в десктоп-режиме искал файл по всему диску: на сервере он лежал
+// в одной папке, а инструменты чтения работали в другой.
 public record ConexyJob(
     Guid TaskId,
     Guid ChatId,
@@ -51,5 +54,7 @@ public record ConexyJob(
     string? DeviceProjectId = null,
     bool RemoteApprovals = false,
     // PHONE_AGENT: добавлено 2026-10-29 — агент работает с телефоном пользователя (инструменты phone_*).
-    bool UsePhone = false
+    bool UsePhone = false,
+    // ATTACHMENTS_ON_DEVICE: где уже лежат вложения этого хода (см. комментарий к записи).
+    string? AttachmentsNote = null
 );

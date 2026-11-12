@@ -295,6 +295,16 @@ public class ConexyBackgroundWorker : BackgroundService
             // десятки тысяч токенов.
             var smallTalk = job.Attachments is not { Count: > 0 } && PromptEconomy.IsSmallTalk(job.Prompt);
 
+            // ATTACHMENTS_ON_DEVICE: в десктоп-режиме файлы должны лежать на ПК в папке проекта, иначе
+            // инструменты чтения их не видят, и агент начинает искать файл по всему диску (на реальной
+            // задаче это заняло четверть часа и закончилось ничем).
+            if (isAgent)
+            {
+                var note = await PrepareAttachmentNoteAsync(scope.ServiceProvider, job, taskToken);
+                if (note is not null)
+                    job = job with { AttachmentsNote = note };
+            }
+
             // CONVERSATION_SERVICE: контекст строится ОДИН раз и используется и для запроса к
             // модели, и для записи хода — поэтому они не могут разойтись по chatId, userId или
             // режиму «продолжить».
@@ -669,6 +679,64 @@ public class ConexyBackgroundWorker : BackgroundService
     /// the agent runner instead. The durable-memory block is appended by
     /// <see cref="IConversationService.BuildRequestAsync"/>, so it is not added here.
     /// </summary>
+    /// <summary>
+    /// ATTACHMENTS_ON_DEVICE: куда положены вложения этого хода. Для десктоп-прогона файлы пишутся на
+    /// ПК через мост устройства (файловые инструменты работают там), для серверного — остаются в рабочей
+    /// папке чата (их сохраняет вызывающий код). Возвращает текст для модели с точными именами.
+    /// </summary>
+    private async Task<string?> PrepareAttachmentNoteAsync(IServiceProvider services, ConexyJob job, CancellationToken ct)
+    {
+        var files = job.Attachments?.Where(a =>
+            !string.IsNullOrWhiteSpace(a.FileName) &&
+            !(a.ContentType ?? string.Empty).StartsWith("image/", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (files is not { Count: > 0 }) return null;
+
+        var placed = new List<string>();
+        if (job.UseDevice)
+        {
+            var bridge = services.GetService<Device.IDeviceToolBridge>();
+            if (bridge?.IsOnline(job.UserId) != true)
+                return null; // устройство не подключено — серверный сценарий останется как есть
+
+            foreach (var file in files)
+            {
+                if (string.IsNullOrWhiteSpace(file.ContentBase64)) continue;
+                var name = System.IO.Path.GetFileName(file.FileName!);
+                try
+                {
+                    var args = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        path = name,
+                        content_base64 = file.ContentBase64,
+                        overwrite = true,
+                    });
+                    var saved = await bridge.ExecuteAsync(job.UserId, job.TaskId, "file_write_bytes", args, ct,
+                        job.DeviceProjectId, job.RemoteApprovals);
+                    if (saved.IsError)
+                    {
+                        _logger.LogWarning("Attachment {Name} was not written to the device: {Error}", name, saved.Output);
+                        continue;
+                    }
+                    placed.Add(name);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+                {
+                    _logger.LogWarning(ex, "Attachment {Name} was not written to the device.", name);
+                }
+            }
+        }
+        else
+        {
+            placed.AddRange(files.Select(f => System.IO.Path.GetFileName(f.FileName!)));
+        }
+
+        if (placed.Count == 0) return null;
+        return "Вложения пользователя уже лежат в рабочей папке под исходными именами: " +
+               string.Join(", ", placed.Select(n => "«" + n + "»")) +
+               ". Читай их сразу по этим именам (file_read, read_document_file или \"view\"). " +
+               "Не ищи файл по системе (glob/workspace_list_files по всему диску), не спрашивай путь и не проси прислать заново.";
+    }
+
     private static string BuildChatSystemPrompt(ConexyJob job)
     {
         var systemPrompt = job.StudentsMode
