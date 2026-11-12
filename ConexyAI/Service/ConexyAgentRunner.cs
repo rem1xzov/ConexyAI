@@ -441,6 +441,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private AgentIdentity _agent = AgentIdentity.Lead;
     // ORCHESTRA: собрал ли ведущий команду за этот прогон (см. OrchestraRequiredPrompt).
     private bool _teamSpawned;
+    // ORCHESTRA_WATCH: когда помощник последний раз отмечался — чтобы не дёргать словарь на каждый токен.
+    private DateTime _lastWorkerTouch = DateTime.MinValue;
+    // ORCHESTRA_WATCH: когда ведущий последний раз проверял команду через agents_status.
+    private DateTime? _lastAgentsStatusAt;
+    private int _teamStatusNudges;
 
     // ORCHESTRA: добавлено 2026-09-28, расширено 2026-10-12 — «Оркестр агентов» для режима Coder.
     //
@@ -600,6 +605,23 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "или честно напиши, что не смог и почему.";
     /// <summary>Верхняя граница числа помощников за один вызов (ведущий — отдельно, итого 5).</summary>
     private const int MaxOrchestraAgents = 4;
+
+    // ORCHESTRA_WATCH: помощник молчит дольше этого — значит завис: его отменяем, иначе ведущий ждёт
+    // его бесконечно и весь прогон превращается в многоминутное «собираю отчёты».
+    private const int WorkerSilenceSeconds = 300;
+    /// <summary>Весь прогон команды дольше этого обрывается принудительно.</summary>
+    private const int TeamHardLimitSeconds = 20 * 60;
+    /// <summary>Активность помощников: ключ — (taskId, agentId).</summary>
+    private static readonly ConcurrentDictionary<(Guid Task, string Agent), DateTime> WorkerActivity = new();
+    private static readonly ConcurrentDictionary<(Guid Task, string Agent), string> WorkerLabels = new();
+
+    /// <summary>Отмечает прогресс помощника (вызывается из его шага).</summary>
+    private static void TouchWorker(Guid taskId, string agentId, string? label = null)
+    {
+        WorkerActivity[(taskId, agentId)] = DateTime.UtcNow;
+        if (label is { Length: > 0 })
+            WorkerLabels[(taskId, agentId)] = label;
+    }
 
     /// <summary>Устав помощника: он полноправный исполнитель своей роли, а не только исследователь.</summary>
     private const string TeamWorkerCharter =
@@ -1562,6 +1584,22 @@ public class ConexyAgentRunner : IConexyAgentRunner
         {
             completedSteps = step;
             ct.ThrowIfCancellationRequested();
+
+            // ORCHESTRA_WATCH: помощник отмечает каждый шаг — по этой метке сторож видит зависание.
+            if (_profile.Mode == "worker")
+                TouchWorker(taskId, _agent.Id);
+
+            // ORCHESTRA_WATCH: ведущий обязан проверять команду не реже минуты, а не ждать молча.
+            if (_profile.Mode == "coder" && _teamSpawned && _teamStatusNudges < 3
+                && TeamRuns.TryGetValue(taskId, out var watching)
+                && watching.Workers.Any(w => w.Job is { IsCompleted: false })
+                && (_lastAgentsStatusAt is null || DateTime.UtcNow - _lastAgentsStatusAt > TimeSpan.FromSeconds(90)))
+            {
+                _teamStatusNudges++;
+                messages.Add(new ChatMessage("system",
+                    "[Orchestra] Прошло больше минуты без проверки субагентов. Вызови `agents_status` с wait_seconds=60, " +
+                    "посмотри, кто застрял, и либо продолжай свою часть, либо останови бесполезных."));
+            }
 
             // STEP_BUDGET: на границе лимита решаем, давать ли ещё шагов.
             if (step == stepLimit && stepExtensions < MaxStepExtensions && productiveSteps >= 12)
@@ -3207,21 +3245,34 @@ public class ConexyAgentRunner : IConexyAgentRunner
         for (var i = 0; i < specs.Count; i++)
         {
             var spec = specs[i];
-            var worker = new TeamWorker($"worker-{i + 1}", spec.Role);
+            var worker = new TeamWorker($"worker-{i + 1}", spec.Role)
+            {
+                Cts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token),
+            };
             run.Workers.Add(worker);
+            TouchWorker(taskId, worker.Id);
             worker.Job = RunOneAsync(worker, spec, i);
+        }
+
+        // ORCHESTRA_WATCH: сторож команды. Ведущий проверяет её сам, а это страховка от завтраки:
+        // молчащий помощник отменяется, слишком долгий прогон — тоже.
+        if (!run.WatchdogStarted)
+        {
+            run.WatchdogStarted = true;
+            _ = WatchTeamAsync(taskId, run, group);
         }
 
         return new ConexyToolResult(
             toolCallId,
             "Команда запущена в фоне: " + string.Join(", ", specs.Select(s => s.Role)) + ".\n" +
             "Не жди их и не простаивай: делай свою часть работы (файлы вне их scope — твои). " +
-            "Отчёты забирай инструментом agents_status (wait_seconds до 120) перед итоговым ответом.",
+            "Проверяй команду инструментом agents_status НЕ РЕЖЕ РАЗА В МИНУТУ (wait_seconds = 60): " +
+            "он показывает, кто сколько молчит; помощники без действий дольше 2,5 минут останавливаются автоматически.",
             false);
 
         async Task RunOneAsync(TeamWorker worker, WorkerSpec spec, int index)
         {
-            var token = cts.Token;
+            var token = worker.Cts?.Token ?? cts.Token;
             using var scope = _scopeFactory.CreateScope();
             var runner = scope.ServiceProvider.GetRequiredService<IConexyAgentRunner>();
             var identity = new AgentIdentity(worker.Id, spec.Role, spec.Scope);
@@ -3265,6 +3316,58 @@ public class ConexyAgentRunner : IConexyAgentRunner
         }
     }
 
+    /// <summary>
+    /// ORCHESTRA_WATCH: раз в 20 с смотрит на команду. Помощник без единого действия дольше
+    /// <see cref="WorkerSilenceSeconds"/> отменяется и попадает в отчёт как «застрял» — ведущий не ждёт
+    /// его вечно. Слишком долгий прогон команды обрывается целиком.
+    /// </summary>
+    private async Task WatchTeamAsync(Guid taskId, TeamRun run, IClientProxy group)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(20));
+                if (!TeamRuns.TryGetValue(taskId, out var current) || !ReferenceEquals(current, run))
+                    return;
+
+                var now = DateTime.UtcNow;
+                foreach (var worker in run.Workers.Where(w => w.Job is { IsCompleted: false }))
+                {
+                    var last = WorkerActivity.TryGetValue((taskId, worker.Id), out var seen) ? seen : worker.StartedAt;
+                    var idle = (int)(now - last).TotalSeconds;
+                    if (idle < WorkerSilenceSeconds) continue;
+
+                    worker.Failed = true;
+                    worker.Report = $"(застрял: {idle} с без единого действия — остановлен автоматически)";
+                    try { worker.Cts?.Cancel(); } catch (ObjectDisposedException) { }
+                    _logger.LogWarning(
+                        "Orchestra: agent {Role} stalled for {Idle}s and was cancelled. task={TaskId}",
+                        worker.Role, idle, taskId);
+                    await group.SendAsync("OnLog",
+                        $"[Orchestra] {worker.Role}: {idle} с без прогресса — остановил и передаю ведущему.", default);
+                }
+
+                var total = (int)(now - run.StartedAt).TotalSeconds;
+                if (total > TeamHardLimitSeconds)
+                {
+                    _logger.LogWarning("Orchestra: team exceeded {Limit}s and was cancelled. task={TaskId}", TeamHardLimitSeconds, taskId);
+                    await group.SendAsync("OnLog",
+                        $"[Orchestra] Команда работает дольше {TeamHardLimitSeconds / 60} мин — останавливаю остальных.", default);
+                    try { run.Cts.Cancel(); } catch (ObjectDisposedException) { }
+                    return;
+                }
+
+                if (run.Workers.All(w => w.Job is null || w.Job.IsCompleted))
+                    return;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Orchestra watchdog stopped. task={TaskId}", taskId);
+        }
+    }
+
     // BACKGROUND_AGENTS: состояние команды для agents_status. Живёт до конца прогона.
     private async Task<ConexyToolResult> AgentsStatusAsync(Guid taskId, JsonElement root, string toolCallId, CancellationToken ct)
     {
@@ -3276,30 +3379,40 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 true);
         }
 
-        var wait = Math.Clamp(GetInt(root, "wait_seconds", 0), 0, 120);
+        // ORCHESTRA_WATCH: по умолчанию ждём минуту — именно так ведущий проверяет команду раз в минуту.
+        var wait = Math.Clamp(GetInt(root, "wait_seconds", 60), 0, 120);
+        _lastAgentsStatusAt = DateTime.UtcNow;
         var all = Task.WhenAll(run.Workers.Select(w => w.Job ?? Task.CompletedTask));
         if (wait > 0 && !all.IsCompleted)
             await Task.WhenAny(all, Task.Delay(TimeSpan.FromSeconds(wait), ct));
 
         var sb = new StringBuilder();
         var running = 0;
+        var now = DateTime.UtcNow;
         foreach (var worker in run.Workers)
         {
             var finished = worker.Job is null || worker.Job.IsCompleted;
             if (!finished) running++;
+            var last = WorkerActivity.TryGetValue((taskId, worker.Id), out var seen) ? seen : worker.StartedAt;
+            var idle = (int)(now - last).TotalSeconds;
             var state = worker.Cancelled
                 ? "остановлен"
                 : worker.Failed
                     ? "ошибка"
-                    : finished ? "готово" : "работает";
+                    : finished ? "готово" : idle >= WorkerSilenceSeconds ? "завис" : "работает";
             sb.AppendLine($"## {worker.Role} ({worker.Id}): {state}");
+            if (!finished)
+                sb.AppendLine($"последнее действие: {idle} с назад" +
+                              (WorkerLabels.TryGetValue((taskId, worker.Id), out var label) ? $" · {label}" : string.Empty));
             if (worker.Report is { Length: > 0 } report)
                 sb.AppendLine(Truncate(report, 2_500));
             sb.AppendLine();
         }
 
         if (running > 0)
-            sb.Append($"Ещё работают: {running}. Не стой без дела — вернись к agents_status позже.");
+            sb.Append("Ещё работают: " + running + ". Не стой без дела: делай свою часть и вернись к agents_status " +
+                      "в течение минуты. Помощник без действий дольше " + WorkerSilenceSeconds +
+                      " с остановится сам — тогда опирайся на его отчёт и доделай его часть.");
         return new ConexyToolResult(toolCallId, sb.ToString().TrimEnd(), false);
     }
 
@@ -3335,6 +3448,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     {
         public CancellationTokenSource Cts { get; } = cts;
         public List<TeamWorker> Workers { get; } = new();
+        public DateTime StartedAt { get; } = DateTime.UtcNow;
+        /// <summary>Сторож уже запущен — второй раз не поднимаем.</summary>
+        public bool WatchdogStarted { get; set; }
     }
 
     private sealed class TeamWorker(string id, string role)
@@ -3345,6 +3461,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
         public string? Report { get; set; }
         public bool Failed { get; set; }
         public bool Cancelled { get; set; }
+        /// <summary>ORCHESTRA_WATCH: последняя активность помощника — по ней видно зависание.</summary>
+        public DateTime LastActivityUtc { get; set; } = DateTime.UtcNow;
+        /// <summary>ORCHESTRA_WATCH: чем он занимался в последний раз — это видит ведущий.</summary>
+        public string? LastLabel { get; set; }
+        /// <summary>ORCHESTRA_WATCH: отдельная отмена, чтобы убить только застрявшего.</summary>
+        public CancellationTokenSource? Cts { get; set; }
+        /// <summary>Начало работы — чтобы в отчёте была длительность, а не только «работает».</summary>
+        public DateTime StartedAt { get; set; } = DateTime.UtcNow;
     }
 
     private sealed record TeamMessage(string From, string To, string Text);
@@ -3460,7 +3584,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 await group.SendAsync("OnLog", $"[Orchestra] [{identity.Role}] минуту без прогресса — поправляю.", ct);
             }
 
+            TouchWorker(taskId, identity.Id, "думает…");
             var turn = await StreamAgentTurnAsync(taskId, messages, ct, streamToClient: false);
+            TouchWorker(taskId, identity.Id, "обдумывает результат…");
             // TOKEN_BREAKER: расход помощников идёт в тот же агентский пул тарифа.
             await _subscriptionService.RecordAgentTokensAsync(job.UserId, job.ModelType, turn.Usage, ct);
             messages.Add(turn.Message);
@@ -3529,6 +3655,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     RecordToolEffect(call, workerFiles, workerCommands);
             }
             messages.AddRange(batchImages);
+            // ORCHESTRA_WATCH: даже долгая команда (установка зависимостей, тесты) — это работа, а не зависание.
+            TouchWorker(taskId, identity.Id, workerFiles.Count > filesBefore ? "правит файлы…" : "выполняет команду…");
             if (workerFiles.Count > filesBefore || workerCommands.Count > commandsBefore)
                 lastProgress.Restart();
         }
@@ -4834,6 +4962,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
 
                 yieldedAnyDelta = true;
+
+                // ORCHESTRA_WATCH: пока идут токены, помощник жив — иначе долгий ответ модели
+                // выглядел бы зависанием и его останавливал сторож. Отмечаем не чаще раза в 15 с.
+                if (_profile.Mode == "worker" && (DateTime.UtcNow - _lastWorkerTouch).TotalSeconds > 15)
+                {
+                    _lastWorkerTouch = DateTime.UtcNow;
+                    TouchWorker(_job.TaskId, _agent.Id, "пишет ответ…");
+                }
 
                 if (!string.IsNullOrEmpty(delta.Reasoning))
                 {
