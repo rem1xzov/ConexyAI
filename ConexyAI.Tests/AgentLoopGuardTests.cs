@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using ConexyAI.Desktop.Tools;
 using ConexyAI.Service;
 using ConexyAI.Service.Prompts;
 
@@ -18,12 +19,17 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("loop guard: web tools are capped per model turn, and the cap resets each turn", WebBudgetAsync);
         TestRegistry.Add("loop guard: the last step asks the model to wrap up instead of stopping silently", WrapUpFragmentAsync);
         TestRegistry.Add("loop guard: different arguments with the same output stop the run", NoProgressAsync);
-        TestRegistry.Add("loop guard: re-reading the same file with new ranges is refused until an edit", ReadTargetAsync);
+        TestRegistry.Add("loop guard: a new page is new information, the identical read is refused", ReadTargetAsync);
         TestRegistry.Add("loop guard: plan and question tools never count as a loop", BookkeepingAsync);
         TestRegistry.Add("loop guard: after a read loop only file edits are allowed", WriteOnlyAsync);
-        TestRegistry.Add("loop guard: reading the same file through bash with new offsets is a loop", ShellReadAsync);
+        TestRegistry.Add("loop guard: shell reads of new chunks are allowed, the same chunk is a loop", ShellReadAsync);
         TestRegistry.Add("verify gate: a success claim without any check is caught", UnverifiedClaimsAsync);
         TestRegistry.Add("route guard: the same failure with new arguments asks for a new route", SameFailureRouteAsync);
+        TestRegistry.Add("route guard: a failed edit keeps the edit route open", FailedEditKeepsRouteAsync);
+        TestRegistry.Add("route guard: reading is never taken off the route", ReadNeverBlockedAsync);
+        TestRegistry.Add("write-only: a drifted edit reopens reading", WriteOnlyRecoveryAsync);
+        TestRegistry.Add("repair: resetting the guard opens checks before the final answer", RepairResetAsync);
+        TestRegistry.Add("read guard: a client analysis run is not stopped by a read streak", ClientAnalysisAsync);
     }
 
     // ROUTE_GUARD: агент перебирал имена репозитория (rem1xzv/ConoxyAI, biocompass…) и получал один и тот же
@@ -135,16 +141,25 @@ internal static class AgentLoopGuardTests
             "a script that writes is an action");
 
         var guard = new AgentLoopGuard();
-        for (var i = 1; i <= AgentLoopGuard.ReadTargetThreshold; i++)
+        // Новый кусок файла — новый текст: это не петля, даже если читается через оболочку.
+        for (var i = 1; i <= 5; i++)
         {
             var args = $"{{\"command\":\"Get-Content MainForm.cs -Skip {i * 100} -TotalCount 100\"}}";
-            Assert(guard.Refuse("bash", args) is null, $"shell read #{i} must be allowed");
+            Assert(guard.Refuse("bash", args) is null, $"shell read #{i} of new content must be allowed");
             guard.Record("bash", args, $"chunk {i}");
         }
-        Assert(guard.Refuse("bash", """{"command":"Get-Content MainForm.cs -Skip 999"}""") == AgentLoopGuard.ReadTargetRefusal,
-            "the same file with another offset must be refused");
+        // А вот один и тот же кусок снова и снова — уже петля.
+        const string repeat = """{"command":"Get-Content MainForm.cs -Skip 100 -TotalCount 100"}""";
+        for (var i = 0; i < AgentLoopGuard.ReadTargetThreshold; i++)
+        {
+            Assert(guard.Refuse("bash", repeat) is null, $"identical shell read #{i + 1} is still allowed");
+            guard.Record("bash", repeat, "chunk 1");
+        }
+        Assert(guard.Refuse("bash", repeat) == AgentLoopGuard.ReadTargetRefusal,
+            "the same chunk over and over must be refused");
 
-        // Разная форма скрипта — тот же файл: ReadAllText/ReadAllLines/Select-String не должны обходить предел.
+        // Разная форма скрипта — тот же файл: ReadAllText/ReadAllLines/Select-String не должны обходить предел,
+        // когда вывод один и тот же.
         var mixed = new AgentLoopGuard();
         var scripts = new[]
         {
@@ -156,7 +171,7 @@ internal static class AgentLoopGuardTests
         {
             var args = JsonSerializer.Serialize(new { command = scripts[i] });
             Assert(mixed.Refuse("bash", args) is null, $"shape #{i + 1} must be allowed");
-            mixed.Record("bash", args, $"out {i}");
+            mixed.Record("bash", args, "одинаковый вывод");
         }
         Assert(mixed.Refuse("bash", JsonSerializer.Serialize(new { command = "$t=[IO.File]::ReadAllText('MainForm.cs'); $t" }))
                == AgentLoopGuard.ReadTargetRefusal,
@@ -360,6 +375,109 @@ internal static class AgentLoopGuardTests
         Assert(text.Contains("Не вызывай инструменты"), "the model must be told not to call tools on the last step");
         Assert(text.Contains("итог"), "the model must be told to sum up for the user");
 
+        return Task.CompletedTask;
+    }
+
+    // BLOCKED_CONTEXT: на реальном прогоне правка дважды не применилась («контекст не найден»), инструмент
+    // попал под route guard — и агент остался с некомпилируемым файлом без способа его починить.
+    private static Task FailedEditKeepsRouteAsync()
+    {
+        const string drifted =
+            "Hunk #1 не применился к 'ChatHub.cs': контекст не найден. Перечитай файл (file_read) и составь патч по актуальному содержимому.";
+        var guard = new AgentLoopGuard();
+        guard.Record("str_replace_editor",
+            """{"command":"str_replace","path":"ChatHub.cs","old_string":"a","new_string":"b"}""", drifted, isError: true);
+        guard.Record("str_replace_editor",
+            """{"command":"str_replace","path":"ChatHub.cs","old_string":"c","new_string":"d"}""", drifted, isError: true);
+
+        var refusal = guard.Refuse("str_replace_editor",
+            """{"command":"str_replace","path":"ChatHub.cs","old_string":"e","new_string":"f"}""");
+        Assert(refusal is null,
+            "a drifted context must not take the edit tool off the route, got " + (refusal ?? "null"));
+        Assert(!guard.BlockedTools.Contains("str_replace_editor"), "the edit tool stays available");
+        return Task.CompletedTask;
+    }
+
+    // ROUTE_GUARD: чтение — путь восстановления контекста. Блокировать его после серии отказов значит
+    // запереть модель без возможности перечитать файл и исправить правку.
+    private static Task ReadNeverBlockedAsync()
+    {
+        var guard = new AgentLoopGuard();
+        guard.Record("bash", """{"command":"git ls-remote https://github.com/a/b.git"}""",
+            "remote: Repository not found.", isError: true);
+        guard.Record("bash", """{"command":"git ls-remote https://github.com/a/c.git"}""",
+            "remote: Repository not found.", isError: true);
+        Assert(guard.Refuse("bash", """{"command":"git ls-remote https://github.com/a/d.git"}""") == AgentLoopGuard.RouteRefusal,
+            "the repeated failure class asks for a new route");
+        Assert(guard.BlockedTools.Contains("bash"), "the failing tool is blocked");
+        Assert(guard.Refuse("file_read", """{"path":"ChatHub.cs"}""") is null,
+            "reading is the recovery path and must never be blocked");
+        Assert(guard.Refuse("grep", """{"pattern":"IsCompatible"}""") is null, "searching stays available too");
+        return Task.CompletedTask;
+    }
+
+    private static Task WriteOnlyRecoveryAsync()
+    {
+        var guard = new AgentLoopGuard();
+        guard.EnterWriteOnly();
+        Assert(guard.Refuse("file_read", """{"path":"a.cs"}""") == AgentLoopGuard.WriteOnlyRefusal,
+            "write-only blocks reading by design");
+
+        guard.Record("str_replace_editor",
+            """{"command":"str_replace","path":"a.cs","old_string":"x","new_string":"y"}""",
+            "контекст не найден", isError: true);
+        Assert(!guard.WriteOnly, "a drifted edit must not leave the agent unable to re-read the file");
+        Assert(guard.Refuse("file_read", """{"path":"a.cs"}""") is null, "reading works again");
+        return Task.CompletedTask;
+    }
+
+    // DOF_REPAIR: правки есть, проверки не было — прогон заканчивался некомпилируемым файлом.
+    private static Task RepairResetAsync()
+    {
+        var guard = new AgentLoopGuard();
+        guard.Record("bash", """{"command":"git ls-remote https://github.com/a/b.git"}""",
+            "remote: Repository not found.", isError: true);
+        guard.Record("bash", """{"command":"git ls-remote https://github.com/a/c.git"}""",
+            "remote: Repository not found.", isError: true);
+        for (var i = 0; i < AgentLoopGuard.StopAfterRefusals; i++)
+            guard.Refuse("bash", $$"""{"command":"git ls-remote https://github.com/a/{{i}}.git"}""");
+
+        Assert(guard.ShouldStop, "three refusals stop the run");
+        Assert(guard.BlockedTools.Contains("bash"), "the failing route is blocked");
+
+        guard.ResetForRepair();
+        Assert(!guard.ShouldStop, "a repair turn starts without pending refusals");
+        Assert(guard.BlockedTools.Count == 0, "every tool is available again for the verification");
+        Assert(guard.Refuse("bash", """{"command":"dotnet build"}""") is null,
+            "the build must be allowed in the repair turn");
+
+        var text = AgentLoopGuard.RepairTurnPrompt(false, "a.cs");
+        Assert(text.Contains("Definition of Done") && text.Contains("a.cs"),
+            "the repair prompt must name the state and the edited files");
+        return Task.CompletedTask;
+    }
+
+    // REGRESSION: анализ проекта без правок упирался в StreakLimit клиента — «чтение заблокировано».
+    private static Task ClientAnalysisAsync()
+    {
+        var guard = new ReadLoopGuard();
+        for (var i = 0; i < 25; i++)
+        {
+            var args = ToolArgs.Parse($$"""{"path":"file{{i}}.cs"}""");
+            Assert(guard.Refuse("file_read", args) is null, $"distinct file #{i + 1} must be readable");
+            guard.Record("file_read", args, $"content of file {i}");
+        }
+
+        // Тот же файл с тем же текстом — вот это повтор.
+        var same = ToolArgs.Parse("""{"path":"file0.cs"}""");
+        Assert(guard.Refuse("file_read", same) is null, "one more identical read is still allowed");
+        guard.Record("file_read", same, "content of file 0");
+        Assert(guard.Refuse("file_read", same) is not null, "the identical read is refused");
+
+        // Другая страница того же файла — новый текст, чтение снова разрешено.
+        var page = ToolArgs.Parse("""{"path":"file0.cs","offset":120,"limit":80}""");
+        Assert(guard.Refuse("file_read", page) is null, "a new page is new information");
+        guard.Record("file_read", page, "tail of file 0");
         return Task.CompletedTask;
     }
 }

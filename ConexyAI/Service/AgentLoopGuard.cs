@@ -85,10 +85,11 @@ public sealed partial class AgentLoopGuard
         "что сделано, что не получилось и что осталось. Не проси пользователя перезапускать программу или писать " +
         "«продолжай»: отказ инструментов — это конец этого хода, а не ваша задача для человека.";
 
-    /// <summary>Текст отказа, когда один и тот же объект читается снова и снова.</summary>
+    /// <summary>Текст отказа, когда один и тот же результат чтения получается снова и снова.</summary>
     public const string ReadTargetRefusal =
-        "Ты уже читал этот файл/объект несколько раз, и данные у тебя есть. Хватит читать — примени то, что уже " +
-        "прочитал: внеси правку, выполни команду или дай итог. Повторное чтение с другими параметрами нового не даст.";
+        "Ты уже получал ровно тот же результат чтения несколько раз — новых данных в этом объекте нет. " +
+        "Дальше: если задача требует правки — примени прочитанное и измени файл; если это анализ — дай итог. " +
+        "Другой файл, другая страница (offset) или другой шаблон не блокируются: новый результат — не петля.";
 
     /// <summary>
     /// WRITE_ONLY: после петли чтения инструменты не отключаются полностью — правка остаётся доступной.
@@ -102,6 +103,22 @@ public sealed partial class AgentLoopGuard
     /// <summary>Текст отказа, когда исчерпан бюджет чтения за прогон.</summary>
     public const string ReadBudgetRefusal =
         "Бюджет чтения на этот запуск исчерпан. Больше не читай — действуй: правка файла или команда, затем проверка.";
+
+    /// <summary>
+    /// DOF_REPAIR: сообщение модели перед восстановительным ходом. Требование универсальное — не зависит ни
+    /// от языка, ни от сборщика: правки должны дойти до проверенного состояния, прежде чем прогон закончится.
+    /// </summary>
+    public static string RepairTurnPrompt(bool verificationRan, string? files = null)
+    {
+        var state = verificationRan
+            ? "Проверка уже запускалась и сейчас красная."
+            : "Проверка ещё не запускалась.";
+        var where = string.IsNullOrWhiteSpace(files) ? string.Empty : $" Изменённые файлы: {files}.";
+        return "[Definition of Done] " + state + where +
+               " Пока сборка/тесты не проходят, задача не выполнена: запусти проверку, исправь ошибки в " +
+               "изменённых файлах, и только потом дай итог. Ошибку, вызванную твоей правкой, исправляй, " +
+               "а не откатывай всё задание целиком.";
+    }
 
     /// <summary>Текст отказа, когда интернет-бюджет этого хода исчерпан.</summary>
     public const string WebBudgetRefusal =
@@ -205,6 +222,9 @@ public sealed partial class AgentLoopGuard
     private readonly int _windowSize;
     private readonly List<Call> _recent = new();
     private readonly Dictionary<string, int> _targets = new(StringComparer.Ordinal);
+    // NEW_CONTENT: хэш последнего результата чтения по объекту. Повтор засчитывается только при том же
+    // содержимом: чтение другой страницы большого файла — это новый контекст, а не топтание на месте.
+    private readonly Dictionary<string, string> _targetHashes = new(StringComparer.Ordinal);
     // READ_INSIST: объекты, по которым отказ уже выдан — повтор по тому же объекту и есть петля.
     private readonly HashSet<string> _refusedReadTargets = new(StringComparer.Ordinal);
     // ROUTE_GUARD: инструменты, временно снятые с маршрута после повторяющегося отказа.
@@ -249,6 +269,7 @@ public sealed partial class AgentLoopGuard
         _writeOnly = true;
         Refusals = 0;
         _targets.Clear();
+        _targetHashes.Clear();
         _refusedReadTargets.Clear();
         _recent.Clear();
     }
@@ -292,6 +313,8 @@ public sealed partial class AgentLoopGuard
             return WriteOnlyRefusal;
         }
 
+        // ROUTE_GUARD: чтение и поиск — путь к восстановлению контекста. Блокировать их после серии отказов
+        // значит запереть модель без возможности перечитать файл и исправить правку.
         if (IsRead(tool, arguments) && _targets.GetValueOrDefault(Target(tool, arguments)) >= ReadTargetThreshold)
         {
             // READ_INSIST: первый отказ по этому объекту — просто подсказка, а не повод отключать
@@ -308,7 +331,7 @@ public sealed partial class AgentLoopGuard
         }
 
         // ROUTE_GUARD: тот же класс ошибки при других аргументах — менять надо маршрут, а не написание.
-        if (RefusesRoute(tool))
+        if (!IsRead(tool, arguments) && RefusesRoute(tool))
         {
             // ROUTE_GUARD: инструмент блокируется до первого успешного вызова — иначе модель вернётся к нему
             // через ход и снова будет перебирать аргументы.
@@ -348,6 +371,34 @@ public sealed partial class AgentLoopGuard
         return ReadBudgetRefusal;
     }
 
+    /// <summary>
+    /// DOF_REPAIR: снять все ограничения перед одним завершающим ходом проверки. Нужен, когда правки уже
+    /// сделаны, но сборка/тесты ещё не проходили: запереть модель отказами значит закончить прогон
+    /// некомпилируемым кодом.
+    /// </summary>
+    public void ResetForRepair()
+    {
+        _writeOnly = false;
+        Refusals = 0;
+        _targets.Clear();
+        _targetHashes.Clear();
+        _refusedReadTargets.Clear();
+        _recent.Clear();
+        _blockedTools.Clear();
+        _routeSignature.Clear();
+        _routeFailures.Clear();
+    }
+
+    /// <summary>Выход из режима «только правка»: чтение и команды снова разрешены.</summary>
+    private void ExitWriteOnly()
+    {
+        _writeOnly = false;
+        Refusals = 0;
+        _targets.Clear();
+        _targetHashes.Clear();
+        _refusedReadTargets.Clear();
+    }
+
     /// <param name="isError">Инструмент вернул ошибку. Только ошибки формируют сигнатуру отказа: обычный
     /// вывод может повторяться («ok»), и это не повод менять маршрут.</param>
     public void Record(string tool, string arguments, string output, bool isError = false)
@@ -359,11 +410,16 @@ public sealed partial class AgentLoopGuard
         // WRITE_ONLY: успешная правка — прогресс, режим снимается и счётчики обнуляются.
         if (_writeOnly && IsWriteTool(tool, arguments))
         {
-            _writeOnly = false;
-            Refusals = 0;
-            _targets.Clear();
-            _recent.Clear();
-            return;
+            if (!isError)
+            {
+                ExitWriteOnly();
+                _recent.Clear();
+                return;
+            }
+            // BLOCKED_CONTEXT: «контекст не найден» — не отсутствие прогресса, а устаревший фрагмент.
+            // В режиме «только правка» модель не может даже перечитать файл, поэтому выходим из него.
+            if (IsFixableEditError(tool, output))
+                ExitWriteOnly();
         }
         // ROUTE_GUARD: успешный вызов инструмента — это прогресс: снимаем блокировку и обнуляем серию отказов.
         if (!isError)
@@ -374,8 +430,16 @@ public sealed partial class AgentLoopGuard
         }
         else if (ErrorSignature(output) is { } signature)
         {
+            // FIXABLE_EDIT: «контекст не найден» / «хунк не применился» лечится перечитыванием файла.
+            // Если считать это повторяющимся отказом класса, инструмент правки блокируется — и агент
+            // остаётся с некомпилируемым файлом без единого способа его починить.
+            if (IsFixableEditError(tool, output))
+            {
+                _routeSignature.Remove(tool);
+                _routeFailures.Remove(tool);
+            }
             // Считаем подряд идущие отказы ОДНОГО класса: если класс сменился, это новая попытка, а не петля.
-            if (_routeSignature.GetValueOrDefault(tool) == signature)
+            else if (_routeSignature.GetValueOrDefault(tool) == signature)
                 _routeFailures[tool] = _routeFailures.GetValueOrDefault(tool) + 1;
             else
             {
@@ -386,11 +450,20 @@ public sealed partial class AgentLoopGuard
         _recent.Add(new Call(tool, arguments, Hash(output), isError ? ErrorSignature(output) : null));
         // Любая правка/команда — прогресс: счётчики чтения обнуляются, перечитывать после правки нормально.
         if (IsProgressTool(tool, arguments))
+        {
             _targets.Clear();
+            _targetHashes.Clear();
+        }
         else if (IsRead(tool, arguments))
         {
             var key = Target(tool, arguments);
-            _targets[key] = _targets.GetValueOrDefault(key) + 1;
+            var hash = Hash(output);
+            // NEW_CONTENT: тот же объект с ДРУГИМ результатом (другая страница большого файла, файл изменился
+            // на диске) — это новый контекст. Повтор засчитывается только при том же выводе.
+            _targets[key] = _targetHashes.GetValueOrDefault(key) == hash
+                ? _targets.GetValueOrDefault(key) + 1
+                : 1;
+            _targetHashes[key] = hash;
         }
 
         if (_recent.Count > _windowSize)
@@ -463,6 +536,34 @@ public sealed partial class AgentLoopGuard
     /// <summary>Новый ли это объект чтения (ещё не читали в этом прогоне). Новый файл — прогресс, не петля.</summary>
     public bool IsNewReadTarget(string tool, string arguments) =>
         IsRead(tool, arguments) && !_targets.ContainsKey(Target(tool, arguments));
+
+    /// <summary>Инструменты, меняющие файл (внутренние имена).</summary>
+    public static bool IsEditTool(string tool) =>
+        tool is "str_replace_editor" or "apply_patch" or "file_patch" or "file_write";
+
+    /// <summary>
+    /// Ошибки правки, которые лечатся перечитыванием файла, а не сменой маршрута. Это ответ инструмента
+    /// модели («фрагмент не совпал»), а не отказ среды — блокировать за него инструмент нельзя.
+    /// </summary>
+    private static readonly string[] FixableEditMarkers =
+    {
+        "контекст не найден", "context not found", "not found in file", "old_string", "old_str",
+        "hunk", "не удалось применить", "failed to apply", "no match", "не совпадает", "ambiguous",
+    };
+
+    /// <summary>Ошибку правки можно исправить повторным чтением файла, инструмент за неё не блокируется.</summary>
+    public static bool IsFixableEditError(string tool, string output)
+    {
+        if (!IsEditTool(tool) || string.IsNullOrEmpty(output))
+            return false;
+        var lower = output.ToLowerInvariant();
+        foreach (var marker in FixableEditMarkers)
+        {
+            if (lower.Contains(marker, StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
 
     /// <summary>
     /// Чтение — либо инструмент чтения, либо читающая команда оболочки.

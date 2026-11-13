@@ -9,14 +9,13 @@ namespace ConexyAI.Desktop.Tools;
 /// <summary>Счётчик чтений без единой правки/команды. Живёт один сеанс ToolRunner.</summary>
 public sealed partial class ReadLoopGuard
 {
-    /// <summary>Сколько раз можно прочитать ОДИН И ТОТ ЖЕ объект, пока не внесена правка.</summary>
+    /// <summary>Сколько раз можно получить ОДИН И ТОТ ЖЕ результат чтения, пока не внесена правка.</summary>
     public const int TargetLimit = 2;
 
-    /// <summary>Сколько чтений подряд без действий допустимо за сеанс.</summary>
-    public const int StreakLimit = 10;
-
     private readonly Dictionary<string, int> _targets = new(StringComparer.Ordinal);
-    private int _streak;
+    // NEW_CONTENT: хэш последнего результата чтения по объекту. Повтор считается только при том же
+    // содержимом: другая страница большого файла — новый контекст, а не топтание на месте.
+    private readonly Dictionary<string, string> _targetHashes = new(StringComparer.Ordinal);
 
     // EDIT_AFTER_READ: файлы, прочитанные в этом сеансе. Правка файла без чтения запрещена —
     // ровно как в Claude Code: модель не может «переписать» код, который не видела, иначе
@@ -30,8 +29,8 @@ public sealed partial class ReadLoopGuard
     /// <summary>Новый ход: счётчики чтения начинаются заново.</summary>
     public void Reset()
     {
-        _streak = 0;
         _targets.Clear();
+        _targetHashes.Clear();
         _read.Clear();
         _bashWarned.Clear();
     }
@@ -73,35 +72,41 @@ public sealed partial class ReadLoopGuard
 
         var target = Target(tool, args);
         if (_targets.GetValueOrDefault(target) >= TargetLimit)
-            return "Этот файл/объект уже прочитан несколько раз — данные у тебя есть. Не читай снова: " +
-                   "внеси правку, выполни команду или дай итог. Повторное чтение с другими параметрами нового не даст.";
-        if (_streak >= StreakLimit)
-            return $"Уже {_streak} чтений подряд без единой правки. Хватит читать: примени прочитанное — " +
-                   "внеси правку файла или выполни команду, затем проверь результат.";
+            return "Этот объект уже давал ровно тот же результат несколько раз — новых данных там нет. " +
+                   "Не читай снова: внеси правку, выполни команду или дай итог. " +
+                   "Другой файл, другая страница (offset) или другой шаблон не блокируются.";
         return null;
     }
 
     /// <summary>Учитывает выполненный вызов: чтение — в счётчик и в список прочитанных, правка сбрасывает всё.</summary>
-    public void Record(string tool, ToolArgs args)
+    /// <param name="output">Фактический вывод: повтор засчитывается только при том же содержимом, поэтому
+    /// чтение другой страницы или изменившегося файла не блокируется.</param>
+    public void Record(string tool, ToolArgs args, string? output = null)
     {
         if (IsRead(tool, args))
         {
             RememberRead(tool, args);
             var target = Target(tool, args);
-            // Новый объект — прогресс: серия «читаю и не правлю» считается только по повторным чтениям.
-            if (!_targets.ContainsKey(target))
-                _streak = 0;
-            else
-                _streak++;
-            _targets[target] = _targets.GetValueOrDefault(target) + 1;
+            var hash = ShortHash(output);
+            _targets[target] = _targetHashes.GetValueOrDefault(target) == hash
+                ? _targets.GetValueOrDefault(target) + 1
+                : 1;
+            _targetHashes[target] = hash;
             return;
         }
 
         if (IsAction(tool, args))
         {
-            _streak = 0;
             _targets.Clear();
+            _targetHashes.Clear();
         }
+    }
+
+    private static string ShortHash(string? output)
+    {
+        if (string.IsNullOrEmpty(output))
+            return string.Empty;
+        return output.Length + ":" + output.GetHashCode().ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>

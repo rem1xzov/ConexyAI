@@ -150,7 +150,7 @@ public sealed class ToolRunner
             };
             // LOOP_GUARD: считаем только реально выполненные вызовы.
             if (!result.IsError)
-                _readGuard.Record(tool, args);
+                _readGuard.Record(tool, args, result.Output);
 
             // HOOKS: контекст PreToolUse — рядом с результатом, как в Claude Code.
             if (hookContext is { Length: > 0 })

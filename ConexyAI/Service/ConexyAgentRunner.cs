@@ -1244,7 +1244,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // LOOP_GUARD: чтение без правок. Агент один раз прочитал одни и те же файлы десятки раз и так и не
     // перешёл к изменениям. Мягкий порог — напоминание, жёсткий — отказ в чтении, потолок — на весь прогон.
     private const int ReadStreakNudge = 6;
-    private const int ReadStreakHardLimit = 10;
+    // READ_GUARD: жёсткого отказа по серии чтений нет — анализ проекта без правок это тоже работа.
+    // От перечитывания одного и того же защищает AgentLoopGuard (сравнивает результат чтения).
     // Изучение реального проекта — это десятки чтений разных файлов; потолок нужен только от бесконечного
     // перечитывания. Шаги и так ограничены STEP_BUDGET.
     private const int ReadTotalLimit = 80;
@@ -1520,6 +1521,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // LOOP_GUARD: после исчерпания отказов инструменты отключаются — модель обязана ответить текстом.
         // Это тот же приём, что у последнего шага цикла, но раньше и по факту петли.
         var finalAnswerForced = false;
+        // DOF_REPAIR: одна попытка довести правки до проверенного состояния перед принудительным итогом.
+        var repairTurnUsed = false;
 
         // Инструменты этого прогона: по профилю режима; take_screenshot убирается, если Chromium нет.
         // MCP: реестр на прогон — операторские серверы + личные серверы пользователя из запроса.
@@ -2070,7 +2073,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // этот вызов бессмысленно — данные у неё уже есть.
                 string? readRefusal = null;
                 var isReadCall = toolAllowed && AgentLoopGuard.IsRead(toolName, toolCall.Function.Arguments);
-                if (isReadCall && (readOnlyStreak >= ReadStreakHardLimit || readOnlyTotal >= ReadTotalLimit))
+                // READ_GUARD: серия чтений сама по себе — не петля: анализ проекта без правок тоже работа.
+                // От бесконечного перечитывания защищает бюджет и отказ по одинаковому результату в guard'е.
+                if (isReadCall && readOnlyTotal >= ReadTotalLimit)
                 {
                     readRefusal = loopGuard.RefuseRead();
                 }
@@ -2355,8 +2360,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     "OnLog",
                     $"[Reading] {readOnlyStreak} чтений без изменений — прошу перейти к правке.", ct);
                 messages.Add(new ChatMessage("system",
-                    "[Reading] Ты уже собрал нужный контекст. Следующий вызов обязан быть действием: правка файла, " +
-                    "редактор или команда. Не читай те же файлы снова — применяй прочитанное."));
+                    "[Reading] Ты уже собрал значительную часть контекста. Следующий шаг должен двигать задачу: " +
+                    "правка файла, команда или ответ пользователю. Если задача требует изменений — переходи к ним; " +
+                    "если это анализ — собери итог из того, что уже прочитано."));
             }
 
             // LOOP_GUARD: несколько отказов подряд — модель топчется на месте.
@@ -2379,6 +2385,25 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     messages.Add(new ChatMessage("system",
                         "[Loop Guard] " + AgentLoopGuard.WriteOnlyRefusal +
                         " Сначала правка, потом — короткий итог. Не заканчивай ход без правки, если задача её требует."));
+                }
+                // DOF_REPAIR: правки уже есть, но ни сборка, ни тесты не прошли — это не повод заканчивать прогон.
+                // Открываем один восстановительный ход: инструменты и проверка снова доступны.
+                else if (!repairTurnUsed && changedFiles.Count > 0 && !buildHealth.IsGreen)
+                {
+                    repairTurnUsed = true;
+                    loopGuard.ResetForRepair();
+                    _logger.LogWarning(
+                        "Agent loop guard: repair turn before final answer (edits={Edits}, verificationRan={Ran}, red={Red}). task={TaskId}",
+                        changedFiles.Count, buildHealth.AnyVerificationRan, buildHealth.IsRed, taskId);
+                    await group.SendAsync(
+                        "OnLog",
+                        "[Definition of Done] Правки не проверены — довожу до зелёной сборки.",
+                        ct);
+                    await SendAgentStatusAsync(taskId, "thinking", "Проверяю и довожу сборку…", ct: ct);
+                    messages.Add(new ChatMessage("system",
+                        AgentLoopGuard.RepairTurnPrompt(
+                            buildHealth.AnyVerificationRan,
+                            string.Join(", ", changedFiles.Take(10)))));
                 }
                 else
                 {
