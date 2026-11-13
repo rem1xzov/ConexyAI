@@ -2229,6 +2229,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // (a refused, unconfirmed or sandbox-less command says nothing about the code).
                 if (toolAllowed && result.CommandExecuted && toolName is "bash" or "terminal_exec")
                 {
+                    buildHealth.RecordToolVerification(toolName, !result.IsError, result.Output);
                     var change = buildHealth.Observe(ReadCommandArgument(toolCall), !result.IsError, result.Output);
                     if (change != BuildHealthChange.None)
                     {
@@ -6558,6 +6559,23 @@ public sealed class BuildHealth
 
     /// <summary>Failing checks, for logs (metadata only — no command text, no output).</summary>
     public string FailingChecks => string.Join(", ", _failing.Keys);
+
+    // VERIFY_TOOL_FIX: проверка через инструмент (`run_tests`, `get_diagnostics`) — тоже проверка. Раньше
+    // BuildHealth смотрел только на команды оболочки, и итоговая плашка говорила «изменения не проверены»
+    // сразу после зелёного прогона тестов: агент запускал их инструментом, а не `python -m unittest` в bash.
+    public void RecordToolVerification(string tool, bool succeeded, string? output)
+    {
+        if (tool is not ("run_tests" or "get_diagnostics")) return;
+        AnyVerificationRan = true;
+        if (tool == "run_tests")
+            NoTestsFound = VerificationCommands.OutputShowsNoTests(output);
+
+        var key = tool + ":tool";
+        if (succeeded)
+            _failing.Remove(key);
+        else
+            _failing[key] = new Failure([tool + ":tool"], tool, Tail(output));
+    }
 
     /// <summary>Records one executed shell command.</summary>
     /// <param name="succeeded">The command's exit status was 0.</param>
