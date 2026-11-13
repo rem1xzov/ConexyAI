@@ -720,6 +720,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         - Чтение файлов и диагностика — это не результат. Ход без единой успешной правки на просьбу изменить код система автоматически вернёт тебе.
         - Сказал «внёс правку» — значит инструмент правки реально вернул успех в этом ходе.
         - Одна и та же ошибка повторилась дважды (not found, 403, auth, timeout) — не перебирай аргументы и написания: проверь факт другим инструментом, исправь одну конкретную причину или спроси пользователя.
+        - Не ставь пакеты глобально и не меняй окружение вне рабочей папки: зависимости — в venv/node_modules проекта. Если для проверки нужен отсутствующий инструмент, поставь его локально или скажи об этом в итоге.
 
         ## Вложения и файлы
         - Файлы, которые пользователь прислал в этом сообщении, уже лежат в рабочей папке под исходными именами (они перечислены в системном сообщении). Читай их сразу по имени: `read` или `read_document_file`.
@@ -3989,20 +3990,41 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     if (string.IsNullOrWhiteSpace(pattern))
                         return new ConexyToolResult(toolCall.Id, "grep requires 'pattern'.", true);
 
+                    var ignoreCase = OptionalBool(root, "ignore_case") ?? false;
                     var res = await _workspaceService.GrepAsync(
                         chatId,
                         pattern,
                         Optional(root, "path"),
                         Optional(root, "glob"),
-                        OptionalBool(root, "ignore_case") ?? false,
+                        ignoreCase,
                         GetInt(root, "max_results", 0),
                         ct);
                     if (!res.Success)
                         return new ConexyToolResult(toolCall.Id, res.Error!, true);
+
+                    // GREP_SMART_CASE: человек говорит «найди Widget», а в коде оно `widget`.
+                    // Точный поиск дал мало — повторяем без учёта регистра и показываем оба результата,
+                    // иначе агент уверенно заявляет «больше совпадений нет» и бросает задачу.
+                    var smartRetry = false;
+                    if (!ignoreCase && res.Matches.Count <= 1 &&
+                        pattern.Any(char.IsLetter) && pattern.All(c => char.IsLetterOrDigit(c) || c is ' ' or '-' or '_'))
+                    {
+                        var loose = await _workspaceService.GrepAsync(
+                            chatId, pattern, Optional(root, "path"), Optional(root, "glob"), true,
+                            GetInt(root, "max_results", 0), ct);
+                        if (loose.Success && loose.Matches.Count > res.Matches.Count)
+                        {
+                            res = loose;
+                            smartRetry = true;
+                        }
+                    }
+
                     if (res.Matches.Count == 0)
                         return new ConexyToolResult(toolCall.Id, $"No matches found (searched {res.FilesSearched} files).", false);
 
                     var sb = new StringBuilder();
+                    if (smartRetry)
+                        sb.AppendLine("Точный поиск с учётом регистра дал меньше совпадений — ниже результаты без учёта регистра:");
                     foreach (var m in res.Matches)
                         sb.Append(m.Path).Append(':').Append(m.Line).Append(": ").AppendLine(m.Text);
                     if (res.Truncated)
