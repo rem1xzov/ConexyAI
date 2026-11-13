@@ -719,6 +719,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         - Просьба «сделай/исправь/доделай» = немедленный вызов `edit` или `apply_patch`. Не пиши «Понял», «Делаю», диагнозы, планы действий и извинения вместо правки.
         - Чтение файлов и диагностика — это не результат. Ход без единой успешной правки на просьбу изменить код система автоматически вернёт тебе.
         - Сказал «внёс правку» — значит инструмент правки реально вернул успех в этом ходе.
+        - Одна и та же ошибка повторилась дважды (not found, 403, auth, timeout) — не перебирай аргументы и написания: проверь факт другим инструментом, исправь одну конкретную причину или спроси пользователя.
 
         ## Вложения и файлы
         - Файлы, которые пользователь прислал в этом сообщении, уже лежат в рабочей папке под исходными именами (они перечислены в системном сообщении). Читай их сразу по имени: `read` или `read_document_file`.
@@ -2075,6 +2076,24 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 var refusal = planRefusal ?? teamRefusal ?? readRefusal
                     ?? (toolAllowed ? loopGuard.Refuse(toolName, toolCall.Function.Arguments) : null);
 
+                // ROUTE_GUARD: отказ универсальный, а альтернативы — из РЕАЛЬНО выданных этому агенту
+                // инструментов, без заблокированных. Никаких зашитых сценариев: что доступно, то и предлагаем.
+                if (refusal == AgentLoopGuard.RouteRefusal)
+                {
+                    var alternatives = AdvertisedToolNames(_tools)
+                        .Where(name => AgentToolCatalog.InternalNameFor(name) != toolName)
+                        .Where(name => !loopGuard.BlockedTools.Contains(AgentToolCatalog.InternalNameFor(name)))
+                        .Take(8)
+                        .Select(name => "`" + name + "`")
+                        .ToList();
+                    refusal = AgentLoopGuard.RouteRefusal
+                        .Replace("{tool}", "`" + toolName + "`")
+                        .Replace("{alternatives}", alternatives.Count > 0
+                            ? "возьми другой инструмент (например " + string.Join(", ", alternatives) + "), проверь факт отдельно"
+                            : "проверь факт другим способом или спроси пользователя");
+                    await group.SendAsync("OnLog", $"[Route] {toolName}: повторяющийся отказ — маршрут меняется.", ct);
+                }
+
                 // EDIT_AFTER_READ + BASH_FILE_OPS: последний гейт перед выполнением. Правка непрочитанного
                 // файла и файловые операции через оболочку отклоняются с указанием точного инструмента.
                 if (toolAllowed && refusal is null)
@@ -2158,7 +2177,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 {
                     // READ_PROGRESS: проверять надо ДО Record — он сам добавляет объект в _targets.
                     var newReadTarget = isReadCall && loopGuard.IsNewReadTarget(toolName, toolCall.Function.Arguments);
-                    loopGuard.Record(toolName, toolCall.Function.Arguments, result.Output);
+                    loopGuard.Record(toolName, toolCall.Function.Arguments, result.Output, result.IsError);
                     // EDIT_AFTER_READ: запоминаем именно успешное чтение — отказ в чтении не делает
                     // файл «прочитанным» (иначе гейт подтверждал бы сам себя).
                     if (!result.IsError)

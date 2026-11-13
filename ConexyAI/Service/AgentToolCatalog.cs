@@ -495,7 +495,7 @@ public static class AgentToolCatalog
         ["read_image"] = "Use `read_image` to look at a mock, a screenshot or a diagram; text tools show images as binary.",
         ["grep"] = "Use `grep` to find code by content; do not escape to the shell for search.",
         ["glob"] = "Use `glob` to discover file paths before reading them.",
-        ["bash"] = "Use `bash` for builds, package managers, git and tests; reading, searching and writing files goes through `read`, `grep`, `edit` and `apply_patch`.",
+        ["bash"] = "Use `bash` for builds, package managers, git and tests; reading, searching and writing files goes through `read`, `grep`, `edit` and `apply_patch`. If the same failure comes back twice with different arguments, the arguments are not the cause: verify the fact with another tool, or ask the user.",
         ["run_tests"] = "After changing code run `run_tests` instead of guessing that it works.",
         ["agents_status"] = "Check the team with `agents_status` at least once a minute while helpers run; do not poll it in a tight loop.",
     };

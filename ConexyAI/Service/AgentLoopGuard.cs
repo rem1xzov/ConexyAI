@@ -30,6 +30,12 @@ public sealed partial class AgentLoopGuard
     /// </summary>
     public const int NoProgressThreshold = 4;
 
+    /// <summary>
+    /// ROUTE_GUARD: сколько раз один и тот же КЛАСС ошибки (Repository not found, 403, auth failed…)
+    /// разрешено получить при разных аргументах, прежде чем это считается петлёй.
+    /// </summary>
+    public const int ErrorNoProgressThreshold = 2;
+
     /// <summary>После стольких отказов подряд инструменты отключаются и модель обязана дать текстовый итог.</summary>
     public const int StopAfterRefusals = 3;
 
@@ -55,6 +61,16 @@ public sealed partial class AgentLoopGuard
     public const string NoProgressRefusal =
         "Ты уже получал ровно этот же результат несколько раз подряд, меняя только аргументы. Новых данных это не даст: " +
         "остановись, проанализируй, что уже известно, и либо сделай следующий шаг другим способом, либо дай итог пользователю.";
+
+    /// <summary>
+    /// ROUTE_GUARD: универсальный отказ. Не про GitHub и не про конкретный текст ошибки: если инструмент дважды
+    /// вернул один и тот же класс отказа при РАЗНЫХ аргументах, причина не в аргументах. Раннер подставляет имя
+    /// инструмента и список выданных альтернатив.
+    /// </summary>
+    public const string RouteRefusal =
+        "[Route] Инструмент {tool} снова вернул тот же класс ошибки, хотя аргументы были другие. Причина не в " +
+        "аргументах — не перебирай варианты. Смени маршрут: {alternatives}. Если факт проверить нечем — " +
+        "спроси пользователя конкретно, что именно не так. {tool} заблокирован до успешного прогресса.";
 
     /// <summary>Текст отказа, когда модель проигнорировала несколько отказов подряд.</summary>
     /// <summary>Служебные инструменты: их повторы — не петля, а рабочка (план, вопрос, диагностика).</summary>
@@ -191,6 +207,14 @@ public sealed partial class AgentLoopGuard
     private readonly Dictionary<string, int> _targets = new(StringComparer.Ordinal);
     // READ_INSIST: объекты, по которым отказ уже выдан — повтор по тому же объекту и есть петля.
     private readonly HashSet<string> _refusedReadTargets = new(StringComparer.Ordinal);
+    // ROUTE_GUARD: инструменты, временно снятые с маршрута после повторяющегося отказа.
+    private readonly HashSet<string> _blockedTools = new(StringComparer.Ordinal);
+    // ROUTE_GUARD: класс последнего отказа и сколько раз он повторился ПОДРЯД. Успешный вызов обнуляет.
+    private readonly Dictionary<string, string> _routeSignature = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _routeFailures = new(StringComparer.Ordinal);
+
+    /// <summary>Инструменты, снятые с маршрута, — раннер не предлагает их как альтернативу.</summary>
+    public IReadOnlyCollection<string> BlockedTools => _blockedTools;
     private bool _writeOnly;
 
     public AgentLoopGuard(
@@ -283,6 +307,16 @@ public sealed partial class AgentLoopGuard
             return RepeatRefusal;
         }
 
+        // ROUTE_GUARD: тот же класс ошибки при других аргументах — менять надо маршрут, а не написание.
+        if (RefusesRoute(tool))
+        {
+            // ROUTE_GUARD: инструмент блокируется до первого успешного вызова — иначе модель вернётся к нему
+            // через ход и снова будет перебирать аргументы.
+            _blockedTools.Add(tool);
+            Refusals++;
+            return RouteRefusal;
+        }
+
         // Разные аргументы, но один и тот же результат: перебор имён файлов и вариантов команды.
         if (RefusesNoProgress(tool))
         {
@@ -314,7 +348,9 @@ public sealed partial class AgentLoopGuard
         return ReadBudgetRefusal;
     }
 
-    public void Record(string tool, string arguments, string output)
+    /// <param name="isError">Инструмент вернул ошибку. Только ошибки формируют сигнатуру отказа: обычный
+    /// вывод может повторяться («ok»), и это не повод менять маршрут.</param>
+    public void Record(string tool, string arguments, string output, bool isError = false)
     {
         // BOOKKEEPING: и в историю вызовов не пишем — иначе один и тот же текст отчёта плана ломал
         // сравнение «одинаковый результат» для следующих настоящих инструментов.
@@ -329,7 +365,25 @@ public sealed partial class AgentLoopGuard
             _recent.Clear();
             return;
         }
-        _recent.Add(new Call(tool, arguments, Hash(output)));
+        // ROUTE_GUARD: успешный вызов инструмента — это прогресс: снимаем блокировку и обнуляем серию отказов.
+        if (!isError)
+        {
+            _blockedTools.Remove(tool);
+            _routeSignature.Remove(tool);
+            _routeFailures.Remove(tool);
+        }
+        else if (ErrorSignature(output) is { } signature)
+        {
+            // Считаем подряд идущие отказы ОДНОГО класса: если класс сменился, это новая попытка, а не петля.
+            if (_routeSignature.GetValueOrDefault(tool) == signature)
+                _routeFailures[tool] = _routeFailures.GetValueOrDefault(tool) + 1;
+            else
+            {
+                _routeSignature[tool] = signature;
+                _routeFailures[tool] = 1;
+            }
+        }
+        _recent.Add(new Call(tool, arguments, Hash(output), isError ? ErrorSignature(output) : null));
         // Любая правка/команда — прогресс: счётчики чтения обнуляются, перечитывать после правки нормально.
         if (IsProgressTool(tool, arguments))
             _targets.Clear();
@@ -366,6 +420,13 @@ public sealed partial class AgentLoopGuard
         }
         return seen >= NoProgressThreshold;
     }
+
+    /// <summary>
+    /// ROUTE_GUARD: два одинаковых ПО СМЫСЛУ отказа (Repository not found, 403, auth failed…) при разных
+    /// аргументах — уже петля: третий заход с новым написанием адреса ничего не даст, пора менять маршрут.
+    /// </summary>
+    public bool RefusesRoute(string tool) =>
+        _blockedTools.Contains(tool) || _routeFailures.GetValueOrDefault(tool) >= ErrorNoProgressThreshold;
 
     /// <summary>
     /// Три (и больше) одинаковых вызова ПОДРЯД, и все они дали один и тот же вывод. Любой другой
@@ -501,5 +562,39 @@ public sealed partial class AgentLoopGuard
     private static string Hash(string text) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 
-    private readonly record struct Call(string Tool, string Arguments, string OutputHash);
+    // ROUTE_GUARD: одинаковый КЛАСС ошибки при разных аргументах — это не перебор вариантов, а топтание на
+    // месте: агент угадывал имя репозитория (`rem1xzv/ConoxyAI`, `biocompass`…), получал один и тот же
+    // «Repository not found» и продолжал. Хеш вывода не ловил это: текст ошибки PowerShell содержит URL с
+    // очередной догадкой. Сигнатура убирает изменчивое (адреса, числа, знаки) — остаётся смысл ошибки.
+    /// <summary>
+    /// ROUTE_GUARD: классы отказов, общие для любого инструмента. Сигнатура — НАБОР классов, а не текст:
+    /// имя репозитория, файла или адреса в тексте меняется, а причина остаётся той же.
+    /// </summary>
+    private static readonly (string Kind, string[] Markers)[] FailureClasses =
+    {
+        ("not_found", ["not found", "no such", "does not exist", "cannot find", "could not find", "unable to find", "не найден", "не существует", "нет такого"]),
+        ("denied", ["permission denied", "access denied", "access is denied", "forbidden", "403", "отказано в доступе", "запрещен"]),
+        ("auth", ["unauthorized", "authentication", "credential", "not logged in", "401", "authoriz", "авториз", "логин"]),
+        ("timeout", ["timed out", "timeout", "time out", "превышено время"]),
+        ("network", ["connection refused", "connection reset", "could not resolve", "name resolution", "unreachable", "network is unreachable", "econnrefused", "no internet", "сеть недоступна"]),
+        ("tls", ["ssl", "certificate", "tls handshake"]),
+        ("rate_limit", ["rate limit", "too many requests", "429", "quota"]),
+        ("conflict", ["merge conflict", "conflict", "конфликт"]),
+        ("exists", ["already exists", "already in use", "уже существует"]),
+        ("disk", ["no space left", "disk full", "read-only file system", "нет места"]),
+    };
+
+    private static string? ErrorSignature(string output)
+    {
+        if (string.IsNullOrWhiteSpace(output)) return null;
+        var lower = output.ToLowerInvariant();
+        var kinds = FailureClasses
+            .Where(cls => cls.Markers.Any(marker => lower.Contains(marker, StringComparison.Ordinal)))
+            .Select(cls => cls.Kind)
+            .OrderBy(kind => kind, StringComparer.Ordinal)
+            .ToList();
+        return kinds.Count == 0 ? null : string.Join("+", kinds);
+    }
+
+    private readonly record struct Call(string Tool, string Arguments, string OutputHash, string? ErrorSignature = null);
 }

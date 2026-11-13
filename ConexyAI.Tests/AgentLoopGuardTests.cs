@@ -23,6 +23,41 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("loop guard: after a read loop only file edits are allowed", WriteOnlyAsync);
         TestRegistry.Add("loop guard: reading the same file through bash with new offsets is a loop", ShellReadAsync);
         TestRegistry.Add("verify gate: a success claim without any check is caught", UnverifiedClaimsAsync);
+        TestRegistry.Add("route guard: the same failure with new arguments asks for a new route", SameFailureRouteAsync);
+    }
+
+    // ROUTE_GUARD: агент перебирал имена репозитория (rem1xzv/ConoxyAI, biocompass…) и получал один и тот же
+    // «Repository not found». Хеш вывода не срабатывал — в тексте ошибки был очередной адрес.
+    private static Task SameFailureRouteAsync()
+    {
+        var guard = new AgentLoopGuard();
+        var first = "remote: Repository not found.\nfatal: repository 'https://github.com/rem1xzv/biocompassa.git/' not found";
+        var second = "remote: Repository not found.\nfatal: repository 'https://github.com/rem1xzv/ConoxyAI.git/' not found";
+
+        guard.Record("bash", """{"command":"git ls-remote https://github.com/rem1xzv/biocompassa.git"}""", first, isError: true);
+        Assert(guard.Refuse("bash", """{"command":"git ls-remote https://github.com/rem1xzv/ConoxyAI.git"}""") is null,
+            "a single failure is not a loop yet");
+
+        guard.Record("bash", """{"command":"git ls-remote https://github.com/rem1xzv/ConoxyAI.git"}""", second, isError: true);
+        Assert(guard.Refuse("bash", """{"command":"git ls-remote https://github.com/rem1xzv/ConoxyAI2.git"}""") == AgentLoopGuard.RouteRefusal,
+            "the same failure twice with different arguments must ask for a different route");
+        Assert(guard.BlockedTools.Contains("bash"), "the failing tool is taken off the route");
+        Assert(guard.Refuse("bash", """{"command":"git ls-remote https://github.com/rem1xzv/blah.git"}""") == AgentLoopGuard.RouteRefusal,
+            "a blocked tool stays blocked until it makes progress");
+
+        // Успешный вызов возвращает инструмент в маршрут: блокировка — не навсегда.
+        guard.Record("bash", """{"command":"echo ok"}""", "ok", isError: false);
+        var afterSuccess = guard.Refuse("bash", """{"command":"echo ok"}""");
+        Assert(!guard.BlockedTools.Contains("bash") && afterSuccess is null,
+            "a successful call unblocks the tool; blocked=" + string.Join(",", guard.BlockedTools) +
+            " refusal=" + (afterSuccess ?? "null"));
+
+        // Разные ошибки подряд — это не повтор: маршрут менять не нужно.
+        var mixed = new AgentLoopGuard();
+        mixed.Record("bash", """{"command":"a"}""", "error: permission denied", isError: true);
+        mixed.Record("bash", """{"command":"b"}""", "fatal: unable to access: timeout", isError: true);
+        Assert(mixed.Refuse("bash", """{"command":"c"}""") is null, "different failures are not a loop");
+        return Task.CompletedTask;
     }
 
     // WRITE_ONLY: сообщение «инструменты отключены» заставляло агента сдаться, не попробовав правку.
