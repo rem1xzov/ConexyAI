@@ -75,6 +75,15 @@ public sealed class FileTools
             ?? throw new ToolException(
                 "file_write требует content. Если нужно изменить часть файла — используй edit или apply_patch.");
 
+        // CHUNKED_WRITE: большой файл пишется частями. Один вызов на 26 КБ не влезает в лимит вывода модели
+        // (MaxTokens), аргумент обрезается, и агент повторяет его по кругу. append — штатный способ.
+        if (args.Bool("append") == true)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.AppendAllText(path, content, Utf8NoBom);
+            return ToolResult.Ok($"Appended {content.Length} chars to '{args.Str("path")}'.");
+        }
+
         if (File.Exists(path))
         {
             // SHRINK_GUARD: полная замена непустого файла на заметно меньший текст (или на пустой) —

@@ -681,6 +681,8 @@ public sealed partial class AgentLoopGuard
     {
         "контекст не найден", "context not found", "not found in file", "old_string", "old_str",
         "hunk", "не удалось применить", "failed to apply", "no match", "не совпадает", "ambiguous",
+        // TRUNCATED_ARGS: аргумент обрезан лимитом вывода — лечится меньшим вызовом, а не сменой маршрута.
+        "обрезан лимитом", "reached end of data", "end of string",
     };
 
     /// <summary>Ошибку правки можно исправить повторным чтением файла, инструмент за неё не блокируется.</summary>

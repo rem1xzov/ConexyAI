@@ -25,7 +25,16 @@ public sealed class ToolArgs
         }
         catch (JsonException ex)
         {
-            throw new ToolException("Аргументы инструмента — невалидный JSON: " + ex.Message);
+            // TRUNCATED_ARGS: аргумент обрезан лимитом вывода модели (finish_reason=length). Повтор того же
+            // вызова даст то же самое: нужен меньший вызов. Говорим это прямо, а не «невалидный JSON».
+            var truncated = ex.Message.Contains("reached end of data", StringComparison.OrdinalIgnoreCase)
+                            || ex.Message.Contains("end of string", StringComparison.OrdinalIgnoreCase);
+            throw new ToolException(truncated
+                ? "Аргумент инструмента обрезан лимитом вывода модели — вызов НЕ выполнен. " +
+                  "Не повторяй его: разбей работу на части. Для нового файла: write(file_path, content) с первой " +
+                  "частью (до ~6 КБ), затем write(file_path, content, append=true) для остальных частей. " +
+                  "Для правки существующего файла — edit/apply_patch небольшими фрагментами."
+                : "Аргументы инструмента — невалидный JSON: " + ex.Message);
         }
     }
 

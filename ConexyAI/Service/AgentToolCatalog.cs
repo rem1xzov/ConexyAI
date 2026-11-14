@@ -202,6 +202,7 @@ public static class AgentToolCatalog
                 // OVERWRITE: явное подтверждение полной замены непустого файла. Без него клиент отказывает,
                 // если новый текст заметно короче старого — так оборванный или пустой ответ не стирает файл.
                 ["overwrite"] = Bool("Set true to replace a non-empty file with much less content on purpose."),
+                ["append"] = Bool("Append to the file instead of replacing it. Use it to build a large file in parts of a few KB each."),
             }, "file_path", "content")),
 
         Tool("edit",
@@ -560,6 +561,7 @@ public static class AgentToolCatalog
                     mapped["path"] = Take("file_path", "path");
                     mapped["content"] = Take("content", "content");
                     mapped["overwrite"] = Take("overwrite", "overwrite");
+                    mapped["append"] = Take("append", "append");
                     break;
                 case "edit":
                     mapped["command"] = "str_replace";

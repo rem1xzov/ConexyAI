@@ -34,6 +34,7 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("loop guard: changed timings and ids do not hide a loop", VolatileOutputAsync);
         TestRegistry.Add("write churn: rewriting one file over and over is refused", WriteChurnAsync);
         TestRegistry.Add("policy: waiting by sleeping is not work", SleepOnlyAsync);
+        TestRegistry.Add("write: a large file can be built in parts with append", AppendWriteAsync);
         TestRegistry.Add("policy: deleting or rolling back files is never silent", DestructiveClassAsync);
         TestRegistry.Add("write: empty or shrunken content never wipes an existing file", WriteGuardAsync);
         TestRegistry.Add("loop guard: one file is not re-read forever through new windows", ReReadSameFileAsync);
@@ -682,5 +683,36 @@ internal static class AgentLoopGuardTests
         Assert(CommandPolicy.SleepOnlyReason("sleep 5; dotnet build") is null, "a chained command is work");
         Assert(CommandPolicy.SleepOnlyReason("dotnet build") is null, "a build is not a sleep");
         return Task.CompletedTask;
+    }
+
+    // TRUNCATED_ARGS: один write на 26 КБ не влезает в лимит вывода модели. Штатный путь — части.
+    private static Task AppendWriteAsync()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "append-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(root);
+        try
+        {
+            var files = new FileTools(new PathGuard(root));
+            files.Write(ToolArgs.Parse("""{"path":"game.js","content":"part1;"}"""));
+            files.Write(ToolArgs.Parse("""{"path":"game.js","content":"part2;","append":true}"""));
+            files.Write(ToolArgs.Parse("""{"path":"game.js","content":"part3;","append":true}"""));
+            Assert(File.ReadAllText(Path.Combine(root, "game.js")) == "part1;part2;part3;",
+                "append must add to the end without wiping the file");
+            // Аргумент, обрезанный лимитом вывода, объясняется модели прямо.
+            try
+            {
+                ToolArgs.Parse("""{"path":"a.js","content":"unterminated""");
+                Assert(false, "truncated JSON must throw");
+            }
+            catch (ToolException ex)
+            {
+                Assert(ex.Message.Contains("обрезан"), "the message must say the call was truncated: " + ex.Message);
+            }
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
     }
 }
