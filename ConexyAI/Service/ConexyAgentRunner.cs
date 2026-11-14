@@ -589,7 +589,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
     }
 
     /// <summary>Сколько шагов даётся одному помощнику.</summary>
-    private const int WorkerMaxIterations = 20;
+    private const int WorkerMaxIterations = 40;
 
     // ORCHESTRA_WATCHDOG: помощники работают параллельно, и ведущий не может вмешаться, пока идёт
     // Task.WhenAll. Живые случаи: (1) агент зацикливался на одной команде, (2) в отчёте «готово»,
@@ -791,8 +791,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private const string OrchestraRequiredPrompt =
         "[Orchestra] Оркестр агентов включён: работай командой. Прежде чем править файлы, вызови " +
         "`spawn_agents` и собери 2–4 агентов с ролями (backend, frontend, design, qa, browser и т. п.), " +
-        "каждому — самодостаточное задание и непересекающуюся область scope. Сам ведущий правит только " +
-        "то, что не отдано помощникам. Это обязательно, пока оркестр включён.";
+        "каждому — самодостаточное задание и непересекающуюся область scope. Проверяющую роль (qa, review, " +
+        "test) ставь с `after: [роли, которые она проверяет]` — иначе она стартует на пустом дереве и " +
+        "«проходит» тест, которого нет. Сам ведущий правит только то, что не отдано помощникам. " +
+        "Это обязательно, пока оркестр включён.";
 
     // PLAN_REQUIRED: добавлено 2026-09-24 — одно напоминание, если многошаговая работа идёт без плана.
     private const string PlanRequiredPrompt =
@@ -1582,7 +1584,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var stepLimit = _maxIterations;
         var stepExtensions = 0;
         var productiveSteps = 0;
-        const int MaxStepExtensions = 2;
+        // STEP_BUDGET: бюджет шагов — страховка от бесконечного кручения, а не лимит на объём работы.
+        // Задачу из десятка файлов нельзя уложить в 100 шагов, и верный признак прогресса — правки и
+        // успешные команды — уже есть. Петли ловит AgentLoopGuard, поэтому продлений может быть больше.
+        const int MaxStepExtensions = 6;
 
         for (var step = 1; step <= stepLimit; step++)
         {
@@ -1606,7 +1611,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             }
 
             // STEP_BUDGET: на границе лимита решаем, давать ли ещё шагов.
-            if (step == stepLimit && stepExtensions < MaxStepExtensions && productiveSteps >= 12)
+            if (step == stepLimit && stepExtensions < MaxStepExtensions && productiveSteps >= 8)
             {
                 var bonus = Math.Max(25, _maxIterations / 2);
                 stepExtensions++;
@@ -3176,13 +3181,28 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var board = TeamBoards.GetOrAdd(taskId, _ => new ConcurrentQueue<TeamMessage>());
         while (board.TryDequeue(out _)) { } // свежая доска на каждую команду
 
+        var subJob = _job;
+        // BACKGROUND_AGENTS: ведущий НЕ ждёт команду. Раньше spawn_agents блокировал его на
+        // Task.WhenAll: пока четыре помощника читали проект, ведущий простаивал, а весь их текст
+        // всё равно попадал в его контекст одним куском. Теперь помощники работают в фоне, а отчёты
+        // забираются инструментом agents_status — по мере готовности.
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        // RE_SPAWN: повторный spawn_agents — это продолжение команды, а не новая сессия: отчёты уже
+        // закончивших помощников должны остаться доступными, иначе ведущий теряет результаты их работы.
+        var run = TeamRuns.TryGetValue(taskId, out var existing) && !existing.Cts.IsCancellationRequested
+            ? existing
+            : new TeamRun(cts);
+        TeamRuns[taskId] = run;
+        var offset = run.Workers.Count;
+        run.MarkSpawn();
+
         // ORCHESTRA: состав команды одним событием — UI рисует карточку на каждого агента.
         await group.SendAsync("AgentTeam", new
         {
             taskId,
             agents = specs.Select((s, i) => new
             {
-                id = $"worker-{i + 1}",
+                id = $"worker-{offset + i + 1}",
                 role = s.Role,
                 brief = s.Brief,
                 scope = s.Scope
@@ -3191,19 +3211,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
         await group.SendAsync("OnLog", $"[Orchestra] Команда в фоне: {string.Join(", ", specs.Select(s => s.Role))}", ct);
         await SendAgentStatusAsync(taskId, "thinking", "Запустил субагентов в фоне — продолжаю сам…", ct: ct);
 
-        var subJob = _job;
-        // BACKGROUND_AGENTS: ведущий НЕ ждёт команду. Раньше spawn_agents блокировал его на
-        // Task.WhenAll: пока четыре помощника читали проект, ведущий простаивал, а весь их текст
-        // всё равно попадал в его контекст одним куском. Теперь помощники работают в фоне, а отчёты
-        // забираются инструментом agents_status — по мере готовности.
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var run = new TeamRun(cts);
-        TeamRuns[taskId] = run;
+        // Если все старые помощники закончили (сторож вышел), новым снова нужен сторож.
+        if (run.Workers.All(w => w.Job is null || w.Job.IsCompleted))
+            run.WatchdogStarted = false;
 
+        var allSpawned = false;
         for (var i = 0; i < specs.Count; i++)
         {
             var spec = specs[i];
-            var worker = new TeamWorker($"worker-{i + 1}", spec.Role)
+            var worker = new TeamWorker($"worker-{offset + i + 1}", spec.Role)
             {
                 Cts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token),
             };
@@ -3211,6 +3227,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             TouchWorker(taskId, worker.Id);
             worker.Job = RunOneAsync(worker, spec, i);
         }
+        allSpawned = true;
 
         // ORCHESTRA_WATCH: сторож команды. Ведущий проверяет её сам, а это страховка от завтраки:
         // молчащий помощник отменяется, слишком долгий прогон — тоже.
@@ -3222,11 +3239,56 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         return new ConexyToolResult(
             toolCallId,
-            "Команда запущена в фоне: " + string.Join(", ", specs.Select(s => s.Role)) + ".\n" +
+            "Команда запущена в фоне: " +
+            string.Join(", ", specs.Select(s => s.Role + (s.After.Count > 0 ? " ← " + string.Join("+", s.After) : string.Empty))) + ".\n" +
             "Не жди их и не простаивай: делай свою часть работы (файлы вне их scope — твои). " +
-            "Проверяй команду инструментом agents_status НЕ РЕЖЕ РАЗА В МИНУТУ (wait_seconds = 60): " +
-            "он показывает, кто сколько молчит; помощники без действий дольше 2,5 минут останавливаются автоматически.",
+            "Проверяй команду инструментом agents_status НЕ РЕЖЕ РАЗА В МИНУТУ (wait_seconds = 60). " +
+            "Когда все отчёты собраны и ты их просмотрел — можно вызвать spawn_agents ещё раз: новые " +
+            "помощники добавляются к той же команде, старые отчёты остаются доступны.",
             false);
+
+        // AFTER: ждём помощников, от которых зависит эта роль. Пока ждём — отмечаемся живыми, иначе
+        // сторож посчитает ожидание зависанием и отменит агента.
+        async Task WaitForDependenciesAsync(TeamWorker worker, WorkerSpec spec, CancellationToken token)
+        {
+            if (spec.After.Count == 0)
+                return;
+            var wanted = new HashSet<string>(spec.After, StringComparer.OrdinalIgnoreCase);
+            var announced = false;
+            var ticks = 0;
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                var deps = run.Workers.ToArray()
+                    .Where(w => wanted.Contains(w.Role) && w.Job is not null && !ReferenceEquals(w, worker))
+                    .Select(w => w.Job!)
+                    .ToArray();
+                if (deps.Length > 0 && deps.All(j => j.IsCompleted))
+                    return;
+                // Роли нет и все уже добавлены — ждать нечего (опечатка в 'after'): не блокируем команду.
+                if (deps.Length == 0 && allSpawned)
+                    return;
+                if (!announced)
+                {
+                    announced = true;
+                    await group.SendAsync("OnLog",
+                        $"[Orchestra] [{spec.Role}] ждёт: {string.Join(", ", spec.After)}", token);
+                    await group.SendAsync("OnAgentStatus", new
+                    {
+                        stage = "thinking",
+                        label = "Ждёт: " + string.Join(", ", spec.After),
+                        file = (string?)null,
+                        agentId = worker.Id,
+                        agentRole = spec.Role
+                    }, token);
+                }
+                // 5 минут ожидания — предел: дальше ведущий лучше сделает сам, чем будет ждать молча.
+                if (++ticks > 600)
+                    return;
+                TouchWorker(taskId, worker.Id);
+                await Task.Delay(TimeSpan.FromMilliseconds(500), token);
+            }
+        }
 
         async Task RunOneAsync(TeamWorker worker, WorkerSpec spec, int index)
         {
@@ -3236,6 +3298,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var identity = new AgentIdentity(worker.Id, spec.Role, spec.Scope);
             try
             {
+                // AFTER: зависимость по роли. Проверяющий агент ждёт тех, кого проверяет, а не стартует
+                // на пустом дереве и не «проходит» тест, которого нет.
+                await WaitForDependenciesAsync(worker, spec, token);
                 await group.SendAsync("OnLog", $"[Orchestra] [{spec.Role}] {spec.Brief}", token);
                 // ORCHESTRA: сразу сообщаем статус помощника, чтобы его карточка не выглядела пустой,
                 // пока идёт первый (медленный) вызов модели.
@@ -3306,7 +3371,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         $"[Orchestra] {worker.Role}: {idle} с без прогресса — остановил и передаю ведущему.", default);
                 }
 
-                var total = (int)(now - run.StartedAt).TotalSeconds;
+                var total = (int)(now - run.LastSpawnAt).TotalSeconds;
                 if (total > TeamHardLimitSeconds)
                 {
                     _logger.LogWarning("Orchestra: team exceeded {Limit}s and was cancelled. task={TaskId}", TeamHardLimitSeconds, taskId);
@@ -3407,6 +3472,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         public CancellationTokenSource Cts { get; } = cts;
         public List<TeamWorker> Workers { get; } = new();
         public DateTime StartedAt { get; } = DateTime.UtcNow;
+        // RE_SPAWN: время последнего запуска новой партии. Предел считается от него, а не от первой
+        // команды: иначе повторный spawn сразу упирался бы в общий таймаут и его гасил бы сторож.
+        public DateTime LastSpawnAt { get; private set; } = DateTime.UtcNow;
+        public void MarkSpawn() => LastSpawnAt = DateTime.UtcNow;
         /// <summary>Сторож уже запущен — второй раз не поднимаем.</summary>
         public bool WatchdogStarted { get; set; }
     }
@@ -3431,7 +3500,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     private sealed record TeamMessage(string From, string To, string Text);
 
-    private sealed record WorkerSpec(string Role, string Brief, IReadOnlyList<string> Scope);
+    private sealed record WorkerSpec(string Role, string Brief, IReadOnlyList<string> Scope, IReadOnlyList<string> After);
 
     /// <summary>Разбирает состав команды: роль, задание и область работы каждого агента.</summary>
     private static List<WorkerSpec> ParseWorkerSpecs(JsonElement root)
@@ -3462,10 +3531,23 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
             }
 
+            // AFTER: роли, которые должны закончить раньше. Так проверяющий агент тестирует готовую работу,
+            // а не пустое дерево: раньше QA стартовал одновременно с frontend и «проходил» впустую.
+            var after = new List<string>();
+            if (item.TryGetProperty("after", out var afterEl) && afterEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var entry in afterEl.EnumerateArray())
+                {
+                    if (entry.ValueKind != JsonValueKind.String) continue;
+                    var value = entry.GetString()?.Trim() ?? string.Empty;
+                    if (value.Length > 0) after.Add(value);
+                }
+            }
+
             // Без задания или без области помощник бесполезен и опасен: пропускаем.
             if (brief.Length == 0 || scope.Count == 0) continue;
             if (role.Length == 0) role = $"agent{specs.Count + 1}";
-            specs.Add(new WorkerSpec(role, brief, scope));
+            specs.Add(new WorkerSpec(role, brief, scope, after));
         }
 
         return specs;

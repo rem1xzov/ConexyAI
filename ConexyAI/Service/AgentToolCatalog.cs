@@ -46,6 +46,8 @@ public static class AgentToolCatalog
                         ["role"] = Str("Short role name: backend, frontend, design, qa, browser, or your own."),
                         ["brief"] = Str("Self-contained task: what to do and what to return. The helper does not see this conversation."),
                         ["scope"] = Array("Path prefixes this helper may change. Non-empty and disjoint from every other helper.", Str("Path prefix, e.g. 'ConexyAI/Service' or 'frontend/src'."), minItems: 1),
+                        // AFTER: порядок важен, когда один агент проверяет работу других.
+                        ["after"] = Array("Roles that must finish first. Use it for a checker (qa, review) so it tests the finished work, not an empty tree.", Str("Role name of a helper in this same call.")),
                     }, "role", "brief", "scope"),
                     minItems: 2, maxItems: 4),
             }, "agents")),

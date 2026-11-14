@@ -16,6 +16,7 @@ internal static class HarnessConformanceTests
         TestRegistry.Add("harness: every advertised tool has a one-line guidance", GuidanceCoversCoreToolsAsync);
         TestRegistry.Add("harness: aliases map to real internal tools and are idempotent", AliasesAreConsistentAsync);
         TestRegistry.Add("harness: old long tool outputs are trimmed, recent ones are kept", ContextCompressionKeepsRecentAsync);
+        TestRegistry.Add("harness: a checker can declare which roles must finish first", SpawnAgentsOrderingAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -128,6 +129,21 @@ internal static class HarnessConformanceTests
         Assert(text.Contains("обрезан", StringComparison.Ordinal) || text.Contains("truncated", StringComparison.Ordinal) ||
                text.Length <= AgentContextCompressor.TrimHeadChars + 400,
             "a trimmed output must be recognisable as trimmed: " + text.Length);
+        return Task.CompletedTask;
+    }
+
+    // ORCHESTRA: проверяющая роль должна уметь стартовать после тех, кого она проверяет — иначе QA
+    // «проходит» на пустом дереве. Заодно проверяем, что повторный spawn_agents разрешён явно.
+    private static Task SpawnAgentsOrderingAsync()
+    {
+        var function = AgentToolCatalog.Build()
+            .Select(schema => JsonSerializer.SerializeToElement(schema).GetProperty("function"))
+            .First(f => f.GetProperty("name").GetString() == "spawn_agents");
+        var agent = function.GetProperty("parameters").GetProperty("properties")
+            .GetProperty("agents").GetProperty("items");
+        Assert(agent.GetProperty("properties").TryGetProperty("after", out var after),
+            "spawn_agents must offer 'after' so a checker waits for the work it checks");
+        Assert(after.GetProperty("type").GetString() == "array", "'after' is a list of roles");
         return Task.CompletedTask;
     }
 }
