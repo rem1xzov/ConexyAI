@@ -1526,6 +1526,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // DOF_REPAIR: одна попытка довести правки до проверенного состояния перед принудительным итогом.
         var repairTurnUsed = false;
         var textLoopStopped = false;
+        var teamFinishNudges = 0;
         // TEXT_GUARD: модель отвечает одним и тем же текстом шаг за шагом (в том числе вызовом инструмента,
         // выведенным в текст). Сравнение по нормализованному тексту, а не по вызовам.
         var lastTextSignature = string.Empty;
@@ -1745,6 +1746,27 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             if (responseMessage.ToolCalls == null || responseMessage.ToolCalls.Count == 0)
             {
+                // ORCHESTRA_FINISH_GATE: ведущий пытается закончить, пока его помощники ещё работают.
+                // Раньше ответ уходил пользователю, фоновые агенты отменялись через 20 с — и часть
+                // работы (обычно проверка) просто исчезала. Дожидаемся отчётов вместо обрыва.
+                if (_teamSpawned && teamFinishNudges < 3
+                    && TeamRuns.TryGetValue(taskId, out var liveTeam)
+                    && liveTeam.Workers.Any(w => w.Job is { IsCompleted: false }))
+                {
+                    teamFinishNudges++;
+                    var runningRoles = string.Join(", ",
+                        liveTeam.Workers.Where(w => w.Job is { IsCompleted: false }).Select(w => w.Role));
+                    _logger.LogInformation(
+                        "Agent orchestra finish gate: lead tried to finish while {Roles} still run ({Nudge}/3). task={TaskId}",
+                        runningRoles, teamFinishNudges, taskId);
+                    await group.SendAsync("OnLog",
+                        $"[Orchestra] Команда ещё работает ({runningRoles}) — дожидаюсь отчётов.", ct);
+                    messages.Add(new ChatMessage("system",
+                        "[Orchestra] Не заканчивай: ещё работают помощники: " + runningRoles + ". " +
+                        "Вызови `agents_status` с wait_seconds=60, дождись их отчётов, просмотри их — и только " +
+                        "потом либо давай итог, либо запусти новую партию помощников через spawn_agents."));
+                    continue;
+                }
                 // SELF_CORRECTION: the model tries to finish while a build/test/lint it ran is still
                 // red. It is sent back with the tail of the failing output — for a bounded number of
                 // rounds. After that its answer stands, with an explicit "still failing" note below:

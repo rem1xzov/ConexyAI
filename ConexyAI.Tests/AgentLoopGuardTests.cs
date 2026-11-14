@@ -33,6 +33,7 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("loop guard: the same call with the same result is a loop between other steps too", SameCallAcrossStepsAsync);
         TestRegistry.Add("loop guard: changed timings and ids do not hide a loop", VolatileOutputAsync);
         TestRegistry.Add("write churn: rewriting one file over and over is refused", WriteChurnAsync);
+        TestRegistry.Add("policy: waiting by sleeping is not work", SleepOnlyAsync);
         TestRegistry.Add("policy: deleting or rolling back files is never silent", DestructiveClassAsync);
         TestRegistry.Add("write: empty or shrunken content never wipes an existing file", WriteGuardAsync);
         TestRegistry.Add("loop guard: one file is not re-read forever through new windows", ReReadSameFileAsync);
@@ -667,6 +668,19 @@ internal static class AgentLoopGuardTests
         var blocked = guard.Refuse("file_read", ToolArgs.Parse("""{"path":"ui.js","offset":900,"limit":100}"""));
         Assert(blocked is not null, "the client must refuse the fourth window of one file");
         Assert(guard.Refuse("file_read", ToolArgs.Parse("""{"path":"game.js"}""")) is null, "other files stay readable");
+        return Task.CompletedTask;
+    }
+
+    // WAIT_IS_NOT_WORK: QA был отменён сторожем на `Start-Sleep -Seconds 150` — ожидание субагентов
+    // делается через agents_status, а не сном в оболочке.
+    private static Task SleepOnlyAsync()
+    {
+        Assert(CommandPolicy.SleepOnlyReason("Start-Sleep -Seconds 150") is not null, "PowerShell sleep is waiting");
+        Assert(CommandPolicy.SleepOnlyReason("sleep 90") is not null, "bash sleep is waiting");
+        Assert(CommandPolicy.SleepOnlyReason("timeout /t 60") is not null, "cmd timeout is waiting");
+        Assert(CommandPolicy.SleepOnlyReason("sleep 2") is null, "a short pause is fine");
+        Assert(CommandPolicy.SleepOnlyReason("sleep 5; dotnet build") is null, "a chained command is work");
+        Assert(CommandPolicy.SleepOnlyReason("dotnet build") is null, "a build is not a sleep");
         return Task.CompletedTask;
     }
 }

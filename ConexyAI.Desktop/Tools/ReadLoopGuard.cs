@@ -16,6 +16,12 @@ public sealed partial class ReadLoopGuard
     // NEW_CONTENT: хэш последнего результата чтения по объекту. Повтор считается только при том же
     // содержимом: другая страница большого файла — новый контекст, а не топтание на месте.
     private readonly Dictionary<string, string> _targetHashes = new(StringComparer.Ordinal);
+    // REREAD: сколько раз читался каждый файл (по любому окну). Перечитывание одного файла разными
+    // окнами без правок — трение, а не работа.
+    private readonly Dictionary<string, int> _fileReads = new(StringComparer.Ordinal);
+
+    /// <summary>Сколько раз можно прочитать один файл (любыми окнами), пока не внесена правка.</summary>
+    public const int RepeatedReadLimit = 3;
 
     // EDIT_AFTER_READ: файлы, прочитанные в этом сеансе. Правка файла без чтения запрещена —
     // ровно как в Claude Code: модель не может «переписать» код, который не видела, иначе
@@ -31,6 +37,7 @@ public sealed partial class ReadLoopGuard
     {
         _targets.Clear();
         _targetHashes.Clear();
+        _fileReads.Clear();
         _read.Clear();
         _bashWarned.Clear();
     }
@@ -71,6 +78,9 @@ public sealed partial class ReadLoopGuard
             return null;
 
         var target = Target(tool, args);
+        if (_fileReads.GetValueOrDefault(FileKey(tool, args)) >= RepeatedReadLimit)
+            return "Этот файл уже прочитан несколько раз (разными окнами) без единой правки — данные у тебя есть. " +
+                   "Переходи к делу: правка или ответ.";
         if (_targets.GetValueOrDefault(target) >= TargetLimit)
             return "Этот объект уже давал ровно тот же результат несколько раз — новых данных там нет. " +
                    "Не читай снова: внеси правку, выполни команду или дай итог. " +
@@ -86,6 +96,8 @@ public sealed partial class ReadLoopGuard
         if (IsRead(tool, args))
         {
             RememberRead(tool, args);
+            var fileKey = FileKey(tool, args);
+            _fileReads[fileKey] = _fileReads.GetValueOrDefault(fileKey) + 1;
             var target = Target(tool, args);
             var hash = ShortHash(output);
             _targets[target] = _targetHashes.GetValueOrDefault(target) == hash
@@ -99,6 +111,7 @@ public sealed partial class ReadLoopGuard
         {
             _targets.Clear();
             _targetHashes.Clear();
+            _fileReads.Clear();
         }
     }
 
@@ -294,6 +307,20 @@ public sealed partial class ReadLoopGuard
 
     [System.Text.RegularExpressions.GeneratedRegex(@"\bfind\b[^\n]*\s(-name|-iname|-type)\b")]
     private static partial System.Text.RegularExpressions.Regex iFindByName();
+
+    /// <summary>Ключ файла без пагинации: новый offset — тот же файл.</summary>
+    private static string FileKey(string tool, ToolArgs args)
+    {
+        if (tool is "bash" or "terminal_exec" or "cmd_exec")
+            return tool + "|" + ShellTarget(args.Str("command") ?? string.Empty);
+        var parts = new List<string> { tool };
+        foreach (var key in new[] { "path", "file_path", "pattern", "glob", "url" })
+        {
+            if (args.Str(key) is { } value)
+                parts.Add(key + "=" + value);
+        }
+        return string.Join('|', parts);
+    }
 
     /// <summary>Ключ объекта: файл/шаблон/папка. Для команд числа (номера строк) не важны.</summary>
     private static string Target(string tool, ToolArgs args)

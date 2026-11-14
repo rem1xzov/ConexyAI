@@ -33,7 +33,10 @@ public sealed partial class PatchApplier
     {
         var files = Parse(patch, fallbackPath);
         if (files.Count == 0)
-            throw new ToolException("В патче нет ни одного hunk'а (@@ ... @@). Нужен unified diff.");
+            throw new ToolException(
+                "В патче нет ни одного hunk'а. Нужен unified diff с заголовками: " +
+                "`--- a/path` / `+++ b/path` / `@@ -10,3 +10,4 @@`, ниже 3 строки контекста с пробелом и в“ " +
+                "строки с '-' и '+' для изменений. Для одной точечной замены проще и надёжнее `edit` (old_string/new_string).");
 
         var writes = new List<(string Path, string? Content)>(); // Content == null → удалить
         var summary = new StringBuilder();

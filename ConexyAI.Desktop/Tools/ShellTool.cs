@@ -116,13 +116,36 @@ public static partial class CommandPolicy
     };
 
     /// <summary>
-    /// Почему команда требует явного решения человека даже в авто-режиме (null — обычная команда).
+    /// <summary>Почему команда требует явного решения человека даже в авто-режиме (null — обычная команда).</summary>
     /// Универсальный признак: операция удаляет или откатывает файлы, а не создаёт их.
     /// </summary>
     public static string? DestructiveReason(string command) =>
         DestructiveCommands.Any(r => r.IsMatch(command))
             ? "операция удаляет или откатывает файлы проекта"
             : null;
+
+    // WAIT_IS_NOT_WORK: команда, которая только спит. Ожидание субагентов — это agents_status
+    // wait_seconds, ожидание фонового процесса — bg_logs; сон в оболочке только тратит ход
+    // и выглядит для сторожа как зависание.
+    private static readonly Regex SleepOnly =
+        new(@"^\s*(?:start-sleep|sleep|timeout)\b[^;|\n]*?\b(\d+)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>Почему команду-сон выполнять не надо (null — это не сон).</summary>
+    public static string? SleepOnlyReason(string command)
+    {
+        var trimmed = command.Trim();
+        if (trimmed.Length == 0)
+            return null;
+        // Только одиночные команды: `sleep 5; make` — уже не «просто ждём».
+        if (trimmed.Contains(';') || trimmed.Contains('|') || trimmed.Contains("&&"))
+            return null;
+        var match = SleepOnly.Match(trimmed);
+        if (!match.Success || !int.TryParse(match.Groups[1].Value, out var seconds) || seconds < 10)
+            return null;
+        return $"Команда только ждёт {seconds} с — это не работа и не прогресс. " +
+               "Если ждёшь субагентов — agents_status с wait_seconds; если фоновый процесс — bg_logs; " +
+               "если нужно просто продолжить работу — продолжай её сейчас.";
+    }
 
     /// <summary>
     /// Только чтение, без цепочек и перенаправлений — можно без вопроса. С <paramref name="root"/> дополнительно
@@ -292,6 +315,10 @@ public sealed partial class ShellTool
     public async Task<ToolResult> RunAsync(ToolArgs args, string tool, CancellationToken ct)
     {
         var command = args.Required("command", tool);
+        // WAIT_IS_NOT_WORK: `Start-Sleep 150` / `sleep 90` — не работа, а ожидание, которое тратит ход и
+        // попадает под сторож субагентов (в реальном прогоне QA был отменён именно на таком сне).
+        if (CommandPolicy.SleepOnlyReason(command) is { } sleepReason)
+            return ToolResult.Fail(sleepReason);
         // BASH_DESCRIPTION: модель обязана объяснить намерение; старые вызовы без описания не ломаем.
         var description = args.Str("description")?.Trim();
         var timeout = Math.Clamp(args.Int("timeout_seconds") ?? DefaultTimeoutSeconds, 1, MaxTimeoutSeconds);
