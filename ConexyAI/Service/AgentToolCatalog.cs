@@ -197,6 +197,9 @@ public static class AgentToolCatalog
             {
                 ["file_path"] = Str("Relative path inside the workspace, e.g. 'index.html'."),
                 ["content"] = Str("Complete new content of the file."),
+                // OVERWRITE: явное подтверждение полной замены непустого файла. Без него клиент отказывает,
+                // если новый текст заметно короче старого — так оборванный или пустой ответ не стирает файл.
+                ["overwrite"] = Bool("Set true to replace a non-empty file with much less content on purpose."),
             }, "file_path", "content")),
 
         Tool("edit",
@@ -554,6 +557,7 @@ public static class AgentToolCatalog
                 case "write":
                     mapped["path"] = Take("file_path", "path");
                     mapped["content"] = Take("content", "content");
+                    mapped["overwrite"] = Take("overwrite", "overwrite");
                     break;
                 case "edit":
                     mapped["command"] = "str_replace";

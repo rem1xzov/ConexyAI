@@ -96,6 +96,34 @@ public static partial class CommandPolicy
             ? "Команда запрещена политикой безопасности клиента (разрушительная операция, доступ к ключам или загрузка-и-запуск кода)."
             : null;
 
+    // DESTRUCTIVE_CLASS: операции, которые удаляют или откатывают уже сделанную работу. Они не запрещены —
+    // иногда это ровно то, что нужно, — но и не выполняются молча: ни авто-режимом, ни запомненным правилом.
+    // Класс определяется по СМЫСЛУ действия (удаление/откат), а не по конкретной команде из одного случая.
+    private static readonly Regex[] DestructiveCommands =
+    {
+        // рекурсивное удаление каталога (rm -rf, Remove-Item -Recurse, rd /s, del /s).
+        new(@"\brm\s+(-[a-z]+\s+)*-[a-z]*[rf][a-z]*", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"\bremove-item\b[^\n]*-recurse", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"\b(rd|rmdir|del|erase)\b[^\n]*\s/[sqr]\b", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        // массовое удаление по маске.
+        new(@"\b(rm|del|erase)\b[^\n]*\*", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        // откат репозитория: теряется незакоммиченная работа.
+        new(@"\bgit\s+clean\b[^\n]*-[a-z]*[fdx]", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"\bgit\s+reset\s+--hard\b", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"\bgit\s+checkout\s+(--\s+)?[.~]\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"\bgit\s+restore\s+[^\n]*\s\.\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"\bgit\s+stash\s+(clear|drop)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+    };
+
+    /// <summary>
+    /// Почему команда требует явного решения человека даже в авто-режиме (null — обычная команда).
+    /// Универсальный признак: операция удаляет или откатывает файлы, а не создаёт их.
+    /// </summary>
+    public static string? DestructiveReason(string command) =>
+        DestructiveCommands.Any(r => r.IsMatch(command))
+            ? "операция удаляет или откатывает файлы проекта"
+            : null;
+
     /// <summary>
     /// Только чтение, без цепочек и перенаправлений — можно без вопроса. С <paramref name="root"/> дополнительно
     /// требуется, чтобы каждый аргумент-путь (относительно <paramref name="cwd"/>) оставался внутри проекта.

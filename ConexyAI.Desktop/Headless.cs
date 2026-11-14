@@ -328,13 +328,13 @@ public static class Headless
 public sealed class HeadlessApprover(bool auto) : ICommandApprover
 {
     public Task<bool> ApproveAsync(string command, string workingDirectory, CancellationToken ct) =>
-        Task.FromResult(auto);
+        Task.FromResult(auto && CommandPolicy.DestructiveReason(command) is null);
 
     public Task<bool> ApproveAsync(string title, string details, string workingDirectory, CancellationToken ct) =>
         Task.FromResult(auto);
 
     public Task<bool> ApproveCommandAsync(string command, string? description, string workingDirectory, CancellationToken ct) =>
-        Task.FromResult(auto);
+        Task.FromResult(auto && CommandPolicy.DestructiveReason(command) is null);
 
     public Task<bool> ApproveSensitiveAsync(string title, string details, string where, CancellationToken ct) =>
         Task.FromResult(false);

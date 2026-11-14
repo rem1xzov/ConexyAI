@@ -69,10 +69,56 @@ public sealed class FileTools
     public ToolResult Write(ToolArgs args)
     {
         var path = _guard.ResolveForWrite(args.Required("path", "file_write"));
-        var content = args.Str("content") ?? string.Empty;
+        // WRITE_INTEGRITY: раньше отсутствующий content молча означал пустой файл — так и терялось
+        // содержимое, если tool-call пришёл обрезанным или с другим именем поля.
+        var content = args.Str("content")
+            ?? throw new ToolException(
+                "file_write требует content. Если нужно изменить часть файла — используй edit или apply_patch.");
+
+        if (File.Exists(path))
+        {
+            // SHRINK_GUARD: полная замена непустого файла на заметно меньший текст (или на пустой) —
+            // самая частая форма случайной потери работы. Это не запрет, а требование явного намерения:
+            // точечная правка сохраняет остальное файла, а намеренная замена передаёт overwrite=true.
+            var existing = File.ReadAllText(path);
+            if (args.Bool("overwrite") != true && existing.Length > 0)
+            {
+                if (content.Length == 0)
+                    throw new ToolException(
+                        $"'{args.Str("path")}' не пуст: пустой content стёр бы всё содержимое. " +
+                        "Для изменения части файла — edit/apply_patch; удаление — командой в терминале (она спросит подтверждение). " +
+                        "Если замена на пустой файл действительно нужна, передай overwrite=true.");
+
+                if (existing.Length > 2_000 && content.Length * 4 < existing.Length)
+                    throw new ToolException(
+                        $"Новый content для '{args.Str("path")}' — {content.Length} символов против {existing.Length}: " +
+                        "четверть файла или меньше. Похоже на обрезанный ответ или на намерение переписать файл почти целиком. " +
+                        "Исправь нужный фрагмент через edit/apply_patch; если полная замена — передай overwrite=true.");
+            }
+        }
+
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        WriteText(path, content);
+        // ATOMIC_WRITE: временный файл + замена. Оборванная запись не оставит половину файла на диске.
+        WriteAtomic(path, content);
         return ToolResult.Ok($"File '{args.Str("path")}' written.");
+    }
+
+    /// <summary>Пишет через временный файл рядом с целевым, затем заменяет его — запись либо есть целиком, либо нет.</summary>
+    private static void WriteAtomic(string path, string content)
+    {
+        var temp = path + ".conexy-" + Guid.NewGuid().ToString("N")[..8];
+        var bom = File.Exists(path) && HasUtf8Bom(path);
+        try
+        {
+            File.WriteAllText(temp, content, bom ? new UTF8Encoding(true) : Utf8NoBom);
+            File.Move(temp, path, overwrite: true);
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     public ToolResult Patch(ToolArgs args)

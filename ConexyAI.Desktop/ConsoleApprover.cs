@@ -37,11 +37,18 @@ public sealed class ConsoleApprover : ICommandApprover
     private async Task<bool> ApproveAsync(string title, string command, string workingDirectory, CancellationToken ct, string? description)
     {
         var note = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
-        if (_auto)
+        var isCommand = title is "Bash" or "cmd";
+        // DESTRUCTIVE: удаление или откат файлов проекта — единственный класс, который спрашивает и в авто-режиме,
+        // и не покрывается запомненными правилами. Здесь ошибка не исправляется повторным запуском: файлов
+        // уже нет. Всё остальное работает как раньше — авто-режим не трогаем.
+        var destructive = isCommand ? CommandPolicy.DestructiveReason(command) : null;
+        if (destructive is not null)
+            note = (note is null ? string.Empty : note + " · ") + "внимание: " + destructive;
+
+        if (_auto && destructive is null)
             return true;
 
-        var isCommand = title is "Bash" or "cmd";
-        if (isCommand && ProjectRoot is { } root && Permissions.Match(root, command) is { } rule)
+        if (isCommand && destructive is null && ProjectRoot is { } root && Permissions.Match(root, command) is { } rule)
         {
             Ui.Info("  " + Ui.Muted($"√ разрешено правилом «{rule}» (/permissions)"));
             return true;
@@ -50,18 +57,21 @@ public sealed class ConsoleApprover : ICommandApprover
         await _gate.WaitAsync(ct);
         try
         {
-            if (_auto)
+            if (_auto && destructive is null)
                 return true;
 
             // APPROVAL_BADGE: пока человек решает, на круге горит значок «нужно подтверждение».
             using var badge = ApprovalBadge.Enter();
 
             if (!Ui.Ansi)
-                return await AskPlainAsync(command, workingDirectory, ct, note);
+                return await AskPlainAsync(command, workingDirectory, ct, note, allowAuto: destructive is null);
 
-            var remember = isCommand && ProjectRoot is not null ? PermissionStore.SuggestRule(command) : null;
+            var remember = isCommand && destructive is null && ProjectRoot is not null
+                ? PermissionStore.SuggestRule(command)
+                : null;
             var choice = await Ui.ConfirmAsync(title, command, workingDirectory, ct, rememberRule: remember, description: note);
-            if (choice == 1)
+            // Авто-режим включается только обычной командой: разрушительная должна оставаться под вопросом.
+            if (choice == 1 && destructive is null)
                 _auto = true;
             if (choice == 3 && remember is not null)
             {

@@ -33,6 +33,8 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("loop guard: the same call with the same result is a loop between other steps too", SameCallAcrossStepsAsync);
         TestRegistry.Add("loop guard: changed timings and ids do not hide a loop", VolatileOutputAsync);
         TestRegistry.Add("write churn: rewriting one file over and over is refused", WriteChurnAsync);
+        TestRegistry.Add("policy: deleting or rolling back files is never silent", DestructiveClassAsync);
+        TestRegistry.Add("write: empty or shrunken content never wipes an existing file", WriteGuardAsync);
     }
 
     // ROUTE_GUARD: агент перебирал имена репозитория (rem1xzv/ConoxyAI, biocompass…) и получал один и тот же
@@ -558,5 +560,69 @@ internal static class AgentLoopGuardTests
         Assert(churn.Refuse("str_replace_editor", ToolArgs.Parse("""{"command":"str_replace","path":"game.js"}""")) is null,
             "a targeted edit is not a rewrite and stays allowed");
         return Task.CompletedTask;
+    }
+
+    // DESTRUCTIVE_CLASS: «снёс всё» — это удаление/откат, а не обычная команда. Класс универсален: проверяем
+    // смысл действия, а не один конкретный случай.
+    private static Task DestructiveClassAsync()
+    {
+        foreach (var command in new[]
+                 {
+                     "rm -rf swamp-attack",
+                     "Remove-Item -Recurse -Force .\\js",
+                     "rd /s /q js",
+                     "git clean -fdx",
+                     "git reset --hard",
+                     "git checkout -- .",
+                     "git stash clear",
+                 })
+        {
+            Assert(CommandPolicy.DestructiveReason(command) is not null, $"'{command}' must need an explicit decision");
+        }
+
+        foreach (var command in new[] { "dotnet build", "git status", "node tools/check.js", "npm test", "dir", "rm one.txt" })
+        {
+            Assert(CommandPolicy.DestructiveReason(command) is null, $"'{command}' is an ordinary command");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    // DATA_LOSS: обрезанный tool-call или пустой content не должны стирать уже написанный файл.
+    private static Task WriteGuardAsync()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "write-guard-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(root);
+        try
+        {
+            var files = new FileTools(new PathGuard(root));
+            var big = new string('x', 5_000);
+            files.Write(ToolArgs.Parse($$"""{"path":"game.js","content":"{{big}}"}"""));
+
+            // Пустой content в непустой файл — отказ, файл цел.
+            Assert(Throws(() => files.Write(ToolArgs.Parse("""{"path":"game.js","content":""}"""))),
+                "an empty content must not wipe a non-empty file");
+            Assert(File.ReadAllText(Path.Combine(root, "game.js")).Length == big.Length, "the file must stay intact");
+
+            // Обрезанный ответ (в разы короче) — тоже отказ.
+            Assert(Throws(() => files.Write(ToolArgs.Parse("""{"path":"game.js","content":"x"}"""))),
+                "a sudden shrink must be refused");
+
+            // Явное намерение — разрешено.
+            var explicitRewrite = files.Write(ToolArgs.Parse("""{"path":"game.js","content":"x","overwrite":true}"""));
+            Assert(!explicitRewrite.IsError, "overwrite=true must allow a deliberate replacement: " + explicitRewrite.Output);
+            Assert(File.ReadAllText(Path.Combine(root, "game.js")) == "x", "the deliberate rewrite is written");
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    private static bool Throws(Action action)
+    {
+        try { action(); return false; }
+        catch (ToolException) { return true; }
     }
 }
