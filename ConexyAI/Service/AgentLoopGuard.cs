@@ -71,6 +71,21 @@ public sealed partial class AgentLoopGuard
     /// </summary>
     public const int SameCallThreshold = 3;
 
+    /// <summary>
+    /// Сколько раз можно получить УЖЕ ВИДЕННЫЙ кусок одного файла, пока не внесена правка. Новые окна
+    /// (другая страница) не считаются — это новый контекст; повтор уже прочитанного — трение.
+    /// </summary>
+    public const int RepeatedReadLimit = 2;
+
+    /// <summary>Предел на число разных окон одного файла без единой правки.</summary>
+    public const int MaxWindowsPerFile = 7;
+
+    /// <summary>Отказ, когда файл перечитывается разными окнами без единой правки.</summary>
+    public const string ReReadRefusal =
+        "Этот файл ты уже прочитал несколько раз — разными окнами и командами, без единой правки. " +
+        "Новых данных в нём нет: собери из уже прочитанного и действуй — правка или ответ. " +
+        "Если задача требует правки, больше чтения не поможет; если не хватает конкретного факта — скажи какого.";
+
     /// <summary>Текст отказа, когда результат не меняется от попытки к попытке.</summary>
     public const string NoProgressRefusal =
         "Ты уже получал ровно этот же результат несколько раз подряд, меняя только аргументы. Новых данных это не даст: " +
@@ -239,6 +254,13 @@ public sealed partial class AgentLoopGuard
     // NEW_CONTENT: хэш последнего результата чтения по объекту. Повтор засчитывается только при том же
     // содержимом: чтение другой страницы большого файла — это новый контекст, а не топтание на месте.
     private readonly Dictionary<string, string> _targetHashes = new(StringComparer.Ordinal);
+    // REREAD: сколько раз читался КАЖДЫЙ файл (по любому окну). В реальном прогоне агент прочитал
+    // ui.js/data.js/style.css по 6–8 раз подряд, ничего не меняя, и сжёг миллионы токенов.
+    private readonly Dictionary<string, int> _fileReads = new(StringComparer.Ordinal);
+    // REREAD_DUP: хеши уже выданных кусков по файлу и число повторов. Повтор куска (в том числе с другим
+    // offset, захватившим тот же текст) видно только по содержимому.
+    private readonly Dictionary<string, HashSet<string>> _fileHashes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _dupReads = new(StringComparer.Ordinal);
     // READ_INSIST: объекты, по которым отказ уже выдан — повтор по тому же объекту и есть петля.
     private readonly HashSet<string> _refusedReadTargets = new(StringComparer.Ordinal);
     // ROUTE_GUARD: инструменты, временно снятые с маршрута после повторяющегося отказа.
@@ -284,6 +306,9 @@ public sealed partial class AgentLoopGuard
         Refusals = 0;
         _targets.Clear();
         _targetHashes.Clear();
+        _fileReads.Clear();
+        _fileHashes.Clear();
+        _dupReads.Clear();
         _refusedReadTargets.Clear();
         _recent.Clear();
     }
@@ -342,6 +367,13 @@ public sealed partial class AgentLoopGuard
         {
             Refusals++;
             return RepeatRefusal;
+        }
+
+        // REREAD: файл целиком перечитывается окнами — данные уже есть, это не новый контекст, а трение.
+        if (IsRead(tool, arguments) && RefusesReRead(tool, arguments))
+        {
+            Refusals++;
+            return ReReadRefusal;
         }
 
         // LOOP_THROUGH_STEPS: та же команда с тем же результатом, но между вызовами агент правил файл или
@@ -405,6 +437,9 @@ public sealed partial class AgentLoopGuard
         Refusals = 0;
         _targets.Clear();
         _targetHashes.Clear();
+        _fileReads.Clear();
+        _fileHashes.Clear();
+        _dupReads.Clear();
         _refusedReadTargets.Clear();
         _recent.Clear();
         _blockedTools.Clear();
@@ -419,6 +454,9 @@ public sealed partial class AgentLoopGuard
         Refusals = 0;
         _targets.Clear();
         _targetHashes.Clear();
+        _fileReads.Clear();
+        _fileHashes.Clear();
+        _dupReads.Clear();
         _refusedReadTargets.Clear();
     }
 
@@ -476,9 +514,15 @@ public sealed partial class AgentLoopGuard
         {
             _targets.Clear();
             _targetHashes.Clear();
+            // Правка/команда — прогресс: после неё файл можно перечитать заново.
+            _fileReads.Clear();
+            _fileHashes.Clear();
+            _dupReads.Clear();
         }
         else if (IsRead(tool, arguments))
         {
+            var fileKey = FileKey(tool, arguments);
+            _fileReads[fileKey] = _fileReads.GetValueOrDefault(fileKey) + 1;
             var key = Target(tool, arguments);
             var hash = Hash(output);
             // NEW_CONTENT: тот же объект с ДРУГИМ результатом (другая страница большого файла, файл изменился
@@ -487,6 +531,11 @@ public sealed partial class AgentLoopGuard
                 ? _targets.GetValueOrDefault(key) + 1
                 : 1;
             _targetHashes[key] = hash;
+            // Повтор уже выданного куска — трение; новый кусок файла — прогресс.
+            if (!_fileHashes.TryGetValue(fileKey, out var seen))
+                _fileHashes[fileKey] = seen = new HashSet<string>(StringComparer.Ordinal);
+            if (!seen.Add(hash))
+                _dupReads[fileKey] = _dupReads.GetValueOrDefault(fileKey) + 1;
         }
 
         if (_recent.Count > _windowSize)
@@ -580,6 +629,40 @@ public sealed partial class AgentLoopGuard
         }
 
         return matches >= SameCallThreshold;
+    }
+
+    /// <summary>Файл перечитывается: уже виденный кусок повторяется или окон стало слишком много.</summary>
+    private bool RefusesReRead(string tool, string arguments)
+    {
+        var fileKey = FileKey(tool, arguments);
+        return _dupReads.GetValueOrDefault(fileKey) >= RepeatedReadLimit
+               || _fileReads.GetValueOrDefault(fileKey) >= MaxWindowsPerFile;
+    }
+
+    /// <summary>
+    /// Ключ ФАЙЛА без пагинации: path/pattern/glob/url. Именно по нему видно, что новый offset — это тот же
+    /// файл, который уже прочитан.
+    /// </summary>
+    private static string FileKey(string tool, string arguments)
+    {
+        if (IsShellTool(tool))
+            return Target(tool, arguments);
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(arguments) ? "{}" : arguments);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return tool + "|" + arguments;
+            foreach (var name in new[] { "path", "file_path", "pattern", "glob", "url" })
+            {
+                if (doc.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+                    return tool + "|" + value.GetString();
+            }
+            return tool + "|" + arguments;
+        }
+        catch (JsonException)
+        {
+            return tool + "|" + arguments;
+        }
     }
 
     /// <summary>Новый ли это объект чтения (ещё не читали в этом прогоне). Новый файл — прогресс, не петля.</summary>

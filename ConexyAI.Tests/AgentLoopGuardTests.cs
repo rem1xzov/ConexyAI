@@ -35,6 +35,8 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("write churn: rewriting one file over and over is refused", WriteChurnAsync);
         TestRegistry.Add("policy: deleting or rolling back files is never silent", DestructiveClassAsync);
         TestRegistry.Add("write: empty or shrunken content never wipes an existing file", WriteGuardAsync);
+        TestRegistry.Add("loop guard: one file is not re-read forever through new windows", ReReadSameFileAsync);
+        TestRegistry.Add("read guard: the client also caps reads of one file", ClientReReadAsync);
     }
 
     // ROUTE_GUARD: агент перебирал имена репозитория (rem1xzv/ConoxyAI, biocompass…) и получал один и тот же
@@ -212,8 +214,7 @@ internal static class AgentLoopGuardTests
             Assert(guard.Refuse("file_read", first) is null, $"repeat #{i} is still allowed");
             guard.Record("file_read", first, "chunk 0");
         }
-        Assert(guard.Refuse("file_read", first) == AgentLoopGuard.ReadTargetRefusal,
-            "the third identical read is refused");
+        Assert(guard.Refuse("file_read", first) is not null, "the repeated read is refused");
 
         // Другой файл — другой объект.
         Assert(guard.Refuse("file_read", """{"path":"TrayIcon.cs"}""") is null, "a different file is allowed");
@@ -624,5 +625,48 @@ internal static class AgentLoopGuardTests
     {
         try { action(); return false; }
         catch (ToolException) { return true; }
+    }
+
+    // REPORTED: агент прочитал ui.js/data.js/style.css по 6-8 раз разными окнами и ничего не изменил.
+    // Счётчик окон это не ловил: каждое окно — «новый объект».
+    private static Task ReReadSameFileAsync()
+    {
+        var guard = new AgentLoopGuard();
+        const string text = "function ui() { /* same body */ }";
+        // Разные окна, но тот же выданный текст: новых данных нет.
+        for (var offset = 0; offset < 3; offset++)
+        {
+            var args = $$"""{"path":"ui.js","offset":{{offset * 100}},"limit":100}""";
+            var refusal = guard.Refuse("file_read", args);
+            Assert(refusal is null || refusal == AgentLoopGuard.ReReadRefusal,
+                $"unexpected refusal on window #{offset + 1}: {refusal}");
+            if (refusal is null)
+                guard.Record("file_read", args, text);
+        }
+
+        var blocked = guard.Refuse("file_read", """{"path":"ui.js","offset":700,"limit":100}""");
+        Assert(blocked == AgentLoopGuard.ReReadRefusal, "re-reading the same text must be refused");
+        Assert(guard.Refuse("file_read", """{"path":"audio.js"}""") is null, "another file is still readable");
+
+        // После правки файл можно перечитать: контекст изменился.
+        guard.Record("file_write", """{"path":"ui.js","content":"x","overwrite":true}""", "ok");
+        Assert(guard.Refuse("file_read", """{"path":"ui.js"}""") is null, "after an edit the file is readable again");
+        return Task.CompletedTask;
+    }
+
+    private static Task ClientReReadAsync()
+    {
+        var guard = new ReadLoopGuard();
+        for (var offset = 0; offset < ReadLoopGuard.RepeatedReadLimit; offset++)
+        {
+            var args = ToolArgs.Parse($$"""{"path":"ui.js","offset":{{offset * 100}},"limit":100}""");
+            Assert(guard.Refuse("file_read", args) is null, $"window #{offset + 1} is fresh");
+            guard.Record("file_read", args, $"window {offset}");
+        }
+
+        var blocked = guard.Refuse("file_read", ToolArgs.Parse("""{"path":"ui.js","offset":900,"limit":100}"""));
+        Assert(blocked is not null, "the client must refuse the fourth window of one file");
+        Assert(guard.Refuse("file_read", ToolArgs.Parse("""{"path":"game.js"}""")) is null, "other files stay readable");
+        return Task.CompletedTask;
     }
 }
