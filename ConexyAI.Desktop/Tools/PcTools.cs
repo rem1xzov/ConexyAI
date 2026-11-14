@@ -309,41 +309,125 @@ public sealed class PcTools : IDisposable
         var height = Math.Clamp(args.Int("height") ?? 800, 240, 2400);
         var temp = Path.Combine(Path.GetTempPath(), "conexy-shot-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temp);
-        var png = Path.Combine(temp, "shot.png");
-
-        var psi = new ProcessStartInfo(browser) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true };
-        foreach (var a in new[]
-                 {
-                     "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
-                     "--disable-extensions", $"--user-data-dir={Path.Combine(temp, "profile")}", $"--window-size={width},{height}",
-                     "--virtual-time-budget=8000", $"--screenshot={png}", url,
-                 })
-            psi.ArgumentList.Add(a);
 
         try
         {
-            using var process = Process.Start(psi)!;
-            _ = process.StandardOutput.ReadToEndAsync(ct);
-            _ = process.StandardError.ReadToEndAsync(ct);
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(60));
-            try { await process.WaitForExitAsync(timeout.Token); }
-            catch (OperationCanceledException)
+            // SCREENSHOT_MODES: `--headless=new` не во всех сборках Edge/Chrome пишет `--screenshot`
+            // (в части версий файл просто не создаётся). Пробуем режимы по порядку и сообщаем РЕАЛЬНУЮ
+            // причину отказа — код возврата и stderr браузера, а не общее «не удалось».
+            // LOOPBACK_IPV4: локальные dev-серверы часто слушают только IPv4 (0.0.0.0:port), а Chromium
+            // резолвит `localhost` в ::1 первым и получает ERR_CONNECTION_REFUSED — при том что HTTP-клиент
+            // видит 200. Поэтому для loopback сначала пробуем 127.0.0.1, потом исходный адрес.
+            var details = new List<string>();
+            foreach (var attemptUrl in LoopbackCandidates(url))
             {
-                try { process.Kill(true); } catch (InvalidOperationException) { }
-                if (ct.IsCancellationRequested) throw;
-                return ToolResult.Fail("Браузер не успел отрисовать страницу за 60 с.");
+                foreach (var mode in new[] { "--headless=new", "--headless" })
+                {
+                    var (png, detail) = await TryCaptureAsync(browser, mode, attemptUrl, temp, width, height, ct);
+                    if (png is not null)
+                    {
+                        var bytes = await File.ReadAllBytesAsync(png, ct);
+                        return ToolResult.Ok("IMAGE_BASE64:image/png:" + Convert.ToBase64String(bytes));
+                    }
+                    details.Add(mode + (attemptUrl == url ? string.Empty : " @127.0.0.1") + ": " + detail);
+                }
             }
 
-            if (!File.Exists(png))
-                return ToolResult.Fail("Браузер не создал скриншот. Проверь, что адрес открывается (http_request).");
-            var bytes = await File.ReadAllBytesAsync(png, ct);
-            return ToolResult.Ok("IMAGE_BASE64:image/png:" + Convert.ToBase64String(bytes));
+            return ToolResult.Fail(
+                "Браузер не создал скриншот страницы. " + string.Join(" | ", details) +
+                " Если http_request по этому адресу отдаёт 200 — проверяй разметку по HTML: скриншот не " +
+                "обязателен, а расхождение обычно в резолве адреса или в самом рендере.");
         }
         finally
         {
             try { Directory.Delete(temp, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
+    }
+
+    /// <summary>
+    /// LOOPBACK_IPV4: адреса для попытки снять страницу. Для loopback первым идёт IPv4: Chromium предпочитает
+    /// ::1, а локальный сервер, слушающий 0.0.0.0, по IPv6 не отвечает. Остальные адреса не меняются.
+    /// </summary>
+    private static IEnumerable<string> LoopbackCandidates(string url)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && IsLoopbackName(uri.Host))
+        {
+            var ipv4 = new UriBuilder(uri) { Host = "127.0.0.1" }.Uri.AbsoluteUri;
+            if (!string.Equals(ipv4, url, StringComparison.OrdinalIgnoreCase))
+                yield return ipv4;
+        }
+
+        yield return url;
+    }
+
+    private static bool IsLoopbackName(string host) =>
+        host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || host == "::1" || host == "[::1]" || host == "0.0.0.0";
+
+    /// <summary>
+    /// Одна попытка снять страницу headless-браузером. Возвращает путь к png или причину отказа —
+    /// код возврата и хвост stderr: без них сообщение «не создал скриншот» бесполезно и модели, и человеку.
+    /// </summary>
+    private static async Task<(string? Png, string Detail)> TryCaptureAsync(
+        string browser, string mode, string url, string temp, int width, int height, CancellationToken ct)
+    {
+        var id = Guid.NewGuid().ToString("N")[..8];
+        var png = Path.Combine(temp, "shot-" + id + ".png");
+        var psi = new ProcessStartInfo(browser)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+        };
+        foreach (var a in new[]
+                 {
+                     mode, "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
+                     "--disable-extensions", $"--user-data-dir={Path.Combine(temp, "profile-" + id)}",
+                     $"--window-size={width},{height}", "--virtual-time-budget=8000", $"--screenshot={png}", url,
+                 })
+            psi.ArgumentList.Add(a);
+
+        using var process = Process.Start(psi);
+        if (process is null)
+            return (null, "браузер не запустился");
+
+        var stderr = process.StandardError.ReadToEndAsync(ct);
+        _ = process.StandardOutput.ReadToEndAsync(ct);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(60));
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(true); } catch (InvalidOperationException) { }
+            if (ct.IsCancellationRequested)
+                throw;
+            return (null, "не отрисовал за 60 с");
+        }
+
+        // Chrome пишет файл перед выходом, но на медленном диске/при antivirus-скане он появляется с задержкой.
+        for (var i = 0; i < 20 && !File.Exists(png); i++)
+            await Task.Delay(250, ct);
+
+        if (File.Exists(png) && new FileInfo(png).Length > 0)
+            return (png, string.Empty);
+
+        var tail = await TailAsync(stderr, ct);
+        return (null, $"код {process.ExitCode}" + (tail.Length > 0 ? ", stderr: " + tail : string.Empty));
+    }
+
+    private static async Task<string> TailAsync(Task<string> stderr, CancellationToken ct)
+    {
+        string text;
+        try { text = await stderr.WaitAsync(TimeSpan.FromSeconds(2), ct); }
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException) { return string.Empty; }
+        text = text.Trim();
+        if (text.Length == 0)
+            return string.Empty;
+        const int max = 400;
+        return text.Length <= max ? text.Replace('\n', ' ') : text[^max..].Replace('\n', ' ');
     }
 
     // ── Файлы по всему ПК (только чтение) ───────────────────────────────────

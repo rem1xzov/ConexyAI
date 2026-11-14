@@ -19,6 +19,8 @@ public sealed class ToolRunner
     private readonly HookRunner? _hooks;
     // LOOP_GUARD: счётчик чтений без правок — заслон работает даже со старой версией сервера.
     private readonly ReadLoopGuard _readGuard = new();
+    // WRITE_CHURN: предел на полные перезаписи одного файла за сеанс.
+    private readonly WriteChurnGuard _churnGuard = new();
     // BUILD_FILES_GUARD: агент менял файлы сборки/тестов — run_tests/get_diagnostics только с подтверждения.
     private volatile bool _buildFilesTouched;
     private string _buildFingerprint;
@@ -65,8 +67,12 @@ public sealed class ToolRunner
 
     public string Root => _guard.Root;
 
-    /// <summary>Новый ход/задача: счётчики чтения начинаются с нуля.</summary>
-    public void ResetReadGuard() => _readGuard.Reset();
+    /// <summary>Новый ход/задача: счётчики чтения и перезаписей начинаются с нуля.</summary>
+    public void ResetReadGuard()
+    {
+        _readGuard.Reset();
+        _churnGuard.Reset();
+    }
 
     public async Task<ToolResult> RunAsync(string tool, string argumentsJson, CancellationToken ct)
     {
@@ -89,6 +95,10 @@ public sealed class ToolRunner
             // и файловые операции через оболочку отклоняются с точным следующим шагом.
             if (_readGuard.Refuse(tool, args, FileExists) is { } readRefusal)
                 return ToolResult.Fail(readRefusal);
+            // WRITE_CHURN: полная перезапись одного файла снова и снова — не прогресс, а смена тактики
+            // требуется: точечная правка по фактическому выводу проверки.
+            if (_churnGuard.Refuse(tool, args) is { } churnRefusal)
+                return ToolResult.Fail(churnRefusal);
 
             // REMOTE_APPROVAL_POLICY: имя инструмента нужно approver'у демона (install_software и т.п. с сайта нельзя).
             if (ToolCallContext.Current is { } call)
@@ -150,7 +160,10 @@ public sealed class ToolRunner
             };
             // LOOP_GUARD: считаем только реально выполненные вызовы.
             if (!result.IsError)
+            {
                 _readGuard.Record(tool, args, result.Output);
+                _churnGuard.Record(tool, args);
+            }
 
             // HOOKS: контекст PreToolUse — рядом с результатом, как в Claude Code.
             if (hookContext is { Length: > 0 })

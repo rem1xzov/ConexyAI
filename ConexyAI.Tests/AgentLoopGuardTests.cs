@@ -30,6 +30,9 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("write-only: a drifted edit reopens reading", WriteOnlyRecoveryAsync);
         TestRegistry.Add("repair: resetting the guard opens checks before the final answer", RepairResetAsync);
         TestRegistry.Add("read guard: a client analysis run is not stopped by a read streak", ClientAnalysisAsync);
+        TestRegistry.Add("loop guard: the same call with the same result is a loop between other steps too", SameCallAcrossStepsAsync);
+        TestRegistry.Add("loop guard: changed timings and ids do not hide a loop", VolatileOutputAsync);
+        TestRegistry.Add("write churn: rewriting one file over and over is refused", WriteChurnAsync);
     }
 
     // ROUTE_GUARD: агент перебирал имена репозитория (rem1xzv/ConoxyAI, biocompass…) и получал один и тот же
@@ -150,13 +153,13 @@ internal static class AgentLoopGuardTests
         }
         // А вот один и тот же кусок снова и снова — уже петля.
         const string repeat = """{"command":"Get-Content MainForm.cs -Skip 100 -TotalCount 100"}""";
-        for (var i = 0; i < AgentLoopGuard.ReadTargetThreshold; i++)
-        {
-            Assert(guard.Refuse("bash", repeat) is null, $"identical shell read #{i + 1} is still allowed");
-            guard.Record("bash", repeat, "chunk 1");
-        }
-        Assert(guard.Refuse("bash", repeat) == AgentLoopGuard.ReadTargetRefusal,
-            "the same chunk over and over must be refused");
+        // Первое повторное чтение того же куска с тем же текстом ещё допустимо, второе — уже петля:
+        // кусок №1 читался в цикле выше, и его результат не изменился.
+        Assert(guard.Refuse("bash", repeat) is null, "one repeated read is still allowed");
+        guard.Record("bash", repeat, "chunk 1");
+        Assert(guard.Refuse("bash", repeat) is null, "the second one is still allowed");
+        guard.Record("bash", repeat, "chunk 1");
+        Assert(guard.Refuse("bash", repeat) is not null, "the same chunk over and over must be refused");
 
         // Разная форма скрипта — тот же файл: ReadAllText/ReadAllLines/Select-String не должны обходить предел,
         // когда вывод один и тот же.
@@ -314,13 +317,17 @@ internal static class AgentLoopGuardTests
         }
         Assert(changing.Refuse("bash", bash) is null, "changing output must never be treated as a loop");
 
-        // Третий одинаковый сломан другим инструментом: цепочка рвётся, петли нет.
+        // Два одинаковых результата с чужим вызовом между ними — ещё не петля.
         var interleaved = new AgentLoopGuard();
         interleaved.Record("bash", bash, "same");
         interleaved.Record("bash", bash, "same");
-        interleaved.Record("read_file", """{"path":"a.cs"}""", "ok");
+        interleaved.Record("file_read", """{"path":"a.cs"}""", "ok");
+        Assert(interleaved.Refuse("bash", bash) is null, "two repeats are still work, not a loop");
         interleaved.Record("bash", bash, "same");
-        Assert(interleaved.Refuse("bash", bash) is null, "another call in between must break the chain");
+        // LOOP_THROUGH_STEPS: третий тот же результат — уже петля, даже если между вызовами были другие шаги:
+        // правка файла между двумя одинаковыми запусками ничего не изменила в результате.
+        Assert(interleaved.Refuse("bash", bash) == AgentLoopGuard.SameCallRefusal,
+            "the same result for the third time is a loop even across other steps");
 
         // Другой аргумент — другая команда, даже если инструмент тот же.
         var otherArgs = new AgentLoopGuard();
@@ -478,6 +485,78 @@ internal static class AgentLoopGuardTests
         var page = ToolArgs.Parse("""{"path":"file0.cs","offset":120,"limit":80}""");
         Assert(guard.Refuse("file_read", page) is null, "a new page is new information");
         guard.Record("file_read", page, "tail of file 0");
+        return Task.CompletedTask;
+    }
+
+    // REPORTED: агент 15 раз переписывал один файл и запускал одну и ту же проверку. Между вызовами были
+    // другие шаги, поэтому проверка «соседние повторы» не срабатывала, и цикл шёл дальше.
+    private static Task SameCallAcrossStepsAsync()
+    {
+        var guard = new AgentLoopGuard();
+        const string bash = """{"command":"node tools/check-levels.js"}""";
+        const string output = "DEBUG len=986 hasGen=false\nExit code: 0";
+        for (var i = 0; i < 6; i++)
+        {
+            var write = $$"""{"path":"tools/check-levels.js","content":"v{{i}}"}""";
+            Assert(guard.Refuse("file_write", write) is null, $"write #{i + 1} is a normal step");
+            guard.Record("file_write", write, "File 'tools/check-levels.js' written.");
+
+            var refusal = guard.Refuse("bash", bash);
+            if (refusal is null)
+            {
+                guard.Record("bash", bash, output);
+                continue;
+            }
+
+            Assert(refusal == AgentLoopGuard.SameCallRefusal,
+                "the third identical run with the same result must stop the cycle, got " + refusal);
+            return Task.CompletedTask;
+        }
+
+        Assert(false, "the cycle was never stopped");
+        return Task.CompletedTask;
+    }
+
+    // OUTPUT_NOISE: в реальных выводах есть длительности, GUID и номера прогонов — из-за них «тот же
+    // результат» не совпадал побайтно, и петля не считалась петлёй.
+    private static Task VolatileOutputAsync()
+    {
+        var guard = new AgentLoopGuard();
+        const string call = """{"command":"dotnet test"}""";
+        for (var i = 0; i < 5; i++)
+        {
+            var refusal = guard.Refuse("bash", call);
+            if (refusal is not null)
+            {
+                Assert(refusal is AgentLoopGuard.SameCallRefusal or AgentLoopGuard.RepeatRefusal,
+                    "volatile output must still be recognised as the same result, got " + refusal);
+                return Task.CompletedTask;
+            }
+
+            guard.Record("bash", call,
+                $"Tests passed in 1.{i} s\nrun 550e8400-e29b-41d4-a716-44665544000{i}\nExit code: 0");
+        }
+
+        Assert(false, "volatile output must not hide the loop");
+        return Task.CompletedTask;
+    }
+
+    // WRITE_CHURN: полная перезапись файла — не «ещё одна попытка», а та же самая тактика.
+    private static Task WriteChurnAsync()
+    {
+        var churn = new WriteChurnGuard();
+        for (var i = 0; i < WriteChurnGuard.RewriteLimit; i++)
+        {
+            var args = ToolArgs.Parse($$"""{"path":"game.js","content":"v{{i}}"}""");
+            Assert(churn.Refuse("file_write", args) is null, $"rewrite #{i + 1} is allowed");
+            churn.Record("file_write", args);
+        }
+
+        var blocked = churn.Refuse("file_write", ToolArgs.Parse("""{"path":"game.js","content":"v9"}"""));
+        Assert(blocked is not null && blocked.Contains("game.js"),
+            "the next full rewrite is refused with a reason naming the file");
+        Assert(churn.Refuse("str_replace_editor", ToolArgs.Parse("""{"command":"str_replace","path":"game.js"}""")) is null,
+            "a targeted edit is not a rewrite and stays allowed");
         return Task.CompletedTask;
     }
 }

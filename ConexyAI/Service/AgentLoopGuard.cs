@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ConexyAI.Service;
 
@@ -56,6 +57,19 @@ public sealed partial class AgentLoopGuard
     public const string RepeatRefusal =
         "Команда уже выполнялась несколько раз без изменения результата. Прекрати повторять одно и то же " +
         "действие. Проанализируй причину неудачи или заверши работу, объяснив пользователю проблему.";
+
+    /// <summary>Текст отказа, когда действие с тем же результатом повторяется через другие шаги.</summary>
+    public const string SameCallRefusal =
+        "Ты уже выполнял ровно это действие и получал ровно этот результат — другие шаги между ними ничего не меняют. " +
+        "Ещё один такой вызов даст то же самое. Смени тактику: прочитай фактический вывод целиком, определи причину " +
+        "и сделай точечную правку именно по ней; если причину не видно — закончи и скажи, чего не хватает.";
+
+    /// <summary>
+    /// Сколько раз одно и то же действие (инструмент + аргументы) должно дать тот же результат, чтобы это
+    /// считалось петлёй, даже если вызовы разделены другими шагами (правка файла межу двумя одинаковыми
+    /// запусками — это не прогресс, если запуск не изменился).
+    /// </summary>
+    public const int SameCallThreshold = 3;
 
     /// <summary>Текст отказа, когда результат не меняется от попытки к попытке.</summary>
     public const string NoProgressRefusal =
@@ -330,6 +344,15 @@ public sealed partial class AgentLoopGuard
             return RepeatRefusal;
         }
 
+        // LOOP_THROUGH_STEPS: та же команда с тем же результатом, но между вызовами агент правил файл или
+        // делал что-то ещё. Раньше это не считалось петлёй (сравнивались только соседние вызовы), и агент
+        // мог крутить «правка → тот же запуск → тот же результат» десятки раз.
+        if (RefusesSameCall(tool, arguments))
+        {
+            Refusals++;
+            return SameCallRefusal;
+        }
+
         // ROUTE_GUARD: тот же класс ошибки при других аргументах — менять надо маршрут, а не написание.
         if (!IsRead(tool, arguments) && RefusesRoute(tool))
         {
@@ -533,6 +556,32 @@ public sealed partial class AgentLoopGuard
         return matching >= _repeatThreshold;
     }
 
+    /// <summary>
+    /// То же действие с тем же результатом <see cref="SameCallThreshold"/> раз среди последних вызовов этого
+    /// инструмента — независимо от того, что было между ними. Другие шаги не делают повтор прогрессом.
+    /// </summary>
+    public bool RefusesSameCall(string tool, string arguments)
+    {
+        var matches = 0;
+        string? output = null;
+        for (var i = _recent.Count - 1; i >= 0 && matches < SameCallThreshold; i--)
+        {
+            var call = _recent[i];
+            if (!string.Equals(call.Tool, tool, StringComparison.Ordinal) ||
+                !string.Equals(call.Arguments, arguments, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            output ??= call.OutputHash;
+            if (!string.Equals(call.OutputHash, output, StringComparison.Ordinal))
+                return false;
+            matches++;
+        }
+
+        return matches >= SameCallThreshold;
+    }
+
     /// <summary>Новый ли это объект чтения (ещё не читали в этом прогоне). Новый файл — прогресс, не петля.</summary>
     public bool IsNewReadTarget(string tool, string arguments) =>
         IsRead(tool, arguments) && !_targets.ContainsKey(Target(tool, arguments));
@@ -660,8 +709,33 @@ public sealed partial class AgentLoopGuard
         _ => false,
     };
 
+    /// <summary>
+    /// VOLATILE: фрагменты вывода, которые меняются от запуска к запуску (GUID, хеши, ISO-время, длительности).
+    /// Без нормализации «тот же результат» не срабатывает: два одинаковых прогона отличаются на пару символов —
+    /// и агент крутит одну и ту же команду десятки раз. Убираем изменчивое, оставляем смысл вывода.
+    /// </summary>
+    private static readonly Regex VolatileBits = new(
+        @"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b" +
+        @"|\b[0-9a-fA-F]{16,}\b" +
+        @"|\d{4}-\d{2}-\d{2}[T ][\d:.]+Z?" +
+        @"|\b\d+(?:[.,]\d+)?\s?(?:ms|мс|sec|secs|seconds?|минут\w*)\b" +
+        @"|\b\d+(?:[.,]\d+)?\s?(?:s|с)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex AnsiEscape = new(@"\x1B\[[0-?]*[ -/]*[@-~]", RegexOptions.Compiled);
+
+    /// <summary>Вывод без изменчивых частей: по нему и видно, что повтор ничего не меняет.</summary>
+    internal static string NormalizeOutput(string? output)
+    {
+        if (string.IsNullOrEmpty(output))
+            return string.Empty;
+        var text = AnsiEscape.Replace(output, string.Empty);
+        return VolatileBits.Replace(text, "#").Trim();
+    }
+
+    /// <summary>Хеш вывода — только по нормализованному тексту (см. <see cref="NormalizeOutput"/>).</summary>
     private static string Hash(string text) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(NormalizeOutput(text))));
 
     // ROUTE_GUARD: одинаковый КЛАСС ошибки при разных аргументах — это не перебор вариантов, а топтание на
     // месте: агент угадывал имя репозитория (`rem1xzv/ConoxyAI`, `biocompass`…), получал один и тот же
