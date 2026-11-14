@@ -17,6 +17,7 @@ internal static class HarnessConformanceTests
         TestRegistry.Add("harness: aliases map to real internal tools and are idempotent", AliasesAreConsistentAsync);
         TestRegistry.Add("harness: old long tool outputs are trimmed, recent ones are kept", ContextCompressionKeepsRecentAsync);
         TestRegistry.Add("harness: a checker can declare which roles must finish first", SpawnAgentsOrderingAsync);
+        TestRegistry.Add("harness: a tool call printed as text is detected", ToolMarkupAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -144,6 +145,17 @@ internal static class HarnessConformanceTests
         Assert(agent.GetProperty("properties").TryGetProperty("after", out var after),
             "spawn_agents must offer 'after' so a checker waits for the work it checks");
         Assert(after.GetProperty("type").GetString() == "array", "'after' is a list of roles");
+        return Task.CompletedTask;
+    }
+
+    // TEXT_GUARD: в реальном прогоне модель вывела вызов `write` текстом (DSML-разметка), harness положил
+    // его в историю, и каждый шаг пересылал 26 КБ заново — 7.2M токенов без единого файла.
+    private static Task ToolMarkupAsync()
+    {
+        var markup = "<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name=\"write\">";
+        Assert(ConexyAgentRunner.ContainsToolMarkup(markup), "a tool call printed as text must be detected");
+        Assert(!ConexyAgentRunner.ContainsToolMarkup("обычный текст про invoke name=write"),
+            "plain prose about tool names is not markup");
         return Task.CompletedTask;
     }
 }

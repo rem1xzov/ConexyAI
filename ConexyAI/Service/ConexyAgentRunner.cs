@@ -1525,6 +1525,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var finalAnswerForced = false;
         // DOF_REPAIR: одна попытка довести правки до проверенного состояния перед принудительным итогом.
         var repairTurnUsed = false;
+        var textLoopStopped = false;
+        // TEXT_GUARD: модель отвечает одним и тем же текстом шаг за шагом (в том числе вызовом инструмента,
+        // выведенным в текст). Сравнение по нормализованному тексту, а не по вызовам.
+        var lastTextSignature = string.Empty;
+        var textRepeats = 0;
+        var markupNudges = 0;
 
         // Инструменты этого прогона: по профилю режима; take_screenshot убирается, если Chromium нет.
         // MCP: реестр на прогон — операторские серверы + личные серверы пользователя из запроса.
@@ -1655,7 +1661,56 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // SUBSCRIPTION_TIERS: внутренние токены агента идут в бюджет тарифа.
             // COWORK_BUDGET: Cowork тратит свой пул, Coder — агентский.
             var billedTokens = await _subscriptionService.RecordAgentTokensAsync(job.UserId, job.ModelType, llmTurn.Usage, ct);
-            messages.Add(responseMessage);
+
+            // TEXT_GUARD: ответ без вызовов инструментов — либо настоящий итог, либо модель «рисует» вызов
+            // текстом (DSML-разметка) или повторяет предыдущий ответ. Раньше такой текст целиком клался в
+            // историю: каждый следующий шаг пересылал его заново, и один ответ на 26 КБ выжигал миллионы
+            // токенов без единого действия (реальный прогон: 7.2M токенов, ноль созданных файлов).
+            var answerText = ExtractTextContent(responseMessage);
+            var noToolCalls = responseMessage.ToolCalls is null || responseMessage.ToolCalls.Count == 0;
+            if (noToolCalls && answerText.Length > 0)
+            {
+                var signature = TextSignature(answerText);
+                textRepeats = signature.Length > 0 && signature == lastTextSignature ? textRepeats + 1 : 1;
+                lastTextSignature = signature;
+            }
+
+            if (noToolCalls && ContainsToolMarkup(answerText))
+            {
+                // Вызов инструмента текстом не исполняется и не должен попадать в историю целым.
+                if (markupNudges < 2 && !finalAnswerForced)
+                {
+                    markupNudges++;
+                    _logger.LogWarning(
+                        "Agent printed a tool call as text ({Chars} chars); asking for a real call. task={TaskId} step={Step}",
+                        answerText.Length, taskId, step);
+                    await group.SendAsync("OnLog",
+                        "[Harness] Вызов инструмента пришёл текстом — прошу настоящий вызов инструмента.", ct);
+                    messages.Add(new ChatMessage("assistant", TextCallMarker));
+                    messages.Add(new ChatMessage("system", TextCallNudge));
+                    continue;
+                }
+
+                lastTextSignature = string.Empty;
+            }
+            else if (noToolCalls && textRepeats >= 2 && answerText.Length > 2_000)
+            {
+                // Один и тот же большой текст повторяется: это петля, а не работа. Историю не раздуваем.
+                _logger.LogWarning(
+                    "Agent repeated the same {Chars}-char answer {Repeats} times; stopping. task={TaskId}",
+                    answerText.Length, textRepeats, taskId);
+                await group.SendAsync("OnLog",
+                    "[Loop Guard] Модель повторяет один и тот же ответ — останавливаю без повторной отправки.", ct);
+                textLoopStopped = true;
+                break;
+            }
+
+            messages.Add(responseMessage with
+            {
+                Content = noToolCalls && answerText.Length > 16_000
+                    ? answerText[..16_000] + "\n…[ответ обрезан для истории]"
+                    : responseMessage.Content
+            });
 
             // TOKEN_SOFT_LIMIT: счёт идёт по ЭТОМУ прогону, а не по счётчику в БД.
             runTokens += billedTokens;
@@ -6283,6 +6338,31 @@ public class ConexyAgentRunner : IConexyAgentRunner
     }
 
     private static readonly string[] Markers = { "<||DSML", "<｜｜DSML", "||DSML||", "｜｜DSML｜｜" };
+
+    /// <summary>В ответе модели есть выведенный текстом вызов инструмента (DSML-разметка).</summary>
+    public static bool ContainsToolMarkup(string? text) =>
+        !string.IsNullOrEmpty(text) && Markers.Any(m => text.Contains(m, StringComparison.Ordinal));
+
+    /// <summary>Подпись ответа для поиска повторов: длина + хеш нормализованного текста.</summary>
+    private static string TextSignature(string text)
+    {
+        var normalized = AgentLoopGuard.NormalizeOutput(text);
+        return normalized.Length + ":" + Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(normalized)))[..32];
+    }
+
+    /// <summary>Пометка вместо вызова инструмента, который модель вывела текстом.</summary>
+    private const string TextCallMarker = "[вызов инструмента выведен текстом и отброшен]";
+
+    /// <summary>
+    /// TEXT_CALL: модель вывела вызов инструмента в текст ответа. Такой вызов не исполняется — нужен настоящий
+    /// tool call, иначе шаг уходит впустую (а текст на десятки килобайт ещё и раздувает историю).
+    /// </summary>
+    private const string TextCallNudge =
+        "[Harness] В ответе был вызов инструмента, напечатанный текстом — он не выполнен. " +
+        "Вызывай инструменты структурно (tool call), а не текстом; не повторяй аргументы в ответе. " +
+        "Если нужно создать большой файл — делай это инструментом write частями (несколько вызовов), " +
+        "а не одним гигантским.";
 
     private static string ExtractTextContent(ChatMessage message)
     {
