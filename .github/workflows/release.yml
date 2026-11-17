@@ -17,6 +17,11 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    # ANDROID_TAGS: v1.* — линейка Android-приложения. APK собирается и прикладывается к релизу
+    # вручную, а этот workflow собирает десктопный клиент и берёт версию из тега. Без этого условия
+    # мобильный тег публиковал «десктоп 1.0.7»: версия из тега уезжала в -p:Version, и релиз
+    # Android получал десктопные бинарники с чужим номером. Десктоп живёт на своих v0.9.* тегах.
+    if: ${{ !startsWith(github.ref_name, 'v1.') && !startsWith(inputs.version, '1.') }}
     env:
       DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
     steps:
