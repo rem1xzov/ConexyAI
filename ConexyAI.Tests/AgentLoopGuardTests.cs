@@ -39,6 +39,7 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("context: the token meter estimates before sending", TokenMeterAsync);
         TestRegistry.Add("context: unchanged project rules are not resent", InstructionDigestAsync);
         TestRegistry.Add("context: @paths are references, not inlined content", FileReferencesAsync);
+        TestRegistry.Add("context: the runtime snapshot is resent only when it changes", RuntimeDigestAsync);
         TestRegistry.Add("write: a large file can be built in parts with append", AppendWriteAsync);
         TestRegistry.Add("policy: deleting or rolling back files is never silent", DestructiveClassAsync);
         TestRegistry.Add("write: empty or shrunken content never wipes an existing file", WriteGuardAsync);
@@ -816,6 +817,17 @@ internal static class AgentLoopGuardTests
         var block = FileReferences.Prompt(paths);
         Assert(block.Contains("только пути") && !block.Contains("function "), "no file content is inlined");
         Assert(FileReferences.Extract("нет упоминаний").Count == 0, "plain text has no references");
+        return Task.CompletedTask;
+    }
+    // RUNTIME_CONTEXT: перенос runtime-context.ts — неизменённый снимок не переотправляется.
+    private static Task RuntimeDigestAsync()
+    {
+        var d = new RuntimeContextDigest();
+        Assert(d.Delta(["step: 1"]) is not null, "the first snapshot is sent");
+        Assert(d.Delta(["step: 1"]) is null, "an unchanged snapshot costs nothing");
+        Assert(d.Delta(["step: 2"]) is not null, "a change is sent");
+        Assert(d.Delta([]) == RuntimeContextDigest.ResetText, "an empty snapshot resets explicitly");
+        Assert(d.Delta([]) is null, "the reset itself is sent once");
         return Task.CompletedTask;
     }
 }

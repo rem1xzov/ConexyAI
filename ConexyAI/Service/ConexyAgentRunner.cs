@@ -1395,6 +1395,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // INSTRUCTION_DIGEST: помним отпечаток правил, чтобы не переотправлять неизменённое и подхватить
         // правку AGENTS.md посреди задачи (раньше правила читались один раз и устаревали).
         var rulesDigest = new InstructionDigest();
+        var runtimeDigest = new RuntimeContextDigest();
         var rulesSeen = rulesDigest.Delta(projectRules?.Prompt, projectRules?.Files);
         if (rulesSeen is not null)
         {
@@ -1616,6 +1617,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
         {
             completedSteps = step;
             ct.ThrowIfCancellationRequested();
+
+            // RUNTIME_CONTEXT: снимок состояния — только при изменении (как в harness).
+            var runtimeDelta = runtimeDigest.Delta(new[]
+            {
+                "step: " + step,
+                "изменено файлов: " + changedFiles.Count
+                    + (changedFiles.Count > 0 ? " (" + string.Join(", ", changedFiles.Take(5)) + ")" : string.Empty),
+                "выполнено команд: " + executedCommands.Count,
+            });
+            if (runtimeDelta is not null)
+                messages.Add(new ChatMessage("system", runtimeDelta));
 
             // INSTRUCTION_DIGEST: раз в 5 шагов перечитываем правила проекта. Изменились — дописываем
             // только дельту; не изменились — не тратим ни одного токена.
