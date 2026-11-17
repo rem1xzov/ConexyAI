@@ -35,6 +35,7 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("write churn: rewriting one file over and over is refused", WriteChurnAsync);
         TestRegistry.Add("policy: waiting by sleeping is not work", SleepOnlyAsync);
         TestRegistry.Add("scope: a run-and-show request does not allow editing code", RequestScopeAsync);
+        TestRegistry.Add("context: a big tool result becomes a preview plus a spill file", SpillAsync);
         TestRegistry.Add("write: a large file can be built in parts with append", AppendWriteAsync);
         TestRegistry.Add("policy: deleting or rolling back files is never silent", DestructiveClassAsync);
         TestRegistry.Add("write: empty or shrunken content never wipes an existing file", WriteGuardAsync);
@@ -734,5 +735,39 @@ internal static class AgentLoopGuardTests
         Assert(RequestScope.From("привет").Intent == ScopeIntent.Unknown, "an empty ask keeps the default");
         Assert(RequestScope.From("привет").MutationsAllowed, "unknown scope keeps edits allowed");
         return Task.CompletedTask;
+    }
+
+    // SPILL: перенос из deepseek-harness (packages/spill) — большой вывод не раздувает историю.
+    private static Task SpillAsync()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "spill-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(root);
+        try
+        {
+            var small = new string('a', 5_000);
+            Assert(ToolResultSpill.Apply("bash", small, root, Guid.Empty) == small, "small output stays as is");
+
+            var middle = new string('b', 20_000);
+            var pruned = ToolResultSpill.Apply("bash", middle, null, Guid.Empty);
+            Assert(pruned.Contains(ToolResultSpill.PrunedMarker), "a long output is pruned in the middle");
+            Assert(pruned.Length < middle.Length, "pruning must shrink the text");
+
+            var huge = new string('c', 60_000);
+            var spilled = ToolResultSpill.Apply("bash", huge, root, Guid.Parse("11111111-1111-1111-1111-111111111111"));
+            Assert(spilled.Contains("Full formatted result stored at:"), "a huge output is spilled to a file");
+            var path = spilled[(spilled.IndexOf("stored at: ", StringComparison.Ordinal) + 11)..];
+            path = path[..path.IndexOf(". Use read", StringComparison.Ordinal)];
+            Assert(File.Exists(path), "the spill file must exist: " + path);
+            Assert(File.ReadAllText(path).Length == huge.Length, "the spill file keeps the full output");
+            var read = ToolResultSpill.Apply("file_read", huge, root, Guid.Empty);
+            Assert(!read.Contains("Full formatted result stored at:"),
+                "read output is never spilled (no read → spill → read loop)");
+            Assert(read.Contains(ToolResultSpill.PrunedMarker), "read output is pruned instead");
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
     }
 }

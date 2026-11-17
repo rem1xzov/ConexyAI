@@ -2325,9 +2325,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         executedCommands.RemoveAll(c => c == rejectedCommand);
                 }
 
+                // SPILL/PRUNE: большой вывод целиком в контекст не идёт — превью + файл (см. ToolResultSpill).
+                var toolContent = ToolResultSpill.Apply(
+                    toolName, result.Output, _workspaceService.GetTaskWorkspacePathIfExists(chatId), taskId);
                 messages.Add(new ChatMessage(
                     Role: "tool",
-                    Content: result.Output,
+                    Content: toolContent,
                     ToolCallId: toolCall.Id
                 ));
 
