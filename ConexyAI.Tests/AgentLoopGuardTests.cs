@@ -34,6 +34,7 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("loop guard: changed timings and ids do not hide a loop", VolatileOutputAsync);
         TestRegistry.Add("write churn: rewriting one file over and over is refused", WriteChurnAsync);
         TestRegistry.Add("policy: waiting by sleeping is not work", SleepOnlyAsync);
+        TestRegistry.Add("scope: a run-and-show request does not allow editing code", RequestScopeAsync);
         TestRegistry.Add("write: a large file can be built in parts with append", AppendWriteAsync);
         TestRegistry.Add("policy: deleting or rolling back files is never silent", DestructiveClassAsync);
         TestRegistry.Add("write: empty or shrunken content never wipes an existing file", WriteGuardAsync);
@@ -714,5 +715,24 @@ internal static class AgentLoopGuardTests
         {
             try { Directory.Delete(root, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
+    }
+
+    // SCOPE: «запусти проект локально» — это операционный запрос. Раньше он превращался в рефакторинг.
+    private static Task RequestScopeAsync()
+    {
+        var run = RequestScope.From("запусти проект X локально и покажи в браузере");
+        Assert(run.Intent == ScopeIntent.Operate, "run/show is an operational request");
+        Assert(!run.MutationsAllowed, "an operational request must not allow file edits");
+        Assert(RequestScope.From("run the app and open it").Intent == ScopeIntent.Operate, "english run/open too");
+
+        Assert(RequestScope.From("почини запуск проекта").Intent == ScopeIntent.Change, "fix implies changes");
+        Assert(RequestScope.From("запусти и почини сборку").MutationsAllowed, "change wins over run");
+        Assert(RequestScope.From("объясни, почему проект не запускается").Intent == ScopeIntent.Explain,
+            "explain is read-only by nature");
+        Assert(RequestScope.From("не запускай проект, просто проверь").Intent != ScopeIntent.Operate,
+            "a negated operation is not an operation");
+        Assert(RequestScope.From("привет").Intent == ScopeIntent.Unknown, "an empty ask keeps the default");
+        Assert(RequestScope.From("привет").MutationsAllowed, "unknown scope keeps edits allowed");
+        return Task.CompletedTask;
     }
 }

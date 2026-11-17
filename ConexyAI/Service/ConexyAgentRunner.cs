@@ -1457,6 +1457,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         }
 
         var changedFiles = new HashSet<string>(StringComparer.Ordinal);
+        // SCOPE: рамка запроса из первой просьбы пользователя. Запрос «запусти/покажи» не разрешает править код.
+        var scope = RequestScope.From(messages.FirstOrDefault(m => m.Role == "user")?.Text);
+        var scopeNudged = false;
         var executedCommands = new List<string>();
         // AGENT_TERMINATION: добавлено 2026-09-23 — у обоих «не дай агенту закончить» гейтов есть
         // бюджет. Раньше оба были НЕОГРАНИЧЕННЫМИ, и это и был баг «ответ написан, а генерация не
@@ -1600,6 +1603,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
         {
             completedSteps = step;
             ct.ThrowIfCancellationRequested();
+
+            // SCOPE: один раз за прогон явно говорим, что именно попросили и где остановиться.
+            if (!scopeNudged && scope.Intent != ScopeIntent.Unknown)
+            {
+                scopeNudged = true;
+                messages.Add(new ChatMessage("system", scope.Prompt));
+            }
 
             // ORCHESTRA_WATCH: помощник отмечает каждый шаг — по этой метке сторож видит зависание.
             if (_profile.Mode == "worker")
@@ -2163,6 +2173,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
                 var refusal = planRefusal ?? teamRefusal ?? readRefusal
                     ?? (toolAllowed ? loopGuard.Refuse(toolName, toolCall.Function.Arguments) : null);
+
+                // SCOPE_GUARD: операционный запрос («запусти/покажи») не разрешает правки файлов —
+                // именно из-за этого запуск проекта превращался в рефакторинг проекта.
+                if (refusal is null && toolAllowed && !scope.MutationsAllowed
+                    && IsScopeMutation(toolName, toolCall.Function.Arguments))
+                {
+                    refusal = scope.MutationRefusal;
+                }
 
                 // ROUTE_GUARD: отказ универсальный, а альтернативы — из РЕАЛЬНО выданных этому агенту
                 // инструментов, без заблокированных. Никаких зашитых сценариев: что доступно, то и предлагаем.
@@ -6385,6 +6403,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "Вызывай инструменты структурно (tool call), а не текстом; не повторяй аргументы в ответе. " +
         "Если нужно создать большой файл — делай это инструментом write частями (несколько вызовов), " +
         "а не одним гигантским.";
+
+    /// <summary>Меняет ли вызов файлы: правка или пишущая команда оболочки.</summary>
+    private static bool IsScopeMutation(string tool, string arguments) =>
+        AgentLoopGuard.IsEditTool(tool)
+        || (AgentLoopGuard.IsShellTool(tool) && !AgentLoopGuard.IsReadOnlyCommand(arguments));
 
     private static string ExtractTextContent(ChatMessage message)
     {
