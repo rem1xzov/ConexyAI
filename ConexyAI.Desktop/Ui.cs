@@ -170,6 +170,12 @@ public static partial class Ui
 
     public static void Banner(string root, string server)
     {
+        // CLEAN_START: clear the launch lines before the logo so the chat starts clean.
+        // Only in an interactive terminal: escape codes break piped output.
+        if (Ansi && !Console.IsOutputRedirected)
+        {
+            try { Console.Clear(); } catch (IOException) { }
+        }
         Console.WriteLine();
         var info = new[]
         {
