@@ -8,7 +8,8 @@ namespace ConexyAI.Desktop.Tools;
 public sealed class SearchTools
 {
     // TOKEN_ECONOMY: каждая строка — токены в контексте. 80 совпадений достаточно, чтобы найти место.
-    private const int DefaultMaxResults = 80;
+    private const int DefaultMaxResults = 100;  // HARNESS: glob 100 путей
+    private const int GrepDefaultResults = 250; // HARNESS: grep 250 совпадений
     private const int HardMaxResults = 400;
     private const long MaxFileBytes = 2_000_000;
 
@@ -34,7 +35,7 @@ public sealed class SearchTools
             throw new ToolException("Невалидное регулярное выражение: " + ex.Message);
         }
 
-        var max = Math.Clamp(args.Int("max_results") is > 0 and var m ? m : DefaultMaxResults, 1, HardMaxResults);
+        var max = Math.Clamp(args.Int("max_results") is > 0 and var m ? m : GrepDefaultResults, 1, HardMaxResults);
         var matcher = BuildMatcher(args.Str("glob"));
         var context = Math.Clamp(args.Int("context_lines") ?? 0, 0, 10);
         var mode = args.Str("output_mode") ?? "content";

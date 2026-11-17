@@ -7,8 +7,8 @@ public sealed class FileTools
 {
     // TOKEN_ECONOMY: 200k символов — это ~50k токенов за одно чтение, и они пересылаются на каждом шаге.
     // Теперь чтение постраничное: 400 строк / 24k символов за раз, дальше — offset/limit.
-    internal const int MaxReadChars = 24_000;
-    internal const int DefaultReadLines = 400;
+    internal const int MaxReadChars = 50_000;   // HARNESS: 50 KiB на один вызов read
+    internal const int DefaultReadLines = 2_000; // HARNESS: default = max
     internal const int MaxReadLines = 2_000;
     internal const long MaxReadBytes = 5_000_000;
     internal const int MaxListEntries = 500;

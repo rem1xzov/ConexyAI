@@ -294,7 +294,7 @@ public sealed partial class ShellTool
     internal const int MaxTimeoutSeconds = 3600;
     // TOKEN_ECONOMY: вывод команд тоже едет в контекст на каждом шаге. Логи сборки читаются
     // по краям (начало + конец), 16k символов — ~4k токенов.
-    private const int MaxOutputChars = 16_000;
+    private const int MaxOutputChars = 64_000;   // HARNESS: 64 KB на поток
 
     private readonly PathGuard _guard;
     private readonly ICommandApprover _approver;
