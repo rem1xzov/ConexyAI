@@ -4725,46 +4725,111 @@ html[data-plain-code='true'] .markdown strong.chat-term {
   text-decoration: underline;
 }
 
-/* LIMIT_LOCK: плашка над композером, когда пул токенов режима выбран полностью. Сделана как у
-   agent-autoapprove (та же строка над полем ввода), но тревожным цветом: это не режим, а стоп. */
-.agent-limit-banner {
+/* LIMIT_LOCK: изменено 2026-11-17 — раньше здесь была только тонкая плашка для агентских пулов.
+   Теперь лимит блокирует весь режим (Flash/Pro/Coder/Cowork), поэтому над композером стоит
+   карточка с датой сброса, а вместо ленты — экран с логотипом и приветствием. */
+.limit-lock {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 18px;
+  max-width: 560px;
+  padding: 8px 16px 24px;
+  text-align: center;
+}
+
+.limit-lock__greeting {
+  margin: 0;
+  /* Приветствие с переносом строки: «Здравствуйте, пожалуйста,\nвернитесь позже.» */
+  white-space: pre-line;
+  font-family: var(--font-display);
+  font-size: clamp(20px, 3.2vw, 28px);
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+
+.limit-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   max-width: 760px;
   width: 100%;
   margin: 0 auto 8px;
-  padding: 8px 12px;
-  border: 1px solid var(--danger);
-  border-radius: 10px;
-  background: rgba(255, 107, 122, 0.1);
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
   color: var(--text);
   font-size: 12.5px;
 }
 
-.agent-limit-banner__text {
-  flex: 1;
+.limit-notice__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   min-width: 0;
 }
 
-.agent-limit-banner__btn {
+.limit-notice__dot {
   flex-shrink: 0;
-  align-self: center;
-  height: 32px;
-  padding: 0 14px;
-  border: 1px solid var(--danger);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--danger);
-  font-size: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.limit-notice__title {
+  min-width: 0;
+  font-weight: 600;
+}
+
+.limit-notice__pool {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.limit-notice__text {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.limit-notice__btn {
+  align-self: flex-start;
+  margin-top: 4px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
 }
 
-.agent-limit-banner__btn:hover {
-  background: rgba(255, 107, 122, 0.16);
+.limit-notice__btn:hover {
+  background: var(--accent-soft);
+}
+
+@media (max-width: 640px) {
+  .limit-lock {
+    gap: 14px;
+    padding-bottom: 16px;
+  }
+
+  .limit-notice {
+    padding: 10px 12px;
+    border-radius: 12px;
+  }
 }
 
 .cmd-card__output {

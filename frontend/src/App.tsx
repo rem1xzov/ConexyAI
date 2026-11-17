@@ -60,6 +60,9 @@ import { LegalPage, legalDocFromHash } from './components/legal/LegalPage';
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 import { UsageIndicator } from './components/UsageIndicator';
 import { UpgradeModal } from './components/UpgradeModal';
+// LIMIT_LOCK: экран и плашка «лимит закончился» для всех пулов (Flash, Pro, Coder, Cowork).
+import { LimitLockHero, LimitNotice } from './components/LimitLock';
+import { isLimitPoolExhausted, limitPoolForModel, type LimitPoolKey } from './utils/limitPools';
 // ADMIN_PANEL: добавлено 2026-09-19
 import { AdminPanel } from './components/AdminPanel';
 // ADMIN_ERROR_BOUNDARY: добавлено 2026-09-23
@@ -298,6 +301,17 @@ function withWorkerAgent(
   if (list.some((a) => a.id === agentId)) return list;
   return [...list, { id: agentId, role: agentRole || agentId, brief: '', scope: [] }];
 }
+
+// LIMIT_LOCK: имена лимитов, которые бэкенд присылает в теле 429 (`limit`), сведены к пулам
+// SubscriptionUsage. Неизвестное имя считаем общим отказом и блокируем текущий режим.
+const EXCEEDED_POOL_KEY: Record<string, LimitPoolKey> = {
+  flash: 'flash',
+  pro: 'pro',
+  cowork: 'cowork',
+  cowork_plan: 'cowork',
+  agent: 'coder',
+  agent_daily: 'coder',
+};
 
 export default function App() {
   // EMAIL_AUTH: добавлено 2026-09-19
@@ -821,13 +835,17 @@ export default function App() {
   const chatTab = !isAgent && !students;
   const incognitoActive = incognito && chatTab;
 
-  // LIMIT_LOCK: добавлено 2026-09-27 — пул токенов ТЕКУЩЕГО режима выбран полностью. Для агентских
-  // режимов это значит, что новый запуск всё равно откажет (429 LIMIT_EXCEEDED), поэтому ввод блокируется,
-  // а рядом появляется кнопка тарифов вместо тупика с обрывом генерации.
-  const agentPoolLimit = model === 'conexy-cowork' ? usage?.coworkLimit : usage?.agentLimit;
-  const agentPoolUsed = model === 'conexy-cowork' ? usage?.coworkUsed : usage?.agentUsed;
-  const agentLimitReached =
-    isAgent && usage !== null && (agentPoolLimit ?? 0) > 0 && (agentPoolUsed ?? 0) >= (agentPoolLimit ?? 0);
+  // LIMIT_LOCK: изменено 2026-11-17 — блокировка работает для ВСЕХ пулов: Flash, Pro, Coder и Cowork.
+  // Для чата это запросы выбранной модели, для агента — токены Coder/Cowork. Раньше здесь были только
+  // агентские пулы, поэтому у Flash/Pro лимит обнаруживался лишь ответом 429 посреди генерации.
+  const currentPool = limitPoolForModel(usage, model);
+  const limitReached = isLimitPoolExhausted(currentPool);
+  // Сервер мог отказать раньше, чем обновился снимок расхода: держим экран, пока отказ не снят.
+  // Отказ привязан к своему пулу: лимит Flash не должен запирать Pro после смены модели.
+  const exceededKey = limitExceeded ? EXCEEDED_POOL_KEY[limitExceeded.limit] : undefined;
+  const serverLocked =
+    limitExceeded !== null && (exceededKey === undefined || currentPool === null || exceededKey === currentPool.key);
+  const limitsLocked = limitReached || serverLocked;
 
   const liveRef = useRef({} as {
     token: string | null;
@@ -1298,7 +1316,9 @@ export default function App() {
           const list = withWorkerAgent(m.agents, agentId, role) ?? [];
           return {
             ...m,
-            agents: list.map((a) => (a.id === agentId ? { ...a, status: payload.label } : a)),
+            // FINISHED_STATUS: «Готово» под карточкой помощника — тот же лишний блок, что и у
+            // ведущего: завершение видно по самой задаче, отдельная подпись только засоряет ленту.
+            agents: list.map((a) => (a.id === agentId ? { ...a, status: payload.stage === 'idle' ? '' : payload.label } : a)),
           };
         });
         return;
@@ -1880,6 +1900,9 @@ export default function App() {
   // TURN_SCOPE (H6/L8): «идёт генерация» — это состояние ОТКРЫТОГО чата, а не глобальный флаг.
   const activeStreaming = isSessionStreaming(activeSession);
   const agentRunning = activeStreaming || activeSession?.status === 'Running';
+  // LIMIT_LOCK: идущий ход уже разрешён сервером — не выдёргиваем ленту из-под него, если расход
+  // пересчитался в тот же момент и упёрся в потолок. Блокировка включается после завершения хода.
+  const limitLockShown = limitsLocked && !agentRunning;
   // COMMAND_CONFIRM: автоподтверждение привязано к КОНКРЕТНОМУ запуску (задаче) активного чата.
   // Раньше плашка жила по глобальному allowAllTaskId и висела при переходе в другой чат.
   const activeAllowAll = Boolean(
@@ -2623,7 +2646,8 @@ export default function App() {
         chatKind: live.sessions.find((s) => s.id === sessionId)?.kind ?? live.activeTab,
         regenerate: regenerate ? true : undefined,
         // PHONE_AGENT: агент может работать с телефоном, если есть плагин и настройка включена.
-        usePhone: shouldUsePhone() ? true : undefined,
+        // PHONE_AGENT_MODELS: только Pro и Coder — на Flash/Cowork телефонные инструменты не нужны.
+        usePhone: shouldUsePhone(live.model) ? true : undefined,
         // ORCHESTRA: флаг едет только для Coder; остальное решает сервер по тарифу.
         orchestra: live.orchestra && live.model === 'conexy-coder' ? true : undefined,
         // GITHUB_PAT_PER_USER: личный токен едет только для агентских режимов (у чата нет git-инструментов).
@@ -3500,12 +3524,15 @@ export default function App() {
               </div>
             )}
             <ChatLayout
-              empty={stageEmpty}
+              // LIMIT_LOCK: пока пул выбран полностью, вместо ленты показываем экран с логотипом.
+              empty={stageEmpty || limitLockShown}
               // FOCUS_MODE: mobile only, and never for guests — their hero holds the login and
               // registration buttons, which must not hide the moment the composer is tapped.
-              composerFocused={isMobile && stageEmpty && composerFocused && !isGuest}
+              composerFocused={isMobile && stageEmpty && !limitLockShown && composerFocused && !isGuest}
               hero={
-                isGuest ? (
+                limitLockShown ? (
+                  <LimitLockHero />
+                ) : isGuest ? (
                   <GuestHero
                     mode={isAgent ? 'agent' : students ? 'students' : 'chat'}
                     onLogin={() => setAuthModal('login')}
@@ -3519,7 +3546,7 @@ export default function App() {
                 )
               }
               options={
-                chatTab && authenticated ? (
+                chatTab && authenticated && !limitLockShown ? (
                   <ChatOptions
                     mode={model === 'ConexyV1-pro' ? 'ConexyV1-pro' : 'ConexyV1-flash'}
                     search={smartSearch}
@@ -3528,9 +3555,9 @@ export default function App() {
                   />
                 ) : undefined
               }
-              chips={quickChips}
+              chips={limitLockShown ? [] : quickChips}
               feed={
-                authenticated ? (
+                limitLockShown ? null : authenticated ? (
                   <ChatFeed
                     session={activeSession}
                     nickname={displayName ?? null}
@@ -3584,14 +3611,14 @@ export default function App() {
                       </button>
                     </div>
                   )}
-                  {/* LIMIT_LOCK: пул режима выбран до конца — говорим об этом до ввода и даём выход. */}
-                  {agentLimitReached && (
-                    <div className="agent-limit-banner" role="status">
-                      <span className="agent-limit-banner__text">{t('usage.limitReached')}</span>
-                      <button className="agent-limit-banner__btn" type="button" onClick={handleUpgrade}>
-                        {t('usage.upgrade')}
-                      </button>
-                    </div>
+                  {/* LIMIT_LOCK: плашка о том, что лимит выбран, и когда он вернётся. */}
+                  {limitLockShown && (
+                    <LimitNotice
+                      pool={currentPool?.key ?? null}
+                      resetsAt={(serverLocked ? limitExceeded?.resetsAt : '') || currentPool?.resetsAt || ''}
+                      planRequired={limitExceeded?.limit === 'cowork_plan'}
+                      onUpgrade={handleUpgrade}
+                    />
                   )}
                   <InputBar
                     model={model}
@@ -3610,7 +3637,7 @@ export default function App() {
                     onOrchestraChange={setOrchestra}
                     orchestraAvailable={orchestraAvailable}
                     onUpgradeClick={handleUpgrade}
-                    disabled={!authenticated || activeLoading || agentLimitReached}
+                    disabled={!authenticated || activeLoading || limitLockShown}
                     isGenerating={agentRunning}
                     onStop={handleStop}
                     // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17

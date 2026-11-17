@@ -1119,6 +1119,8 @@ function PhoneSection() {
             {t('phone.toggle')}
           </div>
           <p className="settings-panel__intro">{t('phone.toggleHint')}</p>
+          {/* PHONE_AGENT_MODELS: на Flash и Cowork телефонный агент не работает. */}
+          <p className="settings-panel__intro">{t('phone.modelsOnly')}</p>
         </div>
         <button
           type="button"

@@ -118,6 +118,9 @@ function MessageBubbleBase({
   const thinking = message.thinking ?? '';
   const screenshots = message.screenshots ?? [];
   const streaming = message.status === 'streaming';
+  // FLASH_NO_VISUALS: Flash не рассуждает и не выполняет шаги — у него не должно быть ни плашки
+  // текущего действия («Думаю…», «Анализирую архитектуру…»), ни строк инструментов в ленте.
+  const isFlash = message.model === 'ConexyV1-flash';
 
   const hasThinking = thinking.length > 0;
   const hasScreenshots = screenshots.length > 0;
@@ -143,7 +146,7 @@ function MessageBubbleBase({
   // a cache written before the feed existed has none, so its flat fields are replayed — which keeps
   // its tools and reasoning exactly where the old timeline drew them. Only an agent turn replays its
   // answer into the feed; everywhere else the answer stays a separate bubble (see `feed.text`).
-  const feed = useMemo(
+  const rawFeed = useMemo(
     () =>
       message.blocks ??
       blocksFromLegacy({
@@ -157,6 +160,9 @@ function MessageBubbleBase({
       }),
     [message.blocks, message.toolActions, message.steps, thinking, content, agentTurn],
   );
+  // FLASH_NO_VISUALS: даже если сервер прислал шаги для хода Flash, в ленте остаётся только его
+  // ответ. Иначе под ответом висели бы строки действий, которых у быстрой модели быть не должно.
+  const feed = isFlash ? rawFeed.filter((block) => block.type === 'text') : rawFeed;
   // What the feed already renders. Each of these used to be drawn separately as well — the reasoning
   // accordion, the plan and the answer bubble — which is exactly how the answer ended up glued to the
   // bottom, away from the tools it talked about.
@@ -166,15 +172,18 @@ function MessageBubbleBase({
   // ходов Flash он показывается только при реально пришедших reasoning-токенах (их быть не
   // должно — модель принудительно отключена на бэкенде). Для Pro аккордеон работает как раньше.
   const modelReasons = message.model !== 'ConexyV1-flash';
-  // THINKING_ONCE: one plate per answer, at the top — the model thinks, then answers. Flash never
-  // reasons, so it gets no plate at all, not even the empty "thinking…" placeholder.
   const showThinkingAccordion =
     modelReasons && (hasThinking || phase === 'thinking') && !hasSteps && !parts.thoughts;
   // Live agent status, rendered as a pill only when no tool event already covers it.
   // INTERLEAVED_STREAM: offered for every phase now, not just `tool_calling`. Some phases stream no
   // text of their own — the auditor review is one — so this label is the only trace of them, and the
   // feed hides the pill whenever a thought or tool block is running anyway.
-  const statusPill = currentAction ? { label: currentAction.label } : null;
+  // FINISHED_STATUS: «Готово» (статус idle с бэкенда) — это не действие, а факт завершения, и
+  // отдельной плашкой под ответом оно не нужно. Для Flash плашки нет вообще (см. isFlash).
+  const statusPill =
+    currentAction && !isFlash && currentAction.stage !== 'idle' && currentAction.label
+      ? { label: currentAction.label }
+      : null;
   const showActions = message.status !== 'streaming';
   // FILE_CARDS: files the agent wrote during this turn, derived from its logs and editor events.
   const logs = message.logs;

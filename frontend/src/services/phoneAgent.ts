@@ -141,9 +141,19 @@ function syncNativeEnabled(): void {
   void Promise.resolve(native.setEnabled({ enabled })).catch(() => undefined);
 }
 
-/** Слать ли `usePhone: true` в запросе задачи. */
-export function shouldUsePhone(): boolean {
-  return isPhoneAgentAvailable() && enabled;
+/**
+ * PHONE_AGENT_MODELS: телефонный агент работает только на Pro и Coder. У Flash нет инструментов
+ * (он отвечает сразу, без агентского цикла), а Cowork — про исследования и документы, а не про
+ * действия на устройстве. Для остальных моделей `usePhone` даже не отправляем: сервер иначе
+ * включил бы агентский цикл и телефонные инструменты для хода, которому они не нужны.
+ */
+export function phoneAgentSupportsModel(model: string): boolean {
+  return model === 'ConexyV1-pro' || model === 'conexy-coder';
+}
+
+/** Слать ли `usePhone: true` в запросе задачи для выбранной модели. */
+export function shouldUsePhone(model: string): boolean {
+  return isPhoneAgentAvailable() && enabled && phoneAgentSupportsModel(model);
 }
 
 export function isPhoneOnboardingPending(): boolean {

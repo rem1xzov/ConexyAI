@@ -595,6 +595,22 @@
     "limitReached": "Token limit reached — the agent cannot start until the limit resets",
     "upgrade": "Increase the limit"
   },
+  "limitLock": {
+    "greeting": "Hello, please come back later.",
+    "serverBusy": "The server is busy.",
+    "limitReached": "Usage limit reached.",
+    "planTitle": "This mode is unavailable.",
+    "resetAt": "The limit will be restored on {{date}} at {{time}}.",
+    "resetUnknown": "The limit will reset when the current period ends.",
+    "planRequired": "This mode is available on paid plans only.",
+    "upgrade": "Upgrade plan",
+    "pool": {
+      "flash": "Flash",
+      "pro": "Pro",
+      "coder": "Coder",
+      "cowork": "Cowork"
+    }
+  },
   "toast": {
     "confirmFailed": "Failed to submit the command decision",
     "confirmExpired": "The decision was not applied: this command is no longer waiting for confirmation"
@@ -775,6 +791,7 @@
     "later": "Later",
     "toggle": "Phone agent",
     "toggleHint": "Lets the agent act on this phone. When off, the agent works as before — without access to the phone.",
+    "modelsOnly": "The phone agent only works with the Pro and Coder models. It is unavailable on Flash and Cowork.",
     "statusTitle": "Status",
     "server": "Server connection",
     "connected": "connected",

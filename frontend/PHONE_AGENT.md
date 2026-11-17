@@ -160,6 +160,9 @@ Java-класс `conexy.app.PhoneAgentPlugin` (`@CapacitorPlugin(name = "PhoneAg
   fallback на `Capacitor.Plugins`). `startPhoneAgent()` вызывается из `main.tsx`.
 - Настройка «Агент телефона» — `localStorage['conexy.phoneAgent.enabled']` (по умолчанию включена). Если выключена,
   `usePhone` не шлётся, а пришедший `PhoneTool` получает `isError=true`. Флаг онбординга — `conexy.phoneAgent.onboarded`.
+- **Модели:** `shouldUsePhone(model)` отправляет `usePhone` только для `ConexyV1-pro` и `conexy-coder`
+  (`phoneAgentSupportsModel`). На `ConexyV1-flash` и `conexy-cowork` агент телефона не включается: у Flash нет
+  инструментов, а Cowork — про исследования и документы, а не про действия на устройстве.
 - Таймаут инструмента: 120 с, для `phone_request_permission` и `phone_gallery_pick` — 300 с. Результат шлётся через
   `invokeHub` с 5 повторами (пока хаб переподключается); `output` не усекается.
 - `RegisterPhone` шлётся после каждого подключения хаба и по `permissionsChanged`; сразу за ним — `SetPhoneForeground`.
