@@ -1752,6 +1752,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 " task=" + taskId +
                 " toolCalls=" + (responseMessage.ToolCalls?.Count ?? 0) +
                 " contentChars=" + (responseMessage.Text?.Length ?? 0) +
+                " historyTokens=" + TokenMeter.Estimate(messages) +
                 " historyAttached=" + Math.Max(0, messages.Count - 3));
 
             if (responseMessage.ToolCalls == null || responseMessage.ToolCalls.Count == 0)
