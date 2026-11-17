@@ -38,6 +38,7 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("context: a big tool result becomes a preview plus a spill file", SpillAsync);
         TestRegistry.Add("context: the token meter estimates before sending", TokenMeterAsync);
         TestRegistry.Add("context: unchanged project rules are not resent", InstructionDigestAsync);
+        TestRegistry.Add("context: @paths are references, not inlined content", FileReferencesAsync);
         TestRegistry.Add("write: a large file can be built in parts with append", AppendWriteAsync);
         TestRegistry.Add("policy: deleting or rolling back files is never silent", DestructiveClassAsync);
         TestRegistry.Add("write: empty or shrunken content never wipes an existing file", WriteGuardAsync);
@@ -803,6 +804,18 @@ internal static class AgentLoopGuardTests
         Assert(updated is not null && updated.Contains("rules v2"), "a changed file brings a delta");
         Assert(digest.Delta(null, null) is not null, "removed rules are announced");
         Assert(digest.Delta(null, null) is null, "a second empty read is silent");
+        return Task.CompletedTask;
+    }
+    // FILE_REFERENCES: перенос context/file-reference — только пути, без содержимого.
+    private static Task FileReferencesAsync()
+    {
+        var paths = FileReferences.Extract("посмотри @SwampAttack/js/game.js и @src/app.ts, не @trap");
+        Assert(paths.Count == 2, "two file mentions are found, got " + paths.Count);
+        Assert(paths.Contains("SwampAttack/js/game.js"), "the path is kept as written");
+        Assert(paths.Contains("src/app.ts"), "windows-style paths are normalised");
+        var block = FileReferences.Prompt(paths);
+        Assert(block.Contains("только пути") && !block.Contains("function "), "no file content is inlined");
+        Assert(FileReferences.Extract("нет упоминаний").Count == 0, "plain text has no references");
         return Task.CompletedTask;
     }
 }

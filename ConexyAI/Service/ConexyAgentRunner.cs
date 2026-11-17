@@ -1414,6 +1414,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
             await group.SendAsync("OnLog", $"[Skills] {string.Join(", ", _skillSummaries.Select(s => s.Name))}", ct);
         }
 
+        // FILE_REFERENCES: «@путь» — это ссылка, а не вставка содержимого (как в harness).
+        var mentionedFiles = FileReferences.Extract(_job.Prompt);
+        if (mentionedFiles.Count > 0)
+        {
+            var insertAt = messages.Count > 0 && messages[0].Role == "system" ? 1 : 0;
+            messages.Insert(insertAt, new ChatMessage("system", FileReferences.Prompt(mentionedFiles)));
+            await group.SendAsync("OnLog", $"[Files] {string.Join(", ", mentionedFiles)}", ct);
+        }
+
         // USER_LINKS: пользователь прислал ссылку — открываем её, а не отвечаем по названию домена.
         // Текст читает fetch_web_page; макеты и SPA — browser_open + browser_screenshot.
         IReadOnlyList<string> userLinks = _profile.Allows(FetchWebPageTool.Name) ? WebLinks.Extract(_job.Prompt) : [];
