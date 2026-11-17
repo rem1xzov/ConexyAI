@@ -37,6 +37,7 @@ internal static class AgentLoopGuardTests
         TestRegistry.Add("scope: a run-and-show request does not allow editing code", RequestScopeAsync);
         TestRegistry.Add("context: a big tool result becomes a preview plus a spill file", SpillAsync);
         TestRegistry.Add("context: the token meter estimates before sending", TokenMeterAsync);
+        TestRegistry.Add("context: unchanged project rules are not resent", InstructionDigestAsync);
         TestRegistry.Add("write: a large file can be built in parts with append", AppendWriteAsync);
         TestRegistry.Add("policy: deleting or rolling back files is never silent", DestructiveClassAsync);
         TestRegistry.Add("write: empty or shrunken content never wipes an existing file", WriteGuardAsync);
@@ -787,6 +788,21 @@ internal static class AgentLoopGuardTests
         Assert(TokenMeter.NeedsCompaction(messages, contextWindow: 1_000, ratio: 0.8) == false,
             "small history needs no compaction");
         Assert(TokenMeter.NeedsCompaction(messages, contextWindow: 200, ratio: 0.8), "a full history does");
+        return Task.CompletedTask;
+    }
+
+    // INSTRUCTION_DIGEST: перенос context/agent-instructions — неизменённые правила не переотправляются.
+    private static Task InstructionDigestAsync()
+    {
+        var digest = new InstructionDigest();
+        Assert(digest.Delta("rules v1", ["AGENTS.md"]) == "rules v1", "the first read is the full block");
+        Assert(digest.Delta("rules v1", ["AGENTS.md"]) is null, "an unchanged file costs nothing");
+        Assert(digest.Delta("rules v1   ", ["AGENTS.md"]) is null, "trailing spaces are not a change");
+
+        var updated = digest.Delta("rules v2", ["AGENTS.md"]);
+        Assert(updated is not null && updated.Contains("rules v2"), "a changed file brings a delta");
+        Assert(digest.Delta(null, null) is not null, "removed rules are announced");
+        Assert(digest.Delta(null, null) is null, "a second empty read is silent");
         return Task.CompletedTask;
     }
 }

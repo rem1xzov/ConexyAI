@@ -1392,11 +1392,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // PROJECT_RULES: добавлено 2026-09-24 — CONEXY.md / CLAUDE.md / .conexy/rules.md из корня
         // рабочей области идут отдельным system-сообщением сразу после основного промпта.
         var projectRules = await LoadProjectRulesAsync(chatId, ct);
-        if (projectRules is not null)
+        // INSTRUCTION_DIGEST: помним отпечаток правил, чтобы не переотправлять неизменённое и подхватить
+        // правку AGENTS.md посреди задачи (раньше правила читались один раз и устаревали).
+        var rulesDigest = new InstructionDigest();
+        var rulesSeen = rulesDigest.Delta(projectRules?.Prompt, projectRules?.Files);
+        if (rulesSeen is not null)
         {
             var insertAt = messages.Count > 0 && messages[0].Role == "system" ? 1 : 0;
-            messages.Insert(insertAt, new ChatMessage("system", projectRules.Prompt));
-            await group.SendAsync("OnLog", $"[Project Rules] Loaded {string.Join(", ", projectRules.Files)}", ct);
+            messages.Insert(insertAt, new ChatMessage("system", rulesSeen));
+            await group.SendAsync("OnLog", $"[Project Rules] Loaded {string.Join(", ", projectRules!.Files)}", ct);
         }
 
         // AGENT_SKILLS: добавлено 2026-10-18 — скиллы пользователя: в промпт только имя и «когда применять»,
@@ -1603,6 +1607,18 @@ public class ConexyAgentRunner : IConexyAgentRunner
         {
             completedSteps = step;
             ct.ThrowIfCancellationRequested();
+
+            // INSTRUCTION_DIGEST: раз в 5 шагов перечитываем правила проекта. Изменились — дописываем
+            // только дельту; не изменились — не тратим ни одного токена.
+            if (step > 1 && step % 5 == 0)
+            {
+                var fresh = await LoadProjectRulesAsync(chatId, ct);
+                if (rulesDigest.Delta(fresh?.Prompt, fresh?.Files) is { } rulesDelta)
+                {
+                    messages.Add(new ChatMessage("system", rulesDelta));
+                    await group.SendAsync("OnLog", "[Project Rules] Правила проекта изменились — обновляю.", ct);
+                }
+            }
 
             // SCOPE: один раз за прогон явно говорим, что именно попросили и где остановиться.
             if (!scopeNudged && scope.Intent != ScopeIntent.Unknown)
