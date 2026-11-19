@@ -1,4 +1,4 @@
-﻿using System.IO.Compression;
+using System.IO.Compression;
 using ConexyAI.Contract;
 using ConexyAI.Extensions;
 using ConexyAI.Repository;
@@ -25,6 +25,8 @@ public class ConexyController : ControllerBase
     private readonly ISandboxActivity _sandboxActivity;
     private readonly IConexyCancellationRegistry _cancellations;
     private readonly ILogger<ConexyController> _logger;
+    // SHARE_TO_ADMIN: добавлено 2026-11-19 — жалоба пользователя: чат + действия агента + скриншот.
+    private readonly IChatShareService? _chatShares;
 
     public ConexyController(
         IConexyService conexyService,
@@ -34,7 +36,9 @@ public class ConexyController : ControllerBase
         IIncognitoChatStore incognito,
         ISandboxActivity sandboxActivity,
         IConexyCancellationRegistry cancellations,
-        ILogger<ConexyController> logger)
+        ILogger<ConexyController> logger,
+        // Необязательный последний параметр: тесты собирают контроллер вручную.
+        IChatShareService? chatShares = null)
     {
         _conexyService = conexyService;
         _workspaceService = workspaceService;
@@ -44,6 +48,7 @@ public class ConexyController : ControllerBase
         _sandboxActivity = sandboxActivity;
         _cancellations = cancellations;
         _logger = logger;
+        _chatShares = chatShares;
     }
 
     [HttpPost("run")]
@@ -211,6 +216,48 @@ public class ConexyController : ControllerBase
             return NotFound(new { error = "Chat not found." });
 
         _logger.LogInformation("Chat {ChatId} public link revoked by user {UserId}.", chatId, userId);
+        return NoContent();
+    }
+
+    // SHARE_TO_ADMIN: добавлено 2026-11-19 — пользователь делится чатом с админами, чтобы разработчик
+    // увидел ход агента, и может приложить скриншот визуального бага. Только владелец чата.
+    /// <summary>
+    /// Creates or refreshes the share-to-admin report of one chat: optional comment and screenshot.
+    /// The admins then see the transcript, the agent's tool actions and the screenshot.
+    /// </summary>
+    [HttpPost("chats/{chatId:guid}/share-to-admin")]
+    [RequestSizeLimit(12_000_000)]
+    public async Task<ActionResult<ShareToAdminResponse>> ShareToAdmin(
+        Guid chatId, [FromBody] ShareToAdminRequest request, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        if (_chatShares is null)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable);
+
+        try
+        {
+            var response = await _chatShares.ShareAsync(userId, chatId, request, ct);
+            _logger.LogInformation("Chat {ChatId} shared with admins by user {UserId}.", chatId, userId);
+            return Ok(response);
+        }
+        catch (AuthException ex)
+        {
+            return StatusCode(ex.StatusCode, new { code = ex.Code, message = ex.Message });
+        }
+    }
+
+    /// <summary>Revokes the share-to-admin report of one chat. Only its owner can do this.</summary>
+    [HttpDelete("chats/{chatId:guid}/share-to-admin")]
+    public async Task<IActionResult> UnshareToAdmin(Guid chatId, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+        if (_chatShares is null)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable);
+
+        await _chatShares.RevokeAsync(userId, chatId, ct);
+        _logger.LogInformation("Chat {ChatId} share-to-admin revoked by user {UserId}.", chatId, userId);
         return NoContent();
     }
 

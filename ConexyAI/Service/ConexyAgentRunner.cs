@@ -56,6 +56,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly IDiagnosticsService? _diagnosticsService;
     // AGENT_HOOKS: добавлено 2026-10-04 — пользовательские хуки проекта (.conexy/hooks.json).
     private readonly IAgentHooksService? _hooksService;
+    // SHARE_TO_ADMIN: добавлено 2026-11-19 — журнал действий агента для разбора багов админом.
+    private readonly IChatAgentLog? _chatAgentLog;
     // MCP: добавлено 2026-10-04 — удалённые MCP-серверы (уровень A, Streamable HTTP). Реестр создаётся
     // на прогон, потому что включает ЛИЧНЫЕ серверы пользователя из запроса.
     private IMcpRegistry? _mcpRegistry;
@@ -1321,7 +1323,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         Phone.IPhoneApprovalService? phoneApprovals = null,
         Phone.IPhoneNotifier? phoneNotifier = null,
         // MCP_OAUTH: добавлено 2026-11-03 — авторизация MCP-сервера в браузере.
-        IMcpOAuthService? mcpOAuthService = null)
+        IMcpOAuthService? mcpOAuthService = null,
+        // SHARE_TO_ADMIN: добавлено 2026-11-19 — журнал действий агента для разбора багов админом.
+        IChatAgentLog? chatAgentLog = null)
     {
         _phoneBridge = phoneBridge;
         _phoneApprovals = phoneApprovals;
@@ -1355,6 +1359,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _mcpRegistryFactory = mcpRegistryFactory;
         _mcpOAuthService = mcpOAuthService;
         _deviceBridge = deviceBridge;
+        _chatAgentLog = chatAgentLog;
 
         var configured = agentOptions.Value.MaxIterations;
         // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
@@ -2386,6 +2391,20 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     loopGuard.Record(toolName, toolCall.Function.Arguments, result.Output, result.IsError);
                     completionGuard.Record(
                         toolName, toolCall.Function.Arguments, result.Output, result.IsError, result.CommandExecuted);
+                    // SHARE_TO_ADMIN: сохраняем действие агента (инструмент, аргументы, вывод), чтобы
+                    // админ разобрал баг по фактам, а не по тексту ответа. Лог не должен ломать ход.
+                    if (_chatAgentLog is not null)
+                    {
+                        try
+                        {
+                            await _chatAgentLog.RecordToolAsync(
+                                chatId, taskId, toolName, toolCall.Function.Arguments, result.Output, result.IsError);
+                        }
+                        catch (Exception logEx)
+                        {
+                            _logger.LogDebug(logEx, "Agent action log failed for task {TaskId}.", taskId);
+                        }
+                    }
                     // EDIT_AFTER_READ: запоминаем именно успешное чтение — отказ в чтении не делает
                     // файл «прочитанным» (иначе гейт подтверждал бы сам себя).
                     if (!result.IsError)

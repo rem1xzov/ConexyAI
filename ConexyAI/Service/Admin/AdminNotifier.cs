@@ -17,6 +17,9 @@ public interface IAdminNotifier
 
     /// <summary>Пользователь нажал «Не помогло» и ждёт оператора.</summary>
     Task SupportEscalatedAsync(Guid userId, Guid ticketId, string? subject, string? lastMessage, CancellationToken ct = default);
+
+    /// <summary>SHARE_TO_ADMIN: пользователь поделился чатом, чтобы админ разобрал баг.</summary>
+    Task ChatSharedAsync(Guid userId, Guid chatId, string? chatTitle, string? comment, CancellationToken ct = default);
 }
 
 public sealed class AdminNotifier : IAdminNotifier
@@ -86,8 +89,28 @@ public sealed class AdminNotifier : IAdminNotifier
         }
     }
 
-    private async Task SendToAdminsAsync(
-        string type,
+    public async Task ChatSharedAsync(Guid userId, Guid chatId, string? chatTitle, string? comment, CancellationToken ct = default)
+    {
+        try
+        {
+            using var scope = _scopes.CreateScope();
+            var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+            var buyer = await DescribeAsync(users, userId, ct);
+
+            const string title = "Пользователь поделился чатом";
+            var topic = string.IsNullOrWhiteSpace(chatTitle) ? "чат с багом" : chatTitle.Trim();
+            var preview = Trim(comment, BodyLimit);
+            var body = preview.Length == 0 ? $"{buyer}: {topic}" : $"{buyer}: {topic} — «{preview}»";
+
+            await SendToAdminsAsync("admin_chat_share", title, body, chatId.ToString(), users, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Admin chat-share notification failed for chat {ChatId}.", chatId);
+        }
+    }
+
+    private async Task SendToAdminsAsync(        string type,
         string title,
         string body,
         string eventId,

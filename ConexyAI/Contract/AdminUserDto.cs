@@ -9,7 +9,10 @@ public record AdminUserDto(
     DateTime CreatedAt,
     string Tier,
     bool IsAdmin,
-    bool IsSuperAdmin);
+    bool IsSuperAdmin,
+    // ADMIN_TOKEN_CREDIT: добавлено 2026-11-19 — купленный (и выданный админом) объём токенов.
+    long CoderTokenTopUp = 0,
+    long CoworkTokenTopUp = 0);
 
 /// <summary>Paginated admin-panel user list.</summary>
 public record AdminUsersResponse(
@@ -22,3 +25,7 @@ public record AdminUsersResponse(
 /// <summary>Body for the admin "set subscription" action. <c>Months</c> &gt; 0 — до этой даты,
 /// иначе тариф выдаётся бессрочно (ручная выдача).</summary>
 public record AdminSetSubscriptionRequest(string Tier, int? Months);
+
+// ADMIN_TOKEN_CREDIT: добавлено 2026-11-19 — админ вводит сумму и начисляет токены пользователю.
+/// <summary>Body of <c>POST /api/admin/users/{id}/tokens</c>: pool (Coder|Cowork), amount, reason.</summary>
+public record AdminCreditTokensRequest(string? Pool, long Amount, string? Reason);

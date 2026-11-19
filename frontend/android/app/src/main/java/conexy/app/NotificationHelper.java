@@ -111,7 +111,9 @@ final class NotificationHelper {
         ensureChannels(context);
 
         if (type == null || !("confirm".equals(type) || "phone_needed".equals(type)
-                || "admin_payment".equals(type) || "admin_support".equals(type))) {
+                || "admin_payment".equals(type) || "admin_support".equals(type)
+                // SHARE_TO_ADMIN: добавлено 2026-11-19 — push о том, что пользователь поделился чатом.
+                || "admin_chat_share".equals(type))) {
             type = "completed";
         }
         actionId = nz(actionId);

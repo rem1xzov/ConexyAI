@@ -311,6 +311,12 @@ builder.Services.AddSingleton<IIncognitoChatStore, IncognitoChatStore>();
 builder.Services.AddHostedService<IncognitoCleanupService>();
 // CHAT_OWNERSHIP: добавлено 2026-09-24 — ревью C1: владелец каждого chat id.
 builder.Services.AddScoped<IChatAccessService, ChatAccessService>();
+// SHARE_TO_ADMIN: добавлено 2026-11-19 — жалобы «поделиться чатом с админом» (диалог + действия
+// агента + скриншот) и журнал действий агента для разбора багов.
+builder.Services.AddScoped<ConexyAI.Service.IChatShareService, ConexyAI.Service.ChatShareService>();
+builder.Services.AddScoped<ConexyAI.Service.IChatAgentLog, ConexyAI.Service.ChatAgentLog>();
+// ADMIN_TOKEN_CREDIT: добавлено 2026-11-19 — ручное начисление токенов админом из админ-панели.
+builder.Services.AddScoped<ConexyAI.Service.IAdminTokenService, ConexyAI.Service.AdminTokenService>();
 // USER_PREFERENCES: добавлено 2026-09-24 — пользовательские инструкции и переключатель памяти.
 builder.Services.AddScoped<IUserPreferencesService, UserPreferencesService>();
 // USER_INTEGRATIONS: добавлено 2026-10-10 — серверное хранение кредов агента (GitHub PAT, MCP).

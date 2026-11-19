@@ -33,18 +33,24 @@ public class AdminController : ControllerBase
     // USER_DATA_CLEANUP: добавлено 2026-09-24 — ревью M9: файлы пользователя удаляются вместе с ним.
     private readonly IUserDataCleanupService _cleanup;
 
+    // ADMIN_TOKEN_CREDIT: добавлено 2026-11-19 — ручное начисление токенов пользователю.
+    private readonly IAdminTokenService? _tokenService;
+
     public AdminController(
         IUserRepository userRepository,
         IOptions<AdminAccountsOptions> adminOptions,
         ILogger<AdminController> logger,
         IUserDataCleanupService cleanup,
-        IPaymentRepository paymentRepository)
+        IPaymentRepository paymentRepository,
+        // Необязательный последний параметр: тесты собирают контроллер вручную.
+        IAdminTokenService? tokenService = null)
     {
         _cleanup = cleanup;
         _userRepository = userRepository;
         _adminOptions = adminOptions;
         _logger = logger;
         _paymentRepository = paymentRepository;
+        _tokenService = tokenService;
     }
 
     /// <summary>Paginated list of users (admin only).</summary>
@@ -150,9 +156,39 @@ public class AdminController : ControllerBase
         return Ok(ToDto(target));
     }
 
+    // ADMIN_TOKEN_CREDIT: добавлено 2026-11-19 — админ вводит сумму и начисляет токены пользователю.
+    /// <summary>
+    /// Credits tokens to a user's pool (Coder or Cowork) from the admin panel. Only administrators may
+    /// call this; the credit is atomic and recorded in the admin_token_grant journal.
+    /// </summary>
+    [HttpPost("users/{id:guid}/tokens")]
+    public async Task<ActionResult<AdminUserDto>> CreditTokens(
+        Guid id, [FromBody] AdminCreditTokensRequest request, CancellationToken ct)
+    {
+        if (!User.IsAdmin())
+            return Forbid();
+
+        if (_tokenService is null)
+            return StatusCode(503);
+
+        User.TryGetUserId(out var adminId);
+        try
+        {
+            var credited = await _tokenService.CreditAsync(id, adminId, request.Pool, request.Amount, request.Reason, ct);
+            if (!credited)
+                return NotFound();
+        }
+        catch (AuthException ex)
+        {
+            return StatusCode(ex.StatusCode, new { code = ex.Code, message = ex.Message });
+        }
+
+        var target = await _userRepository.GetByIdAsync(id, ct);
+        return target is null ? NotFound() : Ok(ToDto(target));
+    }
+
     /// <summary>Deletes a user and all their data via FK cascade (admin only; superadmins are protected).</summary>
-    [HttpDelete("users/{id:guid}")]
-    public async Task<IActionResult> DeleteUser(Guid id, CancellationToken ct)
+    [HttpDelete("users/{id:guid}")]    public async Task<IActionResult> DeleteUser(Guid id, CancellationToken ct)
     {
         if (!User.IsAdmin())
             return Forbid();
@@ -243,5 +279,8 @@ public class AdminController : ControllerBase
         // TIER_DISPLAY: тариф с учётом срока — истёкшая подписка показывается как Free.
         SubscriptionService.EffectiveTier(u, DateTime.UtcNow).ToString(),
         u.IsAdmin,
-        IsSuperAdmin(u));
+        IsSuperAdmin(u),
+        // ADMIN_TOKEN_CREDIT: добавлено 2026-11-19 — сколько токенов куплено/выдано пользователю.
+        u.CoderTokenTopUp,
+        u.CoworkTokenTopUp);
 }

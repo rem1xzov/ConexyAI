@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using ConexyAI.Entity;
 using Microsoft.EntityFrameworkCore;
 
@@ -45,6 +45,12 @@ public class DbConexy : Microsoft.EntityFrameworkCore.DbContext
     public DbSet<SupportMessage> SupportMessages => Set<SupportMessage>();
     // SUPPORT_ATTACHMENTS: добавлено 2026-10-18
     public DbSet<SupportAttachment> SupportAttachments => Set<SupportAttachment>();
+
+    // SHARE_TO_ADMIN: добавлено 2026-11-19 — «поделиться чатом с админом», журнал действий агента
+    // и журнал ручных начислений токенов админом.
+    public DbSet<ChatShareReportEntity> ChatShareReports => Set<ChatShareReportEntity>();
+    public DbSet<ChatAgentEventEntity> ChatAgentEvents => Set<ChatAgentEventEntity>();
+    public DbSet<AdminTokenGrantEntity> AdminTokenGrants => Set<AdminTokenGrantEntity>();
 
     // AGENT_SKILLS: добавлено 2026-10-18 — скиллы агента пользователя (SKILL.md).
     public DbSet<UserSkill> UserSkills => Set<UserSkill>();
