@@ -362,7 +362,8 @@
     "scope": "Scope:",
     "idle": "Working…",
     "starting": "Spawning sub-agents: setting up roles and tasks…",
-    "running": "Orchestra: {{count}} agents working on the task…"
+    "running": "Orchestra: {{count}} agents working on the task…",
+    "cursorAt": "cursor {{x}}, {{y}}"
   },
   "admin": {
     "title": "Admin panel",

@@ -62,6 +62,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly IRepoMapService? _repoMap;
     // LOCAL_WORKER: маршруты моделей — облачная ведущая и локальная модель как субагент.
     private readonly ILlmRouteResolver? _routes;
+    // AGENT_CURSOR: курсоры агентов (для веба/TUI/оверлея) и аренда ввода на один ПК.
+    private readonly ComputerCursorRegistry? _cursors;
+    private readonly ComputerInputLease? _inputLease;
     // MCP: добавлено 2026-10-04 — удалённые MCP-серверы (уровень A, Streamable HTTP). Реестр создаётся
     // на прогон, потому что включает ЛИЧНЫЕ серверы пользователя из запроса.
     private IMcpRegistry? _mcpRegistry;
@@ -1347,7 +1350,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // REPO_MAP: добавлено 2026-11-19 — карта проекта для контекста и инструмента `repo_map`.
         IRepoMapService? repoMap = null,
         // LOCAL_WORKER: добавлено 2026-11-19 — маршруты моделей (локальная модель для субагентов).
-        ILlmRouteResolver? routes = null)
+        ILlmRouteResolver? routes = null,
+        // AGENT_CURSOR: добавлено 2026-11-19 — где каждый агент действует на экране (веб/TUI/оверлей).
+        ComputerCursorRegistry? cursors = null,
+        // AGENT_CURSOR: ввод на один ПК сериализуется — физическая мышь одна.
+        ComputerInputLease? inputLease = null)
     {
         _phoneBridge = phoneBridge;
         _phoneApprovals = phoneApprovals;
@@ -1384,6 +1391,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _chatAgentLog = chatAgentLog;
         _repoMap = repoMap;
         _routes = routes;
+        _cursors = cursors;
+        _inputLease = inputLease;
 
         var configured = agentOptions.Value.MaxIterations;
         // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
@@ -2781,6 +2790,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
             await DrainTeamAsync(taskId);
             // SUBAGENT_AUTONOMY: расход команды этого прогона больше не нужен.
             TeamTokensSpent.TryRemove(taskId, out _);
+            // AGENT_CURSOR: прогон закончился — экран снова свободен, курсоры не висят.
+            _cursors?.Clear(taskId);
+            _inputLease?.Release(_job.UserId, _agent.Id);
             return text;
         }
     }
@@ -5593,10 +5605,38 @@ public class ConexyAgentRunner : IConexyAgentRunner
             return new ConexyToolResult(toolCall.Id, offline, true);
 
         await SendAgentStatusAsync(taskId, "executing", DeviceToolLabel(tool), ct: ct);
-        var outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, tool, toolCall.Function.Arguments, ct, _job.DeviceProjectId, _job.RemoteApprovals);
+
+        // AGENT_CURSOR: физическая мышь одна — ввод держит один агент за раз. Второй помощник получает
+        // честный отказ с именем владельца, а не молча кликает поверх чужого действия.
+        var holdsInput = IsComputerTool(tool) && ComputerUseGuard.HoldsInput(tool);
+        if (holdsInput && _inputLease is not null
+            && !_inputLease.TryAcquire(_job.UserId, _agent.Id, _agent.Role, out var ownerRole))
+        {
+            return new ConexyToolResult(
+                toolCall.Id,
+                $"[Экран занят] Сейчас экраном управляет агент «{ownerRole}». Не действуй параллельно: " +
+                "посмотри экран (`computer_screen`) или подожди и повтори действие после его шага.",
+                true);
+        }
+
+        var outcome = default(ConexyAI.Service.Device.DeviceToolOutcome)!;
+        try
+        {
+            outcome = await _deviceBridge.ExecuteAsync(_job.UserId, taskId, tool, toolCall.Function.Arguments, ct, _job.DeviceProjectId, _job.RemoteApprovals);
+        }
+        finally
+        {
+            if (holdsInput)
+                _inputLease?.Release(_job.UserId, _agent.Id);
+        }
+
         // COMPUTER_USE: состояние кадра после действия — основа защиты от циклов и учёта прогресса.
         if (IsComputerTool(tool))
+        {
             _computerGuard.Record(tool, toolCall.Function.Arguments, outcome.Output, outcome.IsError);
+            // AGENT_CURSOR: рассылаем, где агент действует на экране (web/TUI и оверлей на ПК).
+            await PublishCursorAsync(taskId, group, tool, toolCall.Function.Arguments, outcome.Output, ct);
+        }
         if (outcome.IsError && IsDeviceOffline(outcome.Output))
         {
             _deviceOffline = true;
@@ -5624,6 +5664,66 @@ public class ConexyAgentRunner : IConexyAgentRunner
             ? " Экран после действия НЕ изменился (screen_state.changed=false): не повторяй это действие — смени подход или уточни задачу."
             : string.Empty;
         return new ConexyToolResult(toolCall.Id, ("Скриншот снят и приложен для визуальной проверки. " + note).Trim() + noEffect, false);
+    }
+
+    // AGENT_CURSOR: добавлено 2026-11-19
+    /// <summary>
+    /// Публикует последнее действие агента на экране: координаты, цвет и изменился ли кадр. Событие
+    /// уходит в группу задачи (веб/TUI) и напрямую на активное устройство — оверлей рисует курсоры.
+    /// </summary>
+    private async Task PublishCursorAsync(
+        Guid taskId,
+        IClientProxy group,
+        string tool,
+        string arguments,
+        string? output,
+        CancellationToken ct)
+    {
+        if (_cursors is null)
+            return;
+
+        var state = ScreenStateParser.Parse(output);
+        var (x, y, toX, toY) = CursorArgs.Parse(arguments);
+        var cursor = new AgentCursorState(
+            taskId.ToString(),
+            _agent.Id,
+            _agent.Role,
+            AgentCursorColors.For(_agent.Id),
+            tool,
+            x,
+            y,
+            toX,
+            toY,
+            state?.Changed,
+            DateTime.UtcNow);
+        _cursors.Update(cursor);
+
+        var payload = new
+        {
+            taskId = taskId.ToString(),
+            agentId = cursor.AgentId,
+            agentRole = cursor.AgentRole,
+            color = cursor.Color,
+            tool = cursor.Tool,
+            x = cursor.X,
+            y = cursor.Y,
+            toX = cursor.ToX,
+            toY = cursor.ToY,
+            changed = cursor.Changed,
+            at = cursor.At,
+        };
+
+        try
+        {
+            await group.SendAsync("AgentCursor", payload, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Agent cursor broadcast failed. task={TaskId}", taskId);
+        }
+
+        if (_deviceBridge is not null)
+            await _deviceBridge.SendEventAsync(_job.UserId, "AgentCursor", payload, ct);
     }
 
     // PHONE_AGENT: запуск инструмента phone_* на телефоне: ждём подключения, спрашиваем подтверждение для

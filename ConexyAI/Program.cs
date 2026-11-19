@@ -323,6 +323,9 @@ builder.Services.Configure<ConexyAI.Configuration.RepoMapOptions>(
 builder.Services.AddScoped<ConexyAI.Service.IRepoMapService, ConexyAI.Service.RepoMapService>();
 // LOCAL_WORKER: добавлено 2026-11-19 — маршруты моделей: облачная ведущая + локальная как субагент.
 builder.Services.AddSingleton<ConexyAI.Service.ILlmRouteResolver, ConexyAI.Service.LlmRouteResolver>();
+// AGENT_CURSOR: добавлено 2026-11-19 — курсоры агентов и аренда ввода на один ПК.
+builder.Services.AddSingleton<ConexyAI.Service.ComputerCursorRegistry>();
+builder.Services.AddSingleton<ConexyAI.Service.ComputerInputLease>();
 // USER_PREFERENCES: добавлено 2026-09-24 — пользовательские инструкции и переключатель памяти.
 builder.Services.AddScoped<IUserPreferencesService, UserPreferencesService>();
 // USER_INTEGRATIONS: добавлено 2026-10-10 — серверное хранение кредов агента (GitHub PAT, MCP).

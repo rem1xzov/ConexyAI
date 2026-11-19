@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TeamAgent, TurnBlock, TurnThoughtBlock, TurnToolBlock } from '../types/chat';
-import type { CommandDecisionHandler, ToolActionEvent } from '../types/signalr';
+import type { CommandDecisionHandler, AgentCursorPayload, ToolActionEvent } from '../types/signalr';
 import { ActionStepLine, type ActionKind, type ActionState } from './ActionStepLine';
 import { ChevronDownIcon, GlobeIcon } from './Icons';
 import { CommandConfirmCard } from './CommandConfirmCard';
@@ -43,6 +43,8 @@ interface AgentTimelineProps {
   onOpenPath?: (path: string) => void;
   // ORCHESTRA: состав команды — когда задан, лента рисуется карточками по агентам.
   agents?: TeamAgent[];
+  // AGENT_CURSOR: где каждый агент действует на экране ПК (цвет и последняя точка).
+  cursors?: Record<string, AgentCursorPayload>;
 }
 
 function stateFrom(event: ToolActionEvent): ActionState {
@@ -273,8 +275,21 @@ export function AgentTimeline({
   statusPill,
   onOpenPath,
   agents,
+  cursors,
 }: AgentTimelineProps) {
   const { t } = useTranslation();
+
+  // AGENT_CURSOR: одна и та же точка/цвет для ведущего и помощников — так видно, кто где на экране.
+  const renderCursor = (cursor?: AgentCursorPayload) => {
+    if (!cursor) return null;
+    const hasPoint = cursor.x != null && cursor.y != null;
+    return (
+      <span className="agent-card__cursor" title={cursor.tool}>
+        <span className="agent-card__dot" style={{ backgroundColor: cursor.color }} aria-hidden="true" />
+        {hasPoint ? t('orchestra.cursorAt', { x: cursor.x, y: cursor.y }) : cursor.tool}
+      </span>
+    );
+  };
 
   const feed = collapseThoughts(blocks);
   if (feed.length === 0 && !statusPill) return null;
@@ -430,6 +445,7 @@ export function AgentTimeline({
         <section className="agent-card agent-card--lead">
           <header className="agent-card__head">
             <span className="agent-card__role">{t('orchestra.lead')}</span>
+            {renderCursor(cursors?.lead)}
             {statusPill && <span className="agent-card__status">{statusPill.label}</span>}
           </header>
           <div className="agent-card__feed">{renderBlocks(leadBlocks)}</div>
@@ -441,6 +457,7 @@ export function AgentTimeline({
             <section key={agent.id} className="agent-card">
               <header className="agent-card__head">
                 <span className="agent-card__role">{agent.role}</span>
+                {renderCursor(cursors?.[agent.id])}
                 {agent.status && <span className="agent-card__status">{agent.status}</span>}
               </header>
               {agent.scope.length > 0 && (

@@ -33,6 +33,11 @@ public sealed class ComputerUseGuard
         tool.StartsWith("computer_", StringComparison.Ordinal)
         && tool is not ("computer_screen" or "computer_wait");
 
+    /// <summary>Держит ли инструмент физический ввод (мышь/клавиатуру) — такой ввод сериализуется.</summary>
+    public static bool HoldsInput(string tool) => tool is
+        "computer_click" or "computer_drag" or "computer_scroll" or "computer_type" or "computer_key" or
+        "computer_open" or "computer_move";
+
     /// <summary>
     /// Проверка ПЕРЕД действием: <c>null</c> — можно, иначе готовый текст отказа с требованием
     /// сменить подход (а не повторять то же самое).

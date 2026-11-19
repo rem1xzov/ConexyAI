@@ -12,6 +12,23 @@ export interface AgentStatusPayload {
   agentRole?: string | null;
 }
 
+// AGENT_CURSOR: добавлено 2026-11-19 — где каждый агент действует на экране ПК. Цвет приходит с
+// сервера, поэтому карточки, оверлей и снимок показывают агента одним и тем же цветом.
+export interface AgentCursorPayload {
+  taskId: string;
+  agentId: string;
+  agentRole: string;
+  color: string;
+  tool: string;
+  x?: number | null;
+  y?: number | null;
+  toX?: number | null;
+  toY?: number | null;
+  /** Изменился ли экран после действия (screen_state.changed). */
+  changed?: boolean | null;
+  at: string;
+}
+
 // ORCHESTRA: состав команды агентов на один ход (событие AgentTeam).
 export interface AgentTeamMember {
   id: string;
@@ -132,6 +149,8 @@ export interface SignalrCallbacks {
   onLog?: (message: string, scopeId?: string) => void;
   onScreenshot?: (base64: string, scopeId?: string) => void;
   onAgentStatus?: (payload: AgentStatusPayload, scopeId?: string) => void;
+  // AGENT_CURSOR: последнее действие агента на экране ПК (координируемые курсоры).
+  onAgentCursor?: (payload: AgentCursorPayload, scopeId?: string) => void;
   // ORCHESTRA: состав команды агентов (пришёл один раз в начале работы оркестра).
   onAgentTeam?: (payload: AgentTeamPayload, scopeId?: string) => void;
   onFileCreated?: (payload: FileCreatedPayload, scopeId?: string) => void;

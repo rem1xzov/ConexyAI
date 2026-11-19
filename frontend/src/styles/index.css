@@ -5380,6 +5380,25 @@ html[data-plain-code='true'] .markdown strong.chat-term {
   gap: 4px 8px;
 }
 
+/* AGENT_CURSOR: цвет агента и его последняя точка на экране — одинаково в карточках, TUI и оверлее. */
+.agent-card__cursor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.agent-card__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.15);
+}
+
 .agent-card__role {
   font-size: 12px;
   font-weight: 600;

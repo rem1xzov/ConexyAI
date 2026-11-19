@@ -160,6 +160,8 @@ public sealed class AgentSession : IAsyncDisposable
         _hub.On<JsonElement, string?>("ToolAction", (payload, _) => OnServerToolAction(payload));
         _hub.On<JsonElement, string?>("AgentTeam", (payload, _) => OnTeam(payload));
         _hub.On<JsonElement, string?>("OnAgentStatus", (payload, _) => OnAgentStatus(payload));
+        // AGENT_CURSOR: где каждый агент действует на экране — оверлей рисует разноцветные курсоры.
+        _hub.On<JsonElement, string?>("AgentCursor", (payload, _) => OnAgentCursor(payload));
         _hub.On<JsonElement, string?>("OnCompleted", (_, _) => _turn?.TrySetResult(null));
         _hub.On<string, string?>("OnError", (message, _) => _turn?.TrySetResult(message));
         _hub.On<Guid, string?>("OnStopped", (_, _) => _turn?.TrySetResult("Остановлено."));
@@ -391,6 +393,45 @@ public sealed class AgentSession : IAsyncDisposable
                 }
                 break;
         }
+    }
+
+    // AGENT_CURSOR: добавлено 2026-11-19 — последнее действие агента на экране. Пишем в CursorFeed,
+    // который читает оверлей (разноцветные курсоры) и откуда берётся легенда для модели.
+    private void OnAgentCursor(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object)
+            return;
+
+        string? Text(string name) => payload.TryGetProperty(name, out var element) && element.ValueKind == JsonValueKind.String
+            ? element.GetString()
+            : null;
+        int? Number(string name) => payload.TryGetProperty(name, out var element)
+                                    && element.ValueKind == JsonValueKind.Number
+                                    && element.TryGetInt32(out var value)
+            ? value
+            : null;
+        bool? Boolean(string name) => payload.TryGetProperty(name, out var element)
+            ? element.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                _ => null,
+            }
+            : null;
+
+        var agentId = Text("agentId") ?? "lead";
+        var entry = new Tools.AgentCursorEntry(
+            agentId,
+            Text("agentRole") ?? agentId,
+            Text("color") ?? "#FF8787",
+            Text("tool") ?? string.Empty,
+            Number("x"),
+            Number("y"),
+            Number("toX"),
+            Number("toY"),
+            Boolean("changed"),
+            DateTime.UtcNow);
+        Tools.CursorFeed.Update(entry);
     }
 
     private void OnTeam(JsonElement payload)

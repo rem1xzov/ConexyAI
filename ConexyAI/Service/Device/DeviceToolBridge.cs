@@ -24,6 +24,10 @@ public interface IDeviceToolBridge
     /// <summary>Подключено ли хотя бы одно устройство пользователя.</summary>
     bool IsOnline(Guid userId);
 
+    // AGENT_CURSOR: добавлено 2026-11-19 — визуальное событие на ПК (курсоры агентов), ответа не ждём.
+    /// <summary>Отправляет UI-событие активному устройству пользователя; без устройства — ничего не делает.</summary>
+    Task SendEventAsync(Guid userId, string name, object payload, CancellationToken ct = default);
+
     /// <summary>Регистрирует подключение как устройство пользователя.</summary>
     void Register(Guid userId, string connectionId, string deviceName, string? os = null, string? workspace = null);
 
@@ -135,6 +139,24 @@ public sealed class DeviceToolBridge : IDeviceToolBridge
     }
 
     public bool IsOnline(Guid userId) => Active(userId) is not null;
+
+    // AGENT_CURSOR: добавлено 2026-11-19 — событие «где агент действует на экране» для оверлея на ПК.
+    // Ответа не ждём: это визуальная подсказка, её потеря не должна ломать прогон.
+    public async Task SendEventAsync(Guid userId, string name, object payload, CancellationToken ct = default)
+    {
+        var device = Active(userId);
+        if (device is null)
+            return;
+
+        try
+        {
+            await _hub.Clients.Client(device.ConnectionId).SendAsync(name, payload, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Device UI event {Name} failed for user {UserId}", name, userId);
+        }
+    }
 
     /// <summary>Подключение пропало меньше 30 секунд назад — вероятно, переподключается.</summary>
     private bool RecentlySeen(Guid userId) =>

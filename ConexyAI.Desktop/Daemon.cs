@@ -125,6 +125,8 @@ public static class Daemon
         Log($"Демон запущен (v{Ui.Version}), сервер {server.BaseUrl}, проектов: {device.Projects.Projects.Count}. Журнал: {LogPath}");
         // FLOAT_BUBBLE: чёрный круг с логотипом поверх всех окон — открыть Conexy и бросить файлы.
         Bubble.Show();
+        // AGENT_CURSOR: демон тоже показывает курсоры агентов — иначе оверлей пропадает без окна клиента.
+        CursorOverlay.Start();
         AppDomain.CurrentDomain.ProcessExit += (_, _) => Bubble.Hide();
         // BUBBLE_KEEPALIVE: круг закрывается вместе с окном клиента — у демона он должен вернуться сам,
         // а не через минуту при следующей регистрации.

@@ -428,6 +428,7 @@ function MessageBubbleBase({
         statusPill={statusPill}
         onOpenPath={onOpenFile}
         agents={message.agents}
+        cursors={message.agentCursors}
       />
 
       {/* 4. Answer text, for messages the feed does not carry: the plain chat and students paths. */}

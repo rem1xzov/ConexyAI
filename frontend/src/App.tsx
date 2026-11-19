@@ -1386,6 +1386,15 @@ export default function App() {
         };
       });
     },
+    // AGENT_CURSOR: последнее действие агента на экране ПК — цвет и точка в его карточке.
+    onAgentCursor: (payload, scopeId) => {
+      const ctx = resolveTurn(scopeId);
+      if (!ctx) return dropEvent('AgentCursor', scopeId);
+      patchTurn(ctx, (m) => ({
+        ...m,
+        agentCursors: { ...(m.agentCursors ?? {}), [payload.agentId]: payload },
+      }));
+    },
     onFileCreated: (payload, scopeId) => {
       // The workspace panel shows the OPEN chat: a file created by another chat's agent must not
       // open a tab there.
@@ -1531,6 +1540,7 @@ export default function App() {
       onLog: (message, scopeId) => ev().onLog?.(message, scopeId),
       onScreenshot: (base64, scopeId) => ev().onScreenshot?.(base64, scopeId),
       onAgentStatus: (payload, scopeId) => ev().onAgentStatus?.(payload, scopeId),
+      onAgentCursor: (payload, scopeId) => ev().onAgentCursor?.(payload, scopeId),
       onAgentTeam: (payload, scopeId) => ev().onAgentTeam?.(payload, scopeId),
       onFileCreated: (payload, scopeId) => ev().onFileCreated?.(payload, scopeId),
       onToolAction: (event, scopeId) => ev().onToolAction?.(event, scopeId),

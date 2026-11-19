@@ -494,6 +494,8 @@ static async Task<int> ChatAsync(string[] args)
     try { Console.Title = Bubble.WindowTitle; } catch (IOException) { }
     Bubble.MarkInteractive();
     Bubble.Show();
+    // AGENT_CURSOR: разноцветные курсоры агентов поверх экрана (один экземпляр на ПК).
+    CursorOverlay.Start();
     Attention.Watch();
     // TRAY_QUIT: «Закрыть Conexy» в трее завершает клиент вместе с кругом.
     Bubble.ListenForQuit(() => Environment.Exit(0));

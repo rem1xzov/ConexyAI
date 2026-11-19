@@ -209,7 +209,9 @@ public sealed class ComputerTools
         var pixels = new byte[width * height * 4];
         try
         {
-            if (!BitBlt(memory, 0, 0, width, height, screen, _originX, _originY, 0x00CC0020 | 0x40000000))
+            // AGENT_CURSOR: без CAPTUREBLT (0x40000000) в BitBlt не попадает наш оверлей курсоров агентов —
+            // иначе движущаяся цветная метка «меняла» кадр, и защита от циклов перестала бы видеть клик в пустоту.
+            if (!BitBlt(memory, 0, 0, width, height, screen, _originX, _originY, 0x00CC0020))
                 throw new ToolException("Не удалось снять экран (экран заблокирован?).");
             var info = new BITMAPINFOHEADER { biSize = Marshal.SizeOf<BITMAPINFOHEADER>(), biWidth = width, biHeight = -height, biPlanes = 1, biBitCount = 32 };
             SelectObject(memory, old);
@@ -250,6 +252,10 @@ public sealed class ComputerTools
         var png = WindowTools.EncodePng(rgb, _shotWidth, _shotHeight);
         GetCursorPos(out var cursor);
         var note = $"{prefix} Экран {_shotWidth}×{_shotHeight} (координаты для computer_click — в пикселях ЭТОГО снимка; красный крестик — курсор; курсор {cursor.X},{cursor.Y}).".Trim();
+        // AGENT_CURSOR: остальные агенты на экране видны пользователю цветными метками оверлея, а модели —
+        // текстовой легендой: иначе она не знает, что по экрану работает ещё кто-то.
+        if (CursorFeed.Legend() is { Length: > 0 } legend)
+            note += $" Агенты на экране: {legend}.";
         return $"IMAGE_BASE64:image/png:{Convert.ToBase64String(png)}\n{note}\n{StateLine(changed, cursor.X, cursor.Y, bits)}";
     }
 

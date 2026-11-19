@@ -1,5 +1,6 @@
 import type { ConexyModel } from './api';
 import type { BuildProblem, DeviceDiffPayload, DeviceQuestionPayload, TaskStatus, TodoItem, ToolActionEvent } from './signalr';
+import type { AgentCursorPayload } from './signalr';
 
 export type MessageStatus = 'streaming' | 'complete' | 'error' | 'stopped';
 
@@ -62,6 +63,8 @@ export interface ChatMessage {
   // ORCHESTRA: команда агентов, работающая над этим ходом (событие AgentTeam). Пусто — обычный
   // одиночный агент; тогда лента рисуется как раньше.
   agents?: TeamAgent[];
+  // AGENT_CURSOR: последние действия агентов на экране ПК, по agentId (координируемые курсоры).
+  agentCursors?: Record<string, AgentCursorPayload>;
   /** Set while `POST /run` for this answer has not returned yet (the turn has no task id). A message
    *  still carrying it after a reload was never confirmed by the server. */
   awaitingTaskId?: boolean;
