@@ -270,6 +270,21 @@ public static class AgentToolCatalog
                 ["max_results"] = Int("Maximum files to return (default 200, max 2000).", 1, 2000, 200),
             }, "pattern")),
 
+        // REPO_MAP: добавлено 2026-11-19 — готовая карта проекта вместо блуждания read/glob/grep.
+        Tool("repo_map",
+            "Read the map of this project that Conexy already built: directories, languages, build and " +
+            "check commands, entry points, largest sources and declared symbols. It costs far fewer " +
+            "tokens than listing and reading files one by one. Call it first when you do not know the " +
+            "layout of the project, then `read`/`grep` only the files that matter. Pass `path` to describe " +
+            "one directory instead of the whole project.",
+            Object(new()
+            {
+                ["path"] = Str("Optional relative directory (or file) to describe; empty means the whole project."),
+                ["depth"] = Int("Directory levels to expand below `path` (default 2, max 6).", 1, 6, 2),
+                ["symbols"] = Bool("Include the declared symbols of the listed files (default true).", true),
+                ["max_chars"] = Int("Answer cap in characters (default 6000).", 800, 12000, 6000),
+            })),
+
         // ---------------------------------------------------------------- execution
         Tool("bash",
             "Run a shell command in the isolated one-shot sandbox. The workspace root is the working " +
@@ -501,6 +516,7 @@ public static class AgentToolCatalog
         ["read_image"] = "Use `read_image` to look at a mock, a screenshot or a diagram; text tools show images as binary.",
         ["grep"] = "Use `grep` to find code by content; do not escape to the shell for search. Search by identifier for code, by a plain word for a concept.",
         ["glob"] = "Use `glob` to discover file paths before reading them.",
+        ["repo_map"] = "Start a task in an unfamiliar project with `repo_map` — it is already built and is much cheaper than listing and reading files. Then read or grep only the files it points to.",
         ["bash"] = "Use `bash` for builds, package managers, git and tests; reading, searching and writing files goes through `read`, `grep`, `edit` and `apply_patch`. If the same failure comes back twice with different arguments, the arguments are not the cause: verify the fact with another tool, or ask the user.",
         ["run_tests"] = "After changing code run `run_tests` instead of guessing that it works.",
         ["agents_status"] = "Check the team with `agents_status` at least once a minute while helpers run; do not poll it in a tight loop.",

@@ -58,6 +58,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly IAgentHooksService? _hooksService;
     // SHARE_TO_ADMIN: добавлено 2026-11-19 — журнал действий агента для разбора багов админом.
     private readonly IChatAgentLog? _chatAgentLog;
+    // REPO_MAP: добавлено 2026-11-19 — готовая карта проекта, построенная harness'ом.
+    private readonly IRepoMapService? _repoMap;
     // MCP: добавлено 2026-10-04 — удалённые MCP-серверы (уровень A, Streamable HTTP). Реестр создаётся
     // на прогон, потому что включает ЛИЧНЫЕ серверы пользователя из запроса.
     private IMcpRegistry? _mcpRegistry;
@@ -1325,7 +1327,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // MCP_OAUTH: добавлено 2026-11-03 — авторизация MCP-сервера в браузере.
         IMcpOAuthService? mcpOAuthService = null,
         // SHARE_TO_ADMIN: добавлено 2026-11-19 — журнал действий агента для разбора багов админом.
-        IChatAgentLog? chatAgentLog = null)
+        IChatAgentLog? chatAgentLog = null,
+        // REPO_MAP: добавлено 2026-11-19 — карта проекта для контекста и инструмента `repo_map`.
+        IRepoMapService? repoMap = null)
     {
         _phoneBridge = phoneBridge;
         _phoneApprovals = phoneApprovals;
@@ -1360,6 +1364,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _mcpOAuthService = mcpOAuthService;
         _deviceBridge = deviceBridge;
         _chatAgentLog = chatAgentLog;
+        _repoMap = repoMap;
 
         var configured = agentOptions.Value.MaxIterations;
         // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
@@ -1412,6 +1417,29 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var insertAt = messages.Count > 0 && messages[0].Role == "system" ? 1 : 0;
             messages.Insert(insertAt, new ChatMessage("system", rulesSeen));
             await group.SendAsync("OnLog", $"[Project Rules] Loaded {string.Join(", ", projectRules!.Files)}", ct);
+        }
+
+        // REPO_MAP: карта проекта строится сервером один раз на рабочую область и идёт стабильным
+        // system-блоком сразу после правил: агенту не нужно выяснять структуру десятками read/grep.
+        if (_repoMap is not null && _profile.Mode is "coder" or "cowork" && !PromptEconomy.IsSmallTalk(_job.Prompt))
+        {
+            try
+            {
+                var repoMapBlock = await _repoMap.GetInjectedBlockAsync(chatId, ct);
+                if (!string.IsNullOrEmpty(repoMapBlock))
+                {
+                    // Вставляем ПОСЛЕ блока правил: правила остаются первым system-сообщением.
+                    var insertAt = (messages.Count > 0 && messages[0].Role == "system" ? 1 : 0)
+                                   + (rulesSeen is not null ? 1 : 0);
+                    messages.Insert(insertAt, new ChatMessage("system", repoMapBlock));
+                    await group.SendAsync("OnLog", $"[Repo Map] {repoMapBlock.Length} chars", ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Карта — подсказка, а не условие работы: сбой построения не должен ломать ход.
+                _logger.LogDebug(ex, "repo map injection failed for chat {ChatId}", chatId);
+            }
         }
 
         // AGENT_SKILLS: добавлено 2026-10-18 — скиллы пользователя: в промпт только имя и «когда применять»,
@@ -2528,6 +2556,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             // L9: images of this batch, after every tool result of the assistant turn.
             messages.AddRange(batchImages);
+
+            // REPO_MAP: этот ход мог изменить файлы — карту перестроим при следующем чтении.
+            _repoMap?.Invalidate(chatId);
 
             // AGENT_HOOKS: after_file_change — по одному запуску на изменённый в этом ходе файл (в
             // пределах бюджета). Сбои хуков отдаём модели одним system-сообщением.
@@ -4375,6 +4406,21 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         toolCall.Id,
                         res.Files.Count == 0 ? "No files matched." : string.Join("\n", res.Files),
                         false);
+                }
+
+                case "repo_map":
+                {
+                    if (_repoMap is null)
+                        return new ConexyToolResult(toolCall.Id, "repo_map is not available in this deployment.", true);
+
+                    var mapText = await _repoMap.QueryAsync(
+                        chatId,
+                        Optional(root, "path"),
+                        GetInt(root, "depth", 2),
+                        OptionalBool(root, "symbols") ?? true,
+                        GetInt(root, "max_chars", 0),
+                        ct);
+                    return new ConexyToolResult(toolCall.Id, mapText, false);
                 }
 
                 case "terminal_exec":

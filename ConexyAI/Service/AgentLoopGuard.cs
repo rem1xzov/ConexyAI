@@ -158,7 +158,7 @@ public sealed partial class AgentLoopGuard
     public static readonly HashSet<string> ReadTools = new(StringComparer.Ordinal)
     {
         "file_read", "file_read_bytes", "grep", "glob", "workspace_list_files",
-        "view_image", "read_document_file", "project_rules",
+        "view_image", "read_document_file", "project_rules", "repo_map",
     };
 
     /// <summary>Оболочки: команду внутри ещё надо распознать как чтение или действие.</summary>

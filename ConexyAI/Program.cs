@@ -317,6 +317,10 @@ builder.Services.AddScoped<ConexyAI.Service.IChatShareService, ConexyAI.Service.
 builder.Services.AddScoped<ConexyAI.Service.IChatAgentLog, ConexyAI.Service.ChatAgentLog>();
 // ADMIN_TOKEN_CREDIT: добавлено 2026-11-19 — ручное начисление токенов админом из админ-панели.
 builder.Services.AddScoped<ConexyAI.Service.IAdminTokenService, ConexyAI.Service.AdminTokenService>();
+// REPO_MAP: добавлено 2026-11-19 — harness строит карту проекта и отдаёт её агенту (экономия токенов).
+builder.Services.Configure<ConexyAI.Configuration.RepoMapOptions>(
+    builder.Configuration.GetSection(ConexyAI.Configuration.RepoMapOptions.SectionName));
+builder.Services.AddScoped<ConexyAI.Service.IRepoMapService, ConexyAI.Service.RepoMapService>();
 // USER_PREFERENCES: добавлено 2026-09-24 — пользовательские инструкции и переключатель памяти.
 builder.Services.AddScoped<IUserPreferencesService, UserPreferencesService>();
 // USER_INTEGRATIONS: добавлено 2026-10-10 — серверное хранение кредов агента (GitHub PAT, MCP).

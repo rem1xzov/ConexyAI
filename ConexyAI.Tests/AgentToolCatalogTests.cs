@@ -32,7 +32,7 @@ internal static class AgentToolCatalogTests
         // Инструменты, без которых агент не решает базовые задачи, обязаны быть в наборе.
         foreach (var required in new[]
                  {
-                     "read", "write", "edit", "apply_patch", "grep", "glob",
+                     "read", "write", "edit", "apply_patch", "grep", "glob", "repo_map",
                      "bash", "run_tests", "get_diagnostics", "todo_write", "web_search", "fetch_web_page",
                      "github_action", "github_api", "create_document", "read_document_file", "read_image",
                  })
