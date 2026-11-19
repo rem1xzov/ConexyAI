@@ -1079,6 +1079,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // и тогда ответ проходит. Маркеры узкие и отрицательные (урок ANTI_LIE: широкие слова вроде
     // «могу» давали ложные срабатывания на нормальном тексте).
     private const int MaxIncompleteNudges = 4;
+
+    // COMPLETION_GUARD: сколько раз возвращаем ход, в котором система видит неразрешённые улики
+    // (последняя упавшая команда, серия идентичных выводов). Первый возврат — исправить причину,
+    // второй — сменить подход; дальше ход отпускается с честной машинной припиской.
+    private const int MaxCompletionNudges = 2;
     private static readonly string[] IncompleteWorkMarkers =
     {
         "не сделал", "не сделано", "не сделана", "не сделаны",
@@ -1540,6 +1545,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // LOOP_GUARD: после исчерпания отказов инструменты отключаются — модель обязана ответить текстом.
         // Это тот же приём, что у последнего шага цикла, но раньше и по факту петли.
         var finalAnswerForced = false;
+        // COMPLETION_GUARD: улики хода (неисправленная ошибка команды, серия идентичных выводов).
+        // Гейты ниже читают ТЕКСТ ответа и потому пропускают ход, переведённый в принудительный итог;
+        // этот страж читает факты и на такой ход тоже срабатывает, заново открывая инструменты.
+        var completionGuard = new AgentCompletionGuard();
+        var completionNudges = 0;
+        var completionEscalated = false;
+        var completionSignature = string.Empty;
         // DOF_REPAIR: одна попытка довести правки до проверенного состояния перед принудительным итогом.
         var repairTurnUsed = false;
         var textLoopStopped = false;
@@ -1794,6 +1806,47 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             if (responseMessage.ToolCalls == null || responseMessage.ToolCalls.Count == 0)
             {
+                // COMPLETION_GUARD: не выпускаем ход, пока система видит неразрешённые улики. Это
+                // единственный гейт завершения, который работает и после принудительного итога: там
+                // инструменты снова открываются, иначе модели нечем исправить найденный сбой.
+                var completionEvidence = completionGuard.Inspect();
+                if (completionEvidence.Count > 0 && step < stepLimit)
+                {
+                    var signature = string.Join("|", completionEvidence.Select(item => item.Key));
+                    var repeatedEvidence = string.Equals(signature, completionSignature, StringComparison.Ordinal);
+                    if (completionNudges < MaxCompletionNudges && !(repeatedEvidence && completionEscalated))
+                    {
+                        completionNudges++;
+                        completionSignature = signature;
+                        if (repeatedEvidence)
+                        {
+                            completionEscalated = true;
+                        }
+
+                        var reopenedTools = finalAnswerForced;
+                        if (reopenedTools)
+                        {
+                            finalAnswerForced = false;
+                            loopGuard.ResetForRepair();
+                        }
+
+                        _logger.LogWarning(
+                            "Agent completion guard: {Count} unresolved evidence item(s) at the finish boundary; nudging {Attempt}/{Max} (repeated={Repeated}, reopenedTools={Reopened}). task={TaskId}",
+                            completionEvidence.Count, completionNudges, MaxCompletionNudges, repeatedEvidence, reopenedTools, taskId);
+                        await group.SendAsync(
+                            "OnLog",
+                            repeatedEvidence
+                                ? "[Completion Guard] Та же проблема осталась — прошу сменить подход."
+                                : "[Completion Guard] Есть незавершённая работа — довожу до конца.",
+                            ct);
+                        await SendAgentStatusAsync(taskId, "thinking", "Довожу работу до конца…", ct: ct);
+                        messages.Add(new ChatMessage("system",
+                            AgentCompletionGuard.BuildPrompt(
+                                completionEvidence, repeatedEvidence, completionNudges, MaxCompletionNudges, reopenedTools)));
+                        continue;
+                    }
+                }
+
                 // ORCHESTRA_FINISH_GATE: ведущий пытается закончить, пока его помощники ещё работают.
                 // Раньше ответ уходил пользователю, фоновые агенты отменялись через 20 с — и часть
                 // работы (обычно проверка) просто исчезала. Дожидаемся отчётов вместо обрыва.
@@ -2025,6 +2078,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         taskId);
                 }
 
+                // COMPLETION_GUARD: бюджет продолжений исчерпан, а улики остались — прямо говорим, что
+                // результат не подтверждён, вместо «Готово. Задача выполнена.».
+                var completionNote = AgentCompletionGuard.BuildNote(completionEvidence);
+
                 // P2_DEFINITION_OF_DONE: системная приписка о состоянии проверки — красная сборка,
                 // «не проверено» или подтверждённый зелёный результат.
                 var verificationNote = BuildVerificationNote(changedFiles.Count, buildHealth, selfCorrections, _profile.AuditsCode);
@@ -2115,6 +2172,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     await StreamNoteAsync(group, answer, noEditNote, ct);
                 }
 
+                if (completionNote is not null)
+                {
+                    await StreamNoteAsync(group, answer, completionNote, ct);
+                }
+
                 await group.SendAsync("OnLog", "[Agent Completed] Solution finalized.", ct);
 
                 // AGENT_TERMINATION: без этой строки нельзя было отличить «модель закончила» от
@@ -2129,12 +2191,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // No file modifications were made: the model's text is the whole answer.
                 if (changedFiles.Count == 0)
                 {
-                    return await FinishAsync(AppendNote(answer, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote)));
+                    return await FinishAsync(AppendNote(answer, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote, completionNote)));
                 }
 
                 // File changes were made: return the final report plus a summary card.
                 // BACKGROUND_AGENTS: перед итогом даём фоновым помощникам шанс дописать файлы.
-                return await FinishAsync(BuildFinalReport(AppendNote(finalText, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote)), changedFiles, executedCommands));
+                return await FinishAsync(BuildFinalReport(AppendNote(finalText, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote, completionNote)), changedFiles, executedCommands));
             }
 
             // AGENT_TOOL_FAILURES: инструменты, упавшие именно в этом ходе (для одного сообщения
@@ -2322,6 +2384,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     // READ_PROGRESS: проверять надо ДО Record — он сам добавляет объект в _targets.
                     var newReadTarget = isReadCall && loopGuard.IsNewReadTarget(toolName, toolCall.Function.Arguments);
                     loopGuard.Record(toolName, toolCall.Function.Arguments, result.Output, result.IsError);
+                    completionGuard.Record(
+                        toolName, toolCall.Function.Arguments, result.Output, result.IsError, result.CommandExecuted);
                     // EDIT_AFTER_READ: запоминаем именно успешное чтение — отказ в чтении не делает
                     // файл «прочитанным» (иначе гейт подтверждал бы сам себя).
                     if (!result.IsError)
@@ -2597,7 +2661,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // приписка сообщает, что задача всё же доведена до конца.
         var tokenLimitNote = tokenBudgetExceeded ? TokenLimitNote(remainingTokens, runTokens, poolResetsAt) : null;
         var stopIntegrityNote = BuildToolIntegrityNote(executedToolCounts, toolFailureCounts, accumulated);
-        var note = JoinNotes(tokenLimitNote, stillFailing, stopIntegrityNote);
+        // COMPLETION_GUARD: прогон оборван пределом шагов или бюджетом ошибок, а улики остались —
+        // приписка не даёт выдать это за подтверждённый результат.
+        var stopCompletionNote = AgentCompletionGuard.BuildNote(completionGuard.Inspect());
+        var note = JoinNotes(tokenLimitNote, stillFailing, stopIntegrityNote, stopCompletionNote);
         if (note is not null)
         {
             await StreamNoteAsync(group, accumulated, note, ct);
