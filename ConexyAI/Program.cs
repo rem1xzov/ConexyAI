@@ -321,6 +321,8 @@ builder.Services.AddScoped<ConexyAI.Service.IAdminTokenService, ConexyAI.Service
 builder.Services.Configure<ConexyAI.Configuration.RepoMapOptions>(
     builder.Configuration.GetSection(ConexyAI.Configuration.RepoMapOptions.SectionName));
 builder.Services.AddScoped<ConexyAI.Service.IRepoMapService, ConexyAI.Service.RepoMapService>();
+// LOCAL_WORKER: добавлено 2026-11-19 — маршруты моделей: облачная ведущая + локальная как субагент.
+builder.Services.AddSingleton<ConexyAI.Service.ILlmRouteResolver, ConexyAI.Service.LlmRouteResolver>();
 // USER_PREFERENCES: добавлено 2026-09-24 — пользовательские инструкции и переключатель памяти.
 builder.Services.AddScoped<IUserPreferencesService, UserPreferencesService>();
 // USER_INTEGRATIONS: добавлено 2026-10-10 — серверное хранение кредов агента (GitHub PAT, MCP).

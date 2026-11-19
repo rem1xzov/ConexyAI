@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -20,6 +20,8 @@ public class ConexyLlmClient : IConexyLlmClient
     private readonly AiUpstreamOptions _options;
     private readonly ILogger<ConexyLlmClient> _logger;
     private readonly IHubContext<ConexyHub> _hubContext;
+    // LOCAL_WORKER: маршруты моделей (облачная по умолчанию, локальная для субагентов).
+    private readonly ILlmRouteResolver _routes;
     private readonly JsonSerializerOptions _jsonOptions = new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
 
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(180);
@@ -57,7 +59,8 @@ public class ConexyLlmClient : IConexyLlmClient
         HttpClient httpClient,
         ILogger<ConexyLlmClient> logger,
         IOptions<AiUpstreamOptions> options,
-        IHubContext<ConexyHub> hubContext)
+        IHubContext<ConexyHub> hubContext,
+        ILlmRouteResolver routes)
     {
         _httpClient = httpClient;
         // Hard cap so a stalled upstream can never hold a request open indefinitely.
@@ -65,6 +68,7 @@ public class ConexyLlmClient : IConexyLlmClient
         _logger = logger;
         _options = options.Value;
         _hubContext = hubContext;
+        _routes = routes;
     }
 
     public async Task<LlmChatResult> SendChatAsync(
@@ -73,10 +77,14 @@ public class ConexyLlmClient : IConexyLlmClient
         List<object> tools,
         string? reasoningEffort = null,
         Guid? taskId = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        LlmRoute? route = null)
     {
-        var (baseUrl, apiKey, upstreamModel) = ResolveUpstream(modelType, messages);
-        var resolvedReasoningEffort = ResolveReasoningEffortForModel(modelType, reasoningEffort);
+        var resolved = _routes.Resolve(modelType, ContainsImages(messages), route);
+        var baseUrl = resolved.BaseUrl;
+        var apiKey = resolved.ApiKey;
+        var upstreamModel = resolved.Model;
+        var resolvedReasoningEffort = resolved.Local ? null : ResolveReasoningEffortForModel(modelType, reasoningEffort);
 
         var payload = new LlmChatRequest(
             Model: upstreamModel,
@@ -84,8 +92,8 @@ public class ConexyLlmClient : IConexyLlmClient
             Tools: tools.Count > 0 ? tools : null,
             ToolChoice: tools.Count > 0 ? "auto" : null,
             ReasoningEffort: resolvedReasoningEffort,
-            Thinking: ResolveThinking(modelType, resolvedReasoningEffort),
-            MaxTokens: MaxTokens
+            Thinking: resolved.Local ? null : ResolveThinking(modelType, resolvedReasoningEffort),
+            MaxTokens: resolved.MaxTokens
         );
 
         var json = JsonSerializer.Serialize(payload, _jsonOptions);
@@ -130,41 +138,9 @@ public class ConexyLlmClient : IConexyLlmClient
         }
     }
 
-    private (string BaseUrl, string ApiKey, string UpstreamModel) ResolveUpstream(ConexyModelType modelType, IReadOnlyList<ChatMessage> messages)
-    {
-        var upstream = ResolveUpstream(modelType);
-        // PRO_VISION: deepseek-v4-pro has no vision support, so a Pro turn carrying images would be
-        // rejected (or the images ignored). Such turns go to the vision-capable flash model; the Pro
-        // reasoning settings (thinking/reasoning_effort) still apply, flash supports thinking mode.
-        if (modelType == ConexyModelType.ConexyV1Pro && ContainsImages(messages))
-        {
-            _logger.LogInformation("Pro turn carries images: routing to the vision model {Model}.", _options.DeepSeek.FlashModel);
-            return upstream with { UpstreamModel = _options.DeepSeek.FlashModel };
-        }
-        return upstream;
-    }
-
     internal static bool ContainsImages(IReadOnlyList<ChatMessage> messages) =>
         messages.Any(m => m.Content is IEnumerable<ContentBlock> blocks
                           && blocks.Any(b => b.Type == "image_url"));
-
-    private (string BaseUrl, string ApiKey, string UpstreamModel) ResolveUpstream(ConexyModelType modelType)
-    {
-        if (string.IsNullOrWhiteSpace(_options.DeepSeek.ApiKey))
-        {
-            throw new InvalidOperationException("DeepSeek API key is not configured in appsettings.json");
-        }
-
-        return modelType switch
-        {
-            ConexyModelType.ConexyV1Flash => (_options.DeepSeek.BaseUrl, _options.DeepSeek.ApiKey, _options.DeepSeek.FlashModel),
-            ConexyModelType.ConexyV1Pro => (_options.DeepSeek.BaseUrl, _options.DeepSeek.ApiKey, _options.DeepSeek.ProAgentModel),
-            // COWORK_MODE: both agent modes run on the same upstream model; they differ only in the
-            // system prompt and the tool set (see ConexyAgentRunner.AgentProfile).
-            ConexyModelType.ConexyCoder or ConexyModelType.ConexyCowork => (_options.DeepSeek.BaseUrl, _options.DeepSeek.ApiKey, _options.DeepSeek.FlashModel),
-            _ => throw new ArgumentOutOfRangeException(nameof(modelType), modelType, "Unsupported model type.")
-        };
-    }
 
     private string? ResolveReasoningEffortForModel(ConexyModelType modelType, string? requested)
     {
@@ -208,10 +184,14 @@ public class ConexyLlmClient : IConexyLlmClient
         List<object>? tools = null,
         string? toolChoice = null,
         Guid? taskId = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        [EnumeratorCancellation] CancellationToken ct = default,
+        LlmRoute? route = null)
     {
-        var (baseUrl, apiKey, upstreamModel) = ResolveUpstream(modelType, messages);
-        var resolvedReasoningEffort = ResolveReasoningEffortForModel(modelType, reasoningEffort);
+        var resolved = _routes.Resolve(modelType, ContainsImages(messages), route);
+        var baseUrl = resolved.BaseUrl;
+        var apiKey = resolved.ApiKey;
+        var upstreamModel = resolved.Model;
+        var resolvedReasoningEffort = resolved.Local ? null : ResolveReasoningEffortForModel(modelType, reasoningEffort);
 
         var payload = new LlmChatRequest(
             Model: upstreamModel,
@@ -220,8 +200,8 @@ public class ConexyLlmClient : IConexyLlmClient
             ToolChoice: tools is { Count: > 0 } ? toolChoice ?? "auto" : null,
             Stream: true,
             ReasoningEffort: resolvedReasoningEffort,
-            Thinking: ResolveThinking(modelType, resolvedReasoningEffort),
-            MaxTokens: MaxTokens,
+            Thinking: resolved.Local ? null : ResolveThinking(modelType, resolvedReasoningEffort),
+            MaxTokens: resolved.MaxTokens,
             // STREAM_USAGE: добавлено 2026-09-20 — ask for the trailing usage chunk so the
             // agent token budget is still accounted for when the turn is streamed.
             StreamOptions: new StreamOptionsConfig(true)
@@ -236,7 +216,7 @@ public class ConexyLlmClient : IConexyLlmClient
         // попытку заново, поэтому при 429 от провайдера (общий ключ, несколько пользователей разом)
         // ход не отвечал заметно дольше 20 секунд, а пользователь видел растущий таймер без ответа.
         // После первого токена дедлайн снимается: длинный, но живой ответ резать нельзя.
-        using var firstTokenCts = modelType == ConexyModelType.ConexyV1Flash
+        using var firstTokenCts = !resolved.Local && modelType == ConexyModelType.ConexyV1Flash
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
             : null;
         firstTokenCts?.CancelAfter(FlashNoProgressTimeout);
@@ -490,7 +470,9 @@ public class ConexyLlmClient : IConexyLlmClient
     private HttpRequestMessage BuildRequest(string baseUrl, string apiKey, string json, bool acceptSse)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/chat/completions");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        // LOCAL_WORKER: локальные серверы (Ollama/LM Studio) обычно без ключа — пустой Bearer не ставим.
+        if (!string.IsNullOrWhiteSpace(apiKey))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         if (acceptSse)
         {
             request.Headers.Accept.ParseAdd("text/event-stream");

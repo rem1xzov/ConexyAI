@@ -1,4 +1,4 @@
-﻿using ConexyAI.Contract;
+using ConexyAI.Contract;
 using ConexyAI.Model;
 
 namespace ConexyAI.Service;
@@ -11,7 +11,9 @@ public interface IConexyLlmClient
         List<object> tools,
         string? reasoningEffort = null,
         Guid? taskId = null,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        // LOCAL_WORKER: явный маршрут (например, локальная модель для субагента); null — облачный.
+        LlmRoute? route = null);
 
     IAsyncEnumerable<StreamDelta> StreamChatAsync(
         List<ChatMessage> messages,
@@ -20,5 +22,7 @@ public interface IConexyLlmClient
         List<object>? tools = null,
         string? toolChoice = null,
         Guid? taskId = null,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        // LOCAL_WORKER: явный маршрут (например, локальная модель для субагента); null — облачный.
+        LlmRoute? route = null);
 }

@@ -204,7 +204,7 @@ internal static class SupportTests
 
         public Task<LlmChatResult> SendChatAsync(
             ConexyModelType modelType, List<ChatMessage> messages, List<object> tools,
-            string? reasoningEffort = null, Guid? taskId = null, CancellationToken ct = default)
+            string? reasoningEffort = null, Guid? taskId = null, CancellationToken ct = default, LlmRoute? route = null)
         {
             Calls++;
             return Task.FromResult(new LlmChatResult(new ChatMessage("assistant", Reply), 10));
@@ -212,7 +212,8 @@ internal static class SupportTests
 
         public IAsyncEnumerable<StreamDelta> StreamChatAsync(
             List<ChatMessage> messages, ConexyModelType modelType, string? reasoningEffort = null,
-            List<object>? tools = null, string? toolChoice = null, Guid? taskId = null, CancellationToken ct = default) =>
+            List<object>? tools = null, string? toolChoice = null, Guid? taskId = null, CancellationToken ct = default,
+            LlmRoute? route = null) =>
             throw new NotSupportedException();
     }
 

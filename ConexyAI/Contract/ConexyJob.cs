@@ -1,4 +1,4 @@
-﻿using ConexyAI.Model;
+using ConexyAI.Model;
 
 namespace ConexyAI.Contract;
 
@@ -41,6 +41,9 @@ public record ConexyJob(
     // задачу. Доступен только ProMax и только в режиме Coder (см. OrchestraEligibility); воркер
     // снимает флаг, если тариф его не позволяет.
     bool Orchestra = false,
+    // SUBAGENT_AUTONOMY: добавлено 2026-11-19 — ведущий сам решает, когда звать помощников. Право
+    // определяется сервером (агентские режимы), а не клиентским /team и не веб-переключателем.
+    bool CanSpawnAgents = false,
     // MCP: добавлено 2026-10-04 — личные MCP-серверы пользователя (URL + токен). В БД не хранятся,
     // едут только в памяти с запросом: агент вызывает внешние сервисы под аккаунтом пользователя.
     List<McpServerInput>? McpServers = null,

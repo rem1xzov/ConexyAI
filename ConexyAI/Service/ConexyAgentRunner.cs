@@ -60,6 +60,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly IChatAgentLog? _chatAgentLog;
     // REPO_MAP: добавлено 2026-11-19 — готовая карта проекта, построенная harness'ом.
     private readonly IRepoMapService? _repoMap;
+    // LOCAL_WORKER: маршруты моделей — облачная ведущая и локальная модель как субагент.
+    private readonly ILlmRouteResolver? _routes;
     // MCP: добавлено 2026-10-04 — удалённые MCP-серверы (уровень A, Streamable HTTP). Реестр создаётся
     // на прогон, потому что включает ЛИЧНЫЕ серверы пользователя из запроса.
     private IMcpRegistry? _mcpRegistry;
@@ -445,6 +447,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private AgentIdentity _agent = AgentIdentity.Lead;
     // ORCHESTRA: собрал ли ведущий команду за этот прогон (см. OrchestraRequiredPrompt).
     private bool _teamSpawned;
+    // SUBAGENT_AUTONOMY: сколько раз за прогон ведущий звал помощников и сколько всего их запущено.
+    private int _spawnCalls;
+    private int _teamHelpers;
+    // SUBAGENT_AUTONOMY: остаток бюджета прогона; на его половине самостоятельная команда отключается.
+    private long _runTokenBudget;
     // ORCHESTRA_WATCH: когда помощник последний раз отмечался — чтобы не дёргать словарь на каждый токен.
     private DateTime _lastWorkerTouch = DateTime.MinValue;
     // ORCHESTRA_WATCH: когда ведущий последний раз проверял команду через agents_status.
@@ -609,6 +616,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "или честно напиши, что не смог и почему.";
     /// <summary>Верхняя граница числа помощников за один вызов (ведущий — отдельно, итого 5).</summary>
     private const int MaxOrchestraAgents = 4;
+    // SUBAGENT_AUTONOMY: жёсткие пределы самостоятельного запуска команды — иначе агент может
+    // «делегировать» бесконечно и сжечь пул пользователя за один тяжёлый ход.
+    private const int MaxSpawnCallsPerRun = 2;
+    private const int MaxTeamHelpersPerRun = 4;
 
     // ORCHESTRA_WATCH: помощник молчит дольше этого — значит завис: его отменяем, иначе ведущий ждёт
     // его бесконечно и весь прогон превращается в многоминутное «собираю отчёты».
@@ -761,6 +772,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         - **Не ври о действиях.** Нельзя говорить, что вызвал инструмент, проверил, собрал, прогнал тест или запушил, если этого не было. Ошибку инструмента приводи текстом как есть и не выдумывай причину. Не проверял — так и скажи.
         - **Не сдавай красную сборку и не завершай без проверки.** Если изменил код — сначала прогони сборку/тесты/линтер и доведи до зелёного; либо прямо назови, что и почему всё ещё падает или почему проверка неприменима. Система сама припишет к ответу результат проверки.
         - **Не заканчивай ответом «могу, но не сделал».** Если ты сам пишешь, что что-то не подключено/не создано/осталось сделать — это НЕ финал: доделай это сейчас тем же ходом. Завершать можно только когда всё запрошенное сделано либо есть внешняя блокировка (нет доступа, шаг должен сделать сам пользователь в другом интерфейсе) — и тогда назови её прямо. Пользователь не должен просить ещё раз то, о чём уже попросил.
+
+        ## Команда
+        Ты можешь сам запускать помощников (`spawn_agents`), не дожидаясь команды пользователя. Делай это, когда задача распадается на 2+ независимые области (backend / frontend / QA / browser / research) или когда нужны долгие параллельные проверки: помощники работают одновременно, а ты сводишь результат. Точечную правку одного-двух файлов и вопросы делай сам — команда там дороже. Каждому помощнику — самодостаточное задание и непересекающаяся область (`scope`); проверку поручай отдельному агенту с `after`, чтобы она шла после правок. Помощники видят тот же проект и те же инструменты.
 
         ## Формат ответа
         Короткое резюме после задачи: что изменено, что показали финальная сборка/тесты, известные ограничения и следующие шаги. Live Action Status не пересказывай.
@@ -1329,7 +1343,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // SHARE_TO_ADMIN: добавлено 2026-11-19 — журнал действий агента для разбора багов админом.
         IChatAgentLog? chatAgentLog = null,
         // REPO_MAP: добавлено 2026-11-19 — карта проекта для контекста и инструмента `repo_map`.
-        IRepoMapService? repoMap = null)
+        IRepoMapService? repoMap = null,
+        // LOCAL_WORKER: добавлено 2026-11-19 — маршруты моделей (локальная модель для субагентов).
+        ILlmRouteResolver? routes = null)
     {
         _phoneBridge = phoneBridge;
         _phoneApprovals = phoneApprovals;
@@ -1365,6 +1381,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _deviceBridge = deviceBridge;
         _chatAgentLog = chatAgentLog;
         _repoMap = repoMap;
+        _routes = routes;
 
         var configured = agentOptions.Value.MaxIterations;
         // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
@@ -1391,6 +1408,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _agent = AgentIdentity.Lead;
         AgentExecutionContext.Current = AgentIdentity.Lead;
         _teamSpawned = false;
+        _spawnCalls = 0;
+        _teamHelpers = 0;
+        _runTokenBudget = 0;
         // taskId = per-run id (SignalR group, logging, todo, dedup).
         // chatId = stable per-conversation id (workspace files, editor undo, bash).
         var taskId = job.TaskId;
@@ -1640,6 +1660,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var remainingTokens = poolLimit <= 0 ? long.MaxValue : Math.Max(0, poolLimit - poolUsed);
         var runTokens = 0L;
         var tokenBudgetExceeded = false;
+        // SUBAGENT_AUTONOMY: запоминаем бюджет прогона, чтобы ограничить самостоятельный запуск команды.
+        _runTokenBudget = remainingTokens == long.MaxValue ? 0 : remainingTokens;
 
 
         // AUTO_COMPACT: с этого сообщения начинаются шаги прогона (всё раньше — устав, история и вопрос).
@@ -2749,6 +2771,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         async Task<string> FinishAsync(string text)
         {
             await DrainTeamAsync(taskId);
+            // SUBAGENT_AUTONOMY: расход команды этого прогона больше не нужен.
+            TeamTokensSpent.TryRemove(taskId, out _);
             return text;
         }
     }
@@ -2859,15 +2883,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // MCP: dynamic tools are allowed for the agent modes once an operator configured the servers.
         (tool.StartsWith("mcp__", StringComparison.Ordinal)
             ? _profile.Mode is "coder" or "cowork" or "worker"
-            // ORCHESTRA: помощников запускает только ведущий агент и только с включённым оркестром.
-            // У профиля помощника этот инструмент не разрешён — так исключён бесконечный рекурсивный запуск.
+            // SUBAGENT_AUTONOMY: команда доступна ведущему агентскому режиму всегда — модель сама решает,
+            // когда делегировать. У профиля помощника запуск запрещён: так исключена рекурсия.
             : tool == SpawnAgentsTool
-                ? _job.Orchestra && _profile.Mode == "coder" && _profile.Allows(tool)
+                ? SubagentPolicy.SpawnAllowed(_job, _profile.Mode) && _profile.Allows(tool)
                 // ORCHESTRA: передача задач внутри команды — только ведущему и помощникам.
                 : tool == TeamMessageTool
-                    ? _job.Orchestra && _profile.Mode is "coder" or "worker"
+                    ? SubagentPolicy.TeamMessageAllowed(_job, _profile.Mode)
                     : tool == AgentsStatusTool
-                        ? _job.Orchestra && _profile.Mode == "coder"
+                        ? SubagentPolicy.AgentsStatusAllowed(_job, _profile.Mode)
                         : _profile.Allows(tool)) &&
         // INCOGNITO_CHAT: an incognito turn must not read the user's other conversations, the same
         // rule the conversation service applies to memory and the cross-chat digest.
@@ -3428,6 +3452,30 @@ public class ConexyAgentRunner : IConexyAgentRunner
             return new ConexyToolResult(toolCallId, "spawn_agents is unavailable in this environment.", true);
         }
 
+        // LOCAL_WORKER: локальный помощник возможен только при настроенном маршруте; иначе — честная ошибка.
+        if (specs.Any(spec => spec.Local) && _routes?.Local is null)
+            return new ConexyToolResult(toolCallId,
+                "spawn_agents: локальная модель не настроена на сервере (AiUpstream:Local). Уберите \"local\": true у помощника или настройте локальную модель.", true);
+
+        // SUBAGENT_AUTONOMY: пределы самостоятельной команды. Помощники стоят токенов из пула
+        // пользователя, поэтому делегирование ограничено по числу запусков, по числу агентов и
+        // по израсходованному бюджету — даже если модель считает, что «нужно больше».
+        if (_spawnCalls >= MaxSpawnCallsPerRun)
+            return new ConexyToolResult(toolCallId,
+                "spawn_agents: лимит запусков команды в этом прогоне исчерпан. Доделай остальное сам.", true);
+        var helpersLeft = MaxTeamHelpersPerRun - _teamHelpers;
+        if (helpersLeft < 2)
+            return new ConexyToolResult(toolCallId,
+                $"spawn_agents: в этом прогоне уже запущено {_teamHelpers} помощников (максимум {MaxTeamHelpersPerRun}). Дальше работай сам.", true);
+        var teamSpent = TeamTokensSpent.TryGetValue(taskId, out var spent) ? spent : 0L;
+        if (_runTokenBudget > 0 && teamSpent > _runTokenBudget / 2)
+            return new ConexyToolResult(toolCallId,
+                "spawn_agents: помощники израсходовали больше половины доступного бюджета токенов. Дальше работай сам.", true);
+        if (specs.Count > helpersLeft)
+            specs = specs.Take(helpersLeft).ToList();
+        _spawnCalls++;
+        _teamHelpers += specs.Count;
+
         _teamSpawned = true;
 
         var group = _hubContext.Clients.Group($"task_{taskId}");
@@ -3565,7 +3613,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     agentId = identity.Id,
                     agentRole = spec.Role
                 }, token);
-                var text = await runner.RunWorkerAsync(subJob, identity, spec.Brief, token);
+                var text = await runner.RunWorkerAsync(subJob, identity, spec.Brief, token, spec.Local);
                 worker.Report = string.IsNullOrWhiteSpace(text) ? "(готово)" : text.Trim();
                 await group.SendAsync("OnAgentStatus", new
                 {
@@ -3716,6 +3764,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // ORCHESTRA: доска сообщений команды на один прогон (taskId -> очередь). Живёт в памяти процесса;
     // очищается при сборке новой команды и не переживает прогон.
     private static readonly ConcurrentDictionary<Guid, ConcurrentQueue<TeamMessage>> TeamBoards = new();
+    // SUBAGENT_AUTONOMY: добавлено 2026-11-19 — расход токенов помощниками по taskId (ведущий его читает).
+    private static readonly ConcurrentDictionary<Guid, long> TeamTokensSpent = new();
+    // LOCAL_WORKER: одна локальная модель обычно одна на машину — тяжёлые прогоны сериализуем.
+    private static readonly SemaphoreSlim LocalModelGate = new(1, 1);
 
     // BACKGROUND_AGENTS: запущенные в фоне команды этого прогона.
     private static readonly ConcurrentDictionary<Guid, TeamRun> TeamRuns = new();
@@ -3753,7 +3805,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     private sealed record TeamMessage(string From, string To, string Text);
 
-    private sealed record WorkerSpec(string Role, string Brief, IReadOnlyList<string> Scope, IReadOnlyList<string> After);
+    private sealed record WorkerSpec(string Role, string Brief, IReadOnlyList<string> Scope, IReadOnlyList<string> After, bool Local = false);
 
     /// <summary>Разбирает состав команды: роль, задание и область работы каждого агента.</summary>
     private static List<WorkerSpec> ParseWorkerSpecs(JsonElement root)
@@ -3800,7 +3852,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // Без задания или без области помощник бесполезен и опасен: пропускаем.
             if (brief.Length == 0 || scope.Count == 0) continue;
             if (role.Length == 0) role = $"agent{specs.Count + 1}";
-            specs.Add(new WorkerSpec(role, brief, scope, after));
+            // LOCAL_WORKER: этот помощник идёт на локальной модели, если сервер её настроил.
+            var local = item.TryGetProperty("local", out var localEl) && localEl.ValueKind == JsonValueKind.True;
+            specs.Add(new WorkerSpec(role, brief, scope, after, local));
         }
 
         return specs;
@@ -3826,8 +3880,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
     }
 
     /// <inheritdoc />
-    public async Task<string> RunWorkerAsync(ConexyJob job, AgentIdentity identity, string brief, CancellationToken ct = default)
+    public async Task<string> RunWorkerAsync(
+        ConexyJob job,
+        AgentIdentity identity,
+        string brief,
+        CancellationToken ct = default,
+        // LOCAL_WORKER: помощник может идти на локальной модели пользователя (облачный ведущий).
+        bool localModel = false)
     {
+        var workerRoute = localModel ? _routes?.Local : null;
+        if (localModel && workerRoute is null)
+            _logger.LogWarning("Local worker requested but AiUpstream:Local is not configured; using the cloud route. task={TaskId}", job.TaskId);
         // Помощник — отдельный прогон в этом экземпляре: своя личность (роль и scope), полный набор
         // инструментов и своя короткая история. Текст в основной ответ он не стримит, но его
         // действия/статусы уходят с его agentId — UI рисует их в отдельной карточке.
@@ -3881,11 +3944,36 @@ public class ConexyAgentRunner : IConexyAgentRunner
             }
 
             TouchWorker(taskId, identity.Id, "думает…");
-            var rawTurn = await StreamAgentTurnAsync(taskId, messages, ct, streamToClient: false);
+            // LOCAL_WORKER: локальная модель обычно одна на машину — её ходы идут по очереди,
+            // облачные помощники при этом работают параллельно.
+            (ChatMessage Message, int TotalTokens, LlmTokenUsage Usage) rawTurn;
+            if (workerRoute is { Local: true })
+            {
+                await LocalModelGate.WaitAsync(ct);
+                try
+                {
+                    rawTurn = await StreamAgentTurnAsync(taskId, messages, ct, streamToClient: false, route: workerRoute);
+                }
+                finally
+                {
+                    LocalModelGate.Release();
+                }
+            }
+            else
+            {
+                rawTurn = await StreamAgentTurnAsync(taskId, messages, ct, streamToClient: false);
+            }
+
             var turn = rawTurn with { Message = NormalizeToolCalls(rawTurn.Message) };
             TouchWorker(taskId, identity.Id, "обдумывает результат…");
             // TOKEN_BREAKER: расход помощников идёт в тот же агентский пул тарифа.
-            await _subscriptionService.RecordAgentTokensAsync(job.UserId, job.ModelType, turn.Usage, ct);
+            // LOCAL_WORKER: локальный прогон не тратит облачных токенов пользователя — не начисляем.
+            var billed = workerRoute is { Local: true }
+                ? 0L
+                : await _subscriptionService.RecordAgentTokensAsync(job.UserId, job.ModelType, turn.Usage, ct);
+            // SUBAGENT_AUTONOMY: ведущий видит расход команды и перестаёт делегировать на исходе бюджета.
+            if (billed > 0)
+                TeamTokensSpent.AddOrUpdate(taskId, billed, (_, current) => current + billed);
             messages.Add(turn.Message);
 
             if (turn.Message.ToolCalls is not { Count: > 0 })
@@ -5262,7 +5350,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // ведущего. Через модель он идёт тем же путём, просто без публикации наружу.
         bool streamToClient = true,
         // LOOP_GUARD: ход без инструментов — модель не может снова уйти в цикл и обязана ответить текстом.
-        bool disableTools = false)
+        bool disableTools = false,
+        // LOCAL_WORKER: необязательный маршрут — локальная модель помощника вместо облачной.
+        LlmRoute? route = null)
     {
         var group = _hubContext.Clients.Group($"task_{taskId}");
         var content = new StringBuilder();
@@ -5275,7 +5365,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         var turnTools = disableTools ? new List<object>() : _tools;
         var stream = _llmClient
-            .StreamChatAsync(messages, _job.ModelType, _job.ReasoningEffort, turnTools, taskId: _job.TaskId, ct: ct)
+            .StreamChatAsync(messages, _job.ModelType, _job.ReasoningEffort, turnTools, taskId: _job.TaskId, ct: ct, route: route)
             .GetAsyncEnumerator(ct);
 
         await using (stream)

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -1811,7 +1811,8 @@ internal static class AgentCapabilityTests
             List<object> tools,
             string? reasoningEffort = null,
             Guid? taskId = null,
-            CancellationToken ct = default) =>
+            CancellationToken ct = default,
+            LlmRoute? route = null) =>
             Task.FromResult(new LlmChatResult(new ChatMessage("assistant", "{\"verdict\":\"APPROVED\"}"), 1));
 
         public async IAsyncEnumerable<StreamDelta> StreamChatAsync(
@@ -1821,7 +1822,8 @@ internal static class AgentCapabilityTests
             List<object>? tools = null,
             string? toolChoice = null,
             Guid? taskId = null,
-            [EnumeratorCancellation] CancellationToken ct = default)
+            [EnumeratorCancellation] CancellationToken ct = default,
+            LlmRoute? route = null)
         {
             await Task.Yield();
             Requests.Add(messages.ToList());

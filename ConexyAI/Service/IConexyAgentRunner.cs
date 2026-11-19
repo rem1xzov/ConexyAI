@@ -1,4 +1,4 @@
-﻿using ConexyAI.Contract;
+using ConexyAI.Contract;
 using ConexyAI.Model;
 
 namespace ConexyAI.Service;
@@ -16,7 +16,8 @@ public interface IConexyAgentRunner
 
     // ORCHESTRA: добавлено 2026-09-28, расширено 2026-10-12 — прогон агента-исполнителя команды
     // (роль + scope + полный набор инструментов). Возвращает его отчёт; используется spawn_agents.
-    Task<string> RunWorkerAsync(ConexyJob job, AgentIdentity identity, string brief, CancellationToken ct = default);
+    // LOCAL_WORKER: добавлено 2026-11-19 — помощник может работать на локальной модели пользователя.
+    Task<string> RunWorkerAsync(ConexyJob job, AgentIdentity identity, string brief, CancellationToken ct = default, bool localModel = false);
 
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22
     /// <summary>

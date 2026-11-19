@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -1885,7 +1885,8 @@ sealed class ScriptedAgentLlm : IConexyLlmClient
         List<object> tools,
         string? reasoningEffort = null,
         Guid? taskId = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        LlmRoute? route = null)
     {
         AuditCalls++;
         AuditPrompt = messages.LastOrDefault()?.Text ?? string.Empty;
@@ -1904,7 +1905,8 @@ sealed class ScriptedAgentLlm : IConexyLlmClient
         List<object>? tools = null,
         string? toolChoice = null,
         Guid? taskId = null,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default,
+        LlmRoute? route = null)
     {
         await Task.Yield();
         if (Interlocked.Increment(ref _turn) == 1)

@@ -188,7 +188,7 @@ internal static class AgentEval
             Options.Create(new WorkspaceOptions { RootPath = workspaceRoot }),
             NullLogger<ConexyWorkspaceService>.Instance);
 
-        var realLlm = new ConexyLlmClient(new HttpClient(), NullLogger<ConexyLlmClient>.Instance, Options.Create(ai), hub);
+        var realLlm = new ConexyLlmClient(new HttpClient(), NullLogger<ConexyLlmClient>.Instance, Options.Create(ai), hub, new LlmRouteResolver(Options.Create(ai)));
         var llm = new EvalLlm(realLlm);
         var bash = new EvalHostBash(workspace, maxTimeoutSeconds: 600);
         var editor = new ConexyEditorService(
@@ -374,7 +374,7 @@ internal static class AgentEval
                 Options.Create(new WorkspaceOptions { RootPath = root }),
                 NullLogger<ConexyWorkspaceService>.Instance);
 
-            var realLlm = new ConexyLlmClient(new HttpClient(), NullLogger<ConexyLlmClient>.Instance, Options.Create(ai), hub);
+            var realLlm = new ConexyLlmClient(new HttpClient(), NullLogger<ConexyLlmClient>.Instance, Options.Create(ai), hub, new LlmRouteResolver(Options.Create(ai)));
             var llm = new EvalLlm(realLlm);
             var bash = new EvalHostBash(workspace);
             var editor = new ConexyEditorService(
@@ -829,10 +829,10 @@ internal sealed class EvalLlm : IConexyLlmClient
 
     public async Task<LlmChatResult> SendChatAsync(
         ConexyModelType modelType, List<ChatMessage> messages, List<object> tools,
-        string? reasoningEffort = null, Guid? taskId = null, CancellationToken ct = default)
+        string? reasoningEffort = null, Guid? taskId = null, CancellationToken ct = default, LlmRoute? route = null)
     {
         SendCalls++;
-        var result = await _inner.SendChatAsync(modelType, messages, tools, reasoningEffort, taskId, ct);
+        var result = await _inner.SendChatAsync(modelType, messages, tools, reasoningEffort, taskId, ct, route);
         Account(result.Usage, result.TotalTokens);
         return result;
     }
@@ -840,11 +840,11 @@ internal sealed class EvalLlm : IConexyLlmClient
     public async IAsyncEnumerable<StreamDelta> StreamChatAsync(
         List<ChatMessage> messages, ConexyModelType modelType, string? reasoningEffort = null,
         List<object>? tools = null, string? toolChoice = null, Guid? taskId = null,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default, LlmRoute? route = null)
     {
         StreamCalls++;
         LastMessages = messages.ToList();
-        await foreach (var delta in _inner.StreamChatAsync(messages, modelType, reasoningEffort, tools, toolChoice, taskId, ct))
+        await foreach (var delta in _inner.StreamChatAsync(messages, modelType, reasoningEffort, tools, toolChoice, taskId, ct, route))
         {
             if (delta.ToolCalls is { } calls)
             {
@@ -2132,7 +2132,7 @@ internal sealed class NoWorkerRunner : IConexyAgentRunner
 
     public string GetSystemPrompt(ConexyModelType modelType) => string.Empty;
 
-    public Task<string> RunWorkerAsync(ConexyJob job, AgentIdentity identity, string brief, CancellationToken ct = default) =>
+    public Task<string> RunWorkerAsync(ConexyJob job, AgentIdentity identity, string brief, CancellationToken ct = default, bool localModel = false) =>
         Task.FromResult("(на стенде нет настоящих агентов-помощников — работай сам)");
 
     public string PartialOutput => string.Empty;

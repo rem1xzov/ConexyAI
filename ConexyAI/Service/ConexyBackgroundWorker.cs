@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using ConexyAI.Configuration;
 using ConexyAI.Contract;
 using ConexyAI.Entity;
@@ -288,6 +288,15 @@ public class ConexyBackgroundWorker : BackgroundService
             {
                 Orchestra = job.Orchestra
                     && OrchestraEligibility.IsAllowed(job.Tier, job.IsAdmin, job.ModelType),
+            };
+
+            // SUBAGENT_AUTONOMY: добавлено 2026-11-19 — помощники доступны агентским режимам всегда:
+            // модель сама решает, что задача тяжёлая. Клиентский /team теперь означает «работай командой
+            // сразу», а не «единственное разрешение на команду». Инкогнито побочные прогоны запрещает.
+            job = job with
+            {
+                CanSpawnAgents = job.ModelType is ConexyModelType.ConexyCoder or ConexyModelType.ConexyCowork
+                                 && !job.Incognito,
             };
 
             // TOKEN_ECONOMY: на приветствие агент отвечает КОРОТКИМ промптом без устава, а инструменты
