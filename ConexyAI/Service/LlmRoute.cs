@@ -14,7 +14,10 @@ public sealed record LlmRoute(
     string Model,
     bool Local,
     bool SupportsToolCalls,
-    int MaxTokens);
+    int MaxTokens,
+    // LOCAL_WORKER: транспорт по умолчанию — HTTP к BaseUrl. Для локальной модели на ПК пользователя
+    // транспорта нет: запрос уходит на устройство и возвращает тело chat.completion.
+    Func<string, CancellationToken, Task<string>>? RawTransport = null);
 
 public interface ILlmRouteResolver
 {

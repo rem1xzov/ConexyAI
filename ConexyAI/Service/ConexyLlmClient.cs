@@ -211,6 +211,16 @@ public class ConexyLlmClient : IConexyLlmClient
         // PRIVACY_LOGS: ревью H3 — только метаданные, без содержимого.
         _logger.LogInformation("DeepSeek stream request [task {TaskId}]: model={Model} bodyBytes={Bytes}", taskId, payload.Model, json.Length);
 
+        // LOCAL_WORKER: локальная модель на ПК пользователя — сервер до неё не достаёт, поэтому запрос
+        // уходит через устройство, а ответ разбирается как обычный chat.completion.
+        if (resolved.RawTransport is not null)
+        {
+            var rawResponse = await resolved.RawTransport(json, ct);
+            foreach (var delta in LocalChatBridge.ToDeltas(rawResponse))
+                yield return delta;
+            yield break;
+        }
+
         // FLASH_TIMEOUT: добавлено 2026-09-28 — у Flash ограничен ВЕСЬ путь до первого токена,
         // включая повторы и их задержки (2+4+8с). Раньше сторож «нет прогресса» работал на каждую
         // попытку заново, поэтому при 429 от провайдера (общий ключ, несколько пользователей разом)

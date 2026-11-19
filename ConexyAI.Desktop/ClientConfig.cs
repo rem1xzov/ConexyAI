@@ -32,6 +32,71 @@ public sealed class ClientConfig
     /// <summary>EFFORT: low | high — сколько «думает» модель на каждом шаге агента (medium = high).</summary>
     public string? ReasoningEffort { get; set; }
 
+    // LOCAL_WORKER: добавлено 2026-11-19 — локальная OpenAI-совместимая модель на этом ПК (Ollama,
+    // LM Studio, llama.cpp server). Облачный ведущий может взять её субагентом через device-канал.
+    /// <summary>База OpenAI-совместимого API локальной модели (по умолчанию Ollama).</summary>
+    public string? LocalModelUrl { get; set; }
+
+    /// <summary>Имя модели на локальном сервере.</summary>
+    public string? LocalModelName { get; set; }
+
+    /// <summary>Локальная модель выключена пользователем (`/local off`).</summary>
+    public bool LocalModelDisabled { get; set; }
+
+    public const string DefaultLocalModelUrl = "http://127.0.0.1:11434/v1";
+    public const string DefaultLocalModelName = "qwen2.5-coder:7b";
+
+    /// <summary>Действующие настройки локальной модели (env имеет приоритет над файлом).</summary>
+    public sealed record LocalModelSettings(bool Enabled, string Url, string Model, string ApiKey);
+
+    public static LocalModelSettings LoadLocalModel()
+    {
+        var url = Environment.GetEnvironmentVariable("CONEXY_LOCAL_URL");
+        var model = Environment.GetEnvironmentVariable("CONEXY_LOCAL_MODEL");
+        var apiKey = Environment.GetEnvironmentVariable("CONEXY_LOCAL_KEY") ?? string.Empty;
+        var enabled = true;
+        try
+        {
+            if (File.Exists(FilePath) && JsonSerializer.Deserialize<ClientConfig>(File.ReadAllText(FilePath)) is { } config)
+            {
+                url ??= config.LocalModelUrl;
+                model ??= config.LocalModelName;
+                enabled = !config.LocalModelDisabled;
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) { }
+
+        return new LocalModelSettings(
+            enabled,
+            string.IsNullOrWhiteSpace(url) ? DefaultLocalModelUrl : url.Trim().TrimEnd('/'),
+            string.IsNullOrWhiteSpace(model) ? DefaultLocalModelName : model.Trim(),
+            apiKey);
+    }
+
+    /// <summary>`/local url <...>`, `/local model <...>`, `/local on|off` — меняет только переданные поля.</summary>
+    public static void SaveLocalModel(string? url = null, string? model = null, bool? enabled = null)
+    {
+        ClientConfig config;
+        try
+        {
+            config = File.Exists(FilePath)
+                ? JsonSerializer.Deserialize<ClientConfig>(File.ReadAllText(FilePath)) ?? new ClientConfig()
+                : new ClientConfig();
+        }
+        catch (JsonException)
+        {
+            config = new ClientConfig();
+        }
+
+        if (!string.IsNullOrWhiteSpace(url))
+            config.LocalModelUrl = url.Trim().TrimEnd('/');
+        if (!string.IsNullOrWhiteSpace(model))
+            config.LocalModelName = model.Trim();
+        if (enabled is { } value)
+            config.LocalModelDisabled = !value;
+        config.Save();
+    }
+
     public static string LoadEffort()
     {
         if (Environment.GetEnvironmentVariable("CONEXY_EFFORT") is { Length: > 0 } fromEnv)

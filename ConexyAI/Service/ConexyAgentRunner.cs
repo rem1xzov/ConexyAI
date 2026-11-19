@@ -1452,7 +1452,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         // REPO_MAP: карта проекта строится сервером один раз на рабочую область и идёт стабильным
         // system-блоком сразу после правил: агенту не нужно выяснять структуру десятками read/grep.
-        if (_repoMap is not null && _profile.Mode is "coder" or "cowork" && !PromptEconomy.IsSmallTalk(_job.Prompt))
+        // В десктоп-режиме файлы на ПК — там карту строит клиент по вызову `repo_map`.
+        if (_repoMap is not null && !_job.UseDevice && _profile.Mode is "coder" or "cowork" && !PromptEconomy.IsSmallTalk(_job.Prompt))
         {
             try
             {
@@ -3472,10 +3473,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
             return new ConexyToolResult(toolCallId, "spawn_agents is unavailable in this environment.", true);
         }
 
-        // LOCAL_WORKER: локальный помощник возможен только при настроенном маршруте; иначе — честная ошибка.
-        if (specs.Any(spec => spec.Local) && _routes?.Local is null)
+        // LOCAL_WORKER: локальная модель может быть на сервере ИЛИ на ПК пользователя (через устройство).
+        var hasLocalRoute = _routes?.Local is not null || DeviceLocalRoute(taskId) is not null;
+        if (specs.Any(spec => spec.Local) && !hasLocalRoute)
             return new ConexyToolResult(toolCallId,
-                "spawn_agents: локальная модель не настроена на сервере (AiUpstream:Local). Уберите \"local\": true у помощника или настройте локальную модель.", true);
+                "spawn_agents: локальная модель не настроена ни на сервере (AiUpstream:Local), ни на ПК пользователя. " +
+                "Уберите \"local\": true у помощника или настройте локальную модель.", true);
 
         // SUBAGENT_AUTONOMY: пределы самостоятельной команды. Помощники стоят токенов из пула
         // пользователя, поэтому делегирование ограничено по числу запусков, по числу агентов и
@@ -3633,7 +3636,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     agentId = identity.Id,
                     agentRole = spec.Role
                 }, token);
-                var text = await runner.RunWorkerAsync(subJob, identity, spec.Brief, token, spec.Local);
+                // LOCAL_WORKER: если серверной локальной модели нет, а ПК подключён — помощник идёт на модель ПК.
+                var workerRoute = spec.Local && _routes?.Local is null ? DeviceLocalRoute(subJob.TaskId) : null;
+                var text = await runner.RunWorkerAsync(subJob, identity, spec.Brief, token, spec.Local, workerRoute);
                 worker.Report = string.IsNullOrWhiteSpace(text) ? "(готово)" : text.Trim();
                 await group.SendAsync("OnAgentStatus", new
                 {
@@ -3906,11 +3911,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
         string brief,
         CancellationToken ct = default,
         // LOCAL_WORKER: помощник может идти на локальной модели пользователя (облачный ведущий).
-        bool localModel = false)
+        bool localModel = false,
+        // LOCAL_WORKER: готовый маршрут (например, локальная модель на ПК через устройство).
+        LlmRoute? routeOverride = null)
     {
-        var workerRoute = localModel ? _routes?.Local : null;
+        var workerRoute = routeOverride ?? (localModel ? _routes?.Local : null);
         if (localModel && workerRoute is null)
-            _logger.LogWarning("Local worker requested but AiUpstream:Local is not configured; using the cloud route. task={TaskId}", job.TaskId);
+            _logger.LogWarning("Local worker requested but no local route is configured; using the cloud route. task={TaskId}", job.TaskId);
         // Помощник — отдельный прогон в этом экземпляре: своя личность (роль и scope), полный набор
         // инструментов и своя короткая история. Текст в основной ответ он не стримит, но его
         // действия/статусы уходят с его agentId — UI рисует их в отдельной карточке.
@@ -4520,6 +4527,18 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 {
                     if (_repoMap is null)
                         return new ConexyToolResult(toolCall.Id, "repo_map is not available in this deployment.", true);
+
+                    // REPO_MAP: в десктоп-режиме проект лежит на ПК — карту строит клиент, который видит файлы.
+                    if (_job.UseDevice && _deviceBridge is not null)
+                    {
+                        if (DeviceOfflineRefusal("repo_map") is { } deviceOffline)
+                            return new ConexyToolResult(toolCall.Id, deviceOffline, true);
+
+                        var deviceOutcome = await _deviceBridge.ExecuteAsync(
+                            _job.UserId, taskId, "repo_map", toolCall.Function.Arguments, ct,
+                            _job.DeviceProjectId, _job.RemoteApprovals);
+                        return new ConexyToolResult(toolCall.Id, deviceOutcome.Output, deviceOutcome.IsError);
+                    }
 
                     var mapText = await _repoMap.QueryAsync(
                         chatId,
@@ -5664,6 +5683,36 @@ public class ConexyAgentRunner : IConexyAgentRunner
             ? " Экран после действия НЕ изменился (screen_state.changed=false): не повторяй это действие — смени подход или уточни задачу."
             : string.Empty;
         return new ConexyToolResult(toolCall.Id, ("Скриншот снят и приложен для визуальной проверки. " + note).Trim() + noEffect, false);
+    }
+
+    // LOCAL_WORKER: добавлено 2026-11-19 — маршрут на локальную модель, установленную на ПК пользователя.
+    // Сервер до неё не достаёт (remote server + localhost), поэтому каждый ход идёт через device-канал:
+    // на ПК уходит обычное тело chat.completion, обратно — обычный JSON-ответ.
+    private LlmRoute? DeviceLocalRoute(Guid taskId) =>
+        _job.UseDevice && _deviceBridge is not null
+            ? new LlmRoute(
+                "device-local",
+                "device://local",
+                string.Empty,
+                "local",
+                Local: true,
+                SupportsToolCalls: true,
+                MaxTokens: 4096,
+                RawTransport: (body, ct) => ExecuteLocalChatOnDeviceAsync(taskId, body, ct))
+            : null;
+
+    private async Task<string> ExecuteLocalChatOnDeviceAsync(Guid taskId, string bodyJson, CancellationToken ct)
+    {
+        if (_deviceBridge is null)
+            throw new HttpRequestException("Локальная модель на ПК недоступна: нет связи с устройством.");
+
+        using var document = JsonDocument.Parse(bodyJson);
+        var arguments = JsonSerializer.Serialize(new { body = document.RootElement });
+        var outcome = await _deviceBridge.ExecuteAsync(
+            _job.UserId, taskId, "local_chat", arguments, ct, _job.DeviceProjectId, _job.RemoteApprovals);
+        if (outcome.IsError)
+            throw new HttpRequestException($"Локальная модель на ПК не ответила: {Truncate(outcome.Output, 500)}");
+        return outcome.Output;
     }
 
     // AGENT_CURSOR: добавлено 2026-11-19

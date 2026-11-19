@@ -12,6 +12,10 @@ public sealed class ToolRunner
     private readonly PcTools _pc;
     private readonly WindowTools _windows;
     private readonly ComputerTools _computer;
+    // REPO_MAP: карта проекта на ПК — сервер не видит файлы пользователя, поэтому строит клиент.
+    private readonly ProjectMapTool _repoMap;
+    // LOCAL_WORKER: локальная модель на этом ПК — прогон помощника через device-канал.
+    private readonly LocalModelClient _localModel = new();
     private readonly Action<string> _log;
     private readonly Mcp.LocalTools? _local;
     private readonly ICommandApprover _approver;
@@ -62,6 +66,7 @@ public sealed class ToolRunner
         _pc = new PcTools(_guard, approver, _shell);
         _windows = new WindowTools(approver, _guard.Root);
         _computer = new ComputerTools(approver, _guard.Root, log);
+        _repoMap = new ProjectMapTool(_guard.Root);
         _log = log;
     }
 
@@ -134,6 +139,10 @@ public sealed class ToolRunner
                 "file_write" => _files.Write(args),
                 "file_patch" => _files.Patch(args),
                 "workspace_list_files" => _files.List(args),
+                // REPO_MAP: карта проекта строится здесь, на ПК, где реально лежат файлы.
+                "repo_map" => _repoMap.Run(args),
+                // LOCAL_WORKER: ход локальной модели (тело chat.completion приходит с сервера).
+                "local_chat" => await _localModel.ChatAsync(args, ct),
                 "grep" => _search.Grep(args),
                 "glob" => _search.Glob(args),
                 "str_replace_editor" => _editor.Run(args),

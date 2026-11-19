@@ -52,6 +52,8 @@ public sealed partial class ReadLoopGuard
             case "grep":
             case "glob":
             case "workspace_list_files":
+            // REPO_MAP: карта проекта — чтение, а не действие: защита от повторного чтения работает и на ней.
+            case "repo_map":
                 return true;
             case "str_replace_editor":
                 return args.Str("command") == "view";

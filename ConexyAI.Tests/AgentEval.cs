@@ -2132,7 +2132,7 @@ internal sealed class NoWorkerRunner : IConexyAgentRunner
 
     public string GetSystemPrompt(ConexyModelType modelType) => string.Empty;
 
-    public Task<string> RunWorkerAsync(ConexyJob job, AgentIdentity identity, string brief, CancellationToken ct = default, bool localModel = false) =>
+    public Task<string> RunWorkerAsync(ConexyJob job, AgentIdentity identity, string brief, CancellationToken ct = default, bool localModel = false, LlmRoute? routeOverride = null) =>
         Task.FromResult("(на стенде нет настоящих агентов-помощников — работай сам)");
 
     public string PartialOutput => string.Empty;

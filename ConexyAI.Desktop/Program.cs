@@ -885,6 +885,8 @@ static void PrintHelp()
             ("/http-proxy [url|off]", "прокси для сервера и SignalR (корпоративная сеть); нужен перезапуск клиента"),
             ("/bubble", "круг с логотипом на рабочем столе: клик открывает Conexy, файлы можно бросить на него"),
             ("/control on|off", "полный доступ к ПК: агент сам открывает программы и сайты, кликает, печатает, жмёт клавиши без вопросов; вы видите всё на экране. Стоп — курсор в левый верхний угол"),
+            // LOCAL_WORKER: локальная модель ПК как субагент облачного агента.
+            ("/local [on|off|url|model|test]", "локальная модель на этом ПК (Ollama/LM Studio): облачный ведущий может запускать на ней субагента"),
             ("/permissions", "команды без вопроса в этом проекте\nadd <команда> · remove N · clear"),
         ]),
         ("Фоновая работа с сайта", [
@@ -1297,6 +1299,64 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                         ? "Оркестр включён: ведущий агент собирает команду субагентов. Работает в этом чате, пока не выключите: /team off"
                         : "Оркестр выключен: субагенты больше не запускаются, работает один агент.");
                     break;
+                // LOCAL_WORKER: локальная модель на этом ПК, которую облачный ведущий берёт субагентом.
+                case "/local":
+                {
+                    var localParts = arg.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    var action = localParts.Length > 0 ? localParts[0].ToLowerInvariant() : string.Empty;
+                    var value = localParts.Length > 1 ? localParts[1] : string.Empty;
+                    switch (action)
+                    {
+                        case "":
+                        {
+                            var current = ClientConfig.LoadLocalModel();
+                            var status = current.Enabled ? "включена" : "выключена";
+                            Ui.Info($"Локальная модель {status}: {current.Model} @ {current.Url}. " +
+                                    "Команды: `/local on|off`, `/local url <адрес>`, `/local model <имя>`, `/local test`.");
+                            break;
+                        }
+                        case "on" or "вкл":
+                            ClientConfig.SaveLocalModel(enabled: true);
+                            Ui.Info("Локальная модель включена: облачный ведущий может запускать на ней субагента.");
+                            break;
+                        case "off" or "выкл":
+                            ClientConfig.SaveLocalModel(enabled: false);
+                            Ui.Info("Локальная модель выключена: помощники работают только на облачных моделях.");
+                            break;
+                        case "url":
+                            if (string.IsNullOrWhiteSpace(value))
+                            {
+                                Ui.Error("Используйте: /local url http://127.0.0.1:11434/v1");
+                                break;
+                            }
+                            ClientConfig.SaveLocalModel(url: value);
+                            Ui.Info($"Адрес локальной модели: {ClientConfig.LoadLocalModel().Url}");
+                            break;
+                        case "model":
+                            if (string.IsNullOrWhiteSpace(value))
+                            {
+                                Ui.Error("Используйте: /local model qwen2.5-coder:7b");
+                                break;
+                            }
+                            ClientConfig.SaveLocalModel(model: value);
+                            Ui.Info($"Модель: {ClientConfig.LoadLocalModel().Model}");
+                            break;
+                        case "test":
+                        {
+                            Ui.Info("Проверяю локальную модель…");
+                            var (ok, detail) = await ConexyAI.Desktop.Tools.LocalModelClient.ProbeAsync();
+                            if (ok)
+                                Ui.Info(detail);
+                            else
+                                Ui.Error(detail);
+                            break;
+                        }
+                        default:
+                            Ui.Error("Используйте: /local, /local on|off, /local url <адрес>, /local model <имя>, /local test");
+                            break;
+                    }
+                    break;
+                }
                 case "/update":
                     if (await Updater.CheckAsync(server) is { } found)
                     {
