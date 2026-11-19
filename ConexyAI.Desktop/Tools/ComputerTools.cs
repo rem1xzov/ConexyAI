@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 
 namespace ConexyAI.Desktop.Tools;
 
@@ -38,6 +39,10 @@ public sealed class ComputerTools
     private int _originY;
     private int _shotWidth;
     private int _shotHeight;
+    // SCREEN_STATE: добавлено 2026-11-19 — воспринимаемый отпечаток кадра и номер снимка. Сервер по нему
+    // отличает «клик реально что-то изменил» от «клик в пустоту», не сравнивая base64 картинок.
+    private ulong? _lastFrameBits;
+    private long _shotSeq;
 
     public ComputerTools(ICommandApprover approver, string root, Action<string> log)
     {
@@ -93,7 +98,7 @@ public sealed class ComputerTools
         }
 
         if (args.Bool("screenshot") == false)
-            return ToolResult.Ok("Готово: " + description);
+            return ToolResult.Ok("Готово: " + description + "\n" + StateLine(changed: null));
         await Task.Delay(Math.Clamp(args.Int("delay_ms") ?? 700, 100, 10_000), ct);
         return ToolResult.Ok(Capture("После: " + description + "."));
     }
@@ -234,19 +239,80 @@ public sealed class ComputerTools
                 rgb[dst + 2] = pixels[src];
             }
         }
+        // SCREEN_STATE: отпечаток считается ДО отрисовки курсора — иначе движущийся красный крестик
+        // делал бы каждый кадр «изменённым» и защита от циклов не видела бы застывший экран.
+        var bits = FrameBits(rgb);
+        var changed = _lastFrameBits is { } previous ? HammingDistance(bits, previous) > 6 : (bool?)null;
+        _lastFrameBits = bits;
+        _shotSeq++;
         DrawCursor(rgb);
 
         var png = WindowTools.EncodePng(rgb, _shotWidth, _shotHeight);
-        // UI_STEP_NOTE: в заметке время и позиция курсора — два снимка почти никогда не совпадают байт-в-байт
-        // в ответе, и защита от петель не принимает нормальную работу с экраном за «топтание на месте».
         GetCursorPos(out var cursor);
-        var note = $"{prefix} Экран {_shotWidth}×{_shotHeight} (координаты для computer_click — в пикселях ЭТОГО снимка; красный крестик — курсор; шаг {DateTime.Now:HH:mm:ss.fff}, курсор {cursor.X},{cursor.Y}).".Trim();
-        return $"IMAGE_BASE64:image/png:{Convert.ToBase64String(png)}\n{note}";
+        var note = $"{prefix} Экран {_shotWidth}×{_shotHeight} (координаты для computer_click — в пикселях ЭТОГО снимка; красный крестик — курсор; курсор {cursor.X},{cursor.Y}).".Trim();
+        return $"IMAGE_BASE64:image/png:{Convert.ToBase64String(png)}\n{note}\n{StateLine(changed, cursor.X, cursor.Y, bits)}";
+    }
+
+    // ── Состояние кадра для защиты от циклов ────────────────────────────────
+
+    /// <summary>
+    /// dHash 9×8 по средней яркости ячеек: устойчив к шуму и мелким сдвигам, но различает «экран
+    /// действительно изменился» и «экран застыл». Считается до отрисовки курсора.
+    /// </summary>
+    private ulong FrameBits(byte[] rgb)
+    {
+        const int cellsX = 9;
+        const int cellsY = 8;
+        var luma = new double[cellsX, cellsY];
+        var counts = new int[cellsX, cellsY];
+        for (var y = 0; y < _shotHeight; y++)
+        {
+            var cy = Math.Min(cellsY - 1, y * cellsY / _shotHeight);
+            for (var x = 0; x < _shotWidth; x++)
+            {
+                var cx = Math.Min(cellsX - 1, x * cellsX / _shotWidth);
+                var i = (y * _shotWidth + x) * 3;
+                luma[cx, cy] += 0.299 * rgb[i] + 0.587 * rgb[i + 1] + 0.114 * rgb[i + 2];
+                counts[cx, cy]++;
+            }
+        }
+
+        ulong bits = 0;
+        var bit = 0;
+        for (var y = 0; y < cellsY; y++)
+        for (var x = 0; x < cellsX - 1; x++)
+        {
+            var left = counts[x, y] == 0 ? 0 : luma[x, y] / counts[x, y];
+            var right = counts[x + 1, y] == 0 ? 0 : luma[x + 1, y] / counts[x + 1, y];
+            if (left < right)
+                bits |= 1UL << bit;
+            bit++;
+        }
+
+        return bits;
+    }
+
+    private static int HammingDistance(ulong a, ulong b) => System.Numerics.BitOperations.PopCount(a ^ b);
+
+    /// <summary>Модели и серверу: отпечаток кадра, изменился ли он после действия, и активное окно.</summary>
+    private string StateLine(bool? changed, int? cursorX = null, int? cursorY = null, ulong? bits = null)
+    {
+        var foreground = Foreground();
+        var state = new
+        {
+            frame = (bits ?? _lastFrameBits)?.ToString("X16"),
+            changed,
+            shot = _shotSeq,
+            size = $"{_shotWidth}x{_shotHeight}",
+            cursor = cursorX is null ? null : new[] { cursorX.Value, cursorY ?? 0 },
+            foreground = foreground?.Process,
+            window = Short(foreground?.Title),
+        };
+        return "screen_state:" + JsonSerializer.Serialize(state);
     }
 
     /// <summary>Курсор на снимке — модель видит, куда наведена мышь.</summary>
-    private void DrawCursor(byte[] rgb)
-    {
+    private void DrawCursor(byte[] rgb)    {
         if (!GetCursorPos(out var p))
             return;
         var cx = (int)((p.X - _originX) * _scale);
