@@ -202,6 +202,48 @@ public sealed class ServerClient : IDisposable
         return body?.Messages ?? [];
     }
 
+    /// <summary>
+    /// SHARE_TO_ADMIN: добавлено 2026-11-19 — отчёт админам по текущему чату (баг/жалоба). Комментарий и
+    /// скриншот необязательны; лимиты сервера — комментарий ≤ 2000 символов, PNG ≤ 8 МБ. Возвращает
+    /// человекочитаемый статус отчёта (id и состояние), ошибки — по-русски.
+    /// </summary>
+    public async Task<string> ShareChatWithAdminAsync(Guid chatId, string? comment, byte[]? png, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"api/conexy/chats/{chatId}/share-to-admin")
+        {
+            Content = JsonContent.Create(new
+            {
+                comment = string.IsNullOrWhiteSpace(comment) ? null : comment.Trim(),
+                screenshotFileName = png is null ? null : $"screenshot-{DateTime.Now:yyyyMMdd-HHmmss}.png",
+                screenshotContentType = "image/png",
+                screenshotBase64 = png is null ? null : Convert.ToBase64String(png),
+            }, options: Json),
+        };
+        request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));
+
+        using var response = await _http.SendAsync(request, ct);
+        if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
+            throw new InvalidOperationException("Сервер не разрешил отправить этот чат: возможно, он ещё не создан — отправьте сообщение.");
+        if (response.StatusCode == HttpStatusCode.BadRequest)
+            throw new InvalidOperationException("Сервер отклонил отчёт: " + await ErrorMessageAsync(response, ct));
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"Не удалось отправить отчёт ({(int)response.StatusCode}): {await ErrorMessageAsync(response, ct)}");
+
+        var body = await response.Content.ReadFromJsonAsync<ShareBody>(Json, ct);
+        var id = body?.Id;
+        var status = string.IsNullOrWhiteSpace(body?.Status) ? "open" : body.Status;
+        return string.IsNullOrEmpty(id) ? $"статус: {status}" : $"отчёт {id} · статус: {status}";
+    }
+
+    /// <summary>SHARE_TO_ADMIN: добавлено 2026-11-19 — отозвать отчёт, если сервер это поддерживает.</summary>
+    public async Task<bool> WithdrawShareWithAdminAsync(Guid chatId, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Delete, $"api/conexy/chats/{chatId}/share-to-admin");
+        request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));
+        using var response = await _http.SendAsync(request, ct);
+        return response.IsSuccessStatusCode;
+    }
+
     public async Task<ClientInfo?> GetClientInfoAsync(CancellationToken ct)
     {
         using var response = await _http.GetAsync("api/device/client", ct);
@@ -316,6 +358,9 @@ public sealed class ServerClient : IDisposable
     private sealed record ChatListBody(List<ChatItem> Chats);
 
     private sealed record TranscriptBody(List<TranscriptMessage> Messages);
+
+    // SHARE_TO_ADMIN: добавлено 2026-11-19 — ответ POST share-to-admin: id/createdAt/status.
+    private sealed record ShareBody(string? Id, DateTime? CreatedAt, string? Status);
 
     private sealed record ClientBody(string? DownloadUrl, string? Version, string? GoogleClientId, string? GoogleClientSecret);
 

@@ -730,6 +730,90 @@ static async Task<UsageInfo?> TryUsageAsync(ServerClient server)
     }
 }
 
+// SHARE_TO_ADMIN: добавлено 2026-11-19 — /share: отправить текущий чат админам (баг или жалоба).
+// Комментарий и снимок окна — по желанию; подтверждения не нужны, это собственный отчёт пользователя.
+static async Task ShareCommandAsync(ServerClient server, Guid chatId)
+{
+    if (chatId == Guid.Empty)
+    {
+        Ui.Info("  Чат ещё не создан — отправьте сообщение.");
+        return;
+    }
+
+    // Сервер создаёт чат первым сообщением: у нового (пустого) чата делиться ещё нечем.
+    var created = true;
+    try
+    {
+        using var probe = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        created = (await server.GetChatsAsync(probe.Token)).Any(c => c.Id == chatId);
+    }
+    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or AuthRejectedException)
+    {
+        // Сеть подвела — не блокируем отчёт: если чат и правда чужой, сервер ответит ошибкой при отправке.
+    }
+    if (!created)
+    {
+        Ui.Info("  Чат ещё не создан — отправьте сообщение.");
+        return;
+    }
+
+    var choice = await Ui.ChooseAsync("Отчёт админам",
+        "Отправить этот чат админам? Снимок окна Conexy поможет разобрать проблему.",
+        ["Со снимком экрана", "Без снимка", "Отмена"], CancellationToken.None);
+    if (choice is not (0 or 1))
+    {
+        Ui.Info("  Отправка отменена.");
+        return;
+    }
+
+    Console.WriteLine("  Комментарий для админов: что не так? (Enter — без комментария, Esc — отмена)");
+    var comment = Ui.ReadLineEcho(CancellationToken.None);
+    if (comment is null)
+    {
+        Ui.Info("  Отправка отменена.");
+        return;
+    }
+    comment = comment.Trim();
+    if (comment.Length > 2000)
+    {
+        Ui.Error("Комментарий слишком длинный — максимум 2000 символов.");
+        return;
+    }
+
+    byte[]? png = null;
+    if (choice == 0)
+    {
+        Ui.Info("  Делаю снимок окна…");
+        try
+        {
+            var (shot, _) = WindowTools.CaptureForShare(Bubble.WindowTitle);
+            if (shot.Length <= WindowTools.MaxShareScreenshotBytes)
+                png = shot;
+            else
+                Ui.Info("  Снимок больше 8 МБ — отправляю отчёт без скриншота.");
+        }
+        catch (Exception ex) when (ex is ToolException or IOException or InvalidOperationException)
+        {
+            Ui.Error("Не удалось сделать снимок: " + ex.Message);
+        }
+    }
+
+    try
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var report = await server.ShareChatWithAdminAsync(chatId, comment.Length == 0 ? null : comment, png, cts.Token);
+        Ui.Info($"  Админам отправлен чат {chatId.ToString()[..8]}{(png is null ? string.Empty : " (скриншот приложен)")} · {report}");
+    }
+    catch (InvalidOperationException ex)
+    {
+        Ui.Error(ex.Message);
+    }
+    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or AuthRejectedException or System.Text.Json.JsonException)
+    {
+        Ui.Error("Не удалось отправить отчёт: " + ex.Message);
+    }
+}
+
 static void DaemonCommand(string arg, string root)
 {
     switch (arg.ToLowerInvariant())
@@ -784,6 +868,7 @@ static void PrintHelp()
         ]),
         ("Чат и агент", [
             ("/chats", "все чаты (общие с сайтом): переключиться или создать; у каждого своя папка"),
+            ("/share", "пожаловаться админам на этот чат: отправить переписку с комментарием и снимком окна"),
             ("/agent coder|cowork", "Coder — код и терминал; Cowork — исследования, документы, почта (платные тарифы)"),
             ("/effort [low|high]", "сколько «думает» модель на каждом шаге; high — качество, low — дешевле и быстрее"),
             ("/compact [фокус]", "сжать длинный чат в пересказ и продолжить в новом — дешевле"),
@@ -993,6 +1078,10 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                 case "/chats":
                     if (await PickChatAsync(server, store, root, chatId) is { } picked)
                         return picked;
+                    break;
+                // SHARE_TO_ADMIN: добавлено 2026-11-19 — /share: отчёт админам по текущему чату.
+                case "/share":
+                    await ShareCommandAsync(server, chatId);
                     break;
                 case "/usage":
                     usage = await TryUsageAsync(server);

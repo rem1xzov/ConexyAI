@@ -15,6 +15,15 @@ public sealed class WindowTools
 {
     private const int MaxSide = 1600;
     private const int MaxKeyCombos = 12;
+    /// <summary>SHARE_TO_ADMIN: предел сервера на скриншот в отчёте — 8 МБ.</summary>
+    internal const int MaxShareScreenshotBytes = 8 * 1024 * 1024;
+
+    // SHARE_TO_ADMIN: добавлено 2026-11-19 — окно клиента рисует хост терминала, а не сам процесс conexy:
+    // по этим именам процессов ищем окно с заголовком консоли, чтобы снять именно окно Conexy.
+    private static readonly HashSet<string> ConsoleHostProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "WindowsTerminal", "OpenConsole", "conhost", "cmd", "powershell", "pwsh",
+    };
 
     // Сюда нажатия не отправляются ни при каком подтверждении: здесь клавиши = команды или управление системой.
     private static readonly HashSet<string> KeyBlockedProcesses = new(StringComparer.OrdinalIgnoreCase)
@@ -245,14 +254,18 @@ public sealed class WindowTools
 
     private static bool _dpiAware;
 
+    private static void EnsureDpiAware()
+    {
+        if (_dpiAware)
+            return;
+        // Без этого на экранах с масштабом 125–200% координаты окна «уменьшены», и снимок обрезается.
+        SetProcessDpiAwarenessContext(new IntPtr(-4));
+        _dpiAware = true;
+    }
+
     private static (byte[] Png, string Note) CaptureClient(IntPtr hwnd)
     {
-        if (!_dpiAware)
-        {
-            // Без этого на экранах с масштабом 125–200% координаты окна «уменьшены», и снимок обрезается.
-            SetProcessDpiAwarenessContext(new IntPtr(-4));
-            _dpiAware = true;
-        }
+        EnsureDpiAware();
 
         GetClientRect(hwnd, out var client);
         var origin = new POINT();
@@ -314,6 +327,95 @@ public sealed class WindowTools
         var note = $"Окно {width}×{height}{(scale < 1 ? $", снимок уменьшен до {outW}×{outH}" : string.Empty)}, средняя яркость {average:0}/255.";
         if (average < 6)
             note += " Кадр почти полностью чёрный: либо так рендерит программа (для шейдера — смотри лог ошибок компиляции), либо окно перекрыто/свёрнуто.";
+        return (EncodePng(rgb, outW, outH), note);
+    }
+
+    // SHARE_TO_ADMIN: добавлено 2026-11-19 — снимок для отчёта админам. Сначала окно самого клиента
+    // (его рисует хост терминала; ищем по заголовку консоли «Conexy», а не по процессу conexy),
+    // если окно не нашлось — весь экран. Окно не поднимаем: пользователь только что печатал в нём.
+    internal static (byte[] Png, string Note) CaptureForShare(string consoleTitle)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new ToolException("Снимок окна пока только на Windows.");
+
+        var windows = EnumerateWindows()
+            .Where(w => w.Title.Equals(consoleTitle, StringComparison.OrdinalIgnoreCase)
+                        || (ConsoleHostProcesses.Contains(w.Process) && w.Title.Contains(consoleTitle, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        // Активное окно — то, которое сейчас перед пользователем (он только что печатал в консоли).
+        var foreground = GetForegroundWindow();
+        var window = windows.FirstOrDefault(w => w.Handle == foreground && !w.Minimized)
+                     ?? windows.Where(w => !w.Minimized).OrderByDescending(w => (long)w.Width * w.Height).FirstOrDefault();
+        if (window is not null)
+        {
+            try
+            {
+                return CaptureClient(window.Handle);
+            }
+            catch (ToolException)
+            {
+                // Окно могли свернуть/закрыть между поиском и снимком — ниже снимем весь экран.
+            }
+        }
+        return CaptureScreen();
+    }
+
+    private static (byte[] Png, string Note) CaptureScreen()
+    {
+        EnsureDpiAware();
+        var left = GetSystemMetrics(76);
+        var top = GetSystemMetrics(77);
+        var width = GetSystemMetrics(78);
+        var height = GetSystemMetrics(79);
+        if (width <= 0 || height <= 0)
+            throw new ToolException("Не удалось определить размер экрана.");
+
+        var screen = GetDC(IntPtr.Zero);
+        var memory = CreateCompatibleDC(screen);
+        var bitmap = CreateCompatibleBitmap(screen, width, height);
+        var old = SelectObject(memory, bitmap);
+        var pixels = new byte[width * height * 4];
+        try
+        {
+            if (!BitBlt(memory, 0, 0, width, height, screen, left, top, 0x00CC0020 | 0x40000000))
+                throw new ToolException("Не удалось снять экран (он заблокирован?).");
+            var info = new BITMAPINFOHEADER
+            {
+                biSize = Marshal.SizeOf<BITMAPINFOHEADER>(),
+                biWidth = width,
+                biHeight = -height,
+                biPlanes = 1,
+                biBitCount = 32,
+            };
+            SelectObject(memory, old);
+            if (GetDIBits(memory, bitmap, 0, (uint)height, pixels, ref info, 0) == 0)
+                throw new ToolException("Не удалось прочитать снимок экрана.");
+        }
+        finally
+        {
+            DeleteObject(bitmap);
+            DeleteDC(memory);
+            ReleaseDC(IntPtr.Zero, screen);
+        }
+
+        var scale = Math.Min(1.0, (double)MaxSide / Math.Max(width, height));
+        var outW = Math.Max(1, (int)(width * scale));
+        var outH = Math.Max(1, (int)(height * scale));
+        var rgb = new byte[outW * outH * 3];
+        for (var y = 0; y < outH; y++)
+        {
+            var sy = Math.Min(height - 1, (int)(y / scale));
+            for (var x = 0; x < outW; x++)
+            {
+                var src = (sy * width + Math.Min(width - 1, (int)(x / scale))) * 4;
+                var dst = (y * outW + x) * 3;
+                rgb[dst] = pixels[src + 2];
+                rgb[dst + 1] = pixels[src + 1];
+                rgb[dst + 2] = pixels[src];
+            }
+        }
+
+        var note = $"Экран {outW}×{outH}{(scale < 1 ? $" (окно {width}×{height} уменьшено)" : string.Empty)}.";
         return (EncodePng(rgb, outW, outH), note);
     }
 
@@ -427,6 +529,7 @@ public sealed class WindowTools
     [DllImport("user32.dll", EntryPoint = "MapVirtualKeyW")] private static extern uint MapVirtualKey(uint code, uint mapType);
     [DllImport("user32.dll")] private static extern uint SendInput(uint count, INPUT[] inputs, int size);
     [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
     [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr dc);
