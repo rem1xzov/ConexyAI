@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatSession } from '../types/chat';
 import { ConfirmDialog, PromptDialog } from './Dialog';
-import { EditIcon, EyeIcon, EyeOffIcon, PinIcon, PlusIcon, ShareIcon, ThreeDotsIcon, TrashIcon } from './Icons';
+import { EditIcon, EyeIcon, EyeOffIcon, PinIcon, PlusIcon, ShareIcon, ShieldIcon, ThreeDotsIcon, TrashIcon } from './Icons';
 
 // CHAT_ACTIONS: добавлено 2026-09-29 — действия шапки чата (новый чат, меню чата). Показываются,
 // только когда в чате есть хотя бы одно сообщение; по умолчанию их нет. Меню повторяет то, что уже
@@ -11,6 +11,8 @@ interface ChatHeaderActionsProps {
   session: ChatSession;
   onNewChat: () => void;
   onShare: (session: ChatSession) => void;
+  // SHARE_ADMIN: отправить чат администратору (жалоба/разбор проблемы).
+  onShareAdmin: (session: ChatSession) => void;
   onPin: (id: string) => void;
   // CHAT_HIDE: скрыть чат или вернуть скрытый в общий список.
   onHide: (id: string, hidden: boolean) => void;
@@ -22,6 +24,7 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
   session,
   onNewChat,
   onShare,
+  onShareAdmin,
   onPin,
   onHide,
   onRename,
@@ -80,6 +83,18 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
               }}
             >
               <ShareIcon size={16} className="chats__menu-icon" /> {t('sidebar.share')}
+            </button>
+            {/* SHARE_ADMIN: передача чата админу с комментарием и скриншотом. */}
+            <button
+              type="button"
+              role="menuitem"
+              className="chats__menu-item"
+              onClick={() => {
+                setMenuOpen(false);
+                onShareAdmin(session);
+              }}
+            >
+              <ShieldIcon size={16} className="chats__menu-icon" /> {t('sidebar.shareAdmin')}
             </button>
             <button
               type="button"

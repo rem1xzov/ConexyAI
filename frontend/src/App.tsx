@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setAuthToken } from './api/client';
-import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, setChatHidden, getSubscriptionUsage, resetLimits, getTaskStatus, runTask, createChatShareLink, type VerificationChallenge } from './api/conexyApi';
+import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPinned, setChatHidden, getSubscriptionUsage, resetLimits, getTaskStatus, runTask, createChatShareLink, shareChatWithAdmin, type VerificationChallenge } from './api/conexyApi';
 // YOOKASSA: добавлено 2026-09-27 — создание платежа и окно возврата после оплаты.
 import { createPayment } from './api/paymentsApi';
 // USER_NAME: имя из персонализации подписывает приветствие на стартовом экране.
@@ -69,6 +69,8 @@ import { AdminPanel } from './components/AdminPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
 // SUPPORT: добавлено 2026-09-19
 import { SupportChat } from './components/SupportChat';
+// SHARE_ADMIN: диалог передачи чата администратору (комментарий + скриншот).
+import { ShareWithAdminDialog } from './components/ShareWithAdminDialog';
 // EMAIL_AUTH: добавлено 2026-09-19
 import { AuthModal } from './components/AuthModal';
 import type { AuthMode } from './components/AuthModal';
@@ -91,7 +93,7 @@ import {
 } from './utils/deviceTarget';
 import { getStoredTheme, setTheme, type Theme } from './theme';
 import { setLanguage } from './i18n';
-import type { ChatSummary, ConexyModel, ConexyRequest, ConexyResponse, DeviceOfflinePolicy, LimitExceededInfo, ReasoningEffort, SendOutcome, SubscriptionUsage, TaskAttachment } from './types/api';
+import type { ChatSummary, ConexyModel, ConexyRequest, ConexyResponse, DeviceOfflinePolicy, LimitExceededInfo, ReasoningEffort, SendOutcome, ShareToAdminRequest, SubscriptionUsage, TaskAttachment } from './types/api';
 import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep, TurnBlock, AgentAction, TeamAgent } from './types/chat';
 import type { PendingActionPayload, SignalrCallbacks } from './types/signalr';
 // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
@@ -389,6 +391,10 @@ export default function App() {
   const [route, setRoute] = useState(window.location.hash);
   // SUPPORT: добавлено 2026-09-19
   const [supportOpen, setSupportOpen] = useState(false);
+  // SHARE_ADMIN: чат, который пользователь сейчас передаёт администратору (открыт диалог), и
+  // состояние отправки — кнопки диалога блокируются, пока запрос в полёте.
+  const [shareAdminSession, setShareAdminSession] = useState<ChatSession | null>(null);
+  const [shareAdminBusy, setShareAdminBusy] = useState(false);
   // SETTINGS: добавлено 2026-09-19
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
   const [language, setLanguageState] = useState<string>(i18n.language);
@@ -2439,6 +2445,34 @@ export default function App() {
     }
   }
 
+  // SHARE_ADMIN: передача чата администратору. Гейт тот же, что у публичной ссылки: черновик и
+  // инкогнито-чат на сервере не существуют, админу нечего открывать.
+  function handleShareWithAdmin(session: ChatSession) {
+    if (session.incognito || !session.remote || !GUID_LIKE.test(session.id)) {
+      showToast(t('shareAdmin.unavailable'));
+      return;
+    }
+    setShareAdminSession(session);
+  }
+
+  // Отправка жалобы: id чата захватывается до await, чтобы поздняя ошибка не относилась к другому
+  // чату, если пользователь успел открыть диалог заново.
+  async function submitShareWithAdmin(request: ShareToAdminRequest) {
+    const session = shareAdminSession;
+    if (!session) return;
+    setShareAdminBusy(true);
+    try {
+      await shareChatWithAdmin(session.id, request);
+      setShareAdminSession(null);
+      showToast(t('shareAdmin.sent'));
+    } catch (e) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      showToast(status === 404 ? t('shareAdmin.unavailable') : humanError(e, t));
+    } finally {
+      setShareAdminBusy(false);
+    }
+  }
+
   // BUGFIX_PERF: stable identity (see liveRef above). Everything mutable is read from the ref so
   // the memo on MessageBubble survives per-token session updates.
   const startCompletion = useCallback(async (
@@ -3132,6 +3166,7 @@ export default function App() {
         session={activeSession}
         onNewChat={handleNewChat}
         onShare={handleShareSession}
+        onShareAdmin={handleShareWithAdmin}
         onPin={handlePinSession}
         onHide={(id, hidden) => void handleHideSession(id, hidden)}
         onRename={handleRenameSession}
@@ -3393,6 +3428,7 @@ export default function App() {
         onSelectSession={(id) => (id === activeId ? openSession(id) : guardLeave(() => openSession(id)))}
         onSearchChange={setSearch}
         onShareSession={handleShareSession}
+        onShareAdminSession={handleShareWithAdmin}
         onPinSession={handlePinSession}
         onHideSession={(id, hidden) => void handleHideSession(id, hidden)}
         onRenameSession={handleRenameSession}
@@ -3760,6 +3796,18 @@ export default function App() {
 
       {/* SUPPORT: добавлено 2026-09-19 */}
       {supportOpen && <SupportChat onClose={() => setSupportOpen(false)} onToast={showToast} />}
+
+      {/* SHARE_ADMIN: комментарий и необязательный скриншот перед отправкой чата админу. */}
+      {shareAdminSession && (
+        <ShareWithAdminDialog
+          session={shareAdminSession}
+          busy={shareAdminBusy}
+          onSubmit={(request) => void submitShareWithAdmin(request)}
+          onCancel={() => {
+            if (!shareAdminBusy) setShareAdminSession(null);
+          }}
+        />
+      )}
 
       {phoneSetupOpen && <PhoneSetupModal onClose={() => setPhoneSetupOpen(false)} />}
 

@@ -8334,6 +8334,370 @@ html[data-plain-code='true'] .markdown strong.chat-term {
   text-align: center;
 }
 
+/* ---------- ADMIN_SHARED_CHATS / ADMIN_TOKEN_TOPUP ---------- */
+/* Купленные (начисленные вручную) токены в строке пользователя. */
+.admin-user__topup {
+  color: #ffd166;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Небольшие вспомогательные строки в диалогах (подсказка, ошибка, счётчик символов). */
+.dialog-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.dialog-quick .admin-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.dialog-hint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.dialog-error {
+  font-size: 12.5px;
+  color: var(--danger);
+  line-height: 1.45;
+}
+
+.dialog-counter {
+  align-self: flex-end;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.dialog-textarea {
+  resize: vertical;
+  min-height: 84px;
+  line-height: 1.45;
+  font-family: inherit;
+}
+
+/* SHARE_ADMIN: диалог передачи чата админу. */
+.share-admin__chat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+  min-width: 0;
+}
+
+.share-admin__chat-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.share-admin__chat-title {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-admin__shot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.share-admin__shot img {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+}
+
+.share-admin__shot-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.share-admin__shot-pick {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-shared {
+  flex: 1;
+  min-height: 0;
+}
+
+.admin-shared__row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.admin-shared__status {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.admin-shared__status--open {
+  color: var(--ok);
+  border: 1px solid var(--ok);
+}
+
+.admin-shared__status--closed {
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.admin-shared__row-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-shared__badge {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.admin-shared__pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.admin-shared__pager .admin-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.admin-shared__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.admin-shared__chat-title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Внутренний скролл правой панели: шапка с кнопкой закрытия остаётся на месте. */
+.admin-shared__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.admin-shared__section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.admin-shared__msg {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--bg-input);
+}
+
+.admin-shared__msg--user {
+  border-left: 3px solid var(--accent);
+}
+
+.admin-shared__msg-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.admin-shared__msg-role {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.admin-shared__comment {
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.admin-shared__comment-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+
+.admin-shared__screenshot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-shared__screenshot img {
+  display: block;
+  max-width: 100%;
+  max-height: 340px;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.admin-shared__events {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-shared__event {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface-solid);
+}
+
+.admin-shared__event--error {
+  border-left-color: var(--danger);
+}
+
+.admin-shared__event-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.admin-shared__event-seq {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.admin-shared__event-tool {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.admin-shared__event-block {
+  margin-top: 6px;
+}
+
+.admin-shared__event-caption {
+  display: block;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.admin-shared__pre {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--bg-main);
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.admin-shared__more {
+  margin-top: 4px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.admin-shared__close-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--bg-input);
+}
+
+.admin-shared__close-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ADMIN_SHARED_MOBILE: на телефоне панель прокручивается целиком: сверху список (ограничен по
+   высоте и листается), под ним открытая жалоба. */
+@media (max-width: 768px) {
+  .admin-shared {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .admin-shared .admin-support__list {
+    width: 100%;
+    flex: 0 0 auto;
+  }
+
+  .admin-shared .admin-support__tickets {
+    flex: 0 0 auto;
+    max-height: 40vh;
+  }
+
+  .admin-shared .admin-support__chat {
+    flex: 0 0 auto;
+    min-height: 60vh;
+  }
+}
+
 /* ---------- MOBILE RESPONSIVE: добавлено 2026-09-19 ---------- */
 
 @media (max-width: 768px) {

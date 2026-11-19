@@ -235,6 +235,9 @@ export interface UserProfile {
   isAdmin: boolean;
 }
 
+// ADMIN_TOKEN_TOPUP: пул, в который админ начисляет купленные токены.
+export type TokenPool = 'Coder' | 'Cowork';
+
 // ADMIN_PANEL: добавлено 2026-09-19
 export interface AdminUser {
   id: string;
@@ -244,6 +247,10 @@ export interface AdminUser {
   tier: string;
   isAdmin: boolean;
   isSuperAdmin: boolean;
+  // ADMIN_TOKEN_TOPUP: суммы купленных (начисленных вручную) токенов по пулам. Старый бэкенд этих
+  // полей не отдаёт, поэтому UI обязан читать их через `?? 0`.
+  coderTokenTopUp: number;
+  coworkTokenTopUp: number;
 }
 
 export interface AdminUsersResponse {
@@ -251,6 +258,88 @@ export interface AdminUsersResponse {
   page: number;
   pageSize: number;
   users: AdminUser[];
+}
+
+// SHARE_ADMIN: жалоба/передача чата администратору с необязательным комментарием и скриншотом.
+/** Body of `POST /api/conexy/chats/{chatId}/share-to-admin`; every field is optional. */
+export interface ShareToAdminRequest {
+  comment?: string;
+  screenshotFileName?: string;
+  screenshotContentType?: string;
+  /** Raw image bytes, base64 without the `data:` prefix. */
+  screenshotBase64?: string;
+}
+
+/** Ответ на передачу чата админу: id жалобы (повторная отправка обновляет её). */
+export interface ShareToAdminResponse {
+  id: string;
+  createdAt: string;
+  status: SharedChatReportStatus;
+}
+
+export type SharedChatReportStatus = 'open' | 'closed';
+
+/** Одна жалоба в списке админской вкладки «Жалобы». */
+export interface AdminSharedChatSummary {
+  id: string;
+  chatId: string;
+  userId: string;
+  userEmail: string | null;
+  userGitHubUsername: string | null;
+  chatTitle: string | null;
+  comment: string | null;
+  hasScreenshot: boolean;
+  status: SharedChatReportStatus;
+  createdAt: string;
+  agentEventCount: number;
+}
+
+export interface AdminSharedChatsResponse {
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  items: AdminSharedChatSummary[];
+}
+
+/** Одно сообщение переписки внутри жалобы. */
+export interface AdminSharedChatMessage {
+  role: string;
+  content: string;
+  createdAt: string;
+}
+
+/** Событие агента (вызов инструмента) в хронологии жалобы. */
+export interface AdminSharedChatAgentEvent {
+  seq: number;
+  kind: string;
+  tool: string | null;
+  /** JSON-аргументы вызова инструмента. */
+  arguments: string | null;
+  output: string | null;
+  isError: boolean;
+  createdAt: string;
+}
+
+/** Полная жалоба: сводка + переписка + события агента + скриншот. */
+export interface AdminSharedChatDetail {
+  id: string;
+  chatId: string;
+  userId: string;
+  userEmail: string | null;
+  userGitHubUsername: string | null;
+  chatTitle: string | null;
+  comment: string | null;
+  status: SharedChatReportStatus;
+  createdAt: string;
+  // Детальный ответ бэкенда не обязан повторять счётчики из строки списка — UI их здесь не требует.
+  hasScreenshot?: boolean;
+  agentEventCount?: number;
+  messages: AdminSharedChatMessage[];
+  agentEvents: AdminSharedChatAgentEvent[];
+  screenshotBase64: string | null;
+  screenshotContentType: string | null;
+  screenshotFileName?: string | null;
+  adminNote: string | null;
 }
 
 // YOOKASSA: добавлено 2026-09-27 — сводка оплат для ручных чеков в «Мой налог».

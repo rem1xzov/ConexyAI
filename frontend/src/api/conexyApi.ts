@@ -2,6 +2,8 @@ import http from './client';
 import axios from 'axios';
 import type {
   AdminPaymentSummary,
+  AdminSharedChatDetail,
+  AdminSharedChatsResponse,
   AdminSupportTicket,
   AdminUser,
   AdminUsersResponse,
@@ -29,11 +31,14 @@ import type {
   ProjectReplaceResult,
   ProjectSearchResult,
   SaveFileDto,
+  ShareToAdminRequest,
+  ShareToAdminResponse,
   SharedChat,
   SubscriptionUsage,
   SupportMessage,
   SupportTicket,
   SupportTicketSummary,
+  TokenPool,
   UserProfile,
   WorkspaceFileContent,
   WorkspaceListing,
@@ -175,6 +180,22 @@ export async function setAdminUserSubscription(
   months: number | null,
 ): Promise<AdminUser> {
   const { data } = await http.post<AdminUser>(`/admin/users/${id}/subscription`, { tier, months });
+  return data;
+}
+
+// ADMIN_TOKEN_TOPUP: начисление купленных токенов в пул Coder/Cowork (только админ). Сервер отвечает
+// обновлённым пользователем, поэтому список можно перерисовать без отдельного запроса.
+export async function creditAdminUserTokens(
+  id: string,
+  pool: TokenPool,
+  amount: number,
+  reason?: string,
+): Promise<AdminUser> {
+  const { data } = await http.post<AdminUser>(`/admin/users/${id}/tokens`, {
+    pool,
+    amount,
+    reason: reason?.trim() ? reason.trim() : undefined,
+  });
   return data;
 }
 
@@ -324,6 +345,30 @@ export async function closeSupportTicket(id: string): Promise<void> {
   await http.post(`/admin/support/tickets/${id}/close`);
 }
 
+// SHARE_ADMIN: админская сторона жалоб — постраничный список, одна жалоба целиком и закрытие.
+// `status` — open | closed | all; по умолчанию открытые (по ним нужен ответ).
+export async function getAdminSharedChats(
+  page = 1,
+  pageSize = 20,
+  status: 'open' | 'closed' | 'all' = 'open',
+): Promise<AdminSharedChatsResponse> {
+  const { data } = await http.get<AdminSharedChatsResponse>('/admin/chats/shared', {
+    params: { page, pageSize, status },
+  });
+  return data;
+}
+
+/** Одна жалоба с перепиской, событиями агента и скриншотом. */
+export async function getAdminSharedChat(id: string): Promise<AdminSharedChatDetail> {
+  const { data } = await http.get<AdminSharedChatDetail>(`/admin/chats/shared/${id}`);
+  return data;
+}
+
+/** Закрывает жалобу, опционально оставляя заметку администратора. */
+export async function closeAdminSharedChat(id: string, note?: string): Promise<void> {
+  await http.post(`/admin/chats/shared/${id}/close`, { note: note?.trim() ? note.trim() : undefined });
+}
+
 /** Submits a task; the backend returns 202 Accepted with the created entity. */
 export async function runTask(request: ConexyRequest): Promise<ConexyResponse> {
   const { data } = await http.post<ConexyResponse>('/conexy/run', request);
@@ -411,6 +456,22 @@ export async function createChatShareLink(chatId: string): Promise<ChatShareLink
 /** Отзывает публичную ссылку на чат. */
 export async function revokeChatShareLink(chatId: string): Promise<void> {
   await http.delete(`/conexy/chats/${chatId}/share`);
+}
+
+// SHARE_ADMIN: передача чата администратору (жалоба). Только владелец чата; повторная отправка
+// обновляет уже существующую жалобу, поэтому отдельного «обновить» нет.
+/** Sends the owner's chat to the admin with an optional comment and screenshot. */
+export async function shareChatWithAdmin(
+  chatId: string,
+  request: ShareToAdminRequest,
+): Promise<ShareToAdminResponse> {
+  const { data } = await http.post<ShareToAdminResponse>(`/conexy/chats/${chatId}/share-to-admin`, request);
+  return data;
+}
+
+/** Отзывает жалобу на чат (удаляет переданный администратору чат из списка). */
+export async function withdrawChatFromAdmin(chatId: string): Promise<void> {
+  await http.delete(`/conexy/chats/${chatId}/share-to-admin`);
 }
 
 /**

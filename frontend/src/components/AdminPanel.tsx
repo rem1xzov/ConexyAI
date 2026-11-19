@@ -1,12 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { deleteUser, getAdminUsers, makeAdmin, revokeAdmin, setAdminUserSubscription } from '../api/conexyApi';
-import type { AdminUser } from '../types/api';
+import {
+  creditAdminUserTokens,
+  deleteUser,
+  getAdminUsers,
+  makeAdmin,
+  revokeAdmin,
+  setAdminUserSubscription,
+} from '../api/conexyApi';
+import type { AdminUser, TokenPool } from '../types/api';
 import { humanError } from '../utils/humanError';
 import { ConfirmDialog } from './Dialog';
 import { AdminSubscriptionDialog } from './AdminSubscriptionDialog';
+import { AdminTokenDialog, formatTokenAmount } from './AdminTokenDialog';
 import { ShieldIcon } from './Icons';
 import { AdminSupport } from './AdminSupport';
+import { AdminSharedChats } from './AdminSharedChats';
 // YOOKASSA: добавлено 2026-09-27 — сводка оплат для ручных чеков в «Мой налог».
 import { AdminPayments } from './AdminPayments';
 
@@ -48,9 +57,12 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
   const [pendingAction, setPendingAction] = useState<{ kind: 'makeAdmin' | 'revokeAdmin' | 'delete'; user: AdminUser } | null>(null);
   // ADMIN_SUBSCRIPTION: пользователь, которому сейчас назначаем тариф.
   const [subUser, setSubUser] = useState<AdminUser | null>(null);
+  // ADMIN_TOKEN_TOPUP: пользователь, которому сейчас начисляем купленные токены.
+  const [tokenUser, setTokenUser] = useState<AdminUser | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   // SUPPORT: добавлено 2026-09-19
-  const [tab, setTab] = useState<'users' | 'support' | 'payments'>('users');
+  // SHARE_ADMIN: вкладка «Жалобы» — переданные администратору чаты.
+  const [tab, setTab] = useState<'users' | 'support' | 'payments' | 'shared'>('users');
 
   function roleLabel(u: AdminUser): string {
     if (u.isSuperAdmin) return t('admin.roles.super');
@@ -149,6 +161,23 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
     }
   }
 
+  // ADMIN_TOKEN_TOPUP: начисление купленных токенов в пул Coder или Cowork. После успеха список
+  // перезагружается: строка пользователя показывает обновлённые суммы купленных токенов.
+  async function handleCreditTokens(u: AdminUser, pool: TokenPool, amount: number, reason: string) {
+    setBusyId(u.id);
+    try {
+      await creditAdminUserTokens(u.id, pool, amount, reason || undefined);
+      setTokenUser(null);
+      await load(page);
+      onToast(t('admin.tokens.toast'));
+    } catch (e) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      onToast(status === 403 ? t('admin.noAccess') : humanError(e, t));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   function userName(u: AdminUser): string {
     return u.gitHubUsername ?? u.email ?? t('account.user');
   }
@@ -194,6 +223,13 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
           >
             {t('admin.paymentsTab')}
           </button>
+          <button
+            className={`admin-tab ${tab === 'shared' ? 'admin-tab--active' : ''}`}
+            onClick={() => setTab('shared')}
+            type="button"
+          >
+            {t('admin.sharedTab')}
+          </button>
         </div>
         <span className="admin__count">
           {tab === 'users' ? t('admin.userCount', { count: total }) : ''}
@@ -204,6 +240,8 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
         <AdminSupport onToast={onToast} />
       ) : tab === 'payments' ? (
         <AdminPayments onToast={onToast} />
+      ) : tab === 'shared' ? (
+        <AdminSharedChats onToast={onToast} />
       ) : (
         <>
       {loading ? (
@@ -229,6 +267,19 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
                 <div className="admin-user__meta">
                   <span className="admin-user__tier">{u.tier}</span>
                   <span className={`admin-user__role ${roleClass(u)}`}>{roleLabel(u)}</span>
+                  {/* ADMIN_TOKEN_TOPUP: купленные токены видны в строке, только когда они есть. */}
+                  {((u.coderTokenTopUp ?? 0) > 0 || (u.coworkTokenTopUp ?? 0) > 0) && (
+                    <span className="admin-user__topup" title={t('admin.tokens.rowTitle')}>
+                      {t('admin.tokens.row')}{' '}
+                      {(u.coderTokenTopUp ?? 0) > 0 && (
+                        <>Coder +{formatTokenAmount(u.coderTokenTopUp, i18n.resolvedLanguage ?? i18n.language)}</>
+                      )}
+                      {(u.coderTokenTopUp ?? 0) > 0 && (u.coworkTokenTopUp ?? 0) > 0 && ' · '}
+                      {(u.coworkTokenTopUp ?? 0) > 0 && (
+                        <>Cowork +{formatTokenAmount(u.coworkTokenTopUp, i18n.resolvedLanguage ?? i18n.language)}</>
+                      )}
+                    </span>
+                  )}
                   <span className="admin-user__date">{t('admin.since', { date: formatDate(u.createdAt, i18n.language) })}</span>
                 </div>
               </div>
@@ -246,6 +297,14 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
                     type="button"
                   >
                     {t('admin.sub.button')}
+                  </button>
+                  <button
+                    className="admin-btn"
+                    onClick={() => setTokenUser(u)}
+                    disabled={busyId === u.id}
+                    type="button"
+                  >
+                    {t('admin.tokens.button')}
                   </button>
                   {u.isAdmin ? (
                     <button className="admin-btn" onClick={() => setPendingAction({ kind: 'revokeAdmin', user: u })} disabled={busyId === u.id} type="button">
@@ -296,6 +355,15 @@ export function AdminPanel({ onBack, onToast }: AdminPanelProps) {
           busy={busyId === subUser.id}
           onSubmit={(tier, months) => void handleSetSubscription(subUser, tier, months)}
           onCancel={() => setSubUser(null)}
+        />
+      )}
+
+      {tokenUser && (
+        <AdminTokenDialog
+          user={tokenUser}
+          busy={busyId === tokenUser.id}
+          onSubmit={(pool, amount, reason) => void handleCreditTokens(tokenUser, pool, amount, reason)}
+          onCancel={() => setTokenUser(null)}
         />
       )}
 

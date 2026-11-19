@@ -10,6 +10,7 @@ import {
   PlusIcon,
   ThreeDotsIcon,
   ShareIcon,
+  ShieldIcon,
   PinIcon,
   EditIcon,
   TrashIcon,
@@ -28,6 +29,8 @@ interface SidebarProps {
   onSelectSession: (id: string) => void;
   onSearchChange: (value: string) => void;
   onShareSession: (session: ChatSession) => void;
+  // SHARE_ADMIN: отправить чат администратору (жалоба/разбор проблемы).
+  onShareAdminSession: (session: ChatSession) => void;
   onPinSession: (id: string) => void;
   // CHAT_HIDE: скрыть чат из списка (вернуть — в настройках или в меню самого чата).
   onHideSession: (id: string, hidden: boolean) => void;
@@ -74,6 +77,7 @@ export function Sidebar(props: SidebarProps) {
     onSelectSession,
     onSearchChange,
     onShareSession,
+    onShareAdminSession,
     onPinSession,
     onHideSession,
     onRenameSession,
@@ -144,9 +148,9 @@ export function Sidebar(props: SidebarProps) {
   }
 
   // CHAT_MENU_FLIP: меню открывается вниз, если под кнопкой есть место, и вверх — если его нет.
-  // Высота — грубая оценка содержимого (4 пункта + отступы): точное измерение потребовало бы
+  // Высота — грубая оценка содержимого (6 пунктов + отступы): точное измерение потребовало бы
   // рендера меню до решения о направлении.
-  const MENU_HEIGHT_PX = 200;
+  const MENU_HEIGHT_PX = 260;
 
   function toggleMenu(id: string, button: HTMLElement) {
     if (openMenuId === id) {
@@ -282,6 +286,16 @@ export function Sidebar(props: SidebarProps) {
                           }}
                         >
                           <ShareIcon size={16} className="chats__menu-icon" /> {t('sidebar.share')}
+                        </button>
+                        {/* SHARE_ADMIN: передача чата админу с комментарием и скриншотом. */}
+                        <button
+                          className="chats__menu-item"
+                          onClick={() => {
+                            onShareAdminSession(s);
+                            setOpenMenuId(null);
+                          }}
+                        >
+                          <ShieldIcon size={16} className="chats__menu-icon" /> {t('sidebar.shareAdmin')}
                         </button>
                         <button
                           className="chats__menu-item"
