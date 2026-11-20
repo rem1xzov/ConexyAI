@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatSession } from '../types/chat';
 import { ConfirmDialog, PromptDialog } from './Dialog';
-import { EditIcon, EyeIcon, EyeOffIcon, PinIcon, PlusIcon, ShareIcon, ShieldIcon, ThreeDotsIcon, TrashIcon } from './Icons';
+import { EditIcon, EyeIcon, EyeOffIcon, LightbulbIcon, PinIcon, PlusIcon, ShareIcon, ShieldIcon, ThreeDotsIcon, TrashIcon } from './Icons';
 
 // CHAT_ACTIONS: добавлено 2026-09-29 — действия шапки чата (новый чат, меню чата). Показываются,
 // только когда в чате есть хотя бы одно сообщение; по умолчанию их нет. Меню повторяет то, что уже
@@ -13,6 +13,8 @@ interface ChatHeaderActionsProps {
   onShare: (session: ChatSession) => void;
   // SHARE_ADMIN: отправить чат администратору (жалоба/разбор проблемы).
   onShareAdmin: (session: ChatSession) => void;
+  // GOAL: панель долгоживущей цели чата (раунды запускает сервер).
+  onGoal?: (session: ChatSession) => void;
   onPin: (id: string) => void;
   // CHAT_HIDE: скрыть чат или вернуть скрытый в общий список.
   onHide: (id: string, hidden: boolean) => void;
@@ -25,6 +27,7 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
   onNewChat,
   onShare,
   onShareAdmin,
+  onGoal,
   onPin,
   onHide,
   onRename,
@@ -96,6 +99,20 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
             >
               <ShieldIcon size={16} className="chats__menu-icon" /> {t('sidebar.shareAdmin')}
             </button>
+            {/* GOAL: долгоживущая цель чата — раунды запускает сервер. */}
+            {onGoal && (
+              <button
+                type="button"
+                role="menuitem"
+                className="chats__menu-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onGoal(session);
+                }}
+              >
+                <LightbulbIcon size={16} className="chats__menu-icon" /> {t('goal.menu')}
+              </button>
+            )}
             <button
               type="button"
               role="menuitem"

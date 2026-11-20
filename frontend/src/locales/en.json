@@ -589,6 +589,38 @@
     "closeConfirmTitle": "Close this request?",
     "closeConfirm": "The conversation is kept, but you won’t be able to write in it. If the issue isn’t solved, start a new request."
   },
+  "goal": {
+    "menu": "Goal",
+    "title": "Long-running goal",
+    "hint": "A goal lives across turns: the server keeps starting the next agent round while the goal is active. The agent sees the objective and the previous round's result and closes it itself (goal_complete/goal_block), or you pause it.",
+    "noChat": "A goal belongs to a chat: open or create one.",
+    "loadError": "Could not load the goal.",
+    "actionError": "The action failed. Try again.",
+    "objectiveRequired": "Describe the goal that must be finished.",
+    "objectiveLabel": "What must be done",
+    "objectivePlaceholder": "For example: take release 1.0 through the installer and publish the release notes",
+    "roundsLabel": "Maximum rounds",
+    "started": "Goal started: up to {{rounds}} rounds.",
+    "start": "Start goal",
+    "restart": "Replace goal",
+    "rounds": "Round {{started}} of {{max}}",
+    "lastNote": "Previous round result:",
+    "pause": "Pause",
+    "resume": "Resume",
+    "complete": "Complete",
+    "delete": "Delete goal",
+    "deleteConfirm": "Delete the goal? Running rounds will stop.",
+    "completedNotice": "Goal completed.",
+    "pausedNotice": "Goal paused: no further rounds will start.",
+    "resumedNotice": "The goal is active again.",
+    "deletedNotice": "Goal deleted.",
+    "status": {
+      "active": "active",
+      "paused": "paused",
+      "blocked": "blocked",
+      "complete": "complete"
+    }
+  },
   "skills": {
     "menu": "Skills",
     "title": "Agent skills",

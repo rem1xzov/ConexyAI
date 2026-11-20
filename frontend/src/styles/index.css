@@ -12678,3 +12678,168 @@ body::before {
     animation: none;
   }
 }
+
+/* GOAL: панель долгоживущей цели чата. */
+.goal-dialog {
+  width: min(560px, 96vw);
+  max-height: min(80vh, 720px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+}
+
+.goal-dialog__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.goal-dialog__title {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.goal-dialog__close {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  padding: 4px;
+}
+
+.goal-dialog__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.goal-dialog__error {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #e5484d 14%, transparent);
+  color: #e5484d;
+  font-size: 12px;
+}
+
+.goal-dialog__notice {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #4f8cff 14%, transparent);
+  color: inherit;
+  font-size: 12px;
+}
+
+.goal-dialog__current,
+.goal-dialog__form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+}
+
+.goal-dialog__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.goal-dialog__badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.goal-dialog__badge--active { color: #3fb950; }
+.goal-dialog__badge--paused { color: #d29922; }
+.goal-dialog__badge--blocked { color: #e5484d; }
+.goal-dialog__badge--complete { color: #4f8cff; }
+
+.goal-dialog__rounds {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.goal-dialog__objective {
+  font-size: 14px;
+  white-space: pre-wrap;
+}
+
+.goal-dialog__blocked {
+  font-size: 12px;
+  color: #e5484d;
+}
+
+.goal-dialog__note {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.goal-dialog__note-label {
+  display: block;
+  font-weight: 600;
+  color: inherit;
+}
+
+.goal-dialog__label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.goal-dialog__textarea,
+.goal-dialog__rounds-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.16));
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.goal-dialog__rounds-input {
+  max-width: 120px;
+}
+
+.goal-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.goal-dialog__btn {
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.16));
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.goal-dialog__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.goal-dialog__btn--primary {
+  background: #4f8cff;
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+
+.goal-dialog__btn--danger {
+  color: #e5484d;
+}

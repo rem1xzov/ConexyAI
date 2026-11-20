@@ -71,6 +71,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { SupportChat } from './components/SupportChat';
 // SHARE_ADMIN: диалог передачи чата администратору (комментарий + скриншот).
 import { ShareWithAdminDialog } from './components/ShareWithAdminDialog';
+import { GoalDialog } from './components/GoalDialog';
 // EMAIL_AUTH: добавлено 2026-09-19
 import { AuthModal } from './components/AuthModal';
 import type { AuthMode } from './components/AuthModal';
@@ -394,6 +395,8 @@ export default function App() {
   // SHARE_ADMIN: чат, который пользователь сейчас передаёт администратору (открыт диалог), и
   // состояние отправки — кнопки диалога блокируются, пока запрос в полёте.
   const [shareAdminSession, setShareAdminSession] = useState<ChatSession | null>(null);
+  // GOAL: панель долгоживущей цели активного чата.
+  const [goalOpen, setGoalOpen] = useState(false);
   const [shareAdminBusy, setShareAdminBusy] = useState(false);
   // SETTINGS: добавлено 2026-09-19
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
@@ -3177,6 +3180,7 @@ export default function App() {
         onNewChat={handleNewChat}
         onShare={handleShareSession}
         onShareAdmin={handleShareWithAdmin}
+        onGoal={() => setGoalOpen(true)}
         onPin={handlePinSession}
         onHide={(id, hidden) => void handleHideSession(id, hidden)}
         onRename={handleRenameSession}
@@ -3818,6 +3822,9 @@ export default function App() {
           }}
         />
       )}
+
+      {/* GOAL: долгоживущая цель чата — раунды запускает сервер. */}
+      {goalOpen && <GoalDialog chatId={activeSession?.id ?? null} onClose={() => setGoalOpen(false)} />}
 
       {phoneSetupOpen && <PhoneSetupModal onClose={() => setPhoneSetupOpen(false)} />}
 
