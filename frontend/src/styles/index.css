@@ -13232,3 +13232,32 @@ body::before {
     gap: 10px;
   }
 }
+
+/* ================= MOBILE_KEYBOARD_OPEN ================= */
+@media (max-width: 820px) {
+  /* Клавиатура открыта: нижняя навигация уезжает, нижний отступ main убирается — композер
+     оказывается прямо над клавиатурой, без «пузыря» и лишней полосы под ним. */
+  .app--keyboard-open .mobile-nav {
+    display: none;
+  }
+  .app--keyboard-open .main {
+    padding-bottom: 0;
+  }
+  .app--keyboard-open .chat-stage__composer {
+    padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+  }
+  .app--keyboard-open .inputbar-wrap {
+    padding-bottom: 2px;
+  }
+  /* В открытой клавиатуре заголовок не нужен — освобождаем высоту под поле ввода. */
+  .app--keyboard-open .chat-header {
+    display: none;
+  }
+}
+
+@media (max-width: 820px) {
+  /* Клавиатура открыта: вместе с шапкой убираем и плавающую кнопку меню. */
+  .app--keyboard-open .mobile-menu-btn {
+    display: none;
+  }
+}

@@ -46,7 +46,7 @@ import { StatusBar, type AgentStatus } from './components/StatusBar';
 import { ConnectionBanner } from './components/ConnectionBanner';
 // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
 // import { LiveVoiceModal } from './components/LiveVoiceModal';
-import { MenuLinesIcon, PanelRightCloseIcon, PanelRightOpenIcon, GhostIcon, PlusIcon } from './components/Icons';
+import { MenuLinesIcon, PanelRightCloseIcon, PanelRightOpenIcon, EyeOffIcon, PlusIcon } from './components/Icons';
 // LOGO_SWEEP / CLAUDE_LAYOUT: добавлено 2026-09-20
 import { ConexyLogo } from './components/ConexyLogo';
 import { ChatLayout, type ChatQuickChip } from './components/ChatLayout';
@@ -394,6 +394,21 @@ export default function App() {
   // UI_PREFERENCES: интерфейсные переключатели из «Персонализации» (эффект курсора и скрытие
   // элементов тулбара агента). По умолчанию всё выключено — до загрузки настроек ничего не мигает.
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(DEFAULT_UI_PREFERENCES);
+  // MOBILE_KEYBOARD: на телефоне клавиатура открыта — прячем нижнюю навигацию и нижний отступ,
+  // чтобы композер стоял вплотную над клавиатурой, как в Claude.
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => setKeyboardOpen(window.innerHeight - vv.height > 120 || vv.offsetTop > 120);
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  }, []);
   // Правка не должна «переезжать» на другой чат: при смене открытого чата режим сбрасывается.
   useEffect(() => {
     setComposerEdit(null);
@@ -3254,12 +3269,12 @@ export default function App() {
       aria-label={t('chat.incognito')}
       title={t('chat.incognitoHint')}
     >
-      <GhostIcon size={isMobile ? 22 : 15} />
+      <EyeOffIcon size={isMobile ? 20 : 15} />
       {!isMobile && <span>{t('chat.incognito')}</span>}
     </button>
   ) : incognitoActive && !isMobile ? (
     <span className="incognito-badge" title={t('chat.incognitoHint')}>
-      <GhostIcon size={15} />
+      <EyeOffIcon size={15} />
       <span>{t('chat.incognito')}</span>
     </span>
   ) : null;
@@ -3517,7 +3532,7 @@ export default function App() {
       <div className="glass-aura" aria-hidden="true" />
       {incognitoActive && <div className="incognito-aura" aria-hidden="true" />}
       <ConnectionBanner />
-      <div className={`app${isMobile && sidebarOpen ? ' app--drawer-open' : ''}`}>
+      <div className={`app${isMobile && sidebarOpen ? ' app--drawer-open' : ''}${keyboardOpen ? ' app--keyboard-open' : ''}`}>
       <Sidebar
         open={sidebarOpen}
         activeTab={activeTab}

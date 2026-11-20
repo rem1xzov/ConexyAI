@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ConexyModel, ReasoningEffort, SendOutcome, TaskAttachment } from '../types/api';
-import {
+import { SparkleGlyphIcon } from './MobileIcons';
+import type { ConexyModel, ReasoningEffort, SendOutcome, TaskAttachment } from '../types/api';import {
   MAX_TOTAL_ATTACHMENT_BYTES,
   attachmentBytes,
   estimateRequestBytes,
@@ -1222,7 +1222,7 @@ export function InputBar({
           title={t('input.prompts')}
           aria-label={t('input.prompts')}
         >
-          <span aria-hidden="true">✦</span>
+          <span aria-hidden="true"><SparkleGlyphIcon size={19} /></span>
         </button>
 
         <button

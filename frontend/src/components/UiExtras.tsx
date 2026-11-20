@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatSessionKind } from '../types/chat';
-import { CloseIcon, CpuIcon, GearIcon, GhostIcon, SearchIcon, UserIcon } from './Icons';
+import { CloseIcon, SearchIcon, TerminalIcon, UserIcon } from './Icons';
+import { ChatGlyphIcon, SlidersGlyphIcon } from './MobileIcons';
 
 /**
  * UI_EXTRAS: библиотека промптов, онбординг, мобильная нижняя навигация и палитра быстрых действий.
@@ -203,11 +204,11 @@ export function MobileBottomNav({
   onSettings: () => void;
 }) {
   const { t } = useTranslation();
-  // MOBILE_NAV: как в Claude — четыре иконки-вкладки вместо строки с плюсом по центру.
+  // MOBILE_NAV: иконки тонкие и спокойные, как в Claude: чат, терминал агента, ученики, настройки.
   const tabs: { kind: ChatSessionKind; label: string; icon: JSX.Element }[] = [
-    { kind: 'chat', label: t('sidebar.tabs.chat'), icon: <GhostIcon size={20} /> },
-    { kind: 'projects', label: t('sidebar.tabs.agent'), icon: <CpuIcon size={20} /> },
-    { kind: 'students', label: t('sidebar.tabs.students'), icon: <UserIcon size={20} /> },
+    { kind: 'chat', label: t('sidebar.tabs.chat'), icon: <ChatGlyphIcon size={21} /> },
+    { kind: 'projects', label: t('sidebar.tabs.agent'), icon: <TerminalIcon size={21} /> },
+    { kind: 'students', label: t('sidebar.tabs.students'), icon: <UserIcon size={21} /> },
   ];
   return (
     <nav className="mobile-nav" aria-label={t('extras.mobileNav')}>
@@ -223,7 +224,7 @@ export function MobileBottomNav({
         </button>
       ))}
       <button type="button" className="mobile-nav__btn" onClick={onSettings}>
-        <GearIcon size={20} />
+        <SlidersGlyphIcon size={21} />
         <span>{t('account.settings')}</span>
       </button>
     </nav>
