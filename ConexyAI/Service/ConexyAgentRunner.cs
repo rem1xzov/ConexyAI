@@ -333,6 +333,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     /// <inheritdoc />
     public string PartialOutput => _streamedOutput.ToString();
 
+    /// <summary>TURN_OUTCOME: причина завершения последнего прогона (null — прогон ещё не завершался).</summary>
+    public TurnResult? LastOutcome { get; private set; }
+
     private readonly int _maxIterations;
 
     // Сколько раз аудитор может вернуть работу на доработку.
@@ -1478,6 +1481,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _failedWebUrls.Clear();
         _failedWebFetches = 0;
         _webCallsThisRun = 0;
+        // TURN_OUTCOME: новый прогон — прошлая причина завершения больше не актуальна.
+        LastOutcome = null;
         _phoneOffline = false;
         // ORCHESTRA: ведущий агент — единственный, кому разрешён инструмент spawn_agents.
         _agent = AgentIdentity.Lead;
@@ -2379,12 +2384,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // No file modifications were made: the model's text is the whole answer.
                 if (changedFiles.Count == 0)
                 {
-                    return await FinishAsync(AppendNote(answer, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote, completionNote)));
+                    return await FinishAsync(AppendNote(answer, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote, completionNote)), TurnOutcome.Completed);
                 }
 
                 // File changes were made: return the final report plus a summary card.
                 // BACKGROUND_AGENTS: перед итогом даём фоновым помощникам шанс дописать файлы.
-                return await FinishAsync(BuildFinalReport(AppendNote(finalText, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote, completionNote)), changedFiles, executedCommands));
+                return await FinishAsync(BuildFinalReport(AppendNote(finalText, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote, completionNote)), changedFiles, executedCommands), TurnOutcome.Completed);
             }
 
             // AGENT_TOOL_FAILURES: инструменты, упавшие именно в этом ходе (для одного сообщения
@@ -2902,7 +2907,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         if (accumulated.Length > 0)
         {
-            return await FinishAsync(AppendNote(accumulated, note));
+            return await FinishAsync(AppendNote(accumulated, note), TurnOutcome.Stopped);
         }
 
         return await FinishAsync(AppendNote(
@@ -2911,12 +2916,18 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 : toolBudgetExhausted
                     ? "Не удалось завершить задачу: инструменты, которые нужны агенту, не работают в этом окружении. Запустите задачу заново после устранения ограничения."
                     : "Достигнут предел шагов для одной задачи. Продолжите или уточните задачу отдельным сообщением.",
-            note));
+            note),
+            tokenBudgetExceeded ? TurnOutcome.TokenBudget
+                : toolBudgetExhausted ? TurnOutcome.Failed
+                : TurnOutcome.ForcedFinal);
 
         // BACKGROUND_AGENTS: один выход для всех путей — сначала дожидаемся фоновых агентов
         // (ограниченно), чтобы их работа не пропала вместе с закрытием прогона.
-        async Task<string> FinishAsync(string text)
+        async Task<string> FinishAsync(string text, TurnOutcome reason = TurnOutcome.Completed, string? outcomeNote = null)
         {
+            // TURN_OUTCOME: причина завершения фиксируется до дренажа команды — её видят лог и клиенты.
+            LastOutcome = new TurnResult(reason, outcomeNote);
+            _logger.LogInformation("Agent run finished: reason={Reason} task={TaskId}", LastOutcome.Code, taskId);
             await DrainTeamAsync(taskId);
             // SUBAGENT_AUTONOMY: расход команды этого прогона больше не нужен.
             TeamTokensSpent.TryRemove(taskId, out _);

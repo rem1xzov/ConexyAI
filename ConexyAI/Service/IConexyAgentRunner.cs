@@ -28,4 +28,8 @@ public interface IConexyAgentRunner
     /// it, every stopped run left the conversation empty and the next message had no context.
     /// </summary>
     string PartialOutput { get; }
+
+    // TURN_OUTCOME: тип завершения последнего прогона (completed/forced_final/token_budget/stopped/failed).
+    // Реализация по умолчанию — null, чтобы существующие тестовые двойники не ломались.
+    TurnResult? LastOutcome => null;
 }

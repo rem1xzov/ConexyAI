@@ -25,6 +25,13 @@ namespace ConexyAI.Service;
 public enum TurnOutcome
 {
     Completed,
+
+    /// <summary>TURN_OUTCOME: ход свёрнут по лимиту шагов/политике — ответ есть, но принудительный.</summary>
+    ForcedFinal,
+
+    /// <summary>TURN_OUTCOME: бюджет токенов тарифа исчерпан, задача доведена на остатках.</summary>
+    TokenBudget,
+
     Stopped,
     Failed,
 }
