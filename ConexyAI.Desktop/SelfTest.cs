@@ -139,6 +139,16 @@ public static class SelfTest
             File.WriteAllText(Path.Combine(buildRoot, "package.json"), "{\"scripts\":{\"test\":\"echo changed\"}}");
             await Check("run_tests after build file change via shell needs approval", shellBuild, "get_diagnostics", "{}", r => r.IsError && r.Output.Contains("отклонил"));
 
+            // PYTEST_AUTODETECT: простой pytest-проект без манифеста должен определяться как pytest.
+            var pytestRoot = Path.Combine(root, "pytestproj");
+            var pytestTests = Path.Combine(pytestRoot, "tests");
+            Directory.CreateDirectory(pytestTests);
+            File.WriteAllText(Path.Combine(pytestTests, "test_sample.py"), "def test_ok():\n    assert True\n");
+            var pytestDetected = ProjectCommands.Detect(pytestRoot, test: true) == "python -m pytest -q"
+                                 && ProjectCommands.Detect(pytestRoot, test: false) == "python -m compileall -q .";
+            Console.WriteLine($"{(pytestDetected ? "PASS" : "FAIL")}  pytest project without manifest detected");
+            if (!pytestDetected) failures++;
+
             // REMOTE_APPROVAL_POLICY: в режиме safe опасные категории с сайта отклоняются без запроса.
             ToolCallContext.Current = new ToolCallInfo(Guid.NewGuid(), true, root) { Tool = "install_software" };
             var remoteOk = RoutingApprover.RemoteRefusal(ClientConfig.RemoteLevelSafe, "Установка программы", "winget install --id X", false) is not null

@@ -16,8 +16,8 @@ public static class ProjectCommands
 
         var command = Detect(root, test)
                       ?? throw new ToolException(
-                          "Не удалось определить тип проекта (нет .sln/.csproj, package.json, pyproject.toml, Cargo.toml, go.mod). " +
-                          "Передай явную 'command'.");
+                          "Не удалось определить тип проекта (нет .sln/.csproj, package.json, pyproject.toml/requirements.txt, " +
+                          "Cargo.toml, go.mod и pytest-тестов test_*.py). Передай явную 'command'.");
 
         if (requireApproval)
         {
@@ -104,6 +104,43 @@ public static class ProjectCommands
         if (File.Exists(Path.Combine(root, "pyproject.toml")) || File.Exists(Path.Combine(root, "requirements.txt")))
             return test ? "python -m pytest -q" : "python -m compileall -q .";
 
+        // PYTEST_AUTODETECT: добавлено 2026-11-20 — обычный Python-проект без манифеста, но с тестами
+        // (test_*.py в корне или tests/) раньше не определялся: run_tests падал с «не удалось определить
+        // тип проекта», и агент тратил лишний вызов на явную 'command'. pytest — тот же дефолт, что в
+        // серверном TestRunnerService (IsPytestProject).
+        if (HasPytestTests(root))
+            return test ? "python -m pytest -q" : "python -m compileall -q .";
+
         return null;
+    }
+
+    private static bool HasPytestTests(string root)
+    {
+        static bool IsTestFile(string path)
+        {
+            var name = Path.GetFileName(path);
+            return name.EndsWith(".py", StringComparison.OrdinalIgnoreCase)
+                   && (name.StartsWith("test_", StringComparison.OrdinalIgnoreCase)
+                       || name.EndsWith("_test.py", StringComparison.OrdinalIgnoreCase));
+        }
+
+        try
+        {
+            if (File.Exists(Path.Combine(root, "conftest.py"))
+                || Directory.EnumerateFiles(root, "*.py", SearchOption.TopDirectoryOnly).Any(IsTestFile))
+                return true;
+            foreach (var sub in new[] { "tests", "test" })
+            {
+                var dir = Path.Combine(root, sub);
+                if (Directory.Exists(dir) && Directory.EnumerateFiles(dir, "*.py", SearchOption.TopDirectoryOnly).Any(IsTestFile))
+                    return true;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // Нечитаемая папка — не повод падать в детекте: просто не угадали тип проекта.
+        }
+
+        return false;
     }
 }
