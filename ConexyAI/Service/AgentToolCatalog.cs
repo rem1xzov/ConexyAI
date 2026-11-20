@@ -329,6 +329,25 @@ public static class AgentToolCatalog
                 ["job_id"] = Str("Job id returned by the bash call that started the background job."),
             }, "job_id")),
 
+        // GOAL: закрытие долгоживущей цели (доступно только в раунде цели).
+        Tool("goal_complete",
+            "Mark the active chat goal as COMPLETE once its result is verified. Pass a short summary of what " +
+            "was achieved and how it was checked; further goal rounds stop. Only call it when the objective is " +
+            "actually done — an unfinished goal must not be closed.",
+            Object(new()
+            {
+                ["summary"] = Str("Short result summary: what was achieved and how it was verified."),
+            }, "summary")),
+
+        Tool("goal_block",
+            "Mark the active chat goal as BLOCKED by an external reason you cannot resolve yourself (missing " +
+            "access, a step only the user can do, a broken external service). Pass a concrete reason; further " +
+            "goal rounds stop instead of repeating the same attempt.",
+            Object(new()
+            {
+                ["reason"] = Str("Concrete external blocker: what exactly prevents progress and what the user must do."),
+            }, "reason")),
+
         Tool("run_tests",
             "Run the project's tests and return a STRUCTURED report — pass/fail counts and, per " +
             "failure, its name, file:line and expected/actual — instead of raw logs. The framework " +
@@ -543,6 +562,8 @@ public static class AgentToolCatalog
         ["grep"] = "Use `grep` to find code by content; do not escape to the shell for search. Search by identifier for code, by a plain word for a concept.",
         ["glob"] = "Use `glob` to discover file paths before reading them.",
         ["repo_map"] = "Start a task in an unfamiliar project with `repo_map` — it is already built and is much cheaper than listing and reading files. Then read or grep only the files it points to.",
+        ["goal_complete"] = "Close the active goal only when the objective is really done and verified; an unfinished goal must not be closed.",
+        ["goal_block"] = "Use `goal_block` only for a real external blocker you cannot remove yourself; it stops further goal rounds.",
         ["bash"] = "Use `bash` for builds, package managers, git and tests; reading, searching and writing files goes through `read`, `grep`, `edit` and `apply_patch`. If the same failure comes back twice with different arguments, the arguments are not the cause: verify the fact with another tool, or ask the user. A long command (install, big build) starts with `run_in_background: true` and is read with `job_output`.",
         ["run_tests"] = "After changing code run `run_tests` instead of guessing that it works.",
         ["agents_status"] = "Check the team with `agents_status` at least once a minute while helpers run; do not poll it in a tight loop.",

@@ -17,6 +17,8 @@ public static class GoalStatuses
 public sealed record GoalDto(
     Guid Id,
     Guid ChatId,
+    /// <summary>Владелец цели — он же владелец чата; нужен раунд-драйверу для запуска хода.</summary>
+    Guid UserId,
     string Objective,
     string Status,
     int RoundsStarted,

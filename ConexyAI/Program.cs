@@ -378,6 +378,8 @@ builder.Services.AddSingleton<IConexyTodoService, ConexyTodoService>();
 builder.Services.AddSingleton<ITokenService, JwtTokenService>();
 
 builder.Services.AddHostedService<ConexyBackgroundWorker>();
+// GOAL: добавлено 2026-11-20 — раунд-драйвер долгоживущих целей.
+builder.Services.AddHostedService<ConexyAI.Service.GoalRoundDriver>();
 // SUBSCRIPTION_TIERS: добавлено 2026-09-17
 builder.Services.AddHostedService<MemoryExtractionWorker>();
 // CHAT_TITLE_TOPIC: фоновое название чата по теме (flash-модель, лимиты пользователя не тратит).

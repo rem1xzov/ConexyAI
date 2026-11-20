@@ -1,6 +1,7 @@
 using ConexyAI.Contract;
 using ConexyAI.DbContext;
 using ConexyAI.Entity;
+using ConexyAI.Model;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -29,8 +30,20 @@ public interface IGoalService
     /// <summary>Цели, готовые к следующему раунду (активны, лимит не исчерпан, чат не удалён). Для драйвера.</summary>
     Task<IReadOnlyList<GoalDto>> ListRunnableAsync(CancellationToken ct = default);
 
-    /// <summary>Учитывает запущенный раунд; на последнем раунде переводит цель в blocked с причиной.</summary>
+    /// <summary>Учитывает запущенный раунд (счётчик), не закрывая цель: лимит проверяется по завершении.</summary>
     Task<GoalDto?> RecordRoundAsync(Guid goalId, Guid taskId, string? note, CancellationToken ct = default);
+
+    /// <summary>Итог завершённого раунда: заметка для следующего раунда; на лимите цель блокируется.</summary>
+    Task<GoalDto?> FinalizeRoundAsync(Guid goalId, string? note, CancellationToken ct = default);
+
+    /// <summary>Агент сообщил, что цель достигнута.</summary>
+    Task<GoalDto?> CompleteAsync(Guid goalId, string? summary, CancellationToken ct = default);
+
+    /// <summary>Агент сообщил о внешней блокировке — раунды останавливаются с причиной.</summary>
+    Task<GoalDto?> BlockAsync(Guid goalId, string? reason, CancellationToken ct = default);
+
+    /// <summary>Модель для раунда цели: как у последнего хода чата, иначе Coder.</summary>
+    Task<ConexyModelType> ResolveRoundModelAsync(Guid chatId, CancellationToken ct = default);
 }
 
 public sealed class GoalService : IGoalService
@@ -178,17 +191,11 @@ public sealed class GoalService : IGoalService
 
             goal.RoundsStarted++;
             goal.LastTaskId = taskId;
-            goal.LastNote = Truncate(note, MaxNoteChars);
+            goal.LastNote = Truncate(note, MaxNoteChars) ?? goal.LastNote;
             goal.UpdatedAt = DateTime.UtcNow;
-            if (goal.RoundsStarted >= goal.MaxRounds)
-            {
-                goal.Status = GoalStatuses.Blocked;
-                goal.BlockedReason = $"исчерпан лимит раундов ({goal.MaxRounds})";
-            }
-
             await _db.SaveChangesAsync(ct);
             _logger.LogInformation(
-                "Goal {GoalId} round recorded ({Rounds}/{Max}, status {Status}).", goal.Id, goal.RoundsStarted, goal.MaxRounds, goal.Status);
+                "Goal {GoalId} round started ({Rounds}/{Max}).", goal.Id, goal.RoundsStarted, goal.MaxRounds);
             return ToDto(goal);
         }
         finally
@@ -197,9 +204,78 @@ public sealed class GoalService : IGoalService
         }
     }
 
+    public async Task<GoalDto?> FinalizeRoundAsync(Guid goalId, string? note, CancellationToken ct = default)
+    {
+        await RoundGate.WaitAsync(ct);
+        try
+        {
+            var goal = await _db.ChatGoals.FirstOrDefaultAsync(g => g.Id == goalId, ct);
+            if (goal is null)
+                return null;
+
+            goal.LastNote = Truncate(note, MaxNoteChars) ?? goal.LastNote;
+            goal.UpdatedAt = DateTime.UtcNow;
+            if (goal.Status == GoalStatuses.Active && goal.RoundsStarted >= goal.MaxRounds)
+            {
+                goal.Status = GoalStatuses.Blocked;
+                goal.BlockedReason = $"исчерпан лимит раундов ({goal.MaxRounds})";
+            }
+
+            await _db.SaveChangesAsync(ct);
+            _logger.LogInformation(
+                "Goal {GoalId} round finished ({Rounds}/{Max}, status {Status}).", goal.Id, goal.RoundsStarted, goal.MaxRounds, goal.Status);
+            return ToDto(goal);
+        }
+        finally
+        {
+            RoundGate.Release();
+        }
+    }
+
+    public async Task<GoalDto?> CompleteAsync(Guid goalId, string? summary, CancellationToken ct = default)
+    {
+        var goal = await _db.ChatGoals.FirstOrDefaultAsync(g => g.Id == goalId, ct);
+        if (goal is null || goal.Status == GoalStatuses.Complete)
+            return goal is null ? null : ToDto(goal);
+
+        goal.Status = GoalStatuses.Complete;
+        goal.BlockedReason = null;
+        goal.LastNote = Truncate(summary, MaxNoteChars) ?? goal.LastNote;
+        goal.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        _logger.LogInformation("Goal {GoalId} completed after {Rounds} round(s).", goal.Id, goal.RoundsStarted);
+        return ToDto(goal);
+    }
+
+    public async Task<GoalDto?> BlockAsync(Guid goalId, string? reason, CancellationToken ct = default)
+    {
+        var goal = await _db.ChatGoals.FirstOrDefaultAsync(g => g.Id == goalId, ct);
+        if (goal is null)
+            return null;
+
+        goal.Status = GoalStatuses.Blocked;
+        goal.BlockedReason = Truncate(reason, 600) ?? "агент сообщил о внешней блокировке";
+        goal.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        _logger.LogInformation("Goal {GoalId} blocked: {Reason}", goal.Id, goal.BlockedReason);
+        return ToDto(goal);
+    }
+
+    public async Task<ConexyModelType> ResolveRoundModelAsync(Guid chatId, CancellationToken ct = default)
+    {
+        var modelName = await _db.Chats.AsNoTracking()
+            .Where(c => c.Id == chatId)
+            .Select(c => c.Model)
+            .FirstOrDefaultAsync(ct);
+        return ConexyModelMapper.TryParse(modelName, out var model) && model.IsAgent()
+            ? model
+            : ConexyModelType.ConexyCoder;
+    }
+
     private static GoalDto ToDto(ChatGoalEntity goal) => new(
         goal.Id,
         goal.ChatId,
+        goal.UserId,
         goal.Objective,
         goal.Status,
         goal.RoundsStarted,

@@ -67,6 +67,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly ComputerInputLease? _inputLease;
     // BACKGROUND_JOB: фоновые задачи серверной песочницы.
     private readonly IBackgroundJobService? _backgroundJobs;
+    // GOAL: долгоживущая цель чата (раунды, заметка прошлого раунда, закрытие цели).
+    private readonly IGoalService? _goals;
     // MCP: добавлено 2026-10-04 — удалённые MCP-серверы (уровень A, Streamable HTTP). Реестр создаётся
     // на прогон, потому что включает ЛИЧНЫЕ серверы пользователя из запроса.
     private IMcpRegistry? _mcpRegistry;
@@ -487,6 +489,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // BACKGROUND_JOB: фоновые задачи серверной песочницы (bash run_in_background=true).
     private const string BackgroundJobOutputTool = "job_output";
     private const string BackgroundJobKillTool = "job_kill";
+    // GOAL: инструменты, которыми агент закрывает долгоживущую цель.
+    private const string GoalCompleteTool = "goal_complete";
+    private const string GoalBlockTool = "goal_block";
     /// <summary>
     /// WEB_PARALLEL: страницы, запрошенные в одном ответе, читаются одновременно (только
     /// <c>fetch_web_page</c> — инструменты с побочными эффектами так не запускаются).
@@ -509,6 +514,22 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var path = uri.AbsolutePath.TrimEnd('/');
         var host = uri.Host.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? uri.Host[4..] : uri.Host;
         return (host + path + uri.Query).ToLowerInvariant();
+    }
+
+    // GOAL: текст цели для контекста раунда.
+    internal static string GoalPrompt(GoalDto goal, int round)
+    {
+        var current = round > 0 ? round : goal.RoundsStarted + 1;
+        var builder = new StringBuilder();
+        builder.Append("[Цель] Раунд ").Append(current).Append(" из ").Append(goal.MaxRounds)
+            .Append(". Задача: ").Append(goal.Objective).Append('\n');
+        if (!string.IsNullOrWhiteSpace(goal.LastNote))
+            builder.Append("Итог предыдущего раунда: ").Append(goal.LastNote).Append('\n');
+        builder.Append("Работай над этой целью в этом ходе и не начинай посторонние задачи. ");
+        builder.Append("Когда цель полностью достигнута и проверена — вызови `goal_complete` с коротким итогом. ");
+        builder.Append("Если есть внешняя блокировка, которую ты не можешь устранить, — вызови `goal_block` с причиной. ");
+        builder.Append("Не повторяй то, что уже сделано по заметке выше.");
+        return builder.ToString();
     }
 
     private async Task<Dictionary<string, ConexyToolResult>> PrefetchWebPagesAsync(
@@ -1366,7 +1387,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // AGENT_CURSOR: ввод на один ПК сериализуется — физическая мышь одна.
         ComputerInputLease? inputLease = null,
         // BACKGROUND_JOB: фоновые задачи песочницы (bash run_in_background=true, job_output/job_kill).
-        IBackgroundJobService? backgroundJobs = null)
+        IBackgroundJobService? backgroundJobs = null,
+        // GOAL: долгоживущая цель чата (контекст раунда + инструменты goal_complete/goal_block).
+        IGoalService? goals = null)
     {
         _phoneBridge = phoneBridge;
         _phoneApprovals = phoneApprovals;
@@ -1406,6 +1429,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _cursors = cursors;
         _inputLease = inputLease;
         _backgroundJobs = backgroundJobs;
+        _goals = goals;
 
         var configured = agentOptions.Value.MaxIterations;
         // LOOP_GUARD: запасной вариант совпадает с дефолтом в конфигурации (25), чтобы отсутствие
@@ -1487,6 +1511,29 @@ public class ConexyAgentRunner : IConexyAgentRunner
             {
                 // Карта — подсказка, а не условие работы: сбой построения не должен ломать ход.
                 _logger.LogDebug(ex, "repo map injection failed for chat {ChatId}", chatId);
+            }
+        }
+
+        // GOAL: контекст долгоживущей цели — раунд N из M, задание и заметка предыдущего раунда.
+        // Ставим сразу после правил (перед картой проекта): блок стабилен в пределах раунда.
+        if (_goals is not null && _job.GoalId is { } activeGoalId && !PromptEconomy.IsSmallTalk(_job.Prompt))
+        {
+            try
+            {
+                var goal = await _goals.GetAsync(_job.UserId, activeGoalId, ct);
+                if (goal is not null)
+                {
+                    var goalInsertAt = (messages.Count > 0 && messages[0].Role == "system" ? 1 : 0)
+                                       + (rulesSeen is not null ? 1 : 0);
+                    var round = _job.GoalRound > 0 ? _job.GoalRound : goal.RoundsStarted + 1;
+                    messages.Insert(goalInsertAt, new ChatMessage("system", GoalPrompt(goal, round)));
+                    await group.SendAsync("OnLog", $"[Goal] Раунд {round}/{goal.MaxRounds}", ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Контекст цели — подсказка; сбой чтения не должен ломать раунд.
+                _logger.LogDebug(ex, "goal context injection failed for goal {GoalId}", activeGoalId);
             }
         }
 
@@ -2948,6 +2995,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
             :
         tool == ReadSkillTool
             ? _skillSummaries.Count > 0 && _profile.Mode is "coder" or "cowork" or "worker"
+            :
+        // GOAL: инструменты закрытия цели доступны только если ход идёт в раунде цели.
+        tool is GoalCompleteTool or GoalBlockTool
+            ? _job.GoalId is not null && _goals is not null && _profile.Mode is "coder" or "cowork" or "worker"
             :
         // BACKGROUND_JOB: фоновые задачи живут в серверной песочнице; на ПК пользователя их механизма нет.
         tool is BackgroundJobOutputTool or BackgroundJobKillTool
@@ -4721,6 +4772,31 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         return new ConexyToolResult(toolCall.Id, "job_kill requires 'job_id'.", true);
                     var killText = await _backgroundJobs.KillAsync(chatId, killJobId, ct);
                     return new ConexyToolResult(toolCall.Id, killText, false);
+                }
+
+                // GOAL: агент сам закрывает долгоживущую цель — следующий раунд уже не запускается.
+                case "goal_complete":
+                {
+                    if (_goals is null || _job.GoalId is not { } completeGoalId)
+                        return new ConexyToolResult(toolCall.Id, "У этой задачи нет активной цели.", true);
+                    var summary = GetString(root, "summary");
+                    var closed = await _goals.CompleteAsync(completeGoalId, summary, ct);
+                    return closed is null
+                        ? new ConexyToolResult(toolCall.Id, "Цель не найдена.", true)
+                        : new ConexyToolResult(toolCall.Id,
+                            $"Цель закрыта как выполненная (раундов: {closed.RoundsStarted}). Дальше раунды запускаться не будут.", false);
+                }
+
+                case "goal_block":
+                {
+                    if (_goals is null || _job.GoalId is not { } blockedGoalId)
+                        return new ConexyToolResult(toolCall.Id, "У этой задачи нет активной цели.", true);
+                    var reason = GetString(root, "reason");
+                    var blocked = await _goals.BlockAsync(blockedGoalId, reason, ct);
+                    return blocked is null
+                        ? new ConexyToolResult(toolCall.Id, "Цель не найдена.", true)
+                        : new ConexyToolResult(toolCall.Id,
+                            $"Цель заблокирована: {blocked.BlockedReason}. Дальше раунды запускаться не будут.", false);
                 }
 
                 // TEST_RUNNER: добавлено 2026-10-04 — отдельный инструмент прогона тестов.

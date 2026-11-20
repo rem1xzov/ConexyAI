@@ -388,6 +388,19 @@ public class ConexyBackgroundWorker : BackgroundService
                     // WEB_DEVICE: добавлено 2026-10-18 — итоговый diff с ПК: в веб (OnDeviceDiff до OnCompleted) и в историю.
                     result += await Device.DeviceTurnDiff.CollectAsync(scope.ServiceProvider, _hubContext, job, _logger, taskToken);
 
+                    // GOAL: итог раунда запоминается для следующего раунда; на лимите цель блокируется.
+                    if (job.GoalId is { } goalId && scope.ServiceProvider.GetService<IGoalService>() is { } goalService)
+                    {
+                        try
+                        {
+                            await goalService.FinalizeRoundAsync(goalId, result, taskToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Goal round finalization failed for {GoalId}.", goalId);
+                        }
+                    }
+
                     // PHONE_AGENT: ход чата через агентский цикл всё равно считается запросом чата.
                     if (phoneChat)
                         await subscriptionService.RecordRequestAsync(job.UserId, job.ModelType, taskToken);

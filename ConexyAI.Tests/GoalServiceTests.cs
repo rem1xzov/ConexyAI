@@ -141,8 +141,14 @@ internal static class GoalServiceTests
 
             var second = service.RecordRoundAsync(goal.Id, Guid.NewGuid(), "готово").GetAwaiter().GetResult();
             Assert(second is not null && second.RoundsStarted == 2, "the second round is counted");
-            Assert(second!.Status == GoalStatuses.Blocked && second.BlockedReason!.Contains("лимит", StringComparison.Ordinal),
-                "reaching the round limit blocks the goal with a reason: " + second.BlockedReason);
+            Assert(second!.Status == GoalStatuses.Active, "a started round does not block the goal before it finishes");
+
+            // Лимит проверяется по завершении раунда: последний раунд должен успеть выполниться.
+            var finalized = service.FinalizeRoundAsync(goal.Id, "итог последнего раунда").GetAwaiter().GetResult();
+            Assert(finalized is not null && finalized.Status == GoalStatuses.Blocked
+                   && finalized.BlockedReason!.Contains("лимит", StringComparison.Ordinal),
+                "finalizing the last round blocks the goal with a reason: " + finalized?.BlockedReason);
+            Assert(finalized!.LastNote == "итог последнего раунда", "the final round note is kept");
 
             var third = service.RecordRoundAsync(goal.Id, Guid.NewGuid(), "лишний").GetAwaiter().GetResult();
             Assert(third is not null && third.RoundsStarted == 2, "a blocked goal does not count more rounds");

@@ -59,5 +59,9 @@ public record ConexyJob(
     // PHONE_AGENT: добавлено 2026-10-29 — агент работает с телефоном пользователя (инструменты phone_*).
     bool UsePhone = false,
     // ATTACHMENTS_ON_DEVICE: где уже лежат вложения этого хода (см. комментарий к записи).
-    string? AttachmentsNote = null
+    string? AttachmentsNote = null,
+    // GOAL: добавлено 2026-11-20 — ход запущен раунд-драйвером как раунд долгоживущей цели. Раннер
+    // получает цель в контексте, а инструменты goal_complete/goal_block закрывают её.
+    Guid? GoalId = null,
+    int GoalRound = 0
 );
