@@ -20,10 +20,9 @@ export function MessageExtras({ message }: { message: ChatMessage }) {
 
   const urls = useMemo(() => extractUrls(content), [content]);
   const codeBlocks = useMemo(() => extractCodeBlocks(content), [content]);
-  const suggestions = useMemo(() => buildSuggestions(content, urls.length > 0), [content, urls.length]);
 
   if (message.role !== 'assistant' || message.status !== 'complete') return null;
-  if (!urls.length && !suggestions.length && !codeBlocks.length) return null;
+  if (!urls.length && !codeBlocks.length) return null;
 
   return (
     <div className="msg-extras">
@@ -48,23 +47,6 @@ export function MessageExtras({ message }: { message: ChatMessage }) {
         <button className="msg-artifact-btn" type="button" onClick={() => setArtifactOpen(true)}>
           <span aria-hidden="true">▣</span> {t('extras.openArtifact', { count: codeBlocks.length })}
         </button>
-      )}
-
-      {suggestions.length > 0 && (
-        <div className="msg-followups">
-          {suggestions.map((s) => (
-            <button
-              key={s}
-              type="button"
-              className="msg-followup"
-              onClick={() => {
-                window.dispatchEvent(new CustomEvent('conexy:insert-prompt', { detail: { text: s } }));
-              }}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
       )}
 
       {artifactOpen && (
@@ -170,15 +152,6 @@ function extractCodeBlocks(text: string): { lang: string; code: string }[] {
     if (code.length >= 80) out.push({ lang: m[1] || 'text', code });
   }
   return out;
-}
-
-function buildSuggestions(text: string, hasSources: boolean): string[] {
-  const words = text.trim().split(/\s+/).length;
-  const hasCode = /```/.test(text);
-  if (hasCode) return ['Объясни код построчно', 'Упрости пример', 'Добавь обработку ошибок'];
-  if (hasSources) return ['Сделай выжимку', 'Какие источники надёжнее?', 'Сравни данные'];
-  if (words > 120) return ['Сократи до 5 пунктов', 'Дай пример', 'Что дальше?'];
-  return ['Продолжи', 'Дай пример', 'Объясни проще'];
 }
 
 function extensionFor(lang: string): string {
