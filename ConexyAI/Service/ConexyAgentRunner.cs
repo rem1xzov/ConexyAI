@@ -499,6 +499,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private const string InterruptAgentTool = "interrupt_agent";
     // WORKFLOW: структурированный фан-аут с зависимостями между задачами.
     private const string WorkflowRunTool = "workflow_run";
+    // TEAM_FOLLOW_UP: продолжить работу завершённого помощника с его прошлым отчётом.
+    private const string TeamFollowUpTool = "team_follow_up";
     /// <summary>
     /// WEB_PARALLEL: страницы, запрошенные в одном ответе, читаются одновременно (только
     /// <c>fetch_web_page</c> — инструменты с побочными эффектами так не запускаются).
@@ -3069,7 +3071,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
                             // WORKFLOW: план задач с зависимостями — то же право, что у spawn_agents (ведущий).
                             : tool == WorkflowRunTool
                                 ? SubagentPolicy.SpawnAllowed(_job, _profile.Mode)
-                                : _profile.Allows(tool)) &&
+                                // TEAM_FOLLOW_UP: продолжение помощника — только ведущий, как и запуск.
+                                : tool == TeamFollowUpTool
+                                    ? SubagentPolicy.AgentsStatusAllowed(_job, _profile.Mode)
+                                    : _profile.Allows(tool)) &&
         // INCOGNITO_CHAT: an incognito turn must not read the user's other conversations, the same
         // rule the conversation service applies to memory and the cross-chat digest.
         !(tool == SearchUserChatsTool && _job.Incognito);
@@ -3783,6 +3788,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var spec = specs[i];
             var worker = new TeamWorker($"worker-{offset + i + 1}", spec.Role)
             {
+                Brief = spec.Brief,
+                Scope = spec.Scope,
                 Cts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token),
             };
             run.Workers.Add(worker);
@@ -4052,6 +4059,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     {
         public string Id { get; } = id;
         public string Role { get; } = role;
+        // TEAM_FOLLOW_UP: задание и область нужны, чтобы продолжить работу помощника без пересборки команды.
+        public string Brief { get; set; } = string.Empty;
+        public IReadOnlyList<string> Scope { get; set; } = [];
         public Task? Job { get; set; }
         public string? Report { get; set; }
         public bool Failed { get; set; }
@@ -4486,8 +4496,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }
 
                 // TEAM_CONTROL: остановить одного застрявшего помощника, остальные продолжают работу.
-                case InterruptAgentTool:
-                {
+                case InterruptAgentTool:                {
                     if (!TeamRuns.TryGetValue(taskId, out var interruptRun))
                         return new ConexyToolResult(toolCall.Id, "Команда не запускалась: останавливать некого.", true);
 
@@ -4504,6 +4513,63 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     return new ConexyToolResult(toolCall.Id,
                         $"Помощник '{role}' ({target.Id}) остановлен. Его отчёт (если уже собрал что-то) виден в agents_status; " +
                         "его часть задачи доделай сам или отдай новому помощнику.", false);
+                }
+
+                // TEAM_FOLLOW_UP: продолжить завершённого помощника — он видит свой прошлый отчёт и не
+                // повторяет сделанное. Работающий помощник отклоняется: сначала дождись его.
+                case TeamFollowUpTool:
+                {
+                    if (!TeamRuns.TryGetValue(taskId, out var followRun))
+                        return new ConexyToolResult(toolCall.Id, "Команда не запускалась: продолжать некого.", true);
+
+                    var followRole = GetString(root, "role");
+                    var followBrief = GetString(root, "brief");
+                    var followRoles = followRun.Workers.Select(w => w.Role).ToList();
+                    var resolvedRole = TeamControl.ResolveRole(followRoles, followRole);
+                    if (resolvedRole is null)
+                        return new ConexyToolResult(toolCall.Id, TeamControl.Refusal(followRoles, followRole), true);
+                    if (string.IsNullOrWhiteSpace(followBrief))
+                        return new ConexyToolResult(toolCall.Id, "team_follow_up требует 'brief' — что сделать дальше.", true);
+                    if (_scopeFactory is null)
+                        return new ConexyToolResult(toolCall.Id, "team_follow_up недоступен в этом окружении.", true);
+
+                    var followWorker = followRun.Workers.First(w => string.Equals(w.Role, resolvedRole, StringComparison.Ordinal));
+                    if (followWorker.Job is { IsCompleted: false })
+                        return new ConexyToolResult(toolCall.Id,
+                            $"Помощник '{resolvedRole}' ещё работает: сначала дождись его через agents_status.", true);
+                    if (MaxTeamHelpersPerRun - _teamHelpers <= 0)
+                        return new ConexyToolResult(toolCall.Id,
+                            $"Лимит помощников исчерпан ({MaxTeamHelpersPerRun}); продолжение невозможно — работай сам.", true);
+
+                    _teamHelpers++;
+                    var followGroup = _hubContext.Clients.Group($"task_{taskId}");
+                    await followGroup.SendAsync("OnLog", $"[Orchestra] [{resolvedRole}] продолжение работы", ct);
+                    try
+                    {
+                        using var followScope = _scopeFactory.CreateScope();
+                        var followRunner = followScope.ServiceProvider.GetRequiredService<IConexyAgentRunner>();
+                        var identity = new AgentIdentity("follow-" + followWorker.Id, resolvedRole, followWorker.Scope);
+                        var brief = TeamFollowUp.BuildBrief(followWorker.Report, followBrief);
+                        var text = await followRunner.RunWorkerAsync(_job, identity, brief, ct);
+                        followWorker.Report = string.IsNullOrWhiteSpace(text) ? "(готово)" : text.Trim();
+                        followWorker.Failed = false;
+                        followWorker.Cancelled = false;
+                        followWorker.Job = Task.CompletedTask;
+                        TouchWorker(taskId, followWorker.Id);
+                        return new ConexyToolResult(toolCall.Id,
+                            $"## {resolvedRole} ({followWorker.Id}) — продолжение\n{Truncate(followWorker.Report, 2_500)}", false);
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Team follow-up failed for {Role}. task={TaskId}", resolvedRole, taskId);
+                        followWorker.Failed = true;
+                        return new ConexyToolResult(toolCall.Id,
+                            $"Продолжение помощника '{resolvedRole}' не удалось: {ex.Message}", true);
+                    }
                 }
 
                 // ORCHESTRA: передача сообщения/артефакта другому агенту команды.

@@ -78,6 +78,18 @@ public static class AgentToolCatalog
                     minItems: 2, maxItems: 4),
             }, "tasks")),
 
+        // TEAM_FOLLOW_UP: продолжить завершённого помощника вместо запуска нового.
+        Tool("team_follow_up",
+            "Continue a FINISHED helper with a new instruction: it receives its previous report and is told not " +
+            "to redo completed work. Use it instead of spawning a new helper when the same role must do the next " +
+            "step (for example the same QA agent after a fix). A helper that is still running is refused — wait " +
+            "for it through `agents_status` first.",
+            Object(new()
+            {
+                ["role"] = Str("Role of the helper to continue, as listed by agents_status."),
+                ["brief"] = Str("New instruction for the same helper; it will see its previous report."),
+            }, "role", "brief")),
+
         Tool("team_message",            "Send a message or an artifact to another agent of this run: a helper role, or 'lead' " +
             "for the leading agent. Use it to hand a dependent result to a helper or to ask for a " +
             "clarification, then continue your own work — do not wait for the reply.",
@@ -602,6 +614,7 @@ public static class AgentToolCatalog
         ["agents_status"] = "Check the team with `agents_status` at least once a minute while helpers run; do not poll it in a tight loop.",
         ["interrupt_agent"] = "Stop one looping or wrong-way helper with `interrupt_agent` instead of waiting for it; the others keep working.",
         ["workflow_run"] = "Use `workflow_run` when the work has real ordering between areas (backend/frontend, then QA after both); plain independent helpers go through `spawn_agents`.",
+        ["team_follow_up"] = "Continue a finished helper with `team_follow_up` instead of spawning a new one when the same role must do the next step.",
     };
 
     /// <summary>Подсказки выбора для выданного набора схем (в порядке каталога).</summary>
