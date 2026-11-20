@@ -160,9 +160,19 @@ public static class SelfTest
                            && !secondRead.IsError
                            && secondRead.Output.Contains("уже прочитан", StringComparison.Ordinal)
                            && !secondRead.Output.Contains("hello reread", StringComparison.Ordinal);
-            Console.WriteLine($"{(rereadOk ? "PASS" : "FAIL")}  repeated file read returns a pointer instead of content"
-                              + (rereadOk ? string.Empty : $"\n      first: {firstRead.Output}\n      second: {secondRead.Output}"));
+            Console.WriteLine($"{(rereadOk ? "PASS" : "FAIL")}  repeated file read returns a pointer instead of content");
             if (!rereadOk) failures++;
+
+            // COMMAND_TIMEOUTS: категории таймаутов и подсказка «команда ждала ввод».
+            var timeoutOk = CommandTimeoutPolicy.Resolve("ssh host", null) == CommandTimeoutPolicy.InteractiveSeconds
+                            && CommandTimeoutPolicy.Resolve("python -m pytest -q", null) == CommandTimeoutPolicy.LongSeconds
+                            && CommandTimeoutPolicy.Resolve("git status", null) == CommandTimeoutPolicy.NormalSeconds
+                            && CommandTimeoutPolicy.Resolve("ssh host", 45) == 45
+                            && CommandTimeoutPolicy.WaitedForInput("Password: ")
+                            && CommandTimeoutPolicy.InputWaitingHint("EOFError: EOF when reading a line") is not null
+                            && CommandTimeoutPolicy.TimeoutMessage("ssh host", 120).Contains("доступны", StringComparison.Ordinal);
+            Console.WriteLine($"{(timeoutOk ? "PASS" : "FAIL")}  command timeout policy (interactive/long/normal)");
+            if (!timeoutOk) failures++;
 
             // REMOTE_APPROVAL_POLICY: в режиме safe опасные категории с сайта отклоняются без запроса.
             ToolCallContext.Current = new ToolCallInfo(Guid.NewGuid(), true, root) { Tool = "install_software" };

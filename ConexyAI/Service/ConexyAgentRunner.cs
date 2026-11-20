@@ -921,6 +921,17 @@ public class ConexyAgentRunner : IConexyAgentRunner
         "Никогда не сообщай о выполнении того, чего не было.";
     private const int MaxClaimPushbacks = 2;
 
+    // TOOLS_NOT_DISABLED: добавлено 2026-11-20 — модель заканчивает ответом «мне отключили инструменты»,
+    // хотя инструменты в прогоне доступны. Пользователя это бесит (приходится писать «продолжи»), поэтому
+    // такой финал — не результат, а повод продолжить: инструменты не отключаются, задача доводится.
+    private const string ToolsNotDisabledPrompt =
+        "[Tools] Инструменты в этом прогоне доступны и работают — их никто не отключал (в том числе bash, файлы и проверки). " +
+        "Не заканчивай ответом «инструменты недоступны/отключены» и не проси написать «продолжи». " +
+        "Продолжай прямо сейчас: перечитай последнюю ошибку, смени способ (равноценный инструмент/аргументы), " +
+        "доведи задачу до проверенного результата. Если действительно упёрся во внешний блокер — назови его конкретно " +
+        "и задай пользователю вопрос через `ask_user`, не заканчивая работу пустым отказом.";
+    private const int MaxToolsDisabledPushbacks = 2;
+
     // VERIFY_CLAIMS: добавлено 2026-10-19 — агент пишет «всё работает/исправлено/проверил», не выполнив
     // ни сборки, ни запуска. Это то самое враньё, после которого пользователь проверял — и не работало.
     // Такие утверждения отправляются на доработку, а если бюджет исчерпан — приписка «не подтверждено».
@@ -1670,6 +1681,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var planFinishNudged = 0;
         // ANTI_LIE: сколько раз мы ловили ложный отчёт о GitHub-работе.
         var claimPushbacks = 0;
+        var toolsDisabledPushbacks = 0;
         var unverifiedPushbacks = 0;
         // INCOMPLETE_WORK: сколько раз мы возвращали ответ, где агент сам признал работу незавершённой.
         var incompleteNudges = 0;
@@ -1716,6 +1728,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var completionGuard = new AgentCompletionGuard();
         // REPEAT_REMINDER: мягкая подсказка до жёсткого отказа — повтор с теми же аргументами не двигает работу.
         var repeatReminder = new RepeatToolReminder();
+        // BATCH_DEDUP: одинаковые идемпотентные вызовы внутри одного батча выполняются один раз.
+        var batchDedup = new BatchCallDeduplicator();
+        // DIAGNOSTIC_NUDGE: сколько РАЗНЫХ неудачных проверок подряд и сколько раз уже просили диагностику.
+        // Это не лимит и не отключение: после порога модель получает инструкцию «разберись с причиной»,
+        // инструменты остаются доступны.
+        var failedVerificationSignatures = new HashSet<string>(StringComparer.Ordinal);
+        var failedVerificationAttempts = 0;
+        var diagnosticNudges = 0;
         var completionNudges = 0;
         var completionEscalated = false;
         var completionSignature = string.Empty;
@@ -1738,10 +1758,20 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // LOOP_GUARD: защита от зацикливания живёт ровно один прогон — на следующий запуск состояние
         // не переносится (петля — свойство конкретной задачи).
         var loopGuard = new AgentLoopGuard();
-        // TOOL_PIPELINE: отказные гейты инструмента — стражи цикла и экрана в одном монотонном конвейере.
+        // USER_CONSTRAINTS: явные запреты из сообщения пользователя — общий гейт конвейера (тесты, файлы,
+        // git, «только читай»). Это не отключение инструментов: запрещённый вызов получает отказ с
+        // предложением спросить пользователя, остальные инструменты работают как обычно.
+        var userConstraints = UserConstraints.FromPrompt(_job.Prompt);
         var toolGates = new ToolGatePipeline(
             new LoopGuardGate(loopGuard),
-            new ComputerUseGate(_computerGuard));
+            new ComputerUseGate(_computerGuard),
+            new UserConstraintGate(userConstraints));
+        if (userConstraints.Any)
+        {
+            _logger.LogInformation(
+                "Agent user constraints: readOnly={ReadOnly} forbidden=[{Forbidden}] noGit={NoGit} task={TaskId}",
+                userConstraints.ReadOnly, string.Join(", ", userConstraints.Forbidden), userConstraints.NoGitWrite, _job.TaskId);
+        }
 
         // EDIT_AFTER_READ + BASH_FILE_OPS: тоже на прогон. Чтение живёт весь прогон (файл, прочитанный
         // на шаге 1, можно править на шаге 20) — сбрасывается только отказ «файловые операции через bash».
@@ -2154,6 +2184,23 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     continue;
                 }
 
+                // TOOLS_NOT_DISABLED: «мне отключили инструменты» при живых инструментах — не финал, а
+                // отправка на продолжение (пользователь не должен просить «продолжи»).
+                if (HarnessClaims.ClaimsToolsDisabled(finalText) && _tools is { Count: > 0 }
+                    && !finalAnswerForced && step < stepLimit && toolsDisabledPushbacks < MaxToolsDisabledPushbacks)
+                {
+                    toolsDisabledPushbacks++;
+                    _logger.LogWarning(
+                        "Agent tools-disabled claim while tools are available; sending back {Attempt}/{Max}. task={TaskId}",
+                        toolsDisabledPushbacks, MaxToolsDisabledPushbacks, taskId);
+                    await group.SendAsync("OnLog",
+                        $"[Tools] Ответ говорит, что инструменты отключены, но они доступны — отправляю продолжать ({toolsDisabledPushbacks}/{MaxToolsDisabledPushbacks}).",
+                        ct);
+                    await SendAgentStatusAsync(taskId, "thinking", "Инструменты доступны — продолжаю задачу…", ct: ct);
+                    messages.Add(new ChatMessage("system", ToolsNotDisabledPrompt));
+                    continue;
+                }
+
                 // WEB_FIRST: отрицание без поиска — не вывод, а догадка.
                 var webChecked = executedToolCounts.ContainsKey("web_search") || executedToolCounts.ContainsKey("fetch_web_page");
                 // TOOLS_OFF: если инструменты уже отключены или поиска нет в наборе, гнать модель
@@ -2411,6 +2458,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var batchImages = new List<ChatMessage>();
             // REPEAT_REMINDER: подсказки этого батча — уходят модели после всех tool-результатов.
             var repeatHints = new List<string>();
+            // TOOL_ADVICE + DIAGNOSTIC_NUDGE: советы из ошибок и объяснение «почему проверка не сходится».
+            var adviceHints = new List<string>();
+            batchDedup.Reset();
             // AGENT_HOOKS: заметки хуков этого хода (сбои) — отдаём модели одним system-сообщением после
             // всех tool-результатов; FilesBeforeBatch — чтобы понять, какие файлы изменились именно сейчас.
             var hookNotes = new List<string>();
@@ -2461,6 +2511,18 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // COWORK_MODE: a tool outside the mode's profile is never executed, and a refused
                 // call must not show up in the "Commands executed" summary either.
                 var toolAllowed = IsToolAllowed(toolName);
+
+                // BATCH_DEDUP: второй идентичный идемпотентный вызов в том же ответе не выполняем —
+                // это не отключение инструмента: на следующем шаге он снова доступен с любыми аргументами.
+                if (toolAllowed && batchDedup.ShouldSkip(toolName, toolCall.Function.Arguments))
+                {
+                    messages.Add(new ChatMessage("tool",
+                        "[Дубль в этом батче] Такой же вызов уже выполнен выше — повторно не запускаю, результат выше. " +
+                        "Инструмент доступен и дальше: измени аргументы, если нужен другой результат.",
+                        ToolCallId: toolCall.Id));
+                    await group.SendAsync("OnLog", $"[Batch Dedup] {toolName}: идентичный вызов пропущен.", ct);
+                    continue;
+                }
 
                 // LOOP_GUARD: повтор одного и того же и исчерпанный интернет-бюджет проверяются ДО
                 // вызова инструмента. Проверка после запуска была бы бесполезной: команда уже
@@ -2596,6 +2658,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     // REPEAT_REMINDER: один и тот же вызов с каноничными аргументами; подсказка — после батча.
                     if (repeatReminder.Record(toolName, toolCall.Function.Arguments) is { } repeatHint)
                         repeatHints.Add(repeatHint);
+                    // TOOL_ADVICE: в выводе ошибки уже может быть готовый совет — не даём перебирать флаги.
+                    if (result.IsError && adviceHints.Count < 3
+                        && ToolAdviceDetector.Detect(result.Output) is { } adviceHint)
+                        adviceHints.Add(adviceHint);
+                    // DIAGNOSTIC_NUDGE: считаем РАЗНЫЕ неудачные проверки (тесты/сборка/диагностика).
+                    if (result.IsError && RepeatToolReminder.IsVerification(toolName, toolCall.Function.Arguments)
+                        && failedVerificationSignatures.Add(toolName + "\u0000" + RepeatToolReminder.Canonicalize(toolCall.Function.Arguments)))
+                        failedVerificationAttempts++;
                     // SHARE_TO_ADMIN: сохраняем действие агента (инструмент, аргументы, вывод), чтобы
                     // админ разобрал баг по фактам, а не по тексту ответа. Лог не должен ломать ход.
                     if (_chatAgentLog is not null)
@@ -2740,6 +2810,31 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // чтобы не разрывать пары assistant(tool_calls) → tool(result).
             foreach (var repeatHint in repeatHints)
                 messages.Add(new ChatMessage("system", repeatHint));
+
+            // TOOL_ADVICE: готовые советы из ошибок — тем же порядком, после результатов батча.
+            foreach (var adviceHint in adviceHints)
+                messages.Add(new ChatMessage("system", adviceHint));
+
+            // DIAGNOSTIC_NUDGE: много РАЗНЫХ неудачных проверок — это уже не случайность. Не отключаем
+            // инструменты и не просим сдаться: требуем прочитать ошибку, изолировать причину и починить.
+            if (diagnosticNudges < 2
+                && failedVerificationAttempts >= (diagnosticNudges == 0 ? 5 : 12))
+            {
+                diagnosticNudges++;
+                _logger.LogWarning(
+                    "Agent diagnostic nudge {Attempt}: {Failures} failed verification attempts. task={TaskId}",
+                    diagnosticNudges, failedVerificationAttempts, taskId);
+                await group.SendAsync("OnLog",
+                    $"[Diagnostics] Неудачных проверок: {failedVerificationAttempts} — прошу разобраться с причиной, инструменты доступны.",
+                    ct);
+                messages.Add(new ChatMessage("system",
+                    "[Диагностика] Проверка падает уже " + failedVerificationAttempts + " раз разными способами. " +
+                    "Инструменты доступны — продолжай работу, но смени подход: 1) прочитай ПОЛНЫЙ вывод ошибки до конца " +
+                    "(в нём часто уже написан совет — примени его); 2) изолируй минимальный пример: один тест/один файл/одна команда, " +
+                    "чтобы понять, что именно ломается; 3) назови корневую причину (конфликт имён, версия, путь, окружение) " +
+                    "и исправь её, а не перебирай флаги и режимы. Если причина внешняя и требует решения пользователя — " +
+                    "задай конкретный вопрос через `ask_user`. Не меняй тесты, чтобы «позеленить» проверку, если об этом не просили."));
+            }
 
             // REPO_MAP: этот ход мог изменить файлы — карту перестроим при следующем чтении.
             _repoMap?.Invalidate(chatId);

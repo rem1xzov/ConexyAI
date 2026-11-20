@@ -289,8 +289,10 @@ public static partial class CommandPolicy
 /// <summary>bash / terminal_exec: команда в рабочей папке, с подтверждением, таймаутом и убийством дерева процессов.</summary>
 public sealed partial class ShellTool
 {
-    // С запасом на первую сборку со скачиванием зависимостей (ForgeGradle, Maven, Android, npm). Сервер ждёт дольше.
-    private const int DefaultTimeoutSeconds = 600;
+    // COMMAND_TIMEOUTS: таймаут выбирает общая политика (интерактив 120 с, тесты/сборки 3600 с,
+    // остальное 300 с); явный timeout_seconds от модели её перекрывает. Константы оставлены для
+    // совместимости с внешними вызовами.
+    private const int DefaultTimeoutSeconds = 300;
     internal const int MaxTimeoutSeconds = 3600;
     // TOKEN_ECONOMY: вывод команд тоже едет в контекст на каждом шаге. Логи сборки читаются
     // по краям (начало + конец), 16k символов — ~4k токенов.
@@ -321,7 +323,8 @@ public sealed partial class ShellTool
             return ToolResult.Fail(sleepReason);
         // BASH_DESCRIPTION: модель обязана объяснить намерение; старые вызовы без описания не ломаем.
         var description = args.Str("description")?.Trim();
-        var timeout = Math.Clamp(args.Int("timeout_seconds") ?? DefaultTimeoutSeconds, 1, MaxTimeoutSeconds);
+        // COMMAND_TIMEOUTS: не ждём 10 минут команду, которая просто ждёт ввода; тесты/сборки — можно.
+        var timeout = CommandTimeoutPolicy.Resolve(command, args.Int("timeout_seconds"));
         // Оболочка новая на каждый вызов, `cd` не сохраняется — подпапка задаётся явно и не выходит за проект.
         var cwd = args.Str("cwd") is { Length: > 0 } dir ? _guard.Resolve(dir) : _guard.Root;
         if (!Directory.Exists(cwd))
@@ -472,10 +475,23 @@ public sealed partial class ShellTool
         text = Compress(command, text);
 
         if (timedOut)
-            return ToolResult.Fail($"{text}\n[Команда прервана по таймауту {timeoutSeconds} с]".TrimStart());
+        {
+            // COMMAND_TIMEOUTS: инструменты НЕ отключаются; модель получает объяснение, что произошло,
+            // и что делать: неинтерактивные флаги, bg_start, ask_user, явный timeout_seconds для сборок.
+            var timeoutNote = CommandTimeoutPolicy.TimeoutMessage(command, timeoutSeconds);
+            var waitingNote = CommandTimeoutPolicy.InputWaitingHint(text);
+            var timeoutMessage = string.IsNullOrWhiteSpace(waitingNote)
+                ? $"{text}\n{timeoutNote}".Trim()
+                : $"{text}\n{timeoutNote}\n{waitingNote}".Trim();
+            return ToolResult.Fail(timeoutMessage);
+        }
 
         var code = process.ExitCode;
-        return new ToolResult($"{text}\nExit code: {code}".TrimStart(), code != 0);
+        // INACTIVE_STDIN: если по выводу видно, что команда ждала ввод (пароль/подтверждение/строку),
+        // говорим об этом прямо, даже когда процесс завершился с ошибкой ввода.
+        var inputHint = CommandTimeoutPolicy.InputWaitingHint(text);
+        var finalText = string.IsNullOrWhiteSpace(inputHint) ? text : text + "\n" + inputHint;
+        return new ToolResult($"{finalText}\nExit code: {code}".TrimStart(), code != 0);
     }
 
     private static ProcessStartInfo BuildStartInfo(string command, bool useCmd, bool wrapExitCode)

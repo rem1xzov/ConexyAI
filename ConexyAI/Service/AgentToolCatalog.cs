@@ -341,7 +341,9 @@ public static class AgentToolCatalog
             {
                 ["command"] = Str("Shell command to run."),
                 ["description"] = Str("What the command does in plain words, positive form: 'Build the project', 'Install dependencies'. The user sees this instead of the flags."),
-                ["timeout_seconds"] = Int("Optional timeout in seconds (default 60, max 300).", 1, 300, 60),
+                // COMMAND_TIMEOUTS: по умолчанию таймаут подбирается по категории команды (интерактив 120 с,
+                // тесты/сборки 3600 с, остальное 300 с); явное значение имеет приоритет.
+                ["timeout_seconds"] = Int("Optional explicit timeout in seconds (max 3600). Omit to let the harness pick: 120 for interactive commands, 3600 for tests/builds/installs, 300 otherwise.", 1, 3600),
                 // BACKGROUND_JOB: длинную команду не ждём и не обрываем таймаутом.
                 ["run_in_background"] = Bool("Run a long command detached, return a job id immediately and keep working (read with job_output, stop with job_kill).", false),
             }, "command", "description")),

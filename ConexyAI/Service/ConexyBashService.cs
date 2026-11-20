@@ -36,10 +36,9 @@ public class ConexyBashService : IConexyBashService
     // BACKGROUND_JOB: фоновые задачи (см. BackgroundJobService); null — окружение без Docker/job-подсистемы.
     private readonly IBackgroundJobService? _backgroundJobs;
 
-    private const int MaxTimeoutSeconds = 300;
-    private const int DefaultTimeoutSeconds = 30;
-    // TEST_RUNNER: тестовому прогону нужен больший потолок, чем обычной диагностике.
-    private const int MaxRawTimeoutSeconds = 900;
+    // COMMAND_TIMEOUTS: прежние жёсткие 300 с не давали тестам/сборкам доработать; политика в
+    // CommandTimeoutPolicy выбирает 120/300/3600 по категории команды.
+    private const int MaxTimeoutSeconds = CommandTimeoutPolicy.MaxSeconds;
 
     public ConexyBashService(
         IConexyWorkspaceService workspaceService,
@@ -146,8 +145,9 @@ public class ConexyBashService : IConexyBashService
 
         _logger.LogInformation("Executing bash for session {SessionId} ({Chars} chars).", sessionId, request.Command.Length);
 
-        var maxTimeout = request.RawOutput ? MaxRawTimeoutSeconds : MaxTimeoutSeconds;
-        var timeout = TimeSpan.FromSeconds(Math.Clamp(request.TimeoutSeconds ?? DefaultTimeoutSeconds, 1, maxTimeout));
+        // COMMAND_TIMEOUTS: категория команды важнее «одного таймаута на всё»: интерактив 120 с,
+        // тесты/сборки 3600 с, остальное 300 с; явный таймаут модели главнее.
+        var timeout = TimeSpan.FromSeconds(CommandTimeoutPolicy.Resolve(request.Command, request.TimeoutSeconds));
 
         using var slot = await _activity.AcquireAsync(sessionId, ct);
         return await RunProcessAsync(sessionId, request.Command, workspacePath, timeout, request.RawOutput, ct);
@@ -165,6 +165,14 @@ public class ConexyBashService : IConexyBashService
         // BASH_COMPRESS: ANSI/баннеры снимаются всегда; сборка и тесты отдаются как «итог + окно
         // вокруг ошибки», тестовому прогону (run_tests) — почти весь вывод.
         var (text, truncated) = BashOutputCompressor.Compress(result.Output, command, rawOutput);
+
+        // COMMAND_TIMEOUTS: инструменты не отключаются — при таймауте/ожидании ввода объясняем модели,
+        // что произошло и что делать (неинтерактивные флаги, bg_start, ask_user, timeout_seconds).
+        var hint = result.WasTimedOut
+            ? CommandTimeoutPolicy.TimeoutMessage(command, (int)timeout.TotalSeconds)
+            : CommandTimeoutPolicy.InputWaitingHint(result.Output);
+        if (!string.IsNullOrWhiteSpace(hint))
+            text = (text + "\n\n" + hint).Trim();
 
         return new BashToolResult
         {
