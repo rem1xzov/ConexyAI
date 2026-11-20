@@ -13012,3 +13012,127 @@ body::before {
 .device-diff__note { color: var(--muted); font-size: 11px; margin-right: auto; }
 .device-diff__action { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; font-size: 11px; border-radius: 8px; border: 1px solid var(--border, rgba(255,255,255,.14)); background: transparent; color: var(--muted); cursor: pointer; }
 .device-diff__action:hover { color: var(--text, #fff); border-color: var(--accent); }
+
+/* ================= MOBILE_REDESIGN: Claude-style ================= */
+@media (max-width: 820px) {
+  /* Нижняя навигация — плавающая капсула, а не полоса во всю ширину. */
+  .main {
+    padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  }
+  .mobile-nav {
+    left: 10px;
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    height: 58px;
+    padding: 5px 6px;
+    border: 1px solid var(--border, rgba(255,255,255,.12));
+    border-radius: 20px;
+    background: var(--surface-solid, #17121c);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+    justify-content: space-between;
+    gap: 4px;
+  }
+  .mobile-nav__btn {
+    flex: 1 1 0;
+    flex-direction: column;
+    gap: 2px;
+    padding: 5px 2px;
+    font-size: 10px;
+    border-radius: 14px;
+  }
+  .mobile-nav__btn--active {
+    color: var(--accent);
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .mobile-nav__btn--new { display: none; }
+
+  /* Шапка: компактнее, кнопка «новый чат» рядом с моделью. */
+  .chat-header {
+    min-height: 48px;
+    padding: 4px 10px 4px 54px;
+    gap: 6px;
+  }
+  .chat-header__actions { gap: 2px; }
+  .mobile-new-btn { color: var(--text); }
+
+  /* Стартовый экран: меньше декора, без дубля «стиль ответа/поиск» — они есть в пикере модели. */
+  .chat-stage__options,
+  .chat-stage__chips {
+    display: none;
+  }
+  .chat-stage__hero-inner {
+    max-height: 220px;
+  }
+  .chat-hero-greeting,
+  .hero__title {
+    font-size: 24px !important;
+    line-height: 1.25;
+  }
+  .chat-stage__composer {
+    padding: 0 10px;
+  }
+  .inputbar-wrap {
+    padding: 0 0 6px;
+  }
+  .inputbar {
+    min-height: 54px;
+    border-radius: 18px;
+  }
+  .feed {
+    padding: 14px 12px;
+  }
+
+  /* Модалки — нижние шторки на всю ширину, как в мобильном Claude. */
+  .artifact-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .artifact-modal,
+  .prompt-lib,
+  .quick-palette {
+    width: 100%;
+    max-height: 92dvh;
+    border-radius: 18px 18px 0 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+  }
+  .artifact-modal__head,
+  .prompt-lib .artifact-modal__head,
+  .quick-palette__search {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--surface-solid, #17121c);
+  }
+  .artifact-modal__head { border-radius: 18px 18px 0 0; }
+  .artifact-modal__actions,
+  .prompt-lib__add {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+  .prompt-lib__list {
+    padding-bottom: 10px;
+  }
+  /* Текст промпта больше не обрезается в одну строку. */
+  .prompt-lib__text {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    line-height: 1.35;
+  }
+  .prompt-lib__use {
+    padding: 11px 12px;
+  }
+
+  /* Карточки в ответах не должны вылезать за экран. */
+  .msg-source { max-width: 100%; }
+  .msg-followups { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
+  .msg-followup { flex: 0 0 auto; }
+
+  /* Настройки на телефоне: контент не липнет к системной навигации. */
+  .settings-shell--narrow .settings-modal__body {
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  }
+}

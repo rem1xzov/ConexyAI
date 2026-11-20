@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatSessionKind } from '../types/chat';
-import { CloseIcon, PlusIcon, SearchIcon } from './Icons';
+import { CloseIcon, CpuIcon, GearIcon, GhostIcon, SearchIcon, UserIcon } from './Icons';
 
 /**
  * UI_EXTRAS: библиотека промптов, онбординг, мобильная нижняя навигация и палитра быстрых действий.
@@ -196,19 +196,18 @@ export function OnboardingChecklist({
 export function MobileBottomNav({
   activeTab,
   onTabChange,
-  onNewChat,
   onSettings,
 }: {
   activeTab: ChatSessionKind;
   onTabChange: (tab: ChatSessionKind) => void;
-  onNewChat: () => void;
   onSettings: () => void;
 }) {
   const { t } = useTranslation();
-  const tabs: { kind: ChatSessionKind; label: string }[] = [
-    { kind: 'chat', label: t('sidebar.tabs.chat') },
-    { kind: 'projects', label: t('sidebar.tabs.agent') },
-    { kind: 'students', label: t('sidebar.tabs.students') },
+  // MOBILE_NAV: как в Claude — четыре иконки-вкладки вместо строки с плюсом по центру.
+  const tabs: { kind: ChatSessionKind; label: string; icon: JSX.Element }[] = [
+    { kind: 'chat', label: t('sidebar.tabs.chat'), icon: <GhostIcon size={20} /> },
+    { kind: 'projects', label: t('sidebar.tabs.agent'), icon: <CpuIcon size={20} /> },
+    { kind: 'students', label: t('sidebar.tabs.students'), icon: <UserIcon size={20} /> },
   ];
   return (
     <nav className="mobile-nav" aria-label={t('extras.mobileNav')}>
@@ -219,15 +218,13 @@ export function MobileBottomNav({
           className={`mobile-nav__btn${activeTab === tab.kind ? ' mobile-nav__btn--active' : ''}`}
           onClick={() => onTabChange(tab.kind)}
         >
-          <span className={`mobile-nav__dot mobile-nav__dot--${tab.kind}`} aria-hidden="true" />
+          {tab.icon}
           <span>{tab.label}</span>
         </button>
       ))}
-      <button type="button" className="mobile-nav__btn mobile-nav__btn--new" onClick={onNewChat} aria-label={t('sidebar.newChat')}>
-        <PlusIcon size={18} />
-      </button>
       <button type="button" className="mobile-nav__btn" onClick={onSettings}>
-        {t('account.settings')}
+        <GearIcon size={20} />
+        <span>{t('account.settings')}</span>
       </button>
     </nav>
   );
