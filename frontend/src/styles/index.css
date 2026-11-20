@@ -13285,3 +13285,28 @@ body::before {
     flex-grow: 0;
   }
 }
+
+/* ================= GEMINI_COMPOSER ================= */
+@media (max-width: 820px) {
+  /* Композер — аккуратный прямоугольник со скруглением, а не «пилюля-медуза» при многострочном
+     вводе (border-radius 999px на высокой коробке превращался в огромный овал). */
+  .inputbar,
+  .inputbar--expanded {
+    border-radius: 24px;
+  }
+  /* Как у Gemini: не больше ~5 строк, дальше текст скроллится внутри поля. */
+  .inputbar__textarea {
+    max-height: min(calc(var(--app-height, 100dvh) * 0.3), 132px);
+    line-height: 1.4;
+  }
+  .inputbar__textarea::placeholder {
+    white-space: normal;
+  }
+  /* Небольшой зазор между композером и клавиатурой — как в Gemini, а не вплотную. */
+  .app:has(.inputbar textarea:focus) .chat-stage__composer {
+    padding-bottom: 10px;
+  }
+  .app:has(.inputbar textarea:focus) .inputbar-wrap {
+    padding-bottom: 0;
+  }
+}
