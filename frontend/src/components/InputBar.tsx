@@ -140,6 +140,21 @@ export function InputBar({
   const coarsePointer = useMediaQuery('(pointer: coarse)');
   const enterInsertsNewline = isMobile || coarsePointer;
   const [value, setValue] = useState('');
+  // PROMPTS/FOLLOWUP: кнопки «Промпты» (Ctrl+P) и подсказки кладут текст в композер событием,
+  // чтобы не протаскивать колбэки через всё дерево.
+  useEffect(() => {
+    function onInsertPrompt(event: Event) {
+      const text = (event as CustomEvent<{ text?: string }>).detail?.text;
+      if (typeof text !== 'string' || !text.trim()) return;
+      setValue(text);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(text.length, text.length);
+      });
+    }
+    window.addEventListener('conexy:insert-prompt', onInsertPrompt);
+    return () => window.removeEventListener('conexy:insert-prompt', onInsertPrompt);
+  }, []);
   // ATTACHMENT_UPLOAD: черновик вложения несёт своё состояние. Файл появляется в списке сразу
   // (с превью и спиннером), а base64 появляется позже — до этого отправлять нельзя.
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
@@ -1199,6 +1214,16 @@ export function InputBar({
             onDevice={executionOnDevice}
           />
         )}
+
+        <button
+          className="mic-btn prompt-btn"
+          onClick={() => window.dispatchEvent(new Event('conexy:open-prompts'))}
+          type="button"
+          title={t('input.prompts')}
+          aria-label={t('input.prompts')}
+        >
+          <span aria-hidden="true">✦</span>
+        </button>
 
         <button
           className={`mic-btn ${isRecording ? 'mic-btn--active' : ''}`}

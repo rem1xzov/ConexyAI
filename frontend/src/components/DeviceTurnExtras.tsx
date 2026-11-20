@@ -4,7 +4,7 @@ import type { ChatMessage, DeviceQuestion } from '../types/chat';
 import type { DeviceDiffFile, DeviceDiffPayload } from '../types/signalr';
 import { DEVICE_DIFF_HEADING, diffStats } from '../utils/deviceTarget';
 import { HighlightedCode } from './markdown/HighlightedCode';
-import { ChevronDownIcon, CheckIcon, CloseIcon, SendIcon } from './Icons';
+import { ChevronDownIcon, CheckIcon, CloseIcon, CopyIcon, SendIcon } from './Icons';
 
 // WEB_DEVICE: добавлено 2026-10-18 — части ответа агента, работающего на ПК пользователя:
 // ожидание подключения ПК, вопросы агента и изменённые на ПК файлы.
@@ -242,6 +242,29 @@ function DeviceQuestionCard({
 function DeviceDiffBlock({ diff }: { diff: DeviceDiffPayload }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(true);
+
+  // DIFF_REVIEW: правки на ПК уже применены, поэтому здесь не «принять/отклонить», а ревью:
+  // можно скопировать общий патч или скачать его файлом и откатить вручную/git-ом.
+  function combinedPatch(): string {
+    return diff.files
+      .map((f) => f.diff ?? `--- ${f.path}\n+++ ${f.path}\n`)
+      .join('\n');
+  }
+
+  function copyPatch() {
+    void navigator.clipboard?.writeText(combinedPatch());
+  }
+
+  function downloadPatch() {
+    const blob = new Blob([combinedPatch()], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `changes-${Date.now()}.patch`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="device-diff">
       <button type="button" className="device-diff__toggle" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
@@ -250,12 +273,23 @@ function DeviceDiffBlock({ diff }: { diff: DeviceDiffPayload }) {
         <span className="device-diff__count">{diff.files.length}</span>
       </button>
       {open && (
-        <ul className="device-diff__files">
-          {diff.files.map((file) => (
-            <DeviceDiffFileRow key={file.path} file={file} />
-          ))}
-          {diff.truncated && <li className="device-card__hint">{t('device.changesTruncated')}</li>}
-        </ul>
+        <>
+          <div className="device-diff__actions">
+            <span className="device-diff__note">{t('device.changesAppliedNote')}</span>
+            <button type="button" className="device-diff__action" onClick={copyPatch}>
+              <CopyIcon size={13} /> {t('device.copyDiff')}
+            </button>
+            <button type="button" className="device-diff__action" onClick={downloadPatch}>
+              ⤓ {t('device.downloadDiff')}
+            </button>
+          </div>
+          <ul className="device-diff__files">
+            {diff.files.map((file) => (
+              <DeviceDiffFileRow key={file.path} file={file} />
+            ))}
+            {diff.truncated && <li className="device-card__hint">{t('device.changesTruncated')}</li>}
+          </ul>
+        </>
       )}
     </div>
   );

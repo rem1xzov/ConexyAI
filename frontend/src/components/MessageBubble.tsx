@@ -18,6 +18,7 @@ import { AssistantContent } from './artifacts/AssistantContent';
 import { ProducedFiles } from './ProducedFiles';
 import { MessageActions } from './MessageActions';
 // WEB_DEVICE: добавлено 2026-10-18
+import { MessageExtras } from './ChatExtras';
 import { DeviceTurnExtras, DeviceQuestionCards } from './DeviceTurnExtras';
 import { VariantPager } from './VariantPager';
 import { CopyIcon, EditIcon, ShareIcon, TextSelectIcon } from './Icons';
@@ -451,6 +452,9 @@ function MessageBubbleBase({
       {/* WEB_DEVICE: добавлено 2026-10-18 — ожидание ПК и «Изменения на ПК» под ответом.
           Вопросы агента живут выше (DeviceQuestionCards), у начала ответа. */}
       <DeviceTurnExtras message={message} />
+
+      {/* CHAT_EXTRAS: источники, follow-up подсказки и артефакт с кодом под готовым ответом. */}
+      {message.status === 'complete' && !agentTurn && <MessageExtras message={message} />}
 
       {/* 5. Running light: last element of the message while generating, so it starts directly
           under the timeline and is pushed down as the answer grows. This is the ONLY stopwatch in

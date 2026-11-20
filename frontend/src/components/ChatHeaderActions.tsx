@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatSession } from '../types/chat';
 import { ConfirmDialog, PromptDialog } from './Dialog';
+import { getProject, setProject } from '../utils/projects';
 import { EditIcon, EyeIcon, EyeOffIcon, LightbulbIcon, PinIcon, PlusIcon, ShareIcon, ShieldIcon, ThreeDotsIcon, TrashIcon } from './Icons';
 
 // CHAT_ACTIONS: добавлено 2026-09-29 — действия шапки чата (новый чат, меню чата). Показываются,
@@ -20,6 +21,8 @@ interface ChatHeaderActionsProps {
   onHide: (id: string, hidden: boolean) => void;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
+  // CHAT_EXPORT: выгрузка диалога в Markdown.
+  onExport?: (session: ChatSession) => void;
 }
 
 export const ChatHeaderActions = memo(function ChatHeaderActions({
@@ -32,11 +35,14 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
   onHide,
   onRename,
   onDelete,
+  onExport,
 }: ChatHeaderActionsProps) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // PROJECTS: раскладка чата по локальным папкам.
+  const [projecting, setProjecting] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
 
   // Click/tap anywhere outside the menu closes it.
@@ -87,6 +93,19 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
             >
               <ShareIcon size={16} className="chats__menu-icon" /> {t('sidebar.share')}
             </button>
+            {onExport && (
+              <button
+                type="button"
+                role="menuitem"
+                className="chats__menu-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onExport(session);
+                }}
+              >
+                <span className="chats__menu-icon" aria-hidden="true">⤓</span> {t('message.exportMarkdown')}
+              </button>
+            )}
             {/* SHARE_ADMIN: передача чата админу с комментарием и скриншотом. */}
             <button
               type="button"
@@ -149,6 +168,17 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
               className="chats__menu-item"
               onClick={() => {
                 setMenuOpen(false);
+                setProjecting(true);
+              }}
+            >
+              <span className="chats__menu-icon" aria-hidden="true">▤</span> {t('extras.projectAssign')}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="chats__menu-item"
+              onClick={() => {
+                setMenuOpen(false);
                 setRenaming(true);
               }}
             >
@@ -168,6 +198,20 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
           </div>
         )}
       </div>
+
+      {projecting && (
+        <PromptDialog
+          title={t('extras.projectAssign')}
+          message={t('extras.projectAssignHint')}
+          placeholder={t('extras.projectName')}
+          initialValue={getProject(session.id)}
+          onSubmit={(value) => {
+            setProjecting(false);
+            setProject(session.id, value);
+          }}
+          onCancel={() => setProjecting(false)}
+        />
+      )}
 
       {renaming && (
         <PromptDialog

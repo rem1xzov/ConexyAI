@@ -52,6 +52,16 @@ import { ConexyLogo } from './components/ConexyLogo';
 import { ChatLayout, type ChatQuickChip } from './components/ChatLayout';
 import { ChatOptions } from './components/ChatOptions';
 // CURSOR_TRAIL: след из фирменных стрелок за курсором на пустом стартовом экране (только ПК).
+// CHAT_EXTRAS / UI_EXTRAS: источники и подсказки под ответом, прогресс плана, онбординг,
+// мобильная навигация, библиотека промптов и палитра быстрых действий.
+import { PlanProgress } from './components/ChatExtras';
+import {
+  MobileBottomNav,
+  OnboardingChecklist,
+  PromptLibrary,
+  QuickActionsPalette,
+  type QuickAction,
+} from './components/UiExtras';
 import { CursorTrail } from './components/CursorTrail';
 // GUEST_HERO: добавлено 2026-09-20
 import { GuestHero } from './components/GuestHero';
@@ -378,6 +388,9 @@ export default function App() {
   const [composerEdit, setComposerEdit] = useState<{ id: string; content: string } | null>(null);
   // USER_NAME: имя из настроек персонализации — им подписывается приветствие. Пусто — берём из email.
   const [preferredName, setPreferredName] = useState<string | null>(null);
+  // UI_EXTRAS: библиотека промптов и палитра быстрых действий (Ctrl+K / Ctrl+P).
+  const [promptLibOpen, setPromptLibOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   // UI_PREFERENCES: интерфейсные переключатели из «Персонализации» (эффект курсора и скрытие
   // элементов тулбара агента). По умолчанию всё выключено — до загрузки настроек ничего не мигает.
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(DEFAULT_UI_PREFERENCES);
@@ -2068,6 +2081,75 @@ export default function App() {
   const stageEmpty = chatEmpty && !authPending;
   const showIncognitoToggle = chatTab && chatEmpty && authenticated;
 
+  // UI_EXTRAS: горячие клавиши — Ctrl+K палитра действий, Ctrl+P библиотека промптов.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const typing = Boolean(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable));
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        setPromptLibOpen(true);
+      } else if (e.key === 'Escape') {
+        setPaletteOpen(false);
+        setPromptLibOpen(false);
+      } else if (e.key === '?' && !typing) {
+        setPaletteOpen(true);
+      }
+    }
+    function onOpenPrompts() {
+      setPromptLibOpen(true);
+    }
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('conexy:open-prompts', onOpenPrompts);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('conexy:open-prompts', onOpenPrompts);
+    };
+  }, []);
+
+  // CHAT_EXPORT: выгрузка текущего диалога в Markdown (пункт в меню чата).
+  function handleExportChat(session: ChatSession | null) {
+    if (!session) return;
+    const lines: string[] = [`# ${session.title}`, ''];
+    for (const m of session.messages) {
+      lines.push(m.role === 'user' ? '## Вы' : '## ConexyAI', '', m.content || '', '');
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(session.title || 'chat').replace(/[\\/:*?"<>|]+/g, '').slice(0, 60) || 'chat'}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(t('message.exported'));
+  }
+
+  // QUICK_ACTIONS: палитра Ctrl+K — те же действия, что в шапке/настройках, без поиска по меню.
+  const quickActions: QuickAction[] = [
+    { id: 'new-chat', label: t('sidebar.newChat'), hint: 'Ctrl+K', run: () => handleNewSession('chat') },
+    { id: 'agent', label: t('sidebar.tabs.agent'), run: () => handleTabChange('projects') },
+    { id: 'students', label: t('sidebar.tabs.students'), run: () => handleTabChange('students') },
+    { id: 'settings', label: t('account.settings'), run: () => setSettingsOpen(true) },
+    {
+      id: 'personalization',
+      label: t('prefs.tabPersonalization'),
+      run: () => {
+        setSettingsSection('personalization');
+        setSettingsOpen(true);
+      },
+    },
+    {
+      id: 'theme',
+      label: t('extras.actionTheme'),
+      run: () => handleThemeChange(theme === 'dark' ? 'light' : 'dark'),
+    },
+    { id: 'export', label: t('message.exportMarkdown'), run: () => handleExportChat(activeSession) },
+    { id: 'prompts', label: t('extras.promptsTitle'), hint: 'Ctrl+P', run: () => setPromptLibOpen(true) },
+  ];
+
   // TABS_UNIFIED: chips follow the tab. The chat tab offers real controls (model, smart
   // search); the agent tab shows passive hint chips instead — it runs autonomously and picks its
   // own reasoning depth. Students also shows hint chips, but its reasoning on/off switch is a real
@@ -3197,6 +3279,7 @@ export default function App() {
         onHide={(id, hidden) => void handleHideSession(id, hidden)}
         onRename={handleRenameSession}
         onDelete={(id) => guardLeave(() => void handleDeleteSession(id))}
+        onExport={handleExportChat}
       />
     ) : null;
 
@@ -3766,6 +3849,30 @@ export default function App() {
           по умолчанию выключен. */}
       {stageEmpty && !isMobile && uiPreferences.cursorTrail && <CursorTrail />}
 
+      {/* UI_EXTRAS: онбординг нового пользователя на пустом стартовом экране. */}
+      {stageEmpty && authenticated && !isMobile && (
+        <OnboardingChecklist
+          onNewChat={() => handleNewSession('chat')}
+          onOpenSettings={(section) => {
+            setSettingsSection(section);
+            setSettingsOpen(true);
+          }}
+        />
+      )}
+
+      {/* PLAN: компактный прогресс плана агентской задачи. */}
+      {isAgent && !isMobile && latestTodos.length > 0 && <PlanProgress todos={latestTodos} />}
+
+      {/* MOBILE_NAV: нижняя навигация на телефоне вместо постоянного drawer. */}
+      {isMobile && (
+        <MobileBottomNav
+          activeTab={activeTab}
+          onTabChange={(kind) => guardLeave(() => handleTabChange(kind))}
+          onNewChat={() => guardLeave(() => handleNewSession(activeTab))}
+          onSettings={() => setSettingsOpen(true)}
+        />
+      )}
+
       {toast && <div className="toast">{toast}</div>}
       {authError && <div className="toast toast--error">{authError}</div>}
 
@@ -3818,6 +3925,14 @@ export default function App() {
           onClose={() => setAuthModal(null)}
         />
       )}
+
+      {/* UI_EXTRAS: библиотека промптов и палитра быстрых действий. */}
+      <PromptLibrary open={promptLibOpen} onClose={() => setPromptLibOpen(false)} />
+      <QuickActionsPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        actions={quickActions}
+      />
 
       {/* WORKSPACE_DIRTY: добавлено 2026-09-24 — подтверждение ухода из чата с несохранёнными файлами. */}
       {pendingLeave && (

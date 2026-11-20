@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TeamAgent, TurnBlock, TurnThoughtBlock, TurnToolBlock } from '../types/chat';
 import type { CommandDecisionHandler, AgentCursorPayload, ToolActionEvent } from '../types/signalr';
+import { WebVerifyCard } from './ChatExtras';
 import { ActionStepLine, type ActionKind, type ActionState } from './ActionStepLine';
 import { ChevronDownIcon, GlobeIcon } from './Icons';
 import { CommandConfirmCard } from './CommandConfirmCard';
@@ -355,6 +356,19 @@ export function AgentTimeline({
         const event = toolEventFromBlock(block);
         const { action, label, path } = describeAction(event, t);
         const state = stateFrom(event);
+        // WEB_VERIFY_UI: проверка сайта в реальном браузере — отдельная карточка с PASS/FAIL,
+        // шагами и ошибками JS (как browser verification в Antigravity).
+        if (block.name === 'web_verify') {
+          return (
+            <WebVerifyCard
+              key={block.id}
+              command={block.command}
+              output={block.output}
+              summary={block.summary}
+              failed={block.status === 'error' || block.status === 'rejected'}
+            />
+          );
+        }
         return (
           <ActionStepLine
             key={block.id}

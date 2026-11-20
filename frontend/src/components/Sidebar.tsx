@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatSession, ChatSessionKind } from '../types/chat';
 import type { UserProfile } from '../types/api';
+import { listProjects, projectMap } from '../utils/projects';
 import { AccountWidget } from './AccountWidget';
 import { ConfirmDialog } from './Dialog';
 import {
@@ -16,6 +17,21 @@ import {
   TrashIcon,
   EyeOffIcon,
 } from './Icons';
+
+// SEARCH_FILTERS: подсветка совпадения в названии сессии.
+function highlightMatch(title: string, query: string) {
+  const q = query.trim().toLowerCase();
+  if (!q) return title;
+  const index = title.toLowerCase().indexOf(q);
+  if (index < 0) return title;
+  return (
+    <>
+      {title.slice(0, index)}
+      <mark>{title.slice(index, index + q.length)}</mark>
+      {title.slice(index + q.length)}
+    </>
+  );
+}
 
 interface SidebarProps {
   open: boolean;
@@ -102,6 +118,13 @@ export function Sidebar(props: SidebarProps) {
   // CONFIRM_DIALOGS: добавлено 2026-09-24 — удаление чата необратимо (история на сервере + файлы
   // рабочей области), поэтому пункт меню только открывает подтверждение, а не удаляет сразу.
   const [pendingDelete, setPendingDelete] = useState<ChatSession | null>(null);
+  // SEARCH_FILTERS: при поиске можно сузить до конкретного типа сессии, а не листать всё подряд.
+  const [kindFilter, setKindFilter] = useState<'all' | ChatSessionKind>('all');
+  // PROJECTS: локальные папки чатов; фильтр и список читаются из localStorage.
+  const [projectFilter, setProjectFilter] = useState<string>('all');
+  const [, setProjectsTick] = useState(0);
+  const projects = listProjects();
+  const tags = projectMap();
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -116,11 +139,22 @@ export function Sidebar(props: SidebarProps) {
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, []);
 
+  // PROJECTS: перерисовываемся, когда чат переложили в другую папку из меню.
+  useEffect(() => {
+    function onChange() {
+      setProjectsTick((v) => v + 1);
+    }
+    window.addEventListener('conexy:projects-changed', onChange);
+    return () => window.removeEventListener('conexy:projects-changed', onChange);
+  }, []);
+
   const query = search.trim().toLowerCase();
   // UNIFIED_SEARCH: поиск ищет по ВСЕМ типам сессий (чат/агент/ученики), а не только по активной
   // вкладке — одна строка поиска на весь аккаунт. Без поиска вкладки остаются фильтром.
   const filtered = [...sessions]
     .filter((s) => (query ? true : (s.kind ?? 'chat') === activeTab))
+    .filter((s) => (query && kindFilter !== 'all' ? (s.kind ?? 'chat') === kindFilter : true))
+    .filter((s) => (projectFilter === 'all' ? true : (tags[s.id] ?? '') === projectFilter))
     .filter((s) => !query || s.title.toLowerCase().includes(query))
     .sort(
       (a, b) =>
@@ -223,6 +257,50 @@ export function Sidebar(props: SidebarProps) {
             <PlusIcon size={16} /> {newLabel}
           </button>
 
+          {/* SEARCH_FILTERS: чипы типов появляются только во время поиска. */}
+          {query && (
+            <div className="search-filters">
+              {([
+                ['all', t('extras.filterAll')],
+                ['chat', t('sidebar.tabs.chat')],
+                ['projects', t('sidebar.tabs.agent')],
+                ['students', t('sidebar.tabs.students')],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`search-filter${kindFilter === value ? ' search-filter--active' : ''}`}
+                  onClick={() => setKindFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* PROJECTS: фильтр по локальным папкам, если они появились. */}
+          {!query && projects.length > 0 && (
+            <div className="search-filters">
+              <button
+                type="button"
+                className={`search-filter${projectFilter === 'all' ? ' search-filter--active' : ''}`}
+                onClick={() => setProjectFilter('all')}
+              >
+                {t('extras.filterAll')}
+              </button>
+              {projects.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  className={`search-filter${projectFilter === name ? ' search-filter--active' : ''}`}
+                  onClick={() => setProjectFilter(name)}
+                >
+                  ▤ {name}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="chats">
             <div className="chats__label">{listLabel}</div>
             {filtered.length === 0 ? (
@@ -257,7 +335,7 @@ export function Sidebar(props: SidebarProps) {
                           setOpenMenuId(null);
                         }}
                       >
-                        <span className="chats__title">{s.title}</span>
+                        <span className="chats__title">{highlightMatch(s.title, query)}</span>
                         {query && (s.kind ?? 'chat') !== activeTab && (
                           <span className="chats__kind">
                             {t(
@@ -269,6 +347,7 @@ export function Sidebar(props: SidebarProps) {
                             )}
                           </span>
                         )}
+                        {tags[s.id] && <span className="chats__project">▤ {tags[s.id]}</span>}
                         {/* CHAT_PIN_ICON: булавка стоит в конце строки (как в референсе) — закреплённый
                             чат видно сразу, а не только по порядку в списке. */}
                         {s.isPinned && (
