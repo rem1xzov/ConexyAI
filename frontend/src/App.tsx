@@ -46,7 +46,7 @@ import { StatusBar, type AgentStatus } from './components/StatusBar';
 import { ConnectionBanner } from './components/ConnectionBanner';
 // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
 // import { LiveVoiceModal } from './components/LiveVoiceModal';
-import { MenuLinesIcon, PanelRightCloseIcon, PanelRightOpenIcon, EyeOffIcon, PlusIcon } from './components/Icons';
+import { MenuLinesIcon, PanelRightCloseIcon, PanelRightOpenIcon, GhostIcon } from './components/Icons';
 // LOGO_SWEEP / CLAUDE_LAYOUT: добавлено 2026-09-20
 import { ConexyLogo } from './components/ConexyLogo';
 import { ChatLayout, type ChatQuickChip } from './components/ChatLayout';
@@ -3269,12 +3269,12 @@ export default function App() {
       aria-label={t('chat.incognito')}
       title={t('chat.incognitoHint')}
     >
-      <EyeOffIcon size={isMobile ? 20 : 15} />
+      <GhostIcon size={isMobile ? 22 : 15} />
       {!isMobile && <span>{t('chat.incognito')}</span>}
     </button>
   ) : incognitoActive && !isMobile ? (
     <span className="incognito-badge" title={t('chat.incognitoHint')}>
-      <EyeOffIcon size={15} />
+      <GhostIcon size={15} />
       <span>{t('chat.incognito')}</span>
     </span>
   ) : null;
@@ -3644,17 +3644,6 @@ export default function App() {
                   />
                 </div>
                 <div className="chat-header__actions">
-                  {/* MOBILE_NEW: плюс виден всегда; плюс из ChatHeaderActions на телефоне скрыт CSS,
-                      чтобы не было двух одинаковых кнопок. */}
-                  <button
-                    type="button"
-                    className="chat-actions__btn mobile-new-btn"
-                    onClick={() => guardLeave(() => handleNewSession(activeTab))}
-                    aria-label={t('sidebar.newChat')}
-                    title={t('sidebar.newChat')}
-                  >
-                    <PlusIcon size={18} />
-                  </button>
                   {isAgent ? (
                     /* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */
                     <UsageIndicator usage={usage} />
