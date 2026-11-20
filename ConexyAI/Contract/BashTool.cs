@@ -16,6 +16,13 @@ public class BashToolRequest
     [JsonPropertyName("timeout_seconds")]
     public int? TimeoutSeconds { get; set; }
 
+    // BACKGROUND_JOB: добавлено 2026-11-20 (идея DeepSeek Harness, promoteOnTimeout/jobs) — длинную
+    // команду (установка зависимостей, docker build, большой прогон) можно не ждать: контейнер
+    // запускается отдельно и живёт после ответа инструмента, вывод читается job_output, остановка —
+    // job_kill. Одноразовый bash-контейнер при обычном вызове по-прежнему убивает фоновые процессы.
+    [JsonPropertyName("run_in_background")]
+    public bool? RunInBackground { get; set; }
+
     // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
     /// <summary>Correlates the completion event with its pending confirmation card.</summary>
     [JsonPropertyName("pending_action_id")]

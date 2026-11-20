@@ -291,7 +291,10 @@ public static class AgentToolCatalog
         Tool("bash",
             "Run a shell command in the isolated one-shot sandbox. The workspace root is the working " +
             "directory, so no 'cd' is needed, and every process started in the background dies when " +
-            "the call returns. Use it for builds, package managers, git and file utilities. Do NOT " +
+            "the call returns — for a long command (dependency install, docker build, big run) pass " +
+            "`run_in_background: true`: it starts a detached container and returns a job id, read it " +
+            "with `job_output` and stop it with `job_kill`. Use it for builds, package managers, git and " +
+            "file utilities. Do NOT " +
             "use it to read, search or write files — `read`, `grep`, `glob`, `edit`, `apply_patch` " +
             "exist for that, and the shell forms (cat, head, sed, Get-Content, Out-File) are refused " +
             "with a pointer. Tests go to `run_tests`, type checks to `get_diagnostics`, " +
@@ -303,7 +306,28 @@ public static class AgentToolCatalog
                 ["command"] = Str("Shell command to run."),
                 ["description"] = Str("What the command does in plain words, positive form: 'Build the project', 'Install dependencies'. The user sees this instead of the flags."),
                 ["timeout_seconds"] = Int("Optional timeout in seconds (default 60, max 300).", 1, 300, 60),
+                // BACKGROUND_JOB: длинную команду не ждём и не обрываем таймаутом.
+                ["run_in_background"] = Bool("Run a long command detached, return a job id immediately and keep working (read with job_output, stop with job_kill).", false),
             }, "command", "description")),
+
+        // BACKGROUND_JOB: фоновые задачи серверной песочницы (долгие сборки/установки/прогоны).
+        Tool("job_output",
+            "Read the status and the latest output of a long command started with `bash` and " +
+            "`run_in_background: true`. Call it again to follow progress; a finished job returns its " +
+            "final output and is cleaned up. Shows at most `lines` tail lines (default 80, max 400) — " +
+            "if the output is longer, write it to a file inside the command and read the file instead.",
+            Object(new()
+            {
+                ["job_id"] = Str("Job id returned by the bash call that started the background job."),
+                ["lines"] = Int("Tail lines of output to show (default 80, max 400).", 1, 400, 80),
+            }, "job_id")),
+
+        Tool("job_kill",
+            "Stop a background job started with `bash` and `run_in_background: true` and remove its container.",
+            Object(new()
+            {
+                ["job_id"] = Str("Job id returned by the bash call that started the background job."),
+            }, "job_id")),
 
         Tool("run_tests",
             "Run the project's tests and return a STRUCTURED report — pass/fail counts and, per " +
@@ -519,7 +543,7 @@ public static class AgentToolCatalog
         ["grep"] = "Use `grep` to find code by content; do not escape to the shell for search. Search by identifier for code, by a plain word for a concept.",
         ["glob"] = "Use `glob` to discover file paths before reading them.",
         ["repo_map"] = "Start a task in an unfamiliar project with `repo_map` — it is already built and is much cheaper than listing and reading files. Then read or grep only the files it points to.",
-        ["bash"] = "Use `bash` for builds, package managers, git and tests; reading, searching and writing files goes through `read`, `grep`, `edit` and `apply_patch`. If the same failure comes back twice with different arguments, the arguments are not the cause: verify the fact with another tool, or ask the user.",
+        ["bash"] = "Use `bash` for builds, package managers, git and tests; reading, searching and writing files goes through `read`, `grep`, `edit` and `apply_patch`. If the same failure comes back twice with different arguments, the arguments are not the cause: verify the fact with another tool, or ask the user. A long command (install, big build) starts with `run_in_background: true` and is read with `job_output`.",
         ["run_tests"] = "After changing code run `run_tests` instead of guessing that it works.",
         ["agents_status"] = "Check the team with `agents_status` at least once a minute while helpers run; do not poll it in a tight loop.",
     };

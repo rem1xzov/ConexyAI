@@ -1769,6 +1769,14 @@ sealed class FakeSandboxRunner : IDockerSandboxRunner
         CancellationToken ct = default,
         string? sessionStateHostPath = null) =>
         Task.FromResult(new SandboxExecutionResult(true, 0, string.Empty, false, null));
+
+    // BACKGROUND_JOB: фоновый запуск в тестовой песочнице считается успешным без контейнера.
+    public Task<(bool Ok, string Output)> StartBackgroundAsync(
+        string command,
+        string workspaceHostPath,
+        string? sessionStateHostPath,
+        string containerName,
+        CancellationToken ct = default) => Task.FromResult((true, string.Empty));
 }
 
 // SANDBOX_SESSIONS: добавлено 2026-09-23 — заглушка хранилища состояния песочницы для тестов,

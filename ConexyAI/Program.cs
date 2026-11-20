@@ -340,6 +340,8 @@ builder.Services.AddScoped<IDocumentService, DocumentService>();
 builder.Services.AddSingleton<DockerSandboxRunner>();
 builder.Services.AddSingleton<IDockerSandboxRunner>(sp => sp.GetRequiredService<DockerSandboxRunner>());
 builder.Services.AddSingleton<IDockerServiceRunner>(sp => sp.GetRequiredService<DockerSandboxRunner>());
+// BACKGROUND_JOB: добавлено 2026-11-20 — фоновые задачи серверной песочницы (bash run_in_background).
+builder.Services.AddSingleton<ConexyAI.Service.IBackgroundJobService, ConexyAI.Service.BackgroundJobService>();
 // PREVIEW: долгоживущие сервисы агента (start_service) + шлюз превью.
 builder.Services.AddSingleton<IPreviewService, PreviewService>();
 builder.Services.AddHttpClient("preview", c => c.Timeout = TimeSpan.FromSeconds(60))

@@ -25,6 +25,15 @@ public interface IDockerSandboxRunner
         TimeSpan timeout,
         CancellationToken ct = default,
         string? sessionStateHostPath = null);
+
+    // BACKGROUND_JOB: добавлено 2026-11-20 — запускает команду в отдельном контейнере и сразу
+    // возвращается. Контейнер живёт после ответа инструмента; логи/остановка — через job_output/job_kill.
+    Task<(bool Ok, string Output)> StartBackgroundAsync(
+        string command,
+        string workspaceHostPath,
+        string? sessionStateHostPath,
+        string containerName,
+        CancellationToken ct = default);
 }
 
 /// <summary>
@@ -150,6 +159,29 @@ public class DockerSandboxRunner : IDockerSandboxRunner, IDockerServiceRunner
         {
             return false;
         }
+    }
+
+    public async Task<(bool Ok, string Output)> StartBackgroundAsync(
+        string command,
+        string workspaceHostPath,
+        string? sessionStateHostPath,
+        string containerName,
+        CancellationToken ct = default)
+    {
+        if (!await IsDockerAvailableAsync(ct))
+            return (false, "Sandbox unavailable: Docker daemon is required to execute terminal commands safely.");
+
+        var runResult = await StartContainerAsync(command, workspaceHostPath, sessionStateHostPath, containerName, ct);
+        if (runResult.ExitCode != 0 && DisableNetworkAfterMissingNetwork(runResult.Output))
+            runResult = await StartContainerAsync(command, workspaceHostPath, sessionStateHostPath, containerName, ct);
+
+        if (runResult.ExitCode != 0)
+        {
+            await TryRemoveContainerAsync(containerName);
+            return (false, runResult.Output.Trim());
+        }
+
+        return (true, string.Empty);
     }
 
     public async Task<SandboxExecutionResult> RunAsync(

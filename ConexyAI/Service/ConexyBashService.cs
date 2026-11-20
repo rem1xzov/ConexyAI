@@ -33,6 +33,8 @@ public class ConexyBashService : IConexyBashService
     // словарь семафоров жил в scoped-сервисе, то есть в каждом scope свой, и ничего не сериализовал;
     // заодно файловый API знает, что в воркспейсе идёт команда (ревью C2).
     private readonly ISandboxActivity _activity;
+    // BACKGROUND_JOB: фоновые задачи (см. BackgroundJobService); null — окружение без Docker/job-подсистемы.
+    private readonly IBackgroundJobService? _backgroundJobs;
 
     private const int MaxTimeoutSeconds = 300;
     private const int DefaultTimeoutSeconds = 30;
@@ -45,9 +47,13 @@ public class ConexyBashService : IConexyBashService
         IHubContext<ConexyHub> hubContext,
         ILogger<ConexyBashService> logger,
         ISandboxSessionStore sandboxSessions,
-        ISandboxActivity? activity = null)
+        ISandboxActivity? activity = null,
+        // BACKGROUND_JOB: добавлено 2026-11-20 — необязательная зависимость, чтобы старые тесты
+        // продолжали собирать сервис без неё.
+        IBackgroundJobService? backgroundJobs = null)
     {
         _activity = activity ?? new SandboxActivity();
+        _backgroundJobs = backgroundJobs;
         _workspaceService = workspaceService;
         _sandbox = sandbox;
         _hubContext = hubContext;
@@ -107,6 +113,29 @@ public class ConexyBashService : IConexyBashService
     {
         if (string.IsNullOrWhiteSpace(request.Command))
             return new BashToolResult { Success = false, ExitCode = -1, Output = "", ErrorType = "spawn_failed" };
+
+        // BACKGROUND_JOB: долгую команду не ждём и не обрываем таймаутом — отдельный контейнер живёт
+        // после ответа инструмента; слот команды на воркспейс НЕ занимается (задача долгая по смыслу).
+        if (request.RunInBackground == true)
+        {
+            if (_backgroundJobs is null)
+                return new BashToolResult
+                {
+                    Success = false,
+                    ExitCode = -1,
+                    Output = "Фоновые задачи недоступны в этом окружении: запусти команду без run_in_background.",
+                    ErrorType = "spawn_failed",
+                };
+
+            var job = await _backgroundJobs.StartAsync(sessionId, request.Command, ct);
+            return new BashToolResult
+            {
+                Success = job.Started,
+                ExitCode = job.Started ? 0 : -1,
+                Output = job.Message,
+                ErrorType = job.Started ? null : "spawn_failed",
+            };
+        }
 
         var workspacePath = _workspaceService.GetTaskWorkspacePathIfExists(sessionId);
         if (workspacePath is null)
