@@ -56,8 +56,29 @@ public static class AgentToolCatalog
                     minItems: 2, maxItems: 4),
             }, "agents")),
 
-        Tool("team_message",
-            "Send a message or an artifact to another agent of this run: a helper role, or 'lead' " +
+        // WORKFLOW: план задач с зависимостями — волны параллельных помощников.
+        Tool("workflow_run",
+            "Run a structured plan of 2-4 helper agents with explicit dependencies. Tasks run in waves: " +
+            "independent tasks of one wave execute in parallel, and the next wave receives the reports of " +
+            "the tasks it depends on directly in its brief. Use it when the work has real ordering " +
+            "(backend + frontend, then QA after both); for two simple independent helpers prefer `spawn_agents`.",
+            Object(new()
+            {
+                ["tasks"] = Array(
+                    "Tasks of the plan (2-4). 'after' lists task ids that must finish first; 'scope' lists path prefixes the task may change.",
+                    Object(new()
+                    {
+                        ["id"] = Str("Short unique task id (up to 40 chars), e.g. 'backend' or 'qa'."),
+                        ["title"] = Str("Human-readable task title."),
+                        ["brief"] = Str("Self-contained task: what to do and what to return."),
+                        ["after"] = Array("Task ids that must finish before this one starts.", Str("Task id from this same plan.")),
+                        ["scope"] = Array("Path prefixes this task may change (non-empty and preferably disjoint).", Str("Path prefix, e.g. 'ConexyAI/Service'."), minItems: 1),
+                        ["preset"] = Enum("Optional preset: default (all tools), researcher (read-only), reviewer (read + tests, no edits).", "default", "researcher", "reviewer"),
+                    }, "id", "title", "brief", "scope"),
+                    minItems: 2, maxItems: 4),
+            }, "tasks")),
+
+        Tool("team_message",            "Send a message or an artifact to another agent of this run: a helper role, or 'lead' " +
             "for the leading agent. Use it to hand a dependent result to a helper or to ask for a " +
             "clarification, then continue your own work — do not wait for the reply.",
             Object(new()
@@ -580,6 +601,7 @@ public static class AgentToolCatalog
         ["run_tests"] = "After changing code run `run_tests` instead of guessing that it works.",
         ["agents_status"] = "Check the team with `agents_status` at least once a minute while helpers run; do not poll it in a tight loop.",
         ["interrupt_agent"] = "Stop one looping or wrong-way helper with `interrupt_agent` instead of waiting for it; the others keep working.",
+        ["workflow_run"] = "Use `workflow_run` when the work has real ordering between areas (backend/frontend, then QA after both); plain independent helpers go through `spawn_agents`.",
     };
 
     /// <summary>Подсказки выбора для выданного набора схем (в порядке каталога).</summary>

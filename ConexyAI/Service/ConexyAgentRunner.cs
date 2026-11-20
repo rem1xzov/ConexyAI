@@ -497,6 +497,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private const string GoalBlockTool = "goal_block";
     // TEAM_CONTROL: точечная остановка одного помощника, не убивая остальную команду.
     private const string InterruptAgentTool = "interrupt_agent";
+    // WORKFLOW: структурированный фан-аут с зависимостями между задачами.
+    private const string WorkflowRunTool = "workflow_run";
     /// <summary>
     /// WEB_PARALLEL: страницы, запрошенные в одном ответе, читаются одновременно (только
     /// <c>fetch_web_page</c> — инструменты с побочными эффектами так не запускаются).
@@ -3064,7 +3066,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         // TEAM_CONTROL: точечная остановка помощника — только ведущему.
                         : tool == InterruptAgentTool
                             ? SubagentPolicy.AgentsStatusAllowed(_job, _profile.Mode)
-                            : _profile.Allows(tool)) &&
+                            // WORKFLOW: план задач с зависимостями — то же право, что у spawn_agents (ведущий).
+                            : tool == WorkflowRunTool
+                                ? SubagentPolicy.SpawnAllowed(_job, _profile.Mode)
+                                : _profile.Allows(tool)) &&
         // INCOGNITO_CHAT: an incognito turn must not read the user's other conversations, the same
         // rule the conversation service applies to memory and the cross-chat digest.
         !(tool == SearchUserChatsTool && _job.Incognito);
@@ -3594,6 +3599,88 @@ public class ConexyAgentRunner : IConexyAgentRunner
     /// Каждый помощник идёт в СВОЁМ scope и своём экземпляре раннера: состояние прогона
     /// (<c>_job</c>, профиль, буфер ответа) неделимо, а параллельные агенты не должны его делить.
     /// </summary>
+    // WORKFLOW: добавлено 2026-11-20 (идея DeepSeek Harness, packages/workflow) — структурированный
+    // фан-аут: план задач с `after`-зависимостями исполняется волнами. Внутри волны задачи идут
+    // параллельно (каждая — свой scope раннера, глубина 1), следующая волна получает отчёты предыдущих
+    // прямо в задание. Бюджеты команды общие: один вызов spawn-бюджета и не больше 4 помощников.
+    private async Task<ConexyToolResult> RunWorkflowAsync(
+        Guid taskId, Guid chatId, JsonElement root, string toolCallId, CancellationToken ct)
+    {
+        if (!root.TryGetProperty("tasks", out var tasksElement))
+            return new ConexyToolResult(toolCallId, "workflow_run требует 'tasks' — список задач (2–4).", true);
+
+        var plan = WorkflowPlan.TryParse(tasksElement, out var parseError);
+        if (plan is null)
+            return new ConexyToolResult(toolCallId, "workflow_run: " + parseError, true);
+
+        if (_scopeFactory is null)
+            return new ConexyToolResult(toolCallId, "workflow_run недоступен в этом окружении.", true);
+
+        if (_spawnCalls >= MaxSpawnCallsPerRun)
+            return new ConexyToolResult(toolCallId,
+                "workflow_run: лимит запусков команды в этом прогоне исчерпан. Доделай остальное сам.", true);
+        var helpersLeft = MaxTeamHelpersPerRun - _teamHelpers;
+        if (plan.Steps.Count > helpersLeft)
+            return new ConexyToolResult(toolCallId,
+                $"workflow_run: в прогоне уже занято {_teamHelpers} помощников из {MaxTeamHelpersPerRun}; " +
+                $"для плана нужно ещё {plan.Steps.Count}. Сократи план или работай сам.", true);
+
+        _spawnCalls++;
+        _teamHelpers += plan.Steps.Count;
+        _teamSpawned = true;
+
+        var group = _hubContext.Clients.Group($"task_{taskId}");
+        await group.SendAsync("OnLog", $"[Workflow] План из {plan.Steps.Count} задач: " +
+                                        string.Join(", ", plan.Steps.Select(step => step.Id)), ct);
+
+        var reports = new Dictionary<string, string>(StringComparer.Ordinal);
+        var steps = plan.Steps.ToDictionary(step => step.Id, StringComparer.Ordinal);
+        var waves = plan.Waves();
+        foreach (var wave in waves)
+        {
+            await group.SendAsync("OnLog", $"[Workflow] Волна: {string.Join(", ", wave)}", ct);
+            var results = await Task.WhenAll(wave.Select(id => RunWorkflowStepAsync(steps[id], reports, ct)));
+            for (var index = 0; index < wave.Count; index++)
+                reports[wave[index]] = results[index];
+        }
+
+        var builder = new StringBuilder();
+        builder.Append("[Workflow] Выполнено задач: ").Append(reports.Count).Append(" за ")
+            .Append(waves.Count).Append(" волн(ы).\n");
+        foreach (var step in plan.Steps)
+        {
+            builder.Append("\n## ").Append(step.Id).Append(" — ").Append(step.Title).Append('\n');
+            builder.Append(reports.TryGetValue(step.Id, out var report) ? Truncate(report, 2_500) : "(нет отчёта)");
+        }
+        var overlaps = plan.ScopeOverlaps();
+        if (overlaps.Count > 0)
+            builder.Append("\n\n[Предупреждение] Пересекаются области записи: ").Append(string.Join("; ", overlaps))
+                .Append(". Проверь, что задачи не перезаписали друг друга.");
+        return new ConexyToolResult(toolCallId, builder.ToString().TrimEnd(), false);
+
+        async Task<string> RunWorkflowStepAsync(WorkflowStep step, IReadOnlyDictionary<string, string> done, CancellationToken token)
+        {
+            try
+            {
+                using var scope = _scopeFactory!.CreateScope();
+                var runner = scope.ServiceProvider.GetRequiredService<IConexyAgentRunner>();
+                var identity = new AgentIdentity("wf-" + step.Id, step.Title, step.Scope);
+                var brief = WorkflowPlan.BuildStepBrief(step, done);
+                var text = await runner.RunWorkerAsync(_job, identity, brief, token, preset: step.Preset);
+                return string.IsNullOrWhiteSpace(text) ? "(готово, без отчёта)" : text.Trim();
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Workflow step {StepId} failed. task={TaskId}", step.Id, taskId);
+                return $"ошибка: {ex.Message}";
+            }
+        }
+    }
+
     private async Task<ConexyToolResult> SpawnAgentsAsync(
         Guid taskId,
         Guid chatId,
@@ -4383,6 +4470,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 case SpawnAgentsTool:
                 {
                     return await SpawnAgentsAsync(taskId, chatId, root, toolCall.Id, ct);
+                }
+
+                // WORKFLOW: план задач с зависимостями — волны параллельных помощников, отчёты зависимостей
+                // передаются в задание следующей волны.
+                case WorkflowRunTool:
+                {
+                    return await RunWorkflowAsync(taskId, chatId, root, toolCall.Id, ct);
                 }
 
                 // BACKGROUND_AGENTS: отчёты фоновых помощников — по запросу, а не внутри spawn_agents.

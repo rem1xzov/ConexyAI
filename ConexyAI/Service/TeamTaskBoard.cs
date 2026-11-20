@@ -101,6 +101,39 @@ public static class TeamTaskBoard
         return task with { Status = TeamTaskStatus.Completed, Revision = task.Revision + 1 };
     }
 
+    /// <summary>
+    /// Волны выполнения: в каждой волне задачи независимы и могут идти параллельно, все зависимости
+    /// волны уже завершены предыдущими волнами. Пустой список — цикл (планировать нельзя).
+    /// </summary>
+    public static IReadOnlyList<IReadOnlyList<string>> ExecutionWaves(IReadOnlyList<TeamTask> tasks)
+    {
+        var pending = tasks.ToDictionary(
+            task => task.Id,
+            task => new HashSet<string>(task.DependsOn ?? [], StringComparer.Ordinal),
+            StringComparer.Ordinal);
+        var done = new HashSet<string>(StringComparer.Ordinal);
+        var waves = new List<IReadOnlyList<string>>();
+
+        while (pending.Count > 0)
+        {
+            var wave = pending
+                .Where(pair => pair.Value.All(dependency => done.Contains(dependency)))
+                .Select(pair => pair.Key)
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToList();
+            if (wave.Count == 0)
+                break;
+            waves.Add(wave);
+            foreach (var id in wave)
+            {
+                done.Add(id);
+                pending.Remove(id);
+            }
+        }
+
+        return waves;
+    }
+
     private static IReadOnlyList<IReadOnlyList<string>> FindCycle(IReadOnlyList<TeamTask> tasks)
     {
         var cycles = new List<IReadOnlyList<string>>();
