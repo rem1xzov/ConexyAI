@@ -13310,3 +13310,14 @@ body::before {
     padding-bottom: 0;
   }
 }
+
+/* COMPOSER_BUTTONS_ORDER: в многострочном композере кнопка промптов должна стоять в правой группе
+   рядом с микрофоном, а не висеть по центру: «+» слева, затем [промпты][микрофон][отправить] справа. */
+@media (max-width: 820px) {
+  .inputbar--expanded .prompt-btn {
+    margin-left: auto;
+  }
+  .inputbar--expanded .mic-btn:not(.prompt-btn) {
+    margin-left: 0;
+  }
+}
