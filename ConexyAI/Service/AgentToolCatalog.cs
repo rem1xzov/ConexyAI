@@ -350,6 +350,16 @@ public static class AgentToolCatalog
                 ["reason"] = Str("Concrete external blocker: what exactly prevents progress and what the user must do."),
             }, "reason")),
 
+        // TEAM_CONTROL: точечная остановка застрявшего помощника.
+        Tool("interrupt_agent",
+            "Stop ONE helper agent of the current team without touching the others (for a helper that loops or " +
+            "went the wrong way). Pass its role exactly as it appears in `agents_status`; the stopped helper's " +
+            "partial report stays available there. Do not use it to avoid waiting for normal work.",
+            Object(new()
+            {
+                ["role"] = Str("Role of the helper to stop, as listed by agents_status."),
+            }, "role")),
+
         Tool("run_tests",
             "Run the project's tests and return a STRUCTURED report — pass/fail counts and, per " +
             "failure, its name, file:line and expected/actual — instead of raw logs. The framework " +
@@ -569,6 +579,7 @@ public static class AgentToolCatalog
         ["bash"] = "Use `bash` for builds, package managers, git and tests; reading, searching and writing files goes through `read`, `grep`, `edit` and `apply_patch`. If the same failure comes back twice with different arguments, the arguments are not the cause: verify the fact with another tool, or ask the user. A long command (install, big build) starts with `run_in_background: true` and is read with `job_output`.",
         ["run_tests"] = "After changing code run `run_tests` instead of guessing that it works.",
         ["agents_status"] = "Check the team with `agents_status` at least once a minute while helpers run; do not poll it in a tight loop.",
+        ["interrupt_agent"] = "Stop one looping or wrong-way helper with `interrupt_agent` instead of waiting for it; the others keep working.",
     };
 
     /// <summary>Подсказки выбора для выданного набора схем (в порядке каталога).</summary>

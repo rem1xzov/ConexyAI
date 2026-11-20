@@ -492,6 +492,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // GOAL: инструменты, которыми агент закрывает долгоживущую цель.
     private const string GoalCompleteTool = "goal_complete";
     private const string GoalBlockTool = "goal_block";
+    // TEAM_CONTROL: точечная остановка одного помощника, не убивая остальную команду.
+    private const string InterruptAgentTool = "interrupt_agent";
     /// <summary>
     /// WEB_PARALLEL: страницы, запрошенные в одном ответе, читаются одновременно (только
     /// <c>fetch_web_page</c> — инструменты с побочными эффектами так не запускаются).
@@ -3046,7 +3048,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     ? SubagentPolicy.TeamMessageAllowed(_job, _profile.Mode)
                     : tool == AgentsStatusTool
                         ? SubagentPolicy.AgentsStatusAllowed(_job, _profile.Mode)
-                        : _profile.Allows(tool)) &&
+                        // TEAM_CONTROL: точечная остановка помощника — только ведущему.
+                        : tool == InterruptAgentTool
+                            ? SubagentPolicy.AgentsStatusAllowed(_job, _profile.Mode)
+                            : _profile.Allows(tool)) &&
         // INCOGNITO_CHAT: an incognito turn must not read the user's other conversations, the same
         // rule the conversation service applies to memory and the cross-chat digest.
         !(tool == SearchUserChatsTool && _job.Incognito);
@@ -3878,11 +3883,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var last = WorkerActivity.TryGetValue((taskId, worker.Id), out var seen) ? seen : worker.StartedAt;
             var idle = (int)(now - last).TotalSeconds;
             var state = worker.Cancelled
-                ? "остановлен"
+                ? "остановлен ведущим"
                 : worker.Failed
                     ? "ошибка"
                     : finished ? "готово" : idle >= WorkerSilenceSeconds ? "завис" : "работает";
-            sb.AppendLine($"## {worker.Role} ({worker.Id}): {state}");
+            sb.AppendLine(TeamControl.StatusLine(worker.Role, worker.Id, state));
             if (!finished)
                 sb.AppendLine($"последнее действие: {idle} с назад" +
                               (WorkerLabels.TryGetValue((taskId, worker.Id), out var label) ? $" · {label}" : string.Empty));
@@ -4371,6 +4376,27 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 case AgentsStatusTool:
                 {
                     return await AgentsStatusAsync(taskId, root, toolCall.Id, ct);
+                }
+
+                // TEAM_CONTROL: остановить одного застрявшего помощника, остальные продолжают работу.
+                case InterruptAgentTool:
+                {
+                    if (!TeamRuns.TryGetValue(taskId, out var interruptRun))
+                        return new ConexyToolResult(toolCall.Id, "Команда не запускалась: останавливать некого.", true);
+
+                    var requestedRole = GetString(root, "role");
+                    var roles = interruptRun.Workers.Select(w => w.Role).ToList();
+                    var role = TeamControl.ResolveRole(roles, requestedRole);
+                    if (role is null)
+                        return new ConexyToolResult(toolCall.Id, TeamControl.Refusal(roles, requestedRole), true);
+
+                    var target = interruptRun.Workers.First(w => string.Equals(w.Role, role, StringComparison.Ordinal));
+                    target.Cancelled = true;
+                    try { target.Cts?.Cancel(); } catch (ObjectDisposedException) { }
+                    await LogAsync(taskId, $"[team] остановлен помощник {role} ({target.Id})", ct);
+                    return new ConexyToolResult(toolCall.Id,
+                        $"Помощник '{role}' ({target.Id}) остановлен. Его отчёт (если уже собрал что-то) виден в agents_status; " +
+                        "его часть задачи доделай сам или отдай новому помощнику.", false);
                 }
 
                 // ORCHESTRA: передача сообщения/артефакта другому агенту команды.
