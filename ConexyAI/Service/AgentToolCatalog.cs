@@ -50,6 +50,8 @@ public static class AgentToolCatalog
                         ["after"] = Array("Roles that must finish first. Use it for a checker (qa, review) so it tests the finished work, not an empty tree.", Str("Role name of a helper in this same call.")),
                         // LOCAL_WORKER: локальная модель пользователя как отдельный помощник.
                         ["local"] = Bool("Run this helper on the user's local model instead of the cloud (only when the server has it configured).", false),
+                        // WORKER_PRESETS: ограничение инструментов помощника (чтение/проверка без правок).
+                        ["preset"] = Enum("Optional helper preset: default (all tools), researcher (read/search/web only, no file changes or commands), reviewer (read + run_tests/get_diagnostics, no edits).", "default", "researcher", "reviewer"),
                     }, "role", "brief", "scope"),
                     minItems: 2, maxItems: 4),
             }, "agents")),

@@ -18,7 +18,8 @@ public interface IConexyAgentRunner
     // (роль + scope + полный набор инструментов). Возвращает его отчёт; используется spawn_agents.
     // LOCAL_WORKER: добавлено 2026-11-19 — помощник может работать на локальной модели пользователя
     // (на сервере или на его ПК через device-канал; готовый маршрут передаётся отдельно).
-    Task<string> RunWorkerAsync(ConexyJob job, AgentIdentity identity, string brief, CancellationToken ct = default, bool localModel = false, LlmRoute? routeOverride = null);
+    // WORKER_PRESETS: добавлено 2026-11-20 — пресет ограничивает набор инструментов помощника.
+    Task<string> RunWorkerAsync(ConexyJob job, AgentIdentity identity, string brief, CancellationToken ct = default, bool localModel = false, LlmRoute? routeOverride = null, WorkerPreset preset = WorkerPreset.Default);
 
     // PARTIAL_TURN_PERSIST: добавлено 2026-09-22
     /// <summary>

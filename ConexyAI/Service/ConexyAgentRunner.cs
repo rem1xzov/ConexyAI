@@ -697,6 +697,28 @@ public class ConexyAgentRunner : IConexyAgentRunner
         AuditsCode: false,
         EnforcesPlan: false);
 
+    // WORKER_PRESETS: помощник без правок (ресёрчер) и проверяющий (чтение + тесты/диагностика).
+    private static readonly AgentProfile ResearcherWorkerProfile = new(
+        "worker",
+        TeamWorkerCharter,
+        AllowedTools: WorkerPresets.AllowedTools(WorkerPreset.Researcher),
+        AuditsCode: false,
+        EnforcesPlan: false);
+
+    private static readonly AgentProfile ReviewerWorkerProfile = new(
+        "worker",
+        TeamWorkerCharter,
+        AllowedTools: WorkerPresets.AllowedTools(WorkerPreset.Reviewer),
+        AuditsCode: false,
+        EnforcesPlan: false);
+
+    private static AgentProfile ProfileForPreset(WorkerPreset preset) => preset switch
+    {
+        WorkerPreset.Researcher => ResearcherWorkerProfile,
+        WorkerPreset.Reviewer => ReviewerWorkerProfile,
+        _ => WorkerProfile,
+    };
+
     // COWORK_MODE: добавлено 2026-09-23 — устав режима Cowork (нетехнические задачи).
     // DEEP_RESEARCH: переписано 2026-09-24 — Cowork как бизнес-партнёр: цикл исследования (несколько
     // поисков → 3–5 источников → чтение страниц → сверка → синтез со ссылками → экспорт в .docx/.xlsx).
@@ -3749,7 +3771,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 }, token);
                 // LOCAL_WORKER: если серверной локальной модели нет, а ПК подключён — помощник идёт на модель ПК.
                 var workerRoute = spec.Local && _routes?.Local is null ? DeviceLocalRoute(subJob.TaskId) : null;
-                var text = await runner.RunWorkerAsync(subJob, identity, spec.Brief, token, spec.Local, workerRoute);
+                var text = await runner.RunWorkerAsync(subJob, identity, spec.Brief, token, spec.Local, workerRoute, spec.Preset);
                 worker.Report = string.IsNullOrWhiteSpace(text) ? "(готово)" : text.Trim();
                 await group.SendAsync("OnAgentStatus", new
                 {
@@ -3941,7 +3963,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     private sealed record TeamMessage(string From, string To, string Text);
 
-    private sealed record WorkerSpec(string Role, string Brief, IReadOnlyList<string> Scope, IReadOnlyList<string> After, bool Local = false);
+    private sealed record WorkerSpec(string Role, string Brief, IReadOnlyList<string> Scope, IReadOnlyList<string> After, bool Local = false, WorkerPreset Preset = WorkerPreset.Default);
 
     /// <summary>Разбирает состав команды: роль, задание и область работы каждого агента.</summary>
     private static List<WorkerSpec> ParseWorkerSpecs(JsonElement root)
@@ -3990,7 +4012,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
             if (role.Length == 0) role = $"agent{specs.Count + 1}";
             // LOCAL_WORKER: этот помощник идёт на локальной модели, если сервер её настроил.
             var local = item.TryGetProperty("local", out var localEl) && localEl.ValueKind == JsonValueKind.True;
-            specs.Add(new WorkerSpec(role, brief, scope, after, local));
+            // WORKER_PRESETS: ограничение инструментов помощника (ресёрчер/ревьюер).
+            var preset = WorkerPresets.Parse(
+                item.TryGetProperty("preset", out var presetEl) && presetEl.ValueKind == JsonValueKind.String
+                    ? presetEl.GetString()
+                    : null);
+            specs.Add(new WorkerSpec(role, brief, scope, after, local, preset));
         }
 
         return specs;
@@ -4024,7 +4051,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // LOCAL_WORKER: помощник может идти на локальной модели пользователя (облачный ведущий).
         bool localModel = false,
         // LOCAL_WORKER: готовый маршрут (например, локальная модель на ПК через устройство).
-        LlmRoute? routeOverride = null)
+        LlmRoute? routeOverride = null,
+        // WORKER_PRESETS: ограничение инструментов помощника (default/researcher/reviewer).
+        WorkerPreset preset = WorkerPreset.Default)
     {
         var workerRoute = routeOverride ?? (localModel ? _routes?.Local : null);
         if (localModel && workerRoute is null)
@@ -4033,7 +4062,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // инструментов и своя короткая история. Текст в основной ответ он не стримит, но его
         // действия/статусы уходят с его agentId — UI рисует их в отдельной карточке.
         _job = job;
-        _profile = WorkerProfile;
+        _profile = ProfileForPreset(preset);
         _agent = identity;
         AgentExecutionContext.Current = identity;
         _mcpRegistry = _mcpRegistryFactory?.Create(_job.McpServers, McpTokenProviderFor);
@@ -4047,7 +4076,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
             ? string.Empty
             : "\n\nСообщения команды:\n" + string.Join("\n", board.Select(m => $"[{m.From} → {m.To}] {m.Text}"));
         var system = $"{TeamWorkerCharter}\n\nТвоя роль: {identity.Role}.\n" +
-            $"Твоя область (scope) — менять можно только эти пути: {string.Join(", ", identity.Scope)}.{boardText}";
+            $"Твоя область (scope) — менять можно только эти пути: {string.Join(", ", identity.Scope)}.\n" +
+            // WORKER_PRESETS: явно говорим, что за набор инструментов у помощника.
+            $"Режим помощника: {WorkerPresets.Describe(preset)}.{boardText}";
 
         var messages = new List<ChatMessage>
         {
