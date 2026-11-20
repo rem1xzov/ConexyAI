@@ -40,3 +40,6 @@ eval-run*.log
 tmp-release/
 installer/Output/
 vscode-extension/out/
+
+# transient build dir used by the agent (TEMP redirected inside the repo)
+.tmp-build/
