@@ -20,6 +20,10 @@ public sealed partial class ReadLoopGuard
     // окнами без правок — трение, а не работа.
     private readonly Dictionary<string, int> _fileReads = new(StringComparer.Ordinal);
 
+    // REREAD_FASTPATH: подпись последнего успешного чтения (файл + окно). Если сразу после него приходит
+    // точно такое же чтение, содержимое уже лежит в контексте — отдаём короткую ссылку вместо копии файла.
+    private string? _lastReadSignature;
+
     /// <summary>Сколько раз можно прочитать один файл (любыми окнами), пока не внесена правка.</summary>
     public const int RepeatedReadLimit = 3;
 
@@ -40,6 +44,7 @@ public sealed partial class ReadLoopGuard
         _fileReads.Clear();
         _read.Clear();
         _bashWarned.Clear();
+        _lastReadSignature = null;
     }
 
     /// <summary>Чтение ли это. Для команд — по тому же признаку, что и подтверждение (только чтение).</summary>
@@ -90,6 +95,23 @@ public sealed partial class ReadLoopGuard
         return null;
     }
 
+    /// <summary>
+    /// REREAD_FASTPATH: повторное чтение того же файла тем же окном сразу после предыдущего. Содержимое
+    /// уже в контексте (стресс-тест: агент читал один и тот же файл дважды подряд), поэтому возвращаем
+    /// короткую ссылку вместо полного текста. Правка/команда сбрасывает подпись: после изменения файла
+    /// чтение снова полноценное.
+    /// </summary>
+    public string? AlreadyInContext(string tool, ToolArgs args)
+    {
+        if (tool != "file_read" || !IsRead(tool, args))
+            return null;
+        var signature = FileKey(tool, args) + "|" + Target(tool, args);
+        return signature == _lastReadSignature
+            ? "Этот файл уже прочитан предыдущим вызовом и не изменился — содержимое выше в контексте. " +
+              "Не читай его снова: правь или отвечай. Нужен другой участок — укажи offset."
+            : null;
+    }
+
     /// <summary>Учитывает выполненный вызов: чтение — в счётчик и в список прочитанных, правка сбрасывает всё.</summary>
     /// <param name="output">Фактический вывод: повтор засчитывается только при том же содержимом, поэтому
     /// чтение другой страницы или изменившегося файла не блокируется.</param>
@@ -106,6 +128,7 @@ public sealed partial class ReadLoopGuard
                 ? _targets.GetValueOrDefault(target) + 1
                 : 1;
             _targetHashes[target] = hash;
+            _lastReadSignature = fileKey + "|" + target;
             return;
         }
 
@@ -114,7 +137,22 @@ public sealed partial class ReadLoopGuard
             _targets.Clear();
             _targetHashes.Clear();
             _fileReads.Clear();
+            _lastReadSignature = null;
         }
+    }
+
+    /// <summary>
+    /// REREAD_FASTPATH: засчитывает повторную попытку чтения (содержимое не отдавалось, поэтому хэш
+    /// результата не меняется) — третья такая попытка упирается в обычный отказ стража.
+    /// </summary>
+    public void RecordRepeatAttempt(string tool, ToolArgs args)
+    {
+        if (!IsRead(tool, args))
+            return;
+        var fileKey = FileKey(tool, args);
+        _fileReads[fileKey] = _fileReads.GetValueOrDefault(fileKey) + 1;
+        var target = Target(tool, args);
+        _targets[target] = _targets.GetValueOrDefault(target) + 1;
     }
 
     private static string ShortHash(string? output)

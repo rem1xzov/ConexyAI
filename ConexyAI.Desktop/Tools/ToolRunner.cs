@@ -104,6 +104,14 @@ public sealed class ToolRunner
             // требуется: точечная правка по фактическому выводу проверки.
             if (_churnGuard.Refuse(tool, args) is { } churnRefusal)
                 return ToolResult.Fail(churnRefusal);
+            // REREAD_FASTPATH: то же чтение сразу после предыдущего — содержимое уже в контексте,
+            // не отдаём его второй раз (экономия токенов на повторных file_read). Попытка всё равно
+            // засчитывается счётчиком: третье подряд такое чтение упирается в обычный отказ стража.
+            if (tool == "file_read" && _readGuard.AlreadyInContext(tool, args) is { } rereadNote)
+            {
+                _readGuard.RecordRepeatAttempt(tool, args);
+                return ToolResult.Ok(rereadNote);
+            }
 
             // REMOTE_APPROVAL_POLICY: имя инструмента нужно approver'у демона (install_software и т.п. с сайта нельзя).
             if (ToolCallContext.Current is { } call)

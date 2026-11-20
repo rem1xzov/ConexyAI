@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using ConexyAI.Desktop.Mcp;
@@ -145,12 +146,26 @@ public static class Headless
             };
             if (plan)
                 session.PlanMode = true;
-            session.Event = evt => Emit(output, evt);
+            // METRICS: headless-режим отдаёт CI стоимость прогона — дельту токенов пула, число вызовов
+            // инструментов и длительность. Раньше это приходилось выяснять запросами к /api/subscription/usage.
+            var toolCalls = 0;
+            var started = Stopwatch.StartNew();
+            session.Event = evt =>
+            {
+                // Считаем ВЫЗОВЫ, а не события: клиент присылает started + completed на один вызов.
+                if (evt is AgentTool { Stage: "started" })
+                    Interlocked.Increment(ref toolCalls);
+                Emit(output, evt);
+            };
+
+            var usageBefore = await TryGetUsageAsync(server, lifetime.Token);
 
             await session.ConnectAsync(lifetime.Token);
             var error = await session.AskAsync(prompt.Trim(), lifetime.Token);
             var result = session.LastAnswer;
-            return Finish(output, result, error, chatId, session.LastTaskId);
+            var usageAfter = await TryGetUsageAsync(server, lifetime.Token);
+            return Finish(output, result, error, chatId, session.LastTaskId,
+                started.ElapsedMilliseconds, toolCalls, usageBefore, usageAfter);
         }
         catch (OperationCanceledException)
         {
@@ -234,7 +249,21 @@ public static class Headless
         return args.Contains("--json") ? "json" : "text";
     }
 
-    private static int Finish(string output, string result, string? error, Guid chatId, Guid? taskId)
+    /// <summary>METRICS: расход не должен ронять headless-прогон — при ошибке usage просто не отдаём.</summary>
+    private static async Task<UsageInfo?> TryGetUsageAsync(ServerClient server, CancellationToken ct)
+    {
+        try
+        {
+            return await server.GetUsageAsync(ct);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static int Finish(string output, string result, string? error, Guid chatId, Guid? taskId,
+        long durationMs = 0, int toolCalls = 0, UsageInfo? usageBefore = null, UsageInfo? usageAfter = null)
     {
         if (output == "text")
         {
@@ -254,6 +283,15 @@ public static class Headless
             session_id = chatId.ToString(),
             task_id = taskId?.ToString(),
             is_error = error is not null,
+            duration_ms = durationMs,
+            tool_calls = toolCalls,
+            usage = usageBefore is not null && usageAfter is not null
+                ? new
+                {
+                    agent_tokens = usageAfter.AgentUsed - usageBefore.AgentUsed,
+                    cached_tokens = usageAfter.AgentCachedTokens - usageBefore.AgentCachedTokens,
+                }
+                : null,
         });
         return string.IsNullOrEmpty(error) ? 0 : 1;
     }

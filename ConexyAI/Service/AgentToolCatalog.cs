@@ -261,7 +261,8 @@ public static class AgentToolCatalog
             "you can express it exactly as a diff — it is safer than rewriting a file and leaves the " +
             "rest untouched. Headers are '--- a/path' / '+++ b/path' (several files allowed; " +
             "'/dev/null' creates or deletes). For a single file you may pass only the hunks plus " +
-            "`path`. A hunk that does not match is reported and nothing is changed.",
+            "`path`. A hunk that does not match is reported and nothing is changed. " +
+            "Example: '--- a/app.py\\n+++ b/app.py\\n@@ -1,1 +1,1 @@\\n-old\\n+new' (a patch without @@ hunks is rejected).",
             Object(new()
             {
                 ["patch"] = Str("Unified diff text in git format."),

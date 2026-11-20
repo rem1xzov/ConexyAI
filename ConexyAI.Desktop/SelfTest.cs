@@ -149,6 +149,21 @@ public static class SelfTest
             Console.WriteLine($"{(pytestDetected ? "PASS" : "FAIL")}  pytest project without manifest detected");
             if (!pytestDetected) failures++;
 
+            // REREAD_FASTPATH: второе подряд чтение того же файла отдаёт короткую ссылку, а не текст ещё раз.
+            var readRoot = Path.Combine(root, "readproj");
+            Directory.CreateDirectory(readRoot);
+            File.WriteAllText(Path.Combine(readRoot, "a.txt"), "hello reread");
+            var readRunner = new ToolRunner(readRoot, new FixedApprover(false), _ => { });
+            var firstRead = await readRunner.RunAsync("file_read", """{"path":"a.txt"}""", CancellationToken.None);
+            var secondRead = await readRunner.RunAsync("file_read", """{"path":"a.txt"}""", CancellationToken.None);
+            var rereadOk = !firstRead.IsError && firstRead.Output.Contains("hello reread", StringComparison.Ordinal)
+                           && !secondRead.IsError
+                           && secondRead.Output.Contains("уже прочитан", StringComparison.Ordinal)
+                           && !secondRead.Output.Contains("hello reread", StringComparison.Ordinal);
+            Console.WriteLine($"{(rereadOk ? "PASS" : "FAIL")}  repeated file read returns a pointer instead of content"
+                              + (rereadOk ? string.Empty : $"\n      first: {firstRead.Output}\n      second: {secondRead.Output}"));
+            if (!rereadOk) failures++;
+
             // REMOTE_APPROVAL_POLICY: в режиме safe опасные категории с сайта отклоняются без запроса.
             ToolCallContext.Current = new ToolCallInfo(Guid.NewGuid(), true, root) { Tool = "install_software" };
             var remoteOk = RoutingApprover.RemoteRefusal(ClientConfig.RemoteLevelSafe, "Установка программы", "winget install --id X", false) is not null

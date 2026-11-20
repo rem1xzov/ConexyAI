@@ -14,6 +14,7 @@ internal static class RepeatToolReminderTests
         TestRegistry.Add("repeat reminder: canonical arguments ignore key order and whitespace", CanonicalizeAsync);
         TestRegistry.Add("repeat reminder: hints fire once at thresholds 3, 5 and 8", ThresholdsAsync);
         TestRegistry.Add("repeat reminder: different arguments and service tools are not counted", DistinctAsync);
+        TestRegistry.Add("repeat reminder: a repeated verification warns at the second run", VerificationAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -66,6 +67,29 @@ internal static class RepeatToolReminderTests
         for (var i = 0; i < 4; i++)
             reminder.Record("computer_screen", "{}");
         Assert(reminder.Record("computer_screen", "{}") is null, "screen observation is not a repeated action");
+        return Task.CompletedTask;
+    }
+
+    private static Task VerificationAsync()
+    {
+        var reminder = new RepeatToolReminder();
+        const string args = """{"framework":"pytest","command":"python -m pytest -q"}""";
+        Assert(reminder.Record("run_tests", args) is null, "the first green test run is silent");
+        var second = reminder.Record("run_tests", args);
+        Assert(second is not null && second.Contains("проверка", StringComparison.Ordinal),
+            "the second identical test run is called out: " + second);
+        Assert(reminder.Record("run_tests", args) is null, "the verification hint fires once per threshold");
+
+        var bash = new RepeatToolReminder();
+        const string command = """{"command":"dotnet test --nologo"}""";
+        Assert(bash.Record("bash", command) is null, "the first build/test command through bash is silent");
+        Assert(bash.Record("bash", command) is not null, "the same test command through bash warns at the second run");
+        Assert(bash.Record("bash", """{"command":"dotnet build"}""") is null,
+            "a build (not a test) command keeps the normal threshold");
+
+        var grep = new RepeatToolReminder();
+        grep.Record("grep", """{"pattern":"x"}""");
+        Assert(grep.Record("grep", """{"pattern":"x"}""") is null, "non-verification tools keep the 3-call threshold");
         return Task.CompletedTask;
     }
 }

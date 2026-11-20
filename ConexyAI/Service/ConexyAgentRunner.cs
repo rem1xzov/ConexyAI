@@ -77,6 +77,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private readonly IMcpOAuthService? _mcpOAuthService;
     private AgentHooks? _hooks;
     private int _hookRuns;
+    // INSTRUCTION_DIGEST: содержимое .conexy/hooks.json, прочитанное вместе с правилами одним device-вызовом.
+    private string? _deviceHooksRaw;
     // WEB_DEAD_LINKS: адреса, которые в этом прогоне уже не открылись (адрес -> причина), и счётчики
     // интернет-обращений за прогон. Агент открывал один и тот же мёртвый сайт раз за разом, а старый
     // гард этого не видел: текст ошибки менялся, а бюджет поиска сбрасывался каждый ход.
@@ -1620,10 +1622,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // песочницей (Coder): у Cowork нет bash. Запускаются без подтверждения — это автоматизация
         // владельца репозитория, выполняемая в изолированной песочнице.
         _hookRuns = 0;
+        // INSTRUCTION_DIGEST: на ПК хуки уже пришли вместе с правилами (один вызов project_rules), второй
+        // запрос не нужен — используем сохранённое содержимое.
         _hooks = _hooksService is null || !_profile.Allows("bash")
             ? null
             : _job.UseDevice
-                ? _hooksService.Parse((await ReadDeviceProjectFilesAsync([ConexyAgentHooksService.HooksFile], ct)).FirstOrDefault().Content)
+                ? _hooksService.Parse(_deviceHooksRaw)
                 : await _hooksService.LoadAsync(chatId, ct);
         if (_hooks is not null)
         {
@@ -1827,8 +1831,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 messages.Add(new ChatMessage("system", runtimeDelta));
 
             // INSTRUCTION_DIGEST: раз в 5 шагов перечитываем правила проекта. Изменились — дописываем
-            // только дельту; не изменились — не тратим ни одного токена.
-            if (step > 1 && step % 5 == 0)
+            // только дельту; не изменились — не тратим ни одного токена. INSTRUCTION_REFRESH: сам запрос
+            // правил с ПК теперь нужен только когда среди изменённых файлов есть правила/хуки — стресс-тест
+            // показал лишние device-раундтрипы на каждой смене шага даже при правке одних исходников.
+            if (step > 1 && step % 5 == 0 && InstructionFiles.Touched(changedFiles))
             {
                 var fresh = await LoadProjectRulesAsync(chatId, ct);
                 if (rulesDigest.Delta(fresh?.Prompt, fresh?.Files) is { } rulesDelta)
@@ -3368,7 +3374,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // там просто не читались. Клиент отдаёт их одним тихим вызовом (без строки в терминале).
         if (_job.UseDevice)
         {
-            return _deviceBridge is null ? null : BuildProjectRules(await ReadDeviceProjectFilesAsync(ProjectRuleFiles, ct));
+            if (_deviceBridge is null)
+                return null;
+            // INSTRUCTION_DIGEST: правила и хуки читаем ОДНИМ вызовом клиента (раньше было два запроса подряд:
+            // rules, затем hooks.json). Хуки кладём в поле — их разберёт загрузка хуков ниже.
+            var files = await ReadDeviceProjectFilesAsync([.. ProjectRuleFiles, ConexyAgentHooksService.HooksFile], ct);
+            var (rules, hooks) = DeviceProjectFiles.Split(files, ConexyAgentHooksService.HooksFile, ProjectRuleFiles);
+            _deviceHooksRaw = hooks;
+            return BuildProjectRules(rules);
         }
 
         // No workspace yet means no rule files — and reading through the workspace service would
