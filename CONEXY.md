@@ -29,7 +29,8 @@ ConexyAI — автономная агентская платформа: сер�
 `Migrations/` (69 миграций), `Configuration/` (47 options-классов).
 
 Документация: `DESKTOP.md` (CI/хуки/прокси/релизы десктопа), `QA_REGRESSION.md` (регрессионные
-сценарии агента и чата — читай перед правкой поведения агента), `.agents/skills/` (каталог скиллов).
+сценарии агента и чата — читай перед правкой поведения агента), `docs/HARNESS_REFERENCE.md` (разбор
+DeepSeek Harness как референса и план внедрения идей), `.agents/skills/` (каталог скиллов).
 
 ---
 
@@ -261,6 +262,7 @@ desktop pagination) — они падают так же на чистом `main`
 | Веб | `frontend/src/App.tsx`, `components/`, `services/signalrService.ts`, `api/client.ts`, `types/` |
 | Десктоп (TUI/релиз) | `Desktop/Program.cs`, `Desktop/Tools/ToolRunner.cs`, `DESKTOP.md` |
 | Тесты | `ConexyAI.Tests/TestRegistry.cs`, `Program.cs`, `AgentCapabilityTests.cs` |
+| Референс агентской архитектуры и план идей | `docs/HARNESS_REFERENCE.md` |
 
 Если задача требует знаний, которых нет в этом файле, — сначала ищи ответ в коде и
 `QA_REGRESSION.md`/`DESKTOP.md`, затем спрашивай пользователя. Не выдумывай конвенции.
