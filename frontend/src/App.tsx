@@ -5,7 +5,7 @@ import { getChats, getChat, getChatTranscript, deleteChat, renameChat, setChatPi
 // YOOKASSA: добавлено 2026-09-27 — создание платежа и окно возврата после оплаты.
 import { createPayment } from './api/paymentsApi';
 // USER_NAME: имя из персонализации подписывает приветствие на стартовом экране.
-import { getPreferences, type UserPreferences } from './api/userApi';
+import { getPreferences, DEFAULT_UI_PREFERENCES, type UiPreferences, type UserPreferences } from './api/userApi';
 import { PaymentReturnModal } from './components/PaymentReturnModal';
 import { isForbiddenJoinError, signalrService } from './services/signalrService';
 // TURN_SCOPE: добавлено 2026-09-24 (H6/H7)
@@ -378,6 +378,9 @@ export default function App() {
   const [composerEdit, setComposerEdit] = useState<{ id: string; content: string } | null>(null);
   // USER_NAME: имя из настроек персонализации — им подписывается приветствие. Пусто — берём из email.
   const [preferredName, setPreferredName] = useState<string | null>(null);
+  // UI_PREFERENCES: интерфейсные переключатели из «Персонализации» (эффект курсора и скрытие
+  // элементов тулбара агента). По умолчанию всё выключено — до загрузки настроек ничего не мигает.
+  const [uiPreferences, setUiPreferences] = useState<UiPreferences>(DEFAULT_UI_PREFERENCES);
   // Правка не должна «переезжать» на другой чат: при смене открытого чата режим сбрасывается.
   useEffect(() => {
     setComposerEdit(null);
@@ -2041,12 +2044,19 @@ export default function App() {
   useEffect(() => {
     if (!token) {
       setPreferredName(null);
+      setUiPreferences(DEFAULT_UI_PREFERENCES);
       return;
     }
     let cancelled = false;
     getPreferences()
       .then((p) => {
-        if (!cancelled) setPreferredName(p.name.trim() ? p.name.trim() : null);
+        if (cancelled) return;
+        setPreferredName(p.name.trim() ? p.name.trim() : null);
+        setUiPreferences({
+          cursorTrail: p.cursorTrail,
+          hideGetApp: p.hideGetApp,
+          hideUsageRing: p.hideUsageRing,
+        });
       })
       .catch(() => {
         if (!cancelled) setPreferredName(null);
@@ -3557,8 +3567,9 @@ export default function App() {
                 >
                   {ideCollapsed ? <PanelRightOpenIcon size={18} /> : <PanelRightCloseIcon size={18} />}
                 </button>
-                {/* GET_APP: только в ПК-версии — ведёт в настройки → Десктоп со скачиванием и ключами. */}
-                {authenticated && (
+                {/* GET_APP: только в ПК-версии — ведёт в настройки → Десктоп со скачиванием и ключами.
+                    UI_PREFERENCES: можно скрыть в «Персонализации». */}
+                {authenticated && !uiPreferences.hideGetApp && (
                   <button
                     className="get-app-btn"
                     type="button"
@@ -3571,8 +3582,8 @@ export default function App() {
                     <span aria-hidden="true">⤓</span> {t('settings.getApp')}
                   </button>
                 )}
-                {/* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */}
-                <UsageIndicator usage={usage} />
+                {/* SUBSCRIPTION_TIERS: кольцо токенов — по умолчанию включено, скрывается в «Персонализации». */}
+                {!uiPreferences.hideUsageRing && <UsageIndicator usage={usage} />}
                 {chatActions}
               </div>
             )}
@@ -3751,7 +3762,9 @@ export default function App() {
       {/* CURSOR_TRAIL: только пустой стартовый экран и только на ПК — компонент сам проверяет
           точный указатель и reduced-motion. Стоит после .main, чтобы волна покрывала весь экран
           (а не только область без сайдбара) и не попадала под backdrop-filter панели. */}
-      {stageEmpty && !isMobile && <CursorTrail />}
+      {/* UI_PREFERENCES: след за курсором — опциональный эффект из «Персонализации»,
+          по умолчанию выключен. */}
+      {stageEmpty && !isMobile && uiPreferences.cursorTrail && <CursorTrail />}
 
       {toast && <div className="toast">{toast}</div>}
       {authError && <div className="toast toast--error">{authError}</div>}
@@ -3855,6 +3868,12 @@ export default function App() {
           usage={usage}
           onLimitsReset={handleLimitsReset}
           onPreferencesSaved={(p: UserPreferences) => setPreferredName(p.name.trim() ? p.name.trim() : null)}
+          uiPreferences={uiPreferences}
+          onUiPreferencesSaved={setUiPreferences}
+          onLogoutAll={() => {
+            setSettingsOpen(false);
+            void handleLogout();
+          }}
           hiddenChats={hiddenSessions}
           onOpenHiddenChat={handleOpenHiddenSession}
           onUnhideChat={(id) => void handleHideSession(id, false)}

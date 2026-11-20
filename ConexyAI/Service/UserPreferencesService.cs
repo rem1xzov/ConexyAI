@@ -7,7 +7,14 @@ namespace ConexyAI.Service;
 
 // USER_PREFERENCES: добавлено 2026-09-24 — ТЗ 2, §5 (пользовательские инструкции) и ревью H5 (память
 // можно выключить).
-public sealed record UserPreferences(string Name, string AboutMe, string ResponseStyle, bool MemoryEnabled);
+public sealed record UserPreferences(
+    string Name,
+    string AboutMe,
+    string ResponseStyle,
+    bool MemoryEnabled,
+    bool CursorTrail,
+    bool HideGetApp,
+    bool HideUsageRing);
 
 public interface IUserPreferencesService
 {
@@ -19,6 +26,10 @@ public interface IUserPreferencesService
 
     /// <summary>Turns long-term memory on or off for the user.</summary>
     Task SetMemoryEnabledAsync(Guid userId, bool enabled, CancellationToken ct = default);
+
+    /// <summary>UI_PREFERENCES: сохраняет интерфейсные переключатели (эффект курсора, скрытие элементов).</summary>
+    Task<UserPreferences> SaveUiPreferencesAsync(
+        Guid userId, bool cursorTrail, bool hideGetApp, bool hideUsageRing, CancellationToken ct = default);
 
     /// <summary>
     /// The system-prompt block with the user's own instructions, or an empty string. The user wrote
@@ -41,8 +52,15 @@ public class UserPreferencesService : IUserPreferencesService
     {
         var row = await _db.UserPreferences.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == userId, ct);
         return row is null
-            ? new UserPreferences(string.Empty, string.Empty, string.Empty, MemoryEnabled: true)
-            : new UserPreferences(row.Name ?? string.Empty, row.AboutMe ?? string.Empty, row.ResponseStyle ?? string.Empty, row.MemoryEnabled);
+            ? new UserPreferences(string.Empty, string.Empty, string.Empty, MemoryEnabled: true, CursorTrail: false, HideGetApp: false, HideUsageRing: false)
+            : new UserPreferences(
+                row.Name ?? string.Empty,
+                row.AboutMe ?? string.Empty,
+                row.ResponseStyle ?? string.Empty,
+                row.MemoryEnabled,
+                row.CursorTrail,
+                row.HideGetApp,
+                row.HideUsageRing);
     }
 
     public async Task<UserPreferences> SaveInstructionsAsync(Guid userId, string? name, string? aboutMe, string? responseStyle, CancellationToken ct = default)
@@ -54,7 +72,19 @@ public class UserPreferencesService : IUserPreferencesService
         row.ResponseStyle = Clean(responseStyle);
         row.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
-        return new UserPreferences(row.Name ?? string.Empty, row.AboutMe ?? string.Empty, row.ResponseStyle ?? string.Empty, row.MemoryEnabled);
+        return ToRecord(row);
+    }
+
+    public async Task<UserPreferences> SaveUiPreferencesAsync(
+        Guid userId, bool cursorTrail, bool hideGetApp, bool hideUsageRing, CancellationToken ct = default)
+    {
+        var row = await GetOrCreateTrackedAsync(userId, ct);
+        row.CursorTrail = cursorTrail;
+        row.HideGetApp = hideGetApp;
+        row.HideUsageRing = hideUsageRing;
+        row.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return ToRecord(row);
     }
 
     public async Task SetMemoryEnabledAsync(Guid userId, bool enabled, CancellationToken ct = default)
@@ -105,6 +135,15 @@ public class UserPreferencesService : IUserPreferencesService
         _db.UserPreferences.Add(row);
         return row;
     }
+
+    private static UserPreferences ToRecord(UserPreferencesEntity row) => new(
+        row.Name ?? string.Empty,
+        row.AboutMe ?? string.Empty,
+        row.ResponseStyle ?? string.Empty,
+        row.MemoryEnabled,
+        row.CursorTrail,
+        row.HideGetApp,
+        row.HideUsageRing);
 
     private static string? Clean(string? text, int maxLength = UserPreferences_config.MaxTextLength)
     {

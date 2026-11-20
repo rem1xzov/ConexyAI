@@ -104,7 +104,12 @@
     "passwordTooShort": "The password must be at least 8 characters.",
     "passwordUnavailable": "Password change is unavailable right now.",
     "passwordError": "Could not change the password.",
-    "changePasswordHint": "At least 8 characters. Your current password confirms this is really you."
+    "changePasswordHint": "At least 8 characters. Your current password confirms this is really you.",
+    "sessionsTitle": "Active sessions",
+    "sessionsHint": "Only this browser is active now. The server stores a token version, so other devices are not listed; “Log out everywhere” and a password change end all sessions.",
+    "sessionCurrent": "This device",
+    "sessionCurrentHint": "Current browser, active session",
+    "logoutAll": "Log out everywhere"
   },
   "hero": {
     "title": "Sign in to continue",
@@ -334,6 +339,14 @@
     "responseStylePlaceholder": "e.g. Short answers, code examples in C#, no pleasantries, comparisons as tables.",
     "plainCode": "Plain code highlighting",
     "plainCodeHint": "Render inline code and key terms as ordinary bold text, with no colored chips or outlines.",
+    "interfaceTitle": "Interface",
+    "interfaceHint": "Optional elements — toggled instantly, no Save button.",
+    "cursorTrail": "Cursor trail",
+    "cursorTrailHint": "Particles trailing the cursor on the empty start screen. Off by default.",
+    "hideGetApp": "“Download the app” button in the agent toolbar",
+    "hideGetAppHint": "Show the client download button next to the IDE panel toggle.",
+    "hideUsageRing": "Token usage ring in the agent toolbar",
+    "hideUsageRingHint": "Show the spent-tokens indicator in the agent toolbar.",
     "counter": "{{count}} / {{max}}",
     "save": "Save",
     "saving": "Saving…",

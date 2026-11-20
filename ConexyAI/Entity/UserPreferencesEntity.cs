@@ -22,5 +22,17 @@ public class UserPreferencesEntity
     /// <summary>When false nothing is extracted into long-term memory and nothing is injected.</summary>
     public bool MemoryEnabled { get; set; } = true;
 
+    // UI_PREFERENCES: добавлено 2026-11-21 — интерфейсные переключатели из «Персонализации».
+    // Все три по умолчанию выключены: след за курсором — опциональный эффект, а скрытие элементов
+    // тулбара агента пользователь включает сам.
+    /// <summary>Particle trail behind the cursor on the empty start screen (off by default).</summary>
+    public bool CursorTrail { get; set; }
+
+    /// <summary>Hide the "Download the app" button in the agent toolbar.</summary>
+    public bool HideGetApp { get; set; }
+
+    /// <summary>Hide the token usage ring in the agent toolbar.</summary>
+    public bool HideUsageRing { get; set; }
+
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

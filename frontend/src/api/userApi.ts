@@ -27,7 +27,26 @@ export interface UserPreferences {
   aboutMe: string;
   /** "How ConexyAI should respond": length, language, tone, formatting. */
   responseStyle: string;
+  /** UI_PREFERENCES: след из частиц за курсором на стартовом экране (по умолчанию выключен). */
+  cursorTrail: boolean;
+  /** UI_PREFERENCES: скрыть кнопку «Скачать приложение» в тулбаре агента. */
+  hideGetApp: boolean;
+  /** UI_PREFERENCES: скрыть кольцо расхода токенов в тулбаре агента. */
+  hideUsageRing: boolean;
 }
+
+/** UI_PREFERENCES: только интерфейсные переключатели (сохраняются отдельным PUT). */
+export interface UiPreferences {
+  cursorTrail: boolean;
+  hideGetApp: boolean;
+  hideUsageRing: boolean;
+}
+
+export const DEFAULT_UI_PREFERENCES: UiPreferences = {
+  cursorTrail: false,
+  hideGetApp: false,
+  hideUsageRing: false,
+};
 
 /** Server-side limit for each preferences field (longer values are rejected with TOO_LONG). */
 export const PREFERENCE_MAX_LENGTH = 1500;
@@ -73,6 +92,9 @@ export async function getPreferences(): Promise<UserPreferences> {
     name: typeof data?.name === 'string' ? data.name : '',
     aboutMe: typeof data?.aboutMe === 'string' ? data.aboutMe : '',
     responseStyle: typeof data?.responseStyle === 'string' ? data.responseStyle : '',
+    cursorTrail: data?.cursorTrail === true,
+    hideGetApp: data?.hideGetApp === true,
+    hideUsageRing: data?.hideUsageRing === true,
   };
 }
 
@@ -83,6 +105,19 @@ export async function savePreferences(prefs: UserPreferences): Promise<UserPrefe
     name: typeof data?.name === 'string' ? data.name : prefs.name,
     aboutMe: typeof data?.aboutMe === 'string' ? data.aboutMe : prefs.aboutMe,
     responseStyle: typeof data?.responseStyle === 'string' ? data.responseStyle : prefs.responseStyle,
+    cursorTrail: typeof data?.cursorTrail === 'boolean' ? data.cursorTrail : prefs.cursorTrail,
+    hideGetApp: typeof data?.hideGetApp === 'boolean' ? data.hideGetApp : prefs.hideGetApp,
+    hideUsageRing: typeof data?.hideUsageRing === 'boolean' ? data.hideUsageRing : prefs.hideUsageRing,
+  };
+}
+
+/** UI_PREFERENCES: сохраняет интерфейсные переключатели, не трогая тексты инструкций. */
+export async function saveUiPreferences(ui: UiPreferences): Promise<UiPreferences> {
+  const { data } = await http.put<Partial<UserPreferences>>('/user/preferences/ui', ui);
+  return {
+    cursorTrail: data?.cursorTrail === true,
+    hideGetApp: data?.hideGetApp === true,
+    hideUsageRing: data?.hideUsageRing === true,
   };
 }
 

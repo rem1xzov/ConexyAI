@@ -12680,6 +12680,50 @@ body::before {
   }
 }
 
+/* SESSIONS: текущий сеанс и «Выйти на всех устройствах» в настройках аккаунта. */
+.account-sessions {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+}
+
+.account-session {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+}
+
+.account-session__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--success, #7ee787);
+  box-shadow: 0 0 0 3px rgba(126, 231, 135, 0.14);
+}
+
+.account-session__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.account-session__device {
+  font-size: 13px;
+}
+
+.account-session__sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-sessions__logout {
+  margin-top: 4px;
+}
+
 /* CHANGE_PASSWORD: подтверждение смены пароля в настройках. */
 .settings-saved {
   margin: 8px 0 12px;

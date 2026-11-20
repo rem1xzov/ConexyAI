@@ -104,7 +104,7 @@ public class UserController : ControllerBase
             return Unauthorized(new { error = "Valid user id claim not found in token." });
 
         var prefs = await _preferences.GetAsync(userId, ct);
-        return Ok(new PreferencesDto(prefs.Name, prefs.AboutMe, prefs.ResponseStyle));
+        return Ok(ToPreferencesDto(prefs));
     }
 
     /// <summary>Saves the custom instructions (each field at most 1500 characters).</summary>
@@ -125,8 +125,34 @@ public class UserController : ControllerBase
             return BadRequest(new { error = "TOO_LONG", max = UserPreferences_config.MaxTextLength });
 
         var saved = await _preferences.SaveInstructionsAsync(userId, dto.Name, dto.AboutMe, dto.ResponseStyle, ct);
-        return Ok(new PreferencesDto(saved.Name, saved.AboutMe, saved.ResponseStyle));
+        return Ok(ToPreferencesDto(saved));
     }
+
+    // UI_PREFERENCES: добавлено 2026-11-21 — переключатели интерфейса (след за курсором, скрытие
+    // кнопки «Скачать приложение» и кольца токенов в тулбаре агента). Отдельный PUT, чтобы
+    // переключение не затирало несохранённый текст инструкций в форме.
+    /// <summary>Saves the UI toggles shown in the Personalization section.</summary>
+    [HttpPut("preferences/ui")]
+    public async Task<ActionResult<PreferencesDto>> SaveUiPreferences([FromBody] UiPreferencesDto? dto, CancellationToken ct)
+    {
+        if (!User.TryGetUserId(out var userId))
+            return Unauthorized(new { error = "Valid user id claim not found in token." });
+
+        if (dto is null)
+            return BadRequest(new { error = "Body is required." });
+
+        var saved = await _preferences.SaveUiPreferencesAsync(
+            userId, dto.CursorTrail, dto.HideGetApp, dto.HideUsageRing, ct);
+        return Ok(ToPreferencesDto(saved));
+    }
+
+    private static PreferencesDto ToPreferencesDto(UserPreferences prefs) => new(
+        prefs.Name,
+        prefs.AboutMe,
+        prefs.ResponseStyle,
+        prefs.CursorTrail,
+        prefs.HideGetApp,
+        prefs.HideUsageRing);
 
     // ---------------------------------------------------------------- integrations
 

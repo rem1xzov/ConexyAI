@@ -25,6 +25,10 @@ public class UserPreferences_config : IEntityTypeConfiguration<UserPreferencesEn
         builder.Property(x => x.AboutMe).HasMaxLength(MaxTextLength);
         builder.Property(x => x.ResponseStyle).HasMaxLength(MaxTextLength);
         builder.Property(x => x.MemoryEnabled).IsRequired().HasDefaultValue(true);
+        // UI_PREFERENCES: интерфейсные переключатели; выключены по умолчанию (эффект — опция).
+        builder.Property(x => x.CursorTrail).IsRequired().HasDefaultValue(false);
+        builder.Property(x => x.HideGetApp).IsRequired().HasDefaultValue(false);
+        builder.Property(x => x.HideUsageRing).IsRequired().HasDefaultValue(false);
         builder.Property(x => x.UpdatedAt).IsRequired();
 
         builder.HasOne<User>()

@@ -15,11 +15,14 @@ import {
   type McpOAuthStatus,
   getMemory,
   getPreferences,
+  DEFAULT_UI_PREFERENCES,
   saveGitHubToken,
   saveMcpServers,
   savePreferences,
+  saveUiPreferences,
   setMemoryEnabled,
   type MemoryFact,
+  type UiPreferences,
   type UserPreferences,
 } from '../api/userApi';
 import {
@@ -66,9 +69,11 @@ export type SettingsSection = 'general' | 'limits' | 'account' | 'personalizatio
 function AccountSection({
   email,
   onChangePassword,
+  onLogoutAll,
 }: {
   email?: string;
   onChangePassword?: (currentPassword: string, newPassword: string) => Promise<void>;
+  onLogoutAll?: () => void;
 }) {
   const { t } = useTranslation();
   const [current, setCurrent] = useState('');
@@ -195,6 +200,29 @@ function AccountSection({
           {saving ? t('account.savingPassword') : t('account.savePassword')}
         </button>
       </form>
+
+      {/* SESSIONS: сервер хранит не список сессий, а версию токена, поэтому честно показываем
+          только текущее устройство. «Выйти на всех» отзывает все выданные токены. */}
+      <div className="settings-field account-sessions">
+        <div className="settings-field__label">{t('account.sessionsTitle')}</div>
+        <div className="settings-field__hint">{t('account.sessionsHint')}</div>
+        <div className="account-session">
+          <span className="account-session__dot" aria-hidden="true" />
+          <div className="account-session__meta">
+            <span className="account-session__device">{t('account.sessionCurrent')}</span>
+            <span className="account-session__sub">{t('account.sessionCurrentHint')}</span>
+          </div>
+        </div>
+        {onLogoutAll && (
+          <button
+            className="dialog-btn account-sessions__logout"
+            type="button"
+            onClick={onLogoutAll}
+          >
+            {t('account.logoutAll')}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -220,6 +248,10 @@ interface SettingsModalProps {
   // CHANGE_PASSWORD: аккаунт — email и смена пароля с подтверждением текущим.
   email?: string;
   onChangePassword?: (currentPassword: string, newPassword: string) => Promise<void>;
+  // UI_PREFERENCES: интерфейсные переключатели «Персонализации» и выход со всех устройств.
+  uiPreferences?: UiPreferences;
+  onUiPreferencesSaved?: (ui: UiPreferences) => void;
+  onLogoutAll?: () => void;
 }
 
 // CHAT_HIDE: список скрытых чатов; нажатие открывает чат как обычный, «Показать» возвращает его в список.
@@ -344,10 +376,38 @@ interface PersonalizationSectionProps {
   onDirtyChange: (dirty: boolean) => void;
   // USER_NAME: отдаём сохранённые настройки наверх, чтобы приветствие обновилось без перезагрузки.
   onSaved?: (prefs: UserPreferences) => void;
+  // UI_PREFERENCES: интерфейсные тумблеры и их сохранение (отдельный PUT).
+  ui: UiPreferences;
+  onUiSaved?: (ui: UiPreferences) => void;
 }
 
-function PersonalizationSection({ active, onDirtyChange, onSaved }: PersonalizationSectionProps) {
+function PersonalizationSection({ active, onDirtyChange, onSaved, ui, onUiSaved }: PersonalizationSectionProps) {
   const { t } = useTranslation();
+  // UI_PREFERENCES: локальная копия тумблеров — сохраняется сразу, без кнопки «Сохранить».
+  const [uiState, setUiState] = useState<UiPreferences>(ui);
+  const [uiSaving, setUiSaving] = useState(false);
+  useEffect(() => {
+    setUiState(ui);
+  }, [ui]);
+
+  async function toggleUi(key: keyof UiPreferences) {
+    if (uiSaving) return;
+    const previous = uiState;
+    const next = { ...uiState, [key]: !uiState[key] };
+    setUiState(next);
+    setUiSaving(true);
+    setSaveError(null);
+    try {
+      const saved = await saveUiPreferences(next);
+      setUiState(saved);
+      onUiSaved?.(saved);
+    } catch (e) {
+      setUiState(previous);
+      setSaveError(t('prefs.saveError', { message: humanError(e, t) }));
+    } finally {
+      setUiSaving(false);
+    }
+  }
   // PLAIN_CODE: локальная настройка оформления — цветные «чипы» или обычный жирный белый текст.
   const plainCode = usePlainCode();
   const [loaded, setLoaded] = useState<UserPreferences | null>(null);
@@ -402,7 +462,16 @@ function PersonalizationSection({ active, onDirtyChange, onSaved }: Personalizat
     setSaveError(null);
     setSavedAt(null);
     try {
-      const stored = await savePreferences({ name, aboutMe, responseStyle });
+      // UI_PREFERENCES: интерфейсные тумблеры сохраняются отдельным PUT, но при сохранении
+      // текстов передаём текущее состояние, чтобы сервер вернул те же значения.
+      const stored = await savePreferences({
+        name,
+        aboutMe,
+        responseStyle,
+        cursorTrail: uiState.cursorTrail,
+        hideGetApp: uiState.hideGetApp,
+        hideUsageRing: uiState.hideUsageRing,
+      });
       setLoaded(stored);
       // Keep what the user sees in sync with what the server actually stored (it may trim).
       setName(stored.name);
@@ -553,6 +622,82 @@ function PersonalizationSection({ active, onDirtyChange, onSaved }: Personalizat
           aria-describedby="prefs-plain-code-hint"
           className={`settings-switch ${plainCode ? 'settings-switch--on' : ''}`}
           onClick={() => setPlainCode(!plainCode)}
+        >
+          <span className="settings-switch__thumb" />
+        </button>
+      </div>
+
+      {/* UI_PREFERENCES: переключатели интерфейса из «Персонализации». След за курсором по
+          умолчанию выключен; кнопку «Скачать приложение» и кольцо токенов можно скрыть. */}
+      <div className="settings-field">
+        <div className="settings-field__label">{t('prefs.interfaceTitle')}</div>
+        <div className="settings-field__hint">{t('prefs.interfaceHint')}</div>
+      </div>
+
+      <div className="memory-toggle">
+        <div className="memory-toggle__text">
+          <div className="settings-field__label" id="prefs-cursor-trail-label">
+            {t('prefs.cursorTrail')}
+          </div>
+          <div className="settings-field__hint" id="prefs-cursor-trail-hint">
+            {t('prefs.cursorTrailHint')}
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={uiState.cursorTrail}
+          aria-labelledby="prefs-cursor-trail-label"
+          aria-describedby="prefs-cursor-trail-hint"
+          className={`settings-switch ${uiState.cursorTrail ? 'settings-switch--on' : ''}`}
+          disabled={uiSaving}
+          onClick={() => void toggleUi('cursorTrail')}
+        >
+          <span className="settings-switch__thumb" />
+        </button>
+      </div>
+
+      <div className="memory-toggle">
+        <div className="memory-toggle__text">
+          <div className="settings-field__label" id="prefs-hide-getapp-label">
+            {t('prefs.hideGetApp')}
+          </div>
+          <div className="settings-field__hint" id="prefs-hide-getapp-hint">
+            {t('prefs.hideGetAppHint')}
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={!uiState.hideGetApp}
+          aria-labelledby="prefs-hide-getapp-label"
+          aria-describedby="prefs-hide-getapp-hint"
+          className={`settings-switch ${!uiState.hideGetApp ? 'settings-switch--on' : ''}`}
+          disabled={uiSaving}
+          onClick={() => void toggleUi('hideGetApp')}
+        >
+          <span className="settings-switch__thumb" />
+        </button>
+      </div>
+
+      <div className="memory-toggle">
+        <div className="memory-toggle__text">
+          <div className="settings-field__label" id="prefs-hide-usage-label">
+            {t('prefs.hideUsageRing')}
+          </div>
+          <div className="settings-field__hint" id="prefs-hide-usage-hint">
+            {t('prefs.hideUsageRingHint')}
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={!uiState.hideUsageRing}
+          aria-labelledby="prefs-hide-usage-label"
+          aria-describedby="prefs-hide-usage-hint"
+          className={`settings-switch ${!uiState.hideUsageRing ? 'settings-switch--on' : ''}`}
+          disabled={uiSaving}
+          onClick={() => void toggleUi('hideUsageRing')}
         >
           <span className="settings-switch__thumb" />
         </button>
@@ -1570,6 +1715,9 @@ export function SettingsModal({
   onUnhideChat,
   email,
   onChangePassword,
+  uiPreferences = DEFAULT_UI_PREFERENCES,
+  onUiPreferencesSaved,
+  onLogoutAll,
 }: SettingsModalProps) {
   const { t } = useTranslation();
   const [section, setSection] = useState<SettingsSection>(initialSection);
@@ -1719,7 +1867,7 @@ export function SettingsModal({
             </div>
 
             <div hidden={section !== 'account'}>
-              <AccountSection email={email} onChangePassword={onChangePassword} />
+              <AccountSection email={email} onChangePassword={onChangePassword} onLogoutAll={onLogoutAll} />
             </div>
 
             <div hidden={section !== 'personalization'}>
@@ -1727,6 +1875,8 @@ export function SettingsModal({
                 active={section === 'personalization'}
                 onDirtyChange={setPrefsDirty}
                 onSaved={onPreferencesSaved}
+                ui={uiPreferences}
+                onUiSaved={onUiPreferencesSaved}
               />
             </div>
 
