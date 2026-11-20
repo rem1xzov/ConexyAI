@@ -3629,19 +3629,17 @@ export default function App() {
                   />
                 </div>
                 <div className="chat-header__actions">
-                  {/* MOBILE_NEW: плюс в шапке для пустого чата; когда в чате уже есть сообщения,
-                      тот же плюс приходит из ChatHeaderActions — второй не нужен. */}
-                  {(!activeSession || activeSession.messages.length === 0) && (
-                    <button
-                      type="button"
-                      className="chat-actions__btn mobile-new-btn"
-                      onClick={() => guardLeave(() => handleNewSession(activeTab))}
-                      aria-label={t('sidebar.newChat')}
-                      title={t('sidebar.newChat')}
-                    >
-                      <PlusIcon size={18} />
-                    </button>
-                  )}
+                  {/* MOBILE_NEW: плюс виден всегда; плюс из ChatHeaderActions на телефоне скрыт CSS,
+                      чтобы не было двух одинаковых кнопок. */}
+                  <button
+                    type="button"
+                    className="chat-actions__btn mobile-new-btn"
+                    onClick={() => guardLeave(() => handleNewSession(activeTab))}
+                    aria-label={t('sidebar.newChat')}
+                    title={t('sidebar.newChat')}
+                  >
+                    <PlusIcon size={18} />
+                  </button>
                   {isAgent ? (
                     /* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */
                     <UsageIndicator usage={usage} />
