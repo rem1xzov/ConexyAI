@@ -144,6 +144,59 @@ namespace ConexyAI.Migrations
                     b.ToTable("chat", (string)null);
                 });
 
+            modelBuilder.Entity("ConexyAI.Entity.ChatGoalEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("BlockedReason")
+                        .HasMaxLength(600)
+                        .HasColumnType("character varying(600)");
+
+                    b.Property<Guid>("ChatId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastNote")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<Guid?>("LastTaskId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("MaxRounds")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Objective")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<int>("RoundsStarted")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Status");
+
+                    b.HasIndex("ChatId", "Status");
+
+                    b.ToTable("chat_goal", (string)null);
+                });
+
             modelBuilder.Entity("ConexyAI.Entity.ChatShareReportEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1018,6 +1071,15 @@ namespace ConexyAI.Migrations
                     b.HasOne("ConexyAI.Entity.User", null)
                         .WithMany()
                         .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ConexyAI.Entity.ChatGoalEntity", b =>
+                {
+                    b.HasOne("ConexyAI.Entity.ChatEntity", null)
+                        .WithMany()
+                        .HasForeignKey("ChatId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

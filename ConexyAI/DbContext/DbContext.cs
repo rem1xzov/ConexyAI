@@ -67,6 +67,9 @@ public class DbConexy : Microsoft.EntityFrameworkCore.DbContext
     // PHONE_AGENT: добавлено 2026-10-29 — FCM-токены телефонов.
     public DbSet<MobilePushTokenEntity> MobilePushTokens => Set<MobilePushTokenEntity>();
 
+    // GOAL: добавлено 2026-11-20 — долгоживущие цели чата (раунд-драйвер и API).
+    public DbSet<ChatGoalEntity> ChatGoals => Set<ChatGoalEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

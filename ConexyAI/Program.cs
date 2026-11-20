@@ -321,6 +321,8 @@ builder.Services.AddScoped<ConexyAI.Service.IAdminTokenService, ConexyAI.Service
 builder.Services.Configure<ConexyAI.Configuration.RepoMapOptions>(
     builder.Configuration.GetSection(ConexyAI.Configuration.RepoMapOptions.SectionName));
 builder.Services.AddScoped<ConexyAI.Service.IRepoMapService, ConexyAI.Service.RepoMapService>();
+// GOAL: добавлено 2026-11-20 — долгоживущие цели чата.
+builder.Services.AddScoped<ConexyAI.Service.IGoalService, ConexyAI.Service.GoalService>();
 // LOCAL_WORKER: добавлено 2026-11-19 — маршруты моделей: облачная ведущая + локальная как субагент.
 builder.Services.AddSingleton<ConexyAI.Service.ILlmRouteResolver, ConexyAI.Service.LlmRouteResolver>();
 // AGENT_CURSOR: добавлено 2026-11-19 — курсоры агентов и аренда ввода на один ПК.
