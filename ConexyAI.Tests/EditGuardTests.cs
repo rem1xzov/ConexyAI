@@ -13,6 +13,7 @@ internal static class EditGuardTests
         TestRegistry.Add("edit guard: writing an unread file is refused, reading unlocks it", ServerReadBeforeEditAsync);
         TestRegistry.Add("edit guard: a new file needs no read, apply_patch checks every header path", ServerNewFileAndPatchAsync);
         TestRegistry.Add("edit guard: bash file operations are refused once and name the tool", ServerBashFileOpsAsync);
+        TestRegistry.Add("edit guard: a file changed after reading is refused until it is re-read", ServerStaleVersionAsync);
         TestRegistry.Add("desktop tools: editing an unread file is refused until file_read", DesktopReadBeforeEditAsync);
         TestRegistry.Add("desktop tools: reading a file through bash is refused once", DesktopBashFileOpsAsync);
     }
@@ -67,6 +68,39 @@ internal static class EditGuardTests
         existing.Record("file_read", """{"path":"src/Old.cs"}""");
         Assert(existing.Refuse("apply_patch", $$"""{"patch":{{System.Text.Json.JsonSerializer.Serialize(patch)}}}""") is null,
             "a read file unlocks its patch");
+        return Task.CompletedTask;
+    }
+
+    private static Task ServerStaleVersionAsync()
+    {
+        var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["src/A.cs"] = "version-1",
+        };
+        string? Read(string path) => files.GetValueOrDefault(path.TrimStart('.', '/'));
+        var guard = new EditAfterReadGuard(_ => true, Read);
+
+        const string read = """{"path":"src/A.cs"}""";
+        const string write = """{"path":"./src/A.cs","content":"new"}""";
+
+        guard.Record("file_read", read);
+        Assert(guard.Refuse("file_write", write) is null, "unchanged file after a read can be written");
+
+        // Внешняя правка между чтением и записью: запись должна отказать, а не затереть изменения.
+        files["src/A.cs"] = "version-2-external";
+        var stale = guard.Refuse("file_write", write);
+        Assert(stale is not null && stale.Contains("изменился", StringComparison.Ordinal),
+            "a file changed after reading must be refused with a re-read request: " + stale);
+
+        // Перечитывание снимает отказ.
+        guard.Record("file_read", read);
+        Assert(guard.Refuse("file_write", write) is null, "re-reading the changed file unlocks the write");
+
+        // Своя успешная запись тоже обновляет состояние: следующая правка не считается устаревшей.
+        files["src/A.cs"] = "written-by-me";
+        guard.Record("file_write", write);
+        Assert(guard.Refuse("file_patch", """{"path":"src/A.cs","old_text":"a","new_text":"b"}""") is null,
+            "the agent's own write refreshes the version");
         return Task.CompletedTask;
     }
 

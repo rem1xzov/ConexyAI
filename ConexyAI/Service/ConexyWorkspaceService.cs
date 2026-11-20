@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Text.Json;
 using ConexyAI.Configuration;
 using ConexyAI.Contract;
@@ -314,17 +314,55 @@ public class ConexyWorkspaceService : IConexyWorkspaceService
             var basenameOnly = !pattern.Contains('/');
 
             var limit = Math.Clamp(maxResults <= 0 ? 200 : maxResults, 1, 2000);
-            var files = new List<string>();
+
+            // GLOB_SAMPLE: кап не должен прятать целый модуль — при обрезке отдаём файлы «по кругу» между
+            // верхними каталогами и честно сообщаем, что список неполный (аналог spill-семантики DSH).
+            var scanBudget = Math.Min(limit * 10, 20_000);
+            var groups = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var groupOrder = new List<string>();
+            var total = 0;
+            var truncated = false;
             foreach (var file in EnumerateWorkspaceFiles(baseDir))
             {
                 ct.ThrowIfCancellationRequested();
                 if (!GlobMatches(matcher, basenameOnly, ToSlash(Path.GetRelativePath(baseReal, file)))) continue;
-                files.Add(ToSlash(Path.GetRelativePath(realRoot, file)));
-                if (files.Count >= limit) break;
+                total++;
+                if (total > scanBudget)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                var relative = ToSlash(Path.GetRelativePath(realRoot, file));
+                var top = relative.Contains('/') ? relative[..relative.IndexOf('/')] : "(root)";
+                if (!groups.TryGetValue(top, out var list))
+                {
+                    list = new List<string>();
+                    groups[top] = list;
+                    groupOrder.Add(top);
+                }
+                list.Add(relative);
             }
 
+            groupOrder.Sort(StringComparer.OrdinalIgnoreCase);
+            var files = new List<string>(Math.Min(limit, total));
+            for (var index = 0; files.Count < limit; index++)
+            {
+                var progressed = false;
+                foreach (var top in groupOrder)
+                {
+                    var list = groups[top];
+                    if (index >= list.Count) continue;
+                    files.Add(list[index]);
+                    progressed = true;
+                    if (files.Count >= limit) break;
+                }
+                if (!progressed) break;
+            }
+
+            if (files.Count < total) truncated = true;
             files.Sort(StringComparer.Ordinal);
-            return Task.FromResult(new FileListResult(true, files, null));
+            return Task.FromResult(new FileListResult(true, files, null, truncated));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

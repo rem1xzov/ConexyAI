@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -14,15 +16,28 @@ namespace ConexyAI.Service;
 //
 // Отказ ровно один раз на команду: если агент повторит её, она выполнится — защита от запирания,
 // когда альтернативы действительно нет. Правка без чтения не выполняется никогда.
+//
+// EDIT_VERSION: добавлено 2026-11-20 (идея DeepSeek Harness, `FS_STALE_VERSION`) — читали ли файл,
+// ещё не значит, что он тот же самый. Между чтением и правкой файл мог изменить пользователь, другой
+// агент или фоновый процесс; без версии такая правка молча затирает чужие изменения. Теперь запоминаем
+// отпечаток содержимого при чтении и сверяем его перед записью.
 public sealed partial class EditAfterReadGuard
 {
     private readonly Func<string, bool>? _fileExists;
+    private readonly Func<string, string?>? _readContent;
     private readonly HashSet<string> _read = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _bashWarned = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _readHashes = new(StringComparer.OrdinalIgnoreCase);
 
     /// <param name="fileExists">Проверяет, существует ли файл: правка существующего требует чтения,
     /// создание нового — нет. Без функции считается, что файл существует (безопаснее).</param>
-    public EditAfterReadGuard(Func<string, bool>? fileExists = null) => _fileExists = fileExists;
+    /// <param name="readContent">Читает текущее содержимое файла для проверки версии. Без функции
+    /// проверка версии отключена (старое поведение «читал — можно писать»).</param>
+    public EditAfterReadGuard(Func<string, bool>? fileExists = null, Func<string, string?>? readContent = null)
+    {
+        _fileExists = fileExists;
+        _readContent = readContent;
+    }
 
     /// <summary>Причина отказа или null, если вызов можно выполнять.</summary>
     public string? Refuse(string tool, string argumentsJson)
@@ -32,13 +47,26 @@ public sealed partial class EditAfterReadGuard
         return WriteRefusal(tool, argumentsJson);
     }
 
-    /// <summary>Учитывает успешно выполненный вызов: запоминает прочитанные файлы.</summary>
+    /// <summary>Учитывает успешно выполненный вызов: запоминает прочитанные файлы и отпечатки их версий.</summary>
     public void Record(string tool, string argumentsJson)
     {
-        if (!IsReadTool(tool, argumentsJson))
+        if (IsReadTool(tool, argumentsJson))
+        {
+            if (ReadPath(argumentsJson) is { Length: > 0 } path)
+            {
+                AddReadPath(path);
+                RememberHash(path);
+            }
             return;
-        if (ReadPath(argumentsJson) is { Length: > 0 } path)
-            AddReadPath(path);
+        }
+
+        // Своя успешная запись: сохранённый отпечаток больше не актуален — иначе собственная правка
+        // агента считалась бы «внешним изменением». Новая внешняя правка будет поймана после чтения.
+        if (_readContent is not null)
+        {
+            foreach (var path in WriteTargets(tool, argumentsJson))
+                _readHashes.Remove(HashKey(path));
+        }
     }
 
     private string? WriteRefusal(string tool, string argumentsJson)
@@ -46,7 +74,12 @@ public sealed partial class EditAfterReadGuard
         foreach (var path in WriteTargets(tool, argumentsJson))
         {
             if (IsReadPath(path))
+            {
+                // EDIT_VERSION: файл читали, но он мог измениться с тех пор — сверяем отпечаток.
+                if (StaleRefusal(path) is { } stale)
+                    return stale;
                 continue;
+            }
             if (_fileExists is not null && !_fileExists(path))
                 continue;
             return $"Сначала прочитай '{path}' инструментом file_read (или str_replace_editor view), потом правь: " +
@@ -54,6 +87,34 @@ public sealed partial class EditAfterReadGuard
         }
         return null;
     }
+
+    private void RememberHash(string path)
+    {
+        if (_readContent is null)
+            return;
+        if (_readContent(path) is { } content)
+            _readHashes[HashKey(path)] = Hash(content);
+    }
+
+    private string? StaleRefusal(string path)
+    {
+        if (_readContent is null)
+            return null;
+        if (!_readHashes.TryGetValue(HashKey(path), out var recorded))
+            return null;
+        var current = _readContent(path);
+        if (current is null)
+            return null;
+        if (string.Equals(Hash(current), recorded, StringComparison.Ordinal))
+            return null;
+        return $"Файл '{path}' изменился с момента чтения (внешняя правка или другой агент). Перечитай его " +
+               "через file_read и повтори правку — иначе изменения будут потеряны.";
+    }
+
+    private static string HashKey(string path) => Keys(path).First();
+
+    private static string Hash(string content) =>
+        Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(content)));
 
     private string? BashFileOpRefusal(string tool, string argumentsJson)
     {

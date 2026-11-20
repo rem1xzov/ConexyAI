@@ -1,4 +1,4 @@
-﻿namespace ConexyAI.Contract;
+namespace ConexyAI.Contract;
 
 public record FileReadResult(bool Success, string? Content, string? Error);
 
@@ -9,7 +9,7 @@ public record FileBytesResult(bool Success, byte[]? Content, string? Error);
 
 public record FilePatchResult(bool Success, string Path, string? Error, int AppliedOccurrences = 0);
 
-public record FileListResult(bool Success, IReadOnlyList<string> Files, string? Error);
+public record FileListResult(bool Success, IReadOnlyList<string> Files, string? Error, bool Truncated = false);
 
 // GREP_GLOB: добавлено 2026-10-04 — grep/glob как отдельные инструменты агента вместо bash-обёрток.
 public record GrepMatch(string Path, int Line, string Text);

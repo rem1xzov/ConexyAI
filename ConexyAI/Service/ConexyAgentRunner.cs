@@ -1614,6 +1614,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // Гейты ниже читают ТЕКСТ ответа и потому пропускают ход, переведённый в принудительный итог;
         // этот страж читает факты и на такой ход тоже срабатывает, заново открывая инструменты.
         var completionGuard = new AgentCompletionGuard();
+        // REPEAT_REMINDER: мягкая подсказка до жёсткого отказа — повтор с теми же аргументами не двигает работу.
+        var repeatReminder = new RepeatToolReminder();
         var completionNudges = 0;
         var completionEscalated = false;
         var completionSignature = string.Empty;
@@ -1654,7 +1656,23 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 return false;
             }
         }
-        var editGuard = new EditAfterReadGuard(FileExistsInWorkspace);
+        // EDIT_VERSION: текущее содержимое файла для сверки «не изменился ли с момента чтения».
+        string? ReadFileInWorkspace(string path)
+        {
+            try
+            {
+                var root = _workspaceService.GetTaskWorkspacePathIfExists(chatId);
+                if (root is null)
+                    return null;
+                var full = Path.IsPathRooted(path) ? path : Path.Combine(root, path);
+                return File.Exists(full) ? File.ReadAllText(full) : null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return null;
+            }
+        }
+        var editGuard = new EditAfterReadGuard(FileExistsInWorkspace, ReadFileInWorkspace);
 
         // TOKEN_BREAKER: остаток квоты на старте прогона. Раньше лимит проверялся ТОЛЬКО до запуска,
         // и внутри цикла зациклившийся агент выжигал миллионы токенов сверх тарифа (дефект M3:
@@ -2273,6 +2291,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // tool-результатов хода: user(image) между assistant(tool_calls) и tool(...) ломает формат
             // запроса к модели (tool-ответы обязаны идти сразу за своим assistant-сообщением).
             var batchImages = new List<ChatMessage>();
+            // REPEAT_REMINDER: подсказки этого батча — уходят модели после всех tool-результатов.
+            var repeatHints = new List<string>();
             // AGENT_HOOKS: заметки хуков этого хода (сбои) — отдаём модели одним system-сообщением после
             // всех tool-результатов; FilesBeforeBatch — чтобы понять, какие файлы изменились именно сейчас.
             var hookNotes = new List<string>();
@@ -2457,6 +2477,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     loopGuard.Record(toolName, toolCall.Function.Arguments, result.Output, result.IsError);
                     completionGuard.Record(
                         toolName, toolCall.Function.Arguments, result.Output, result.IsError, result.CommandExecuted);
+                    // REPEAT_REMINDER: один и тот же вызов с каноничными аргументами; подсказка — после батча.
+                    if (repeatReminder.Record(toolName, toolCall.Function.Arguments) is { } repeatHint)
+                        repeatHints.Add(repeatHint);
                     // SHARE_TO_ADMIN: сохраняем действие агента (инструмент, аргументы, вывод), чтобы
                     // админ разобрал баг по фактам, а не по тексту ответа. Лог не должен ломать ход.
                     if (_chatAgentLog is not null)
@@ -2596,6 +2619,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             // L9: images of this batch, after every tool result of the assistant turn.
             messages.AddRange(batchImages);
+
+            // REPEAT_REMINDER: подсказки по повтору того же действия — после всех tool-результатов,
+            // чтобы не разрывать пары assistant(tool_calls) → tool(result).
+            foreach (var repeatHint in repeatHints)
+                messages.Add(new ChatMessage("system", repeatHint));
 
             // REPO_MAP: этот ход мог изменить файлы — карту перестроим при следующем чтении.
             _repoMap?.Invalidate(chatId);
@@ -4502,8 +4530,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         sb.AppendLine("Точный поиск с учётом регистра дал меньше совпадений — ниже результаты без учёта регистра:");
                     foreach (var m in res.Matches)
                         sb.Append(m.Path).Append(':').Append(m.Line).Append(": ").AppendLine(m.Text);
+                    // GREP_COMPLETE: честно говорим о неполноте выдачи, иначе модель считает «больше нет».
                     if (res.Truncated)
-                        sb.Append("… (truncated; narrow the search with 'glob' or 'path')");
+                        sb.Append($"… (показано {res.Matches.Count} совпадений — это лимит выдачи; результаты могут быть неполными. "
+                            + $"Поиск шёл по {res.FilesSearched} файлам: сузь 'glob'/'path' или увеличь max_results.)");
                     return new ConexyToolResult(toolCall.Id, sb.ToString().TrimEnd(), false);
                 }
 
@@ -4517,10 +4547,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     if (!res.Success)
                         return new ConexyToolResult(toolCall.Id, res.Error!, true);
 
-                    return new ConexyToolResult(
-                        toolCall.Id,
-                        res.Files.Count == 0 ? "No files matched." : string.Join("\n", res.Files),
-                        false);
+                    if (res.Files.Count == 0)
+                        return new ConexyToolResult(toolCall.Id, "No files matched.", false);
+
+                    // GLOB_COMPLETE: обрезанный список помечаем явно — «файлов больше нет» без этого было ложью.
+                    var globText = string.Join("\n", res.Files);
+                    if (res.Truncated)
+                        globText += $"\n… (показано {res.Files.Count} файлов — список обрезан лимитом; файлы из разных "
+                            + "верхних каталогов взяты по кругу. Сузь pattern/path или увеличь max_results.)";
+                    return new ConexyToolResult(toolCall.Id, globText, false);
                 }
 
                 case "repo_map":
