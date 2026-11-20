@@ -163,6 +163,33 @@ public static class SelfTest
             Console.WriteLine($"{(rereadOk ? "PASS" : "FAIL")}  repeated file read returns a pointer instead of content");
             if (!rereadOk) failures++;
 
+            // WEB_VERIFY: настоящий headless Edge/Chrome должен кликать кнопку и видеть изменение DOM.
+            if (Environment.GetEnvironmentVariable("CONEXY_SKIP_BROWSER_SELFTEST") != "1")
+            {
+                var pageRoot = Path.Combine(root, "webproj");
+                Directory.CreateDirectory(pageRoot);
+                var pagePath = Path.Combine(pageRoot, "index.html");
+                File.WriteAllText(pagePath, "<!doctype html><html><body><button id=\"go\">Go</button><div id=\"out\"></div><script>document.getElementById('go').onclick=function(){document.getElementById('out').textContent='clicked';};</script></body></html>");
+                var webRunner = new ToolRunner(pageRoot, new FixedApprover(true), _ => { });
+                var webArgs = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    url = new Uri(pagePath).AbsoluteUri,
+                    steps = new object[] { new { action = "click", selector = "#go" }, new { action = "expect_text", text = "clicked" } },
+                    timeout_seconds = 60,
+                });
+                ToolResult webResult;
+                try
+                {
+                    webResult = await webRunner.RunAsync("web_verify", webArgs, CancellationToken.None);
+                }
+                catch (Exception webEx)
+                {
+                    webResult = ToolResult.Fail("exception: " + webEx.GetType().Name + ": " + webEx.Message);
+                }
+                var webOk = !webResult.IsError && webResult.Output.Contains("PASS", StringComparison.Ordinal);
+                Console.WriteLine($"{(webOk ? "PASS" : "FAIL")}  web_verify clicks a button in a real headless browser" + (webOk ? string.Empty : "\n      -> " + webResult.Output));
+                if (!webOk) failures++;
+            }
             // COMMAND_TIMEOUTS: категории таймаутов и подсказка «команда ждала ввод».
             var timeoutOk = CommandTimeoutPolicy.Resolve("ssh host", null) == CommandTimeoutPolicy.InteractiveSeconds
                             && CommandTimeoutPolicy.Resolve("python -m pytest -q", null) == CommandTimeoutPolicy.LongSeconds

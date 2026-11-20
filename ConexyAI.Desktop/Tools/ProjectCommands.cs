@@ -14,10 +14,16 @@ public static class ProjectCommands
         if (args.Str("command") is { Length: > 0 } explicitCommand)
             return await shell.RunAsync(args, test ? "run_tests" : "get_diagnostics", ct);
 
-        var command = Detect(root, test)
+        // STATIC_WEB: статический сайт/PWA без манифеста сборки — тестов нет, но синтаксис JS/JSON и
+        // PWA-файлы проверить можно (и поведение — отдельно через web_verify).
+        var detected = Detect(root, test);
+        if (detected is null && StaticWebProject.IsStaticWeb(root))
+            return await StaticWebProject.RunChecksAsync(root, shell, test, ct);
+
+        var command = detected
                       ?? throw new ToolException(
                           "Не удалось определить тип проекта (нет .sln/.csproj, package.json, pyproject.toml/requirements.txt, " +
-                          "Cargo.toml, go.mod и pytest-тестов test_*.py). Передай явную 'command'.");
+                          "Cargo.toml, go.mod, pytest-тестов test_*.py и HTML-страниц). Передай явную 'command'.");
 
         if (requireApproval)
         {

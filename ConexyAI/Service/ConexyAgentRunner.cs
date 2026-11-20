@@ -102,9 +102,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     {
         "file_read", "file_write", "file_patch", "str_replace_editor", "apply_patch",
         "workspace_list_files", "grep", "glob", "bash", "terminal_exec", "run_tests", "get_diagnostics",
-        "cmd_exec", "bg_start", "bg_logs", "bg_stop", "http_request", "page_screenshot",
+        "cmd_exec", "bg_start", "bg_logs", "bg_stop", "http_request", "page_screenshot", "web_verify",
         "pc_list_dir", "pc_read_file", "pc_copy_to_project", "download_file", "install_software",
-        "window_list", "screen_capture", "window_keys", AskUserTool,
+        "window_list", "screen_capture", "window_keys", "web_verify", AskUserTool,
         "computer_screen", "computer_click", "computer_move", "computer_drag", "computer_scroll",
         "computer_type", "computer_key", "computer_open", "computer_wait",
     };
@@ -211,9 +211,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // DESKTOP_AGENT: инструменты, которые есть ТОЛЬКО на десктопе (в каталоге/профиле сервера их нет).
     private static readonly HashSet<string> DesktopOnlyTools = new(StringComparer.Ordinal)
     {
-        "cmd_exec", "bg_start", "bg_logs", "bg_stop", "http_request", "page_screenshot",
+        "cmd_exec", "bg_start", "bg_logs", "bg_stop", "http_request", "page_screenshot", "web_verify",
         "pc_list_dir", "pc_read_file", "pc_copy_to_project", "download_file", "install_software",
-        "window_list", "screen_capture", "window_keys",
+        "window_list", "screen_capture", "window_keys", "web_verify",
     };
 
     // DESKTOP_AGENT: инструменты-команды ПК: их ненулевой код — результат команды, а не сбой инструмента.
@@ -294,6 +294,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 url = new { type = "string" },
                 width = new { type = "integer", description = "По умолчанию 1280" },
                 height = new { type = "integer", description = "По умолчанию 800" }
+            }, required = new[] { "url" } }),
+        // WEB_VERIFY: проверка работоспособности сайта без computer use — headless Edge/Chrome на ПК,
+        // клики, ввод, Enter и проверки того, что DOM реально изменился.
+        Function("web_verify",
+            "Проверяет, что сайт РЕАЛЬНО работает, а не только выглядит: открывает URL в headless Edge/Chrome на ПК и выполняет шаги — клики, ввод, Enter, проверки текста/видимости/количества/значения/URL, собирает ошибки JS. Используй после сборки веб-UI: запусти сервер через bg_start, затем проверь http://localhost:<порт> (добавить запись → появилась карточка → нажать действие → статус изменился). page_screenshot оставь для визуальной проверки, но готовность подтверждай web_verify.",
+            new { type = "object", properties = new {
+                url = new { type = "string", description = "http(s):// или file://; локальный сайт — после bg_start" },
+                steps = new { type = "array", description = "Шаги проверки по порядку (до 15). Пример: [{\"action\":\"fill\",\"selector\":\"#name\",\"value\":\"Роза\"},{\"action\":\"click\",\"selector\":\"#add\"},{\"action\":\"expect_count\",\"selector\":\".plant-card\",\"count\":1}]", items = new { type = "object", description = "Действие: click / fill / press / expect_text / expect_visible / expect_count / expect_value / expect_url" } },
+                timeout_seconds = new { type = "integer", description = "Общий таймаут проверки (по умолчанию 60, макс 180)" }
             }, required = new[] { "url" } }),
         Function("pc_list_dir", "Содержимое любой папки на ПК (абсолютный путь, например C:\\Users\\me\\Downloads). Только чтение, с подтверждением пользователя.",
             new { type = "object", properties = new {
@@ -1945,7 +1954,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 : "Обдумываю следующий шаг...";
             await SendAgentStatusAsync(taskId, "thinking", thinkingLabel, ct: ct);
 
-            var llmTurn = await StreamAgentTurnAsync(taskId, messages, ct, disableTools: finalAnswerForced);
+            var llmTurn = await RunModelTurnAsync(taskId, messages, ct, disableTools: finalAnswerForced);
             // HARNESS_ALIASES: модель говорит именами harness (read/write/edit) — переводим в внутренние
             // до всех стражей, диспетчера и UI.
             var responseMessage = NormalizeToolCalls(llmTurn.Message);
@@ -4344,7 +4353,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 await LocalModelGate.WaitAsync(ct);
                 try
                 {
-                    rawTurn = await StreamAgentTurnAsync(taskId, messages, ct, streamToClient: false, route: workerRoute);
+                    rawTurn = await RunModelTurnAsync(taskId, messages, ct, streamToClient: false, route: workerRoute);
                 }
                 finally
                 {
@@ -4353,7 +4362,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             }
             else
             {
-                rawTurn = await StreamAgentTurnAsync(taskId, messages, ct, streamToClient: false);
+                rawTurn = await RunModelTurnAsync(taskId, messages, ct, streamToClient: false);
             }
 
             var turn = rawTurn with { Message = NormalizeToolCalls(rawTurn.Message) };
@@ -4484,6 +4493,16 @@ public class ConexyAgentRunner : IConexyAgentRunner
     {
         try
         {
+            // TOOL_ARG_ALIASES: модель иногда называет путь `file`/`file_path` вместо `path` — ремонтируем
+            // до разбора аргументов, чтобы вызов не тратился на ошибку контракта.
+            if (ToolArgumentAliases.TryRepair(toolCall.Function.Name, toolCall.Function.Arguments, out var repairedArgs))
+            {
+                toolCall = toolCall with { Function = toolCall.Function with { Arguments = repairedArgs } };
+                _logger.LogInformation(
+                    "Agent tool arguments repaired via path alias. tool={Tool} task={TaskId}",
+                    toolCall.Function.Name, _job.TaskId);
+            }
+
             using var doc = JsonDocument.Parse(toolCall.Function.Arguments);
             var root = doc.RootElement;
 
@@ -5883,6 +5902,81 @@ public class ConexyAgentRunner : IConexyAgentRunner
     /// arriving as one block. Content, reasoning and the assembled tool calls are returned as a
     /// single assistant message so the rest of the loop is unchanged.
     /// </summary>
+    // MODEL_WATCHDOG: добавлено 2026-11-21 — в стресс-тесте ответ модели мог зависнуть на 15 минут:
+    // стрим-сторож сдавался, но fallback-запрос висел без единого события, и клиент ждал до общего
+    // таймаута. Теперь на ход модели есть жёсткий дедлайн и heartbeat-сообщения каждые 20 с, а ошибка
+    // внятная: «модель не ответила за 150 с, сделанное сохранено».
+    private static readonly TimeSpan ModelTurnDeadline = TimeSpan.FromSeconds(150);
+
+    private async Task<(ChatMessage Message, int TotalTokens, LlmTokenUsage Usage)> RunModelTurnAsync(
+        Guid taskId,
+        List<ChatMessage> messages,
+        CancellationToken ct,
+        bool disableTools = false,
+        bool streamToClient = true,
+        LlmRoute? route = null)
+    {
+        using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadlineCts.CancelAfter(ModelTurnDeadline);
+        var group = _hubContext.Clients.Group($"task_{taskId}");
+        using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var startedAt = DateTime.UtcNow;
+        var heartbeat = Task.Run(async () =>
+        {
+            while (true)
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(20), heartbeatCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                try
+                {
+                    if (streamToClient)
+                        await group.SendAsync("OnLog",
+                            $"[Model] Ждём ответа модели… {(int)(DateTime.UtcNow - startedAt).TotalSeconds} с", ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Heartbeat не должен ломать ход.
+                }
+            }
+        }, CancellationToken.None);
+
+        try
+        {
+            return await StreamAgentTurnAsync(taskId, messages, deadlineCts.Token,
+                streamToClient: streamToClient, disableTools: disableTools, route: route);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && deadlineCts.IsCancellationRequested)
+        {
+            if (streamToClient)
+            {
+                try
+                {
+                    await group.SendAsync("OnLog",
+                        $"[Model] Модель не ответила за {(int)ModelTurnDeadline.TotalSeconds} с — прогон прерван, сделанные изменения сохранены.", ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                }
+            }
+
+            throw new HttpRequestException(
+                $"Модель не ответила за {(int)ModelTurnDeadline.TotalSeconds} с (ни одного токена). Прогон прерван, " +
+                "уже сделанные изменения сохранены — повторите запрос; если это повторяется, сервер перегружен.");
+        }
+        finally
+        {
+            heartbeatCts.Cancel();
+            try { await heartbeat; } catch (Exception ex) when (ex is not OperationCanceledException) { }
+        }
+    }
+
     private async Task<(ChatMessage Message, int TotalTokens, LlmTokenUsage Usage)> StreamAgentTurnAsync(
         Guid taskId,
         List<ChatMessage> messages,

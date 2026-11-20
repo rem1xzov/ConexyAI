@@ -23,6 +23,8 @@ public sealed class ToolRunner
     private readonly HookRunner? _hooks;
     // LOOP_GUARD: счётчик чтений без правок — заслон работает даже со старой версией сервера.
     private readonly ReadLoopGuard _readGuard = new();
+    // WEB_VERIFY: проверка работоспособности сайта в headless Edge/Chrome через CDP.
+    private readonly WebVerifyTool _webVerify = new();
     // WRITE_CHURN: предел на полные перезаписи одного файла за сеанс.
     private readonly WriteChurnGuard _churnGuard = new();
     // BUILD_FILES_GUARD: агент менял файлы сборки/тестов — run_tests/get_diagnostics только с подтверждения.
@@ -161,6 +163,7 @@ public sealed class ToolRunner
                 "bg_stop" => _pc.BgStop(args),
                 "http_request" => await _pc.HttpAsync(args, ct),
                 "page_screenshot" => await _pc.ScreenshotAsync(args, ct),
+                "web_verify" => await _webVerify.RunAsync(args, ct),
                 "window_list" => _windows.List(args),
                 "screen_capture" => await _windows.CaptureAsync(args, ct),
                 "window_keys" => await _windows.KeysAsync(args, ct),

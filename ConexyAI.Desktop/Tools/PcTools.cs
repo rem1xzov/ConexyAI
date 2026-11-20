@@ -260,7 +260,7 @@ public sealed class PcTools : IDisposable
 
     // ── Скриншот страницы в браузере ПК ─────────────────────────────────────
 
-    private static string? FindBrowser()
+    public static string? FindBrowser()
     {
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         string[] candidates = OperatingSystem.IsWindows()

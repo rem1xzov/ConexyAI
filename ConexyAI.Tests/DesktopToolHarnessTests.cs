@@ -16,6 +16,7 @@ internal static class DesktopToolHarnessTests
         TestRegistry.Add("desktop tools: shell, background processes and project commands", ShellAsync);
         TestRegistry.Add("desktop tools: pc_* tools reach outside the project", PcAsync);
         TestRegistry.Add("desktop tools: service tools and guards (paths, unknown tools, plan mode)", GuardsAsync);
+        TestRegistry.Add("desktop tools: static site syntax and PWA checks", StaticWebAsync);
         TestRegistry.Add("desktop tools: re-reading the same file is stopped until an edit", ReadLoopAsync);
         TestRegistry.Add("desktop tools: file reads are paginated and capped", ReadPagingAsync);
         TestRegistry.Add("desktop tools: a system folder is never a workspace", SystemRootAsync,
@@ -129,6 +130,18 @@ internal static class DesktopToolHarnessTests
     }
 
     // TOKEN_ECONOMY: целый файл — это десятки тысяч токенов в контексте на каждом шаге.
+    private static async Task StaticWebAsync()
+    {
+        using var h = new Harness();
+        File.WriteAllText(Path.Combine(h.Root, "index.html"), "<!doctype html><html><body><h1>Site</h1></body></html>");
+        File.WriteAllText(Path.Combine(h.Root, "app.js"), "console.log('ok');");
+        File.WriteAllText(Path.Combine(h.Root, "manifest.webmanifest"), "{\"name\":\"site\",\"start_url\":\"/\"}");
+        await h.Ok("get_diagnostics", new { }, output => output.Contains("синтаксис", StringComparison.Ordinal) || output.Contains("manifest", StringComparison.Ordinal));
+
+        File.WriteAllText(Path.Combine(h.Root, "app.js"), "function broken( {");
+        await h.Fail("run_tests", new { });
+    }
+
     private static async Task ReadPagingAsync()
     {
         using var h = new Harness();

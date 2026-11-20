@@ -15,6 +15,7 @@ internal static class HarnessGuardsTests
         TestRegistry.Add("tool advice: a ready-made hint is extracted from an error", AdviceAsync);
         TestRegistry.Add("harness claims: a 'tools disabled' excuse is recognized, honest reports are not", ClaimsAsync);
         TestRegistry.Add("command timeouts: interactive, long and normal commands get 120/3600/300", TimeoutsAsync);
+        TestRegistry.Add("tool arg aliases: path is restored from file/file_path/filename", AliasesAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -112,6 +113,19 @@ internal static class HarnessGuardsTests
             "an honest user rejection is not an excuse about disabled tools");
         Assert(!HarnessClaims.ClaimsToolsDisabled("Нет доступа к API: ключ не настроен."),
             "an honest external blocker is not an excuse about disabled tools");
+        return Task.CompletedTask;
+    }
+
+    private static Task AliasesAsync()
+    {
+        Assert(ToolArgumentAliases.TryRepair("file_write", """{"file_path":"a.txt","content":"x"}""", out var repaired),
+            "file_path repairs the missing path");
+        using (var doc = System.Text.Json.JsonDocument.Parse(repaired))
+            Assert(doc.RootElement.GetProperty("path").GetString() == "a.txt", "the alias value moves into path");
+        Assert(ToolArgumentAliases.TryRepair("file_read", """{"filename":"b.txt"}""", out _), "filename repairs too");
+        Assert(!ToolArgumentAliases.TryRepair("grep", """{"pattern":"x"}""", out _), "non-path tools are untouched");
+        Assert(!ToolArgumentAliases.TryRepair("file_write", """{"content":"x"}""", out _), "nothing to repair without an alias");
+        Assert(!ToolArgumentAliases.TryRepair("file_write", """{"path":"a.txt","file":"b.txt"}""", out _), "an existing path is never overwritten");
         return Task.CompletedTask;
     }
 
