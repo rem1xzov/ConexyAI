@@ -1725,6 +1725,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // LOOP_GUARD: защита от зацикливания живёт ровно один прогон — на следующий запуск состояние
         // не переносится (петля — свойство конкретной задачи).
         var loopGuard = new AgentLoopGuard();
+        // TOOL_PIPELINE: отказные гейты инструмента — стражи цикла и экрана в одном монотонном конвейере.
+        var toolGates = new ToolGatePipeline(
+            new LoopGuardGate(loopGuard),
+            new ComputerUseGate(_computerGuard));
 
         // EDIT_AFTER_READ + BASH_FILE_OPS: тоже на прогон. Чтение живёт весь прогон (файл, прочитанный
         // на шаге 1, можно править на шаге 20) — сбрасывается только отказ «файловые операции через bash».
@@ -2457,12 +2461,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 {
                     readRefusal = loopGuard.RefuseRead();
                 }
+                // TOOL_PIPELINE: гейты идут в фиксированном порядке и только отказывают: план/команда/чтение
+                // проверяются до выполнения, затем общий конвейер (страж цикла + страж экрана).
                 var refusal = planRefusal ?? teamRefusal ?? readRefusal
-                    ?? (toolAllowed ? loopGuard.Refuse(toolName, toolCall.Function.Arguments) : null)
-                    // COMPUTER_USE: клик в пустоту и застывший экран отсекаются ДО действия, по состоянию кадра.
-                    ?? (toolAllowed && IsComputerTool(toolName)
-                        ? _computerGuard.Refuse(toolName, toolCall.Function.Arguments)
-                        : null);
+                    ?? (toolAllowed ? toolGates.Refuse(toolName, toolCall.Function.Arguments) : null);
 
                 // SCOPE_GUARD: операционный запрос («запусти/покажи») не разрешает правки файлов —
                 // именно из-за этого запуск проекта превращался в рефакторинг проекта.
