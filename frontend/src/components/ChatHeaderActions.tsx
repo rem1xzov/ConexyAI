@@ -93,7 +93,7 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
             >
               <ShareIcon size={16} className="chats__menu-icon" /> {t('sidebar.share')}
             </button>
-            {onExport && (
+            {(session.kind ?? 'chat') === 'projects' && onExport && (
               <button
                 type="button"
                 role="menuitem"
@@ -119,7 +119,7 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
               <ShieldIcon size={16} className="chats__menu-icon" /> {t('sidebar.shareAdmin')}
             </button>
             {/* GOAL: долгоживущая цель чата — раунды запускает сервер. */}
-            {onGoal && (
+            {(session.kind ?? 'chat') === 'projects' && onGoal && (
               <button
                 type="button"
                 role="menuitem"
@@ -162,17 +162,19 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
                 {session.isHidden ? t('sidebar.unhide') : t('sidebar.hide')}
               </button>
             )}
-            <button
-              type="button"
-              role="menuitem"
-              className="chats__menu-item"
-              onClick={() => {
-                setMenuOpen(false);
-                setProjecting(true);
-              }}
-            >
-              <span className="chats__menu-icon" aria-hidden="true">▤</span> {t('extras.projectAssign')}
-            </button>
+            {(session.kind ?? 'chat') === 'projects' && (
+              <button
+                type="button"
+                role="menuitem"
+                className="chats__menu-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setProjecting(true);
+                }}
+              >
+                <span className="chats__menu-icon" aria-hidden="true">▤</span> {t('extras.projectAssign')}
+              </button>
+            )}
             <button
               type="button"
               role="menuitem"
