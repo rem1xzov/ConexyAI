@@ -111,6 +111,16 @@ export function ModelPicker({
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
 
+  // MODELPICKER_ESC: Escape закрывает меню (раньше оно закрывалось только кликом мимо и
+  // оставалось висеть поверх чата).
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   const options = mode === 'code' ? [CODER_MODEL, COWORK_MODEL] : [FLASH_MODEL, PRO_MODEL];
   const current = ALL_MODELS.find((o) => o.value === model) ?? options[0];
   const isAgent = mode === 'code';

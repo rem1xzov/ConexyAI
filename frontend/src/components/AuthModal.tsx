@@ -39,6 +39,14 @@ function messageOf(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
+// PASSWORD_RESET: код можно вводить заново, если ошибка не про сам код: сервер сначала валидирует
+// пароль (например «минимум 8 символов») и только потом расходует код. Раньше любая ошибка стирала
+// код и включала 60-секундный кулдаун — пользователь не мог просто исправить пароль.
+function isCodeError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  return /код|code|попыт|expired|invalid/i.test(message);
+}
+
 // PASSWORD_EYE: добавлено 2026-09-26
 /**
  * A password input with a show/hide button. The eye is there on phones as much as on desktops: on an
@@ -258,15 +266,27 @@ export function AuthModal({
       onClose();
     } catch (err) {
       setError(messageOf(err, t('errors.default')));
-      // A spent code is dead; the password stays so the user does not retype it after requesting a new one.
-      setResetCode('');
+      // PASSWORD_RESET: код стираем только если проблема в самом коде (истёк/неверный/кончились
+      // попытки) и сразу разрешаем запросить новый. Ошибка валидации пароля код не тратит —
+      // оставляем его, чтобы можно было исправить пароль и отправить снова.
+      if (isCodeError(err)) {
+        setResetCode('');
+        setCooldown(0);
+      }
     } finally {
       setLoading(false);
     }
   }
 
   const overlay = (children: ReactNode) => (
-    <div className="dialog-overlay dialog-overlay--auth" onMouseDown={onClose}>
+    <div
+      className="dialog-overlay dialog-overlay--auth"
+      // PASSWORD_RESET: случайный клик мимо окна не должен сбрасывать введённый код и пароли.
+      // В режимах «забыли пароль»/«новый пароль» закрываем только явной кнопкой X.
+      onMouseDown={() => {
+        if (view === 'credentials' && !challenge) onClose();
+      }}
+    >
       <div className="dialog-card auth-modal" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
         {children}
       </div>

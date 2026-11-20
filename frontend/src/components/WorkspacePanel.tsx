@@ -1599,7 +1599,9 @@ export function WorkspacePanel({
 
   return (
     <div className="workspace" style={style} ref={rootRef}>
-      <MenuBar menus={menus} />
+      {/* MENUBAR_CLEANUP: «Файл/Правка/Вид» показываем только когда есть открытый файл — в пустой
+          веб-панели это лишний нативный хром. */}
+      {activePath && <MenuBar menus={menus} />}
       <input
         ref={zipInputRef}
         type="file"

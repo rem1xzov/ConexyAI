@@ -610,6 +610,49 @@ public class AuthController : ControllerBase
         }
     }
 
+    // CHANGE_PASSWORD: добавлено 2026-11-21 — смена пароля авторизованным пользователем (в отличие от
+    // reset-password по коду из письма, здесь подтверждением служит текущий пароль). Как и сброс, смена
+    // отзывает все старые сессии (BumpTokenVersion) и выдаёт новую текущему устройству.
+    [HttpPost("change-password")]
+    [Authorize]
+    [EnableRateLimiting(AuthRateLimitPolicies.ResetPassword)]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request, CancellationToken ct)
+    {
+        if (!User.TryGetUserId(out var userId))
+            return Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(request.CurrentPassword) || string.IsNullOrWhiteSpace(request.NewPassword))
+            return BadRequest(new { code = "invalid_password", message = "Введите текущий и новый пароль." });
+
+        var user = await _userRepository.GetByIdAsync(userId, ct);
+        if (user?.PasswordHash is not { Length: > 0 })
+            return BadRequest(new { code = "no_password", message = "У этого аккаунта нет пароля: вход выполнен через GitHub." });
+
+        if (!BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
+            return BadRequest(new { code = "invalid_current_password", message = "Текущий пароль неверен." });
+
+        if (string.Equals(request.CurrentPassword, request.NewPassword, StringComparison.Ordinal))
+            return BadRequest(new { code = "same_password", message = "Новый пароль совпадает с текущим." });
+
+        try
+        {
+            EmailAuthService.ValidatePassword(request.NewPassword);
+        }
+        catch (AuthException ex)
+        {
+            return BadRequest(new { code = ex.Code, message = ex.Message });
+        }
+
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+        await _userRepository.UpdateAsync(user, ct);
+        // TOKEN_REVOCATION: все ранее выданные токены становятся недействительными — остальные
+        // устройства разлогиниваются, текущее получает новую сессию ниже.
+        await _userRepository.BumpTokenVersionAsync(user.Id, ct);
+        var fresh = await _userRepository.GetByIdAsync(user.Id, ct) ?? user;
+        _logger.LogInformation("Account: password changed by the user (user {UserId}).", userId);
+        return Ok(IssueSession(fresh));
+    }
+
     // EMAIL_AUTH: добавлено 2026-09-19
     /// <summary>Logs in with an email/password account.</summary>
     [HttpPost("login")]

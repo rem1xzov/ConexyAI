@@ -26,7 +26,7 @@ interface SidebarProps {
   onToggle: () => void;
   onTabChange: (tab: ChatSessionKind) => void;
   onNewSession: (kind: ChatSessionKind) => void;
-  onSelectSession: (id: string) => void;
+  onSelectSession: (id: string, kind?: ChatSessionKind) => void;
   onSearchChange: (value: string) => void;
   onShareSession: (session: ChatSession) => void;
   // SHARE_ADMIN: отправить чат администратору (жалоба/разбор проблемы).
@@ -116,9 +116,12 @@ export function Sidebar(props: SidebarProps) {
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, []);
 
+  const query = search.trim().toLowerCase();
+  // UNIFIED_SEARCH: поиск ищет по ВСЕМ типам сессий (чат/агент/ученики), а не только по активной
+  // вкладке — одна строка поиска на весь аккаунт. Без поиска вкладки остаются фильтром.
   const filtered = [...sessions]
-    .filter((s) => (s.kind ?? 'chat') === activeTab)
-    .filter((s) => !search.trim() || s.title.toLowerCase().includes(search.trim().toLowerCase()))
+    .filter((s) => (query ? true : (s.kind ?? 'chat') === activeTab))
+    .filter((s) => !query || s.title.toLowerCase().includes(query))
     .sort(
       (a, b) =>
         Number(b.isPinned ?? false) - Number(a.isPinned ?? false) ||
@@ -248,11 +251,24 @@ export function Sidebar(props: SidebarProps) {
                       <button
                         className={`chats__item ${s.id === activeId ? 'chats__item--active' : ''}`}
                         onClick={() => {
-                          onSelectSession(s.id);
+                          // UNIFIED_SEARCH: сессия из другой вкладки (нашлась поиском) открывает свою
+                          // вкладку и сам чат — не нужно сначала переключаться вручную.
+                          onSelectSession(s.id, s.kind ?? 'chat');
                           setOpenMenuId(null);
                         }}
                       >
                         <span className="chats__title">{s.title}</span>
+                        {query && (s.kind ?? 'chat') !== activeTab && (
+                          <span className="chats__kind">
+                            {t(
+                              s.kind === 'projects'
+                                ? 'sidebar.tabs.agent'
+                                : s.kind === 'students'
+                                  ? 'sidebar.tabs.students'
+                                  : 'sidebar.tabs.chat',
+                            )}
+                          </span>
+                        )}
                         {/* CHAT_PIN_ICON: булавка стоит в конце строки (как в референсе) — закреплённый
                             чат видно сразу, а не только по порядку в списке. */}
                         {s.isPinned && (

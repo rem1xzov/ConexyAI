@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   getDevToken,
+  changePassword as apiChangePassword,
   forgotPassword as apiForgotPassword,
   getMe,
   getSession,
@@ -542,6 +543,19 @@ export function useAuth() {
     [applyToken, t],
   );
 
+  // CHANGE_PASSWORD: смена пароля из настроек (текущий пароль + новый). Как и сброс, сервер
+  // отзывает остальные сессии и выдаёт новую текущему устройству.
+  const changePassword = useCallback(
+    async (currentPassword: string, newPassword: string) => {
+      try {
+        applyToken(await apiChangePassword(currentPassword, newPassword));
+      } catch (e) {
+        throw new Error(authErrorMessage(e, t));
+      }
+    },
+    [applyToken, t],
+  );
+
   // SESSION_REVOKED: изменено 2026-09-24 (M19) — выход отзывает токен на сервере (Bearer + cookie),
   // а локальное состояние аккаунта (чаты, хаб, ходы) App чистит по смене пользователя (H10).
   const logout = useCallback(async () => {
@@ -575,6 +589,8 @@ export function useAuth() {
     // PASSWORD_RESET: добавлено 2026-09-26
     requestPasswordReset,
     resetPassword,
+    // CHANGE_PASSWORD: добавлено 2026-11-21
+    changePassword,
     logout,
   };
 }

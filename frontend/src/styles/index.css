@@ -2953,6 +2953,13 @@ body {
   text-decoration: none;
 }
 
+/* LINKIFY: голые URL из ответов модели подчёркиваем — иначе ссылка неотличима от текста. */
+.markdown a.chat-link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-word;
+}
+
 .markdown a:hover {
   text-decoration: underline;
 }
@@ -12671,6 +12678,27 @@ body::before {
     background: transparent;
     box-shadow: none;
   }
+}
+
+/* CHANGE_PASSWORD: подтверждение смены пароля в настройках. */
+.settings-saved {
+  margin: 8px 0 12px;
+  color: var(--success, #7ee787);
+  font-size: 13px;
+}
+
+/* UNIFIED_SEARCH: бейдж типа сессии в общем поиске (чат/агент/ученики). */
+.chats__kind {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.16));
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 16px;
+  text-transform: lowercase;
+  white-space: nowrap;
 }
 
 @media (prefers-reduced-motion: reduce) {

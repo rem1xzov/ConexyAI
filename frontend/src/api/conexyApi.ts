@@ -132,6 +132,19 @@ export async function resetPassword(
   return data;
 }
 
+// CHANGE_PASSWORD: добавлено 2026-11-21 — смена пароля из настроек (подтверждение текущим паролем).
+/** Changes the password of the signed-in account; other sessions are revoked, a fresh token is returned. */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<DevTokenResponse> {
+  const { data } = await axios.post<DevTokenResponse>('/api/auth/change-password', {
+    currentPassword,
+    newPassword,
+  });
+  return data;
+}
+
 // EMAIL_AUTH: добавлено 2026-09-19
 /** Logs in with an email/password account and returns its session token. */
 export async function login(email: string, password: string): Promise<DevTokenResponse> {

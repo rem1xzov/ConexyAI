@@ -59,7 +59,145 @@ import { LEGAL_PATHS } from './legal/LegalPage';
 // MCP_OAUTH: внешняя ссылка открывается системным браузером в приложении и новой вкладкой в вебе.
 import { openExternalUrl } from '../utils/mobile';
 
-export type SettingsSection = 'general' | 'limits' | 'personalization' | 'memory' | 'github' | 'mcp' | 'telegram' | 'desktop' | 'app' | 'phone';
+export type SettingsSection = 'general' | 'limits' | 'account' | 'personalization' | 'memory' | 'github' | 'mcp' | 'telegram' | 'desktop' | 'app' | 'phone';
+
+// CHANGE_PASSWORD: добавлено 2026-11-21 — раздел «Аккаунт» в настройках: email и смена пароля
+// с подтверждением текущим. Остальные сессии отзываются сервером, текущее устройство остаётся.
+function AccountSection({
+  email,
+  onChangePassword,
+}: {
+  email?: string;
+  onChangePassword?: (currentPassword: string, newPassword: string) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const canSubmit = !saving && current.length > 0 && next.length >= 8 && next === confirm;
+
+  async function submit() {
+    setError(null);
+    setSaved(false);
+    if (next !== confirm) {
+      setError(t('account.passwordMismatch'));
+      return;
+    }
+    if (next.length < 8) {
+      setError(t('account.passwordTooShort'));
+      return;
+    }
+    if (!onChangePassword) {
+      setError(t('account.passwordUnavailable'));
+      return;
+    }
+    setSaving(true);
+    try {
+      await onChangePassword(current, next);
+      setCurrent('');
+      setNext('');
+      setConfirm('');
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('account.passwordError'));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="settings-panel">
+      <p className="settings-panel__intro">{t('account.intro')}</p>
+
+      <div className="settings-field">
+        <div className="settings-field__label">{t('account.emailLabel')}</div>
+        <input className="dialog-input" type="email" value={email ?? ''} readOnly disabled />
+      </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <div className="settings-field">
+          <label className="settings-field__label" htmlFor="account-current-password">
+            {t('account.currentPassword')}
+          </label>
+          <input
+            id="account-current-password"
+            className="dialog-input"
+            type="password"
+            autoComplete="current-password"
+            value={current}
+            onChange={(e) => {
+              setCurrent(e.target.value);
+              setError(null);
+              setSaved(false);
+            }}
+          />
+        </div>
+
+        <div className="settings-field">
+          <label className="settings-field__label" htmlFor="account-new-password">
+            {t('account.newPassword')}
+          </label>
+          <input
+            id="account-new-password"
+            className="dialog-input"
+            type="password"
+            autoComplete="new-password"
+            value={next}
+            onChange={(e) => {
+              setNext(e.target.value);
+              setError(null);
+              setSaved(false);
+            }}
+          />
+        </div>
+
+        <div className="settings-field">
+          <label className="settings-field__label" htmlFor="account-confirm-password">
+            {t('account.confirmPassword')}
+          </label>
+          <input
+            id="account-confirm-password"
+            className="dialog-input"
+            type="password"
+            autoComplete="new-password"
+            value={confirm}
+            onChange={(e) => {
+              setConfirm(e.target.value);
+              setError(null);
+              setSaved(false);
+            }}
+          />
+        </div>
+
+        <div className="settings-field__hint">{t('account.changePasswordHint')}</div>
+
+        {error && (
+          <div className="settings-error" role="alert">
+            {error}
+          </div>
+        )}
+        {saved && (
+          <div className="settings-saved" role="status">
+            {t('account.passwordChanged')}
+          </div>
+        )}
+
+        <button className="dialog-btn dialog-btn--primary" type="submit" disabled={!canSubmit}>
+          {saving ? t('account.savingPassword') : t('account.savePassword')}
+        </button>
+      </form>
+    </div>
+  );
+}
 
 interface SettingsModalProps {
   theme: Theme;
@@ -79,6 +217,9 @@ interface SettingsModalProps {
   hiddenChats?: ChatSession[];
   onOpenHiddenChat?: (id: string) => void;
   onUnhideChat?: (id: string) => void;
+  // CHANGE_PASSWORD: аккаунт — email и смена пароля с подтверждением текущим.
+  email?: string;
+  onChangePassword?: (currentPassword: string, newPassword: string) => Promise<void>;
 }
 
 // CHAT_HIDE: список скрытых чатов; нажатие открывает чат как обычный, «Показать» возвращает его в список.
@@ -160,6 +301,8 @@ const LANGS: { value: string; key: string }[] = [
 const SECTIONS: { value: SettingsSection; key: string; Icon: typeof GearIcon }[] = [
   { value: 'general', key: 'prefs.tabGeneral', Icon: GearIcon },
   { value: 'limits', key: 'prefs.tabLimits', Icon: ShieldIcon },
+  // CHANGE_PASSWORD: раздел «Аккаунт» — безопасность и смена пароля.
+  { value: 'account', key: 'prefs.tabAccount', Icon: ShieldIcon },
   { value: 'personalization', key: 'prefs.tabPersonalization', Icon: UserIcon },
   { value: 'memory', key: 'memory.tab', Icon: DatabaseIcon },
   { value: 'github', key: 'settings.githubTab', Icon: GitHubIcon },
@@ -1425,6 +1568,8 @@ export function SettingsModal({
   hiddenChats = [],
   onOpenHiddenChat,
   onUnhideChat,
+  email,
+  onChangePassword,
 }: SettingsModalProps) {
   const { t } = useTranslation();
   const [section, setSection] = useState<SettingsSection>(initialSection);
@@ -1571,6 +1716,10 @@ export function SettingsModal({
             {/* Sections stay mounted (only hidden) so switching tabs never drops typed text. */}
             <div hidden={section !== 'limits'}>
               <LimitsSection usage={usage} onReset={onLimitsReset} />
+            </div>
+
+            <div hidden={section !== 'account'}>
+              <AccountSection email={email} onChangePassword={onChangePassword} />
             </div>
 
             <div hidden={section !== 'personalization'}>

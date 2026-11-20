@@ -318,7 +318,7 @@ const EXCEEDED_POOL_KEY: Record<string, LimitPoolKey> = {
 
 export default function App() {
   // EMAIL_AUTH: добавлено 2026-09-19
-  const { token, user, initializing, profileFailed, reloadProfile, error: authError, login, register, confirmEmail, resendCode, requestPasswordReset, resetPassword, logout } = useAuth();
+  const { token, user, initializing, profileFailed, reloadProfile, error: authError, login, register, confirmEmail, resendCode, requestPasswordReset, resetPassword, changePassword, logout } = useAuth();
   // SETTINGS: добавлено 2026-09-19
   const { t, i18n } = useTranslation();
   // MOBILE: добавлено 2026-09-19 — drives the responsive layout (sidebar overlay, agent tabs).
@@ -346,7 +346,9 @@ export default function App() {
   // FOCUS_MODE: the start screen steps aside while the composer has focus (mobile layout only).
   const [composerFocused, setComposerFocused] = useState(false);
   const [workspaceWidth, setWorkspaceWidth] = useState(55); // % width of the IDE pane
-  const [ideCollapsed, setIdeCollapsed] = useState(false);
+  // IDE_PANEL: по умолчанию правая панель свёрнута — пустая IDE-обвязка не должна занимать треть
+  // экрана до появления файлов (как у Trae/Antigravity: панель появляется с задачей).
+  const [ideCollapsed, setIdeCollapsed] = useState(true);
 
   // SESSION_ISOLATION: чаты в памяти принадлежат `storeUser`; кеш на диске разложен по пользователям.
   const [storeUser, setStoreUser] = useState<string | null>(userId);
@@ -2083,9 +2085,9 @@ export default function App() {
           ];
 
   // LOGO_SWEEP: the start screen greets by time of day, next to the mark (Claude-style row).
-  // USER_NAME: имя из персонализации важнее производного от email.
-  const emailName = user?.displayName ? user.displayName.split('@')[0] : null;
-  const displayName = preferredName ?? emailName;
+  // USER_NAME: обращение берём ТОЛЬКО из персонализации. Подставлять email-локаль нельзя —
+  // «Добрый вечер, b.kravtsov09» выглядит как техническая строка; без имени — нейтральное обращение.
+  const displayName = preferredName ?? null;
   const greeting = t(greetingKey(activeTab), { name: displayName ?? t('chat.defaultName') });
 
   // Latest agent progress for the IDE bottom panel (the task checklist).
@@ -3439,7 +3441,20 @@ export default function App() {
           handleNewSession(kind);
           if (isMobile) setSidebarOpen(false);
         })}
-        onSelectSession={(id) => (id === activeId ? openSession(id) : guardLeave(() => openSession(id)))}
+        onSelectSession={(id, kind) => {
+          // UNIFIED_SEARCH: открыть сессию из поиска можно из любой вкладки — сначала переключаем
+          // вкладку (с проверкой несохранённых правок), затем открываем сам чат.
+          if (id === activeId && (!kind || kind === activeTab)) {
+            openSession(id);
+            if (isMobile) setSidebarOpen(false);
+            return;
+          }
+          guardLeave(() => {
+            if (kind && kind !== activeTab) handleTabChange(kind);
+            openSession(id);
+            if (isMobile) setSidebarOpen(false);
+          });
+        }}
         onSearchChange={setSearch}
         onShareSession={handleShareSession}
         onShareAdminSession={handleShareWithAdmin}
@@ -3843,6 +3858,8 @@ export default function App() {
           hiddenChats={hiddenSessions}
           onOpenHiddenChat={handleOpenHiddenSession}
           onUnhideChat={(id) => void handleHideSession(id, false)}
+          email={user?.email}
+          onChangePassword={changePassword}
         />
       )}
 

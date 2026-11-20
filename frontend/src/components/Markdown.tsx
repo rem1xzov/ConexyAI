@@ -1,4 +1,4 @@
-import { memo, useMemo, type ReactNode } from 'react';
+import { Fragment, memo, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { inlineText, parseInline, parseMarkdown, type Block, type Inline, type TableAlign } from './markdown/parse';
 import { CodeBlock } from './markdown/CodeBlock';
@@ -23,11 +23,35 @@ function isTermBadge(text: string): boolean {
   return trimmed.length > 0 && trimmed.length <= 32 && trimmed.split(/\s+/).length <= 4;
 }
 
+/**
+ * LINKIFY: голые URL в ответах модели (Smart Search, ссылки на источники) раньше были обычным
+ * текстом — теперь это кликабельные ссылки. Знаки препинания в конце URL не входят в href.
+ */
+const BARE_URL = /(https?:\/\/[^\s<>"']+)/g;
+
+function renderTextWithLinks(value: string): ReactNode {
+  if (!value.includes('http')) return value;
+  const parts = value.split(BARE_URL);
+  return parts.map((part, index) => {
+    if (index % 2 === 0) return part;
+    const trailing = part.match(/[.,;:!?)\]»]+$/)?.[0] ?? '';
+    const href = trailing ? part.slice(0, -trailing.length) : part;
+    return (
+      <span key={`url-${index}`}>
+        <a className="chat-link" href={href} target="_blank" rel="noreferrer noopener">
+          {href}
+        </a>
+        {trailing}
+      </span>
+    );
+  });
+}
+
 function renderInlineNodes(nodes: Inline[]): ReactNode[] {
   return nodes.map((node, i) => {
     switch (node.type) {
       case 'text':
-        return node.value;
+        return <Fragment key={i}>{renderTextWithLinks(node.value)}</Fragment>;
       case 'code':
         return (
           <code key={i} className="chat-code">
