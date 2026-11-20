@@ -16,6 +16,8 @@ internal static class AgentContextCompressorTests
         TestRegistry.Add("context compressor: short outputs and non-tool messages are left alone", ShortAndNonToolUntouchedAsync);
         TestRegistry.Add("context compressor: exactly the kept count is never trimmed", BoundaryAsync);
         TestRegistry.Add("context compressor: trims in batches so the cached prefix stays stable between steps", BatchKeepsPrefixAsync);
+        TestRegistry.Add("context compressor: no window pressure means no trimming at all", PressureGateAsync);
+        TestRegistry.Add("context compressor: pressure trims every old output and keeps its head and tail", PressureTrimsAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -80,6 +82,45 @@ internal static class AgentContextCompressorTests
             Assert(messages.Select(m => (string?)m.Content).SequenceEqual(before),
                 $"step {step}: nothing may change until a whole batch is due, or the cache prefix breaks every step");
             messages.Add(Tool(longText));
+        }
+    }
+
+    private static async Task PressureGateAsync()
+    {
+        await Task.CompletedTask;
+        var longText = new string('x', 10_000);
+        var messages = new List<ChatMessage> { new("system", "prompt") };
+        for (var i = 0; i < 16; i++) messages.Add(Tool(longText));
+
+        // Огромное окно: давления нет — историю не трогаем (кэш префикса стабилен).
+        var result = AgentContextCompressor.Compress(messages, contextWindowTokens: 10_000_000, reservedTokens: 16_000);
+        Assert(!result.Applied && result.TrimmedOutputs == 0, "with room in the window nothing is trimmed");
+        Assert(messages.All(m => m.Role != "tool" || ((string)m.Content!).Length == longText.Length),
+            "no output content changes under low pressure");
+    }
+
+    private static async Task PressureTrimsAsync()
+    {
+        await Task.CompletedTask;
+        var text = "HEAD" + new string('x', 10_000) + "TAIL";
+        var messages = new List<ChatMessage> { new("system", "prompt") };
+        for (var i = 0; i < 16; i++) messages.Add(Tool(text));
+
+        // Символов ~170k (~42k токенов) при доступном бюджете 36k и пороге 0.8 — контекст под давлением.
+        var result = AgentContextCompressor.Compress(messages, contextWindowTokens: 40_000, reservedTokens: 4_000);
+        Assert(result.Applied, "a small window triggers compression");
+        Assert(result.EstimatedTokensAfter < result.EstimatedTokensBefore, "the token estimate shrinks");
+
+        for (var i = 0; i < 12; i++)
+        {
+            var content = (string)messages[1 + i].Content!;
+            Assert(content.StartsWith("HEAD", StringComparison.Ordinal), $"output #{i} keeps its head");
+            Assert(content.EndsWith("TAIL", StringComparison.Ordinal), $"output #{i} keeps its tail (build/test errors live there)");
+            Assert(content.Contains("обрезан для экономии", StringComparison.Ordinal), $"output #{i} carries the truncation marker");
+        }
+        for (var i = 12; i < 16; i++)
+        {
+            Assert(((string)messages[1 + i].Content!).Length == text.Length, $"fresh output #{i} is untouched");
         }
     }
 

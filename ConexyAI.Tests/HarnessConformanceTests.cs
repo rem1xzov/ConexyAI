@@ -118,7 +118,9 @@ internal static class HarnessConformanceTests
         AgentContextCompressor.Compress(messages);
         var totalAfter = messages.Sum(m => (m.Content as string)?.Length ?? 0);
 
-        Assert(totalAfter < totalBefore / 2, $"compression must cut context, before={totalBefore} after={totalAfter}");
+        // CONTEXT_PRESSURE: обрезанный вывод теперь хранит голову И хвост (в хвосте итог сборки и
+        // ошибки тестов), поэтому «меньше половины» больше не гарантируется — но заметно меньше.
+        Assert(totalAfter < totalBefore * 0.6, $"compression must cut context, before={totalBefore} after={totalAfter}");
 
         var tailStart = messages.Count - AgentContextCompressor.KeepFullOutputs;
         for (var i = tailStart; i < messages.Count; i++)

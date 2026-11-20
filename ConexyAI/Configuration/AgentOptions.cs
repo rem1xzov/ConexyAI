@@ -53,4 +53,13 @@ public class AgentOptions
     /// A value &lt;= 0 falls back to the default (5); values above 20 are capped.
     /// </summary>
     public int MaxSelfCorrectionAttempts { get; set; } = 5;
+
+    // CONTEXT_PRESSURE: добавлено 2026-11-20 — сжатие контекста включается по измеренному давлению,
+    // а не по числу сообщений. Окно DeepSeek-совместимых моделей — 128К; оставляем запас под ответ
+    // модели и следующий шаг, чтобы шаг не упирался в лимит уже после отправки запроса.
+    /// <summary>Окно контекста модели в токенах (используется для порога сжатия).</summary>
+    public int ContextWindowTokens { get; set; } = 128_000;
+
+    /// <summary>Сколько токенов окна резервируется под ответ модели и следующий шаг.</summary>
+    public int ContextReservedTokens { get; set; } = 16_000;
 }

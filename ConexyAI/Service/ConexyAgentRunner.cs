@@ -342,6 +342,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // закончить при красной сборке/тестах (AgentOptions.MaxSelfCorrectionAttempts).
     private readonly int _maxSelfCorrectionAttempts;
 
+    // CONTEXT_PRESSURE: добавлено 2026-11-20 — окно модели и резерв под ответ; по ним сжатие
+    // контекста включается измеренным давлением, а не числом сообщений.
+    private readonly int _contextWindowTokens;
+    private readonly int _contextReservedTokens;
+
     // AUDITOR_BUDGET: добавлено 2026-09-23 — у аудитора не было НИКАКОЙ собственной границы, хотя он
     // идёт уже ПОСЛЕ того, как финальный текст улетел в чат. Единственным пределом был таймаут
     // HTTP-клиента: 180 с на попытку и до 3 повторов на 429/5xx, то есть до ~12 минут «ответ готов, а
@@ -1413,6 +1418,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
         var corrections = agentOptions.Value.MaxSelfCorrectionAttempts;
         _maxSelfCorrectionAttempts = corrections <= 0 ? 5 : Math.Min(corrections, 20);
+
+        _contextWindowTokens = agentOptions.Value.ContextWindowTokens > 0 ? agentOptions.Value.ContextWindowTokens : 128_000;
+        _contextReservedTokens = agentOptions.Value.ContextReservedTokens >= 0 ? agentOptions.Value.ContextReservedTokens : 16_000;
     }
 
     public async Task<string> RunLoopAsync(ConexyJob job, ConversationContext context, CancellationToken ct = default)
@@ -1789,7 +1797,19 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             // TOKEN_ECONOMY: перед каждым ходом сжимаем старые длинные выводы инструментов, чтобы
             // история не росла монотонно и каждый шаг не пересылал десятки тысяч токенов заново.
-            AgentContextCompressor.Compress(messages);
+            // CONTEXT_PRESSURE: пока в окне есть запас — историю не трогаем (кэш префикса живёт).
+            // Под давлением обрезаем старые длинные выводы и видим в логе, сколько токенов это вернуло.
+            var compression = AgentContextCompressor.Compress(messages, _contextWindowTokens, _contextReservedTokens);
+            if (compression.Applied)
+            {
+                _logger.LogInformation(
+                    "Agent context compressed: ~{Before}→~{After} tokens, {Trimmed} output(s). task={TaskId}",
+                    compression.EstimatedTokensBefore, compression.EstimatedTokensAfter, compression.TrimmedOutputs, taskId);
+                await group.SendAsync(
+                    "OnLog",
+                    $"[Context] Сжал старые выводы инструментов: ~{compression.EstimatedTokensBefore}→~{compression.EstimatedTokensAfter} токенов.",
+                    ct);
+            }
             await CompactLongRunAsync(messages, runStart, taskId, group, ct);
 
             // ITERATION_WRAPUP: на последнем разрешённом шаге просим модель не вызывать инструменты, а
