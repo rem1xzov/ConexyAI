@@ -1840,18 +1840,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // AUTO_COMPACT: с этого сообщения начинаются шаги прогона (всё раньше — устав, история и вопрос).
         var runStart = messages.Count;
 
-        // STEP_BUDGET: большой задаче не хватало 100 шагов (схема БД, миграции, API, тесты — это
-        // десятки шагов), но бесконечный лимит — это ровно то, из-за чего прогон выглядел
-        // зависшим. Поэтому лимит продлевается ПО ФАКТУ ПРОГРЕССА: пока агент правит файлы и
-        // запускает успешные команды, к лимиту добавляется ещё половина базы (не больше двух
-        // раз). Как только прогресса нет — продления нет, и прогон заканчивается как раньше.
+        // STEP_BUDGET: пока есть реальный прогресс — шаги продлеваются без жёсткого потолка.
+        // Раньше MaxStepExtensions=6 мог оборвать длинную задачу (игра/миграция) в середине.
+        // Cost ceiling остаётся за токен-брейкером, loop guard и бюджетом ошибок инструментов.
+        const int MaxStepExtensions = 1_000_000;
         var stepLimit = _maxIterations;
         var stepExtensions = 0;
         var productiveSteps = 0;
-        // STEP_BUDGET: бюджет шагов — страховка от бесконечного кручения, а не лимит на объём работы.
-        // Задачу из десятка файлов нельзя уложить в 100 шагов, и верный признак прогресса — правки и
-        // успешные команды — уже есть. Петли ловит AgentLoopGuard, поэтому продлений может быть больше.
-        const int MaxStepExtensions = 6;
 
         for (var step = 1; step <= stepLimit; step++)
         {
@@ -4369,7 +4364,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var stalls = 0;
         var noWorkNudged = false;
 
-        for (var step = 1; step <= WorkerMaxIterations; step++)
+        var workerStepLimit = WorkerMaxIterations;
+
+        for (var step = 1; step <= workerStepLimit; step++)
         {
             ct.ThrowIfCancellationRequested();
 
@@ -4483,6 +4480,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
             TouchWorker(taskId, identity.Id, workerFiles.Count > filesBefore ? "правит файлы…" : "выполняет команду…");
             if (workerFiles.Count > filesBefore || workerCommands.Count > commandsBefore)
                 lastProgress.Restart();
+
+            // WORKER_BUDGET_RENEW: помощник на длинной задаче не должен обрываться на 40 шагах.
+            // Продлеваем окно, пока он реально двигает файлы/команды; от зависаний защищает watchdog.
+            if (step == workerStepLimit)
+            {
+                workerStepLimit += WorkerMaxIterations;
+                await group.SendAsync("OnLog",
+                    $"[Orchestra] [{identity.Role}] продлеваю лимит шагов до {workerStepLimit}.", ct);
+            }
         }
 
         // ORCHESTRA_WATCHDOG: ведущий должен видеть, что агент НИЧЕГО не сделал, а не читать его

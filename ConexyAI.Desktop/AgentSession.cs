@@ -65,18 +65,16 @@ public sealed class AgentSession : IAsyncDisposable
     /// <summary>HEADLESS: события хода для --output-format stream-json.</summary>
     public Action<AgentEvent>? Event { get; set; }
 
-    /// <summary>--max-turns: максимальное число вызовов инструментов за ход (0 — без лимита).</summary>
+    /// <summary>--max-turns: размер окна вызовов инструментов; каждое следующее окно автоматически продлевается (0 — без счётчика).</summary>
     public int MaxToolCalls { get; set; }
 
     /// <summary>--effort: low | medium | high — сколько «думает» модель на каждом шаге.</summary>
     public string Effort { get; set; } = Environment.GetEnvironmentVariable("CONEXY_EFFORT") ?? "high";
 
     private int _toolCalls;
-    // STEP_BUDGET_SOFT: после исчерпания --max-turns инструменты запрещаются, но ход НЕ обрывается:
-    // модель обязана получить шанс написать финальный итог (и вызвать turn_diff), иначе StopGeneration
-    // убивал серверный прогон вместе с субагентами и пользователь оставался без ответа и diff.
-    private int _budgetDeniedCalls;
-    private const int MaxBudgetDeniedCalls = 4;
+    // STEP_BUDGET_RENEW: --max-turns — это размер окна, а не жёсткий потолок. Каждое окно
+    // автоматически продлевается: длинная задача (игра, миграция) не должна умирать на лимите.
+    private int _toolBudgetWindows = 1;
     // FINAL_REPORT_TAIL: серверный OnCompleted несёт хвост, которого нет в токенах (Change Summary,
     // diff с ПК). Раньше при любом стриме он игнорировался — отсюда «нет финального diff».
     private bool _reportTailAppended;
@@ -280,7 +278,7 @@ public sealed class AgentSession : IAsyncDisposable
         _needBullet = true;
         _answer.Clear();
         _toolCalls = 0;
-        _budgetDeniedCalls = 0;
+        _toolBudgetWindows = 1;
         if (!Headless)
             Ui.Busy();
 
@@ -577,37 +575,24 @@ public sealed class AgentSession : IAsyncDisposable
 
     private async Task OnExecuteToolAsync(Guid callId, Guid taskId, string tool, string argumentsJson)
     {
-        // HEADLESS: зашитый max-turns в терминах клиента — число вызовов инструментов за ход.
+        // STEP_BUDGET_RENEW: --max-turns задаёт окно, а не потолок. Когда окно заканчивается,
+        // инструменты выдаются снова (и так до завершения задачи). Единственные реальные стопы —
+        // токен-бюджет сервера, явный Ctrl+C и фатальные ошибки.
         // Служебные project_rules/turn_diff не считаем: это не шаги задачи.
         if (MaxToolCalls > 0 && tool is not ("project_rules" or "turn_diff"))
         {
             var used = Interlocked.Increment(ref _toolCalls);
-            if (used > MaxToolCalls)
+            var window = (used - 1) / MaxToolCalls + 1;
+            if (window > _toolBudgetWindows)
             {
-                _budgetDeniedCalls++;
-                // STEP_BUDGET_SOFT: не рвём ход. Возвращаем модели отказ инструмента и требуем итог.
-                // turn_diff разрешён и после лимита — иначе пропадёт финальный diff.
-                var demand = _budgetDeniedCalls <= MaxBudgetDeniedCalls
-                    ? $"Лимит шагов (--max-turns {MaxToolCalls}) исчерпан. Инструменты отключены. " +
-                      "Не вызывай больше инструменты: прямо сейчас напиши финальный итог — что сделано, " +
-                      "какие файлы изменены, что осталось и какие проверки прошли. " +
-                      "Если нужен итоговый diff, вызови только serve-инструмент turn_diff (он не расходует шаги)."
-                    : $"Инструменты отключены: лимит шагов (--max-turns {MaxToolCalls}) исчерпан. " +
-                      "Ответь обычным текстом с итогом, без вызовов инструментов.";
-                await SendResultAsync(callId, ToolResult.Fail(demand));
-                if (_budgetDeniedCalls == 1)
+                _toolBudgetWindows = window;
+                if (!Headless)
                 {
-                    if (!Headless)
-                    {
-                        Ui.Idle();
-                        Ui.ShowToolResult(new ToolResult(
-                            $"Лимит шагов исчерпан — прошу финальный итог без инструментов.", false));
-                        Ui.Busy();
-                    }
+                    Ui.Idle();
+                    Ui.ShowToolResult(new ToolResult(
+                        $"Лимит шагов продлён: окно {window} (+{MaxToolCalls}).", false));
+                    Ui.Busy();
                 }
-                // Если модель упорно игнорирует запрет, серверный MaxIterations всё равно завершит прогон
-                // штатным wrap-up. Клиентский StopGeneration здесь не вызываем — он убивал субагентов.
-                return;
             }
         }
 
