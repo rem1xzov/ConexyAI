@@ -3535,7 +3535,7 @@ export default function App() {
 
       {incognitoActive && <div className="incognito-aura" aria-hidden="true" />}
       <ConnectionBanner />
-      <div className={`app${isMobile && sidebarOpen ? ' app--drawer-open' : ''}${keyboardOpen ? ' app--keyboard-open' : ''}`}>
+      <div className={`app${isMobile && sidebarOpen ? ' app--drawer-open' : ''}${keyboardOpen ? ' app--keyboard-open' : ''}${isMobile && settingsOpen ? ' app--settings-open' : ''}`}>
       <Sidebar
         open={sidebarOpen}
         activeTab={activeTab}
@@ -3882,11 +3882,18 @@ export default function App() {
       {isAgent && !isMobile && latestTodos.length > 0 && <PlanProgress todos={latestTodos} />}
 
       {/* MOBILE_NAV: нижняя навигация на телефоне вместо постоянного drawer. */}
-      {isMobile && (
+      {isMobile && !artifactsOpen && (
         <MobileBottomNav
           activeTab={activeTab}
-          onTabChange={(kind) => guardLeave(() => handleTabChange(kind))}
-          onArtifacts={() => setArtifactsOpen(true)}
+          settingsActive={settingsOpen}
+          onTabChange={(kind) => {
+            setSettingsOpen(false);
+            guardLeave(() => handleTabChange(kind));
+          }}
+          onArtifacts={() => {
+            setSettingsOpen(false);
+            setArtifactsOpen(true);
+          }}
           onSettings={() => setSettingsOpen(true)}
         />
       )}

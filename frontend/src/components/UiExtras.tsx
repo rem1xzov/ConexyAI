@@ -196,11 +196,13 @@ export function OnboardingChecklist({
 
 export function MobileBottomNav({
   activeTab,
+  settingsActive = false,
   onTabChange,
   onArtifacts,
   onSettings,
 }: {
   activeTab: ChatSessionKind;
+  settingsActive?: boolean;
   onTabChange: (tab: ChatSessionKind) => void;
   onArtifacts: () => void;
   onSettings: () => void;
@@ -232,7 +234,7 @@ export function MobileBottomNav({
         </svg>
         <span>{t('extras.artifactsTitle')}</span>
       </button>
-      <button type="button" className="mobile-nav__btn" onClick={onSettings}>
+      <button type="button" className={`mobile-nav__btn${settingsActive ? ' mobile-nav__btn--active' : ''}`} onClick={onSettings}>
         <SlidersGlyphIcon size={21} />
         <span>{t('account.settings')}</span>
       </button>
