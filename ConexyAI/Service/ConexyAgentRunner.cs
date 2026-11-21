@@ -473,6 +473,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private AgentIdentity _agent = AgentIdentity.Lead;
     // ORCHESTRA: собрал ли ведущий команду за этот прогон (см. OrchestraRequiredPrompt).
     private bool _teamSpawned;
+    // ORCHESTRA_LEAD_WAIT: ведущий получает доступ к правкам только после того, как прочитал
+    // отчёты завершившейся команды через agents_status/workflow_run.
+    private bool _teamReportsReviewed;
     // SUBAGENT_AUTONOMY: сколько раз за прогон ведущий звал помощников и сколько всего их запущено.
     private int _spawnCalls;
     private int _teamHelpers;
@@ -1514,6 +1517,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _agent = AgentIdentity.Lead;
         AgentExecutionContext.Current = AgentIdentity.Lead;
         _teamSpawned = false;
+        _teamReportsReviewed = false;
         _spawnCalls = 0;
         _teamHelpers = 0;
         _runTokenBudget = 0;
@@ -1898,7 +1902,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 _teamStatusNudges++;
                 messages.Add(new ChatMessage("system",
                     "[Orchestra] Прошло больше минуты без проверки субагентов. Вызови `agents_status` с wait_seconds=60, " +
-                    "посмотри, кто застрял, и либо продолжай свою часть, либо останови бесполезных."));
+                    "посмотри, кто застрял, и либо дождись отчётов, либо останови бесполезных; правки — только после завершения команды."));
             }
 
             // STEP_BUDGET: на границе лимита решаем, давать ли ещё шагов.
@@ -2103,6 +2107,19 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         "[Orchestra] Не заканчивай: ещё работают помощники: " + runningRoles + ". " +
                         "Вызови `agents_status` с wait_seconds=60, дождись их отчётов, просмотри их — и только " +
                         "потом либо давай итог, либо запусти новую партию помощников через spawn_agents."));
+                    continue;
+                }
+                // ORCHESTRA_REVIEW_GATE: команда закончила, но отчёты ещё не прочитаны. Без этого
+                // ведущий выдавал итог по своим правкам, а не по реальной работе субагентов.
+                if (_teamSpawned && !_teamReportsReviewed && teamFinishNudges < 3)
+                {
+                    teamFinishNudges++;
+                    await group.SendAsync("OnLog",
+                        "[Orchestra] Сначала собери отчёты субагентов через agents_status.", ct);
+                    messages.Add(new ChatMessage("system",
+                        "[Orchestra] Все помощники закончили, но ты ещё не прочитал их отчёты. " +
+                        "Вызови `agents_status` (wait_seconds=0), прочитай отчёты и проверь результат; " +
+                        "только после этого давай финальный итог или дополняй код."));
                     continue;
                 }
                 // SELF_CORRECTION: the model tries to finish while a build/test/lint it ran is still
@@ -3783,6 +3800,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _spawnCalls++;
         _teamHelpers += plan.Steps.Count;
         _teamSpawned = true;
+        _teamReportsReviewed = false;
 
         var group = _hubContext.Clients.Group($"task_{taskId}");
         await group.SendAsync("OnLog", $"[Workflow] План из {plan.Steps.Count} задач: " +
@@ -3811,6 +3829,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
         if (overlaps.Count > 0)
             builder.Append("\n\n[Предупреждение] Пересекаются области записи: ").Append(string.Join("; ", overlaps))
                 .Append(". Проверь, что задачи не перезаписали друг друга.");
+        // Workflow синхронный: отчёты всех волн уже в ответе, ведущий может проверять и дополнять.
+        _teamReportsReviewed = true;
         return new ConexyToolResult(toolCallId, builder.ToString().TrimEnd(), false);
 
         async Task<string> RunWorkflowStepAsync(WorkflowStep step, IReadOnlyDictionary<string, string> done, CancellationToken token)
@@ -3893,6 +3913,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         _teamHelpers += specs.Count;
 
         _teamSpawned = true;
+        _teamReportsReviewed = false;
 
         var group = _hubContext.Clients.Group($"task_{taskId}");
         var board = TeamBoards.GetOrAdd(taskId, _ => new ConcurrentQueue<TeamMessage>());
@@ -3960,9 +3981,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
             toolCallId,
             "Команда запущена в фоне: " +
             string.Join(", ", specs.Select(s => s.Role + (s.After.Count > 0 ? " ← " + string.Join("+", s.After) : string.Empty))) + ".\n" +
-            "Не жди их и не простаивай: делай свою часть работы (файлы вне их scope — твои). " +
+            "Пока команда работает, НЕ правь файлы: читай и планируй. " +
             "Проверяй команду инструментом agents_status НЕ РЕЖЕ РАЗА В МИНУТУ (wait_seconds = 60). " +
-            "Когда все отчёты собраны и ты их просмотрел — можно вызвать spawn_agents ещё раз: новые " +
+            "Когда все отчёты собраны и просмотрены — проверь результат и только тогда дополняй код сам; " +
+            "после этого можно вызвать spawn_agents ещё раз: новые " +
             "помощники добавляются к той же команде, старые отчёты остаются доступны.",
             false);
 
@@ -4154,9 +4176,15 @@ public class ConexyAgentRunner : IConexyAgentRunner
         }
 
         if (running > 0)
-            sb.Append("Ещё работают: " + running + ". Не стой без дела: делай свою часть и вернись к agents_status " +
-                      "в течение минуты. Помощник без действий дольше " + WorkerSilenceSeconds +
-                      " с остановится сам — тогда опирайся на его отчёт и доделай его часть.");
+            sb.Append("Ещё работают: " + running + ". Не правь файлы, пока они не закончат: читай и планируй, " +
+                      "вернись к agents_status через минуту. Помощник без действий дольше " + WorkerSilenceSeconds +
+                      " с остановится сам — тогда забери его отчёт и закончи его часть сам.");
+        else
+        {
+            _teamReportsReviewed = true;
+            sb.Append("Все помощники закончили. Проверь их отчёты и результат, при необходимости дополни код сам. " +
+                      "Если отчёты не подтверждаются реальными правками в проекте — сделай работу сам, не выдавай отчёт за результат.");
+        }
         return new ConexyToolResult(toolCallId, sb.ToString().TrimEnd(), false);
     }
 
@@ -4191,6 +4219,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     // BACKGROUND_AGENTS: запущенные в фоне команды этого прогона.
     private static readonly ConcurrentDictionary<Guid, TeamRun> TeamRuns = new();
+
+    /// <summary>ORCHESTRA_LEAD_WAIT: есть ли в команде хотя бы один незавершённый помощник.</summary>
+    private static bool TeamStillWorking(Guid taskId) =>
+        TeamRuns.TryGetValue(taskId, out var run)
+        && run.Workers.Any(worker => worker.Job is { IsCompleted: false });
 
     private sealed class TeamRun(CancellationTokenSource cts)
     {
@@ -4549,6 +4582,27 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
             using var doc = JsonDocument.Parse(toolCall.Function.Arguments);
             var root = doc.RootElement;
+
+            // ORCHESTRA_LEAD_WAIT: пока субагенты работают, ведущий НЕ правит код. Иначе команда
+            // существует «для вида»: ведущий параллельно меняет те же файлы, отчёты расходятся с
+            // реальным деревом, а diff показывает работу, которой не было. Читать и проверять можно.
+            if (_profile.Mode == "coder"
+                && string.Equals(_agent.Id, AgentIdentity.Lead.Id, StringComparison.Ordinal)
+                && _teamSpawned
+                && (!_teamReportsReviewed || TeamStillWorking(taskId))
+                && (IsScopeMutation(toolCall.Function.Name, toolCall.Function.Arguments)
+                    || toolCall.Function.Name is "create_document" or "file_write_bytes"))
+            {
+                var reason = TeamStillWorking(taskId)
+                    ? "субагенты ещё работают"
+                    : "ты ещё не прочитал отчёты субагентов";
+                return new ConexyToolResult(
+                    toolCall.Id,
+                    $"[Orchestra] Правки файлов запрещены: {reason}. " +
+                    "Вызови `agents_status` с wait_seconds=60, дождись, пока все закончат, " +
+                    "прочитай их отчёты — и только потом правь код сам или запускай проверки.",
+                    true);
+            }
 
             // MCP: tools of connected remote servers are dynamic, so they are routed by prefix.
             if (toolCall.Function.Name.StartsWith("mcp__", StringComparison.Ordinal))

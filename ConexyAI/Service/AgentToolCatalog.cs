@@ -34,9 +34,11 @@ public static class AgentToolCatalog
         Tool("spawn_agents",
             "Run 2-4 helper agents in parallel, each with a role, a self-contained brief and a " +
             "non-overlapping `scope` of path prefixes it may change. Nothing is shared between " +
-            "agents: two helpers may never own the same file, and the lead still edits everything " +
-            "outside the scopes it handed out. Use it for work that splits cleanly across areas " +
-            "(backend / frontend / qa / browser); for a single-file change do it yourself.",
+            "agents: two helpers may never own the same file. While helpers are running the lead " +
+            "must NOT edit files (writes are refused): read, plan and wait through `agents_status`; " +
+            "after every helper has finished, read their reports and only then add your own edits or run checks. " +
+            "Use it for work that splits cleanly across areas (backend / frontend / qa / browser); " +
+            "for a single-file change do it yourself.",
             Object(new()
             {
                 ["agents"] = Array(
@@ -101,8 +103,9 @@ public static class AgentToolCatalog
 
         Tool("agents_status",
             "State of the team started with `spawn_agents`: which helpers are running, done or " +
-            "failed, plus the reports of the finished ones. Call it before your final answer; " +
-            "`wait_seconds` > 0 blocks until a helper finishes. Do not poll it in a loop.",
+            "failed, plus the reports of the finished ones. Call it before your final answer and " +
+            "before any of your own file edits; `wait_seconds` > 0 blocks until a helper finishes. " +
+            "Do not poll it in a loop.",
             Object(new()
             {
                 ["wait_seconds"] = Int("Seconds to wait for unfinished helpers (0-120, default 0).", 0, 120, 0),
@@ -614,6 +617,7 @@ public static class AgentToolCatalog
         ["goal_block"] = "Use `goal_block` only for a real external blocker you cannot remove yourself; it stops further goal rounds.",
         ["bash"] = "Use `bash` for builds, package managers, git and tests; reading, searching and writing files goes through `read`, `grep`, `edit` and `apply_patch`. If the same failure comes back twice with different arguments, the arguments are not the cause: verify the fact with another tool, or ask the user. A long command (install, big build) starts with `run_in_background: true` and is read with `job_output`.",
         ["run_tests"] = "After changing code run `run_tests` instead of guessing that it works.",
+        ["spawn_agents"] = "Spawn helpers, then do NOT edit files while they run: read/plan and poll `agents_status` with wait_seconds=60. After all reports are in and reviewed, add your own edits or run checks.",
         ["agents_status"] = "Check the team with `agents_status` at least once a minute while helpers run; do not poll it in a tight loop.",
         ["interrupt_agent"] = "Stop one looping or wrong-way helper with `interrupt_agent` instead of waiting for it; the others keep working.",
         ["workflow_run"] = "Use `workflow_run` when the work has real ordering between areas (backend/frontend, then QA after both); plain independent helpers go through `spawn_agents`.",
