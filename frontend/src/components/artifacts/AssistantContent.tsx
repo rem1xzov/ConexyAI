@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { splitArtifacts } from '../../utils/artifacts';
-import { settledPrefix, STREAM_PARSE_INTERVAL_MS } from '../../utils/streamText';
+import { settledPrefix, STREAM_PARSE_INTERVAL_MS, closeStreamingInline, sanitizeStreamingTail } from '../../utils/streamText';
 import { Markdown } from '../Markdown';
 import { ArtifactCard } from './ArtifactCard';
 import { getArtifactState, openArtifact, registerMessageArtifacts, unregisterMessage } from './store';
@@ -55,9 +55,12 @@ export const AssistantContent = memo(function AssistantContent({
   // Content can shrink or be replaced (regenerate, edit, resume), and then the settled prefix is no
   // longer a prefix at all — showing a stale tail after it would duplicate text.
   const settled = content.startsWith(parsedContent) ? parsedContent : content;
-  const tail = settled === content ? '' : content.slice(settled.length);
+  const rawTail = settled === content ? '' : content.slice(settled.length);
+  const tail = streaming ? sanitizeStreamingTail(rawTail) : rawTail;
 
-  const segments = useMemo(() => splitArtifacts(settled, streaming), [settled, streaming]);
+  // STREAM_SANITIZER: во время стриминга закрываем незавершённые **, `, ~~ до рендера.
+  const sanitizedSettled = streaming ? closeStreamingInline(settled) : settled;
+  const segments = useMemo(() => splitArtifacts(sanitizedSettled, streaming), [sanitizedSettled, streaming]);
   // An artifact whose opening tag is still arriving has no reliable identifier yet, so it is not
   // registered (it is always the last one, which keeps the `messageId:index` keys stable).
   const artifacts = useMemo(

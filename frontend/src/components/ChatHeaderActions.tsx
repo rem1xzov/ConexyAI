@@ -4,6 +4,9 @@ import type { ChatSession } from '../types/chat';
 import { ConfirmDialog, PromptDialog } from './Dialog';
 import { getProject, setProject } from '../utils/projects';
 import { EditIcon, EyeIcon, EyeOffIcon, LightbulbIcon, PinIcon, PlusIcon, ShareIcon, ShieldIcon, ThreeDotsIcon, TrashIcon } from './Icons';
+import { duration } from '../motion/motionConfig';
+import { usePresence } from '../motion/usePresence';
+import { triggerHaptic } from '../utils/haptics';
 
 // CHAT_ACTIONS: добавлено 2026-09-29 — действия шапки чата (новый чат, меню чата). Показываются,
 // только когда в чате есть хотя бы одно сообщение; по умолчанию их нет. Меню повторяет то, что уже
@@ -39,6 +42,7 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
 }: ChatHeaderActionsProps) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const menu = usePresence(menuOpen, duration.fast);
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // PROJECTS: раскладка чата по локальным папкам.
@@ -71,7 +75,10 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
         <button
           type="button"
           className="chat-actions__btn"
-          onClick={() => setMenuOpen((o) => !o)}
+          onClick={() => {
+            setMenuOpen((o) => !o);
+            triggerHaptic('light');
+          }}
           title={t('sidebar.sessionMenu')}
           aria-label={t('sidebar.sessionMenu')}
           aria-haspopup="menu"
@@ -80,8 +87,8 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
           <ThreeDotsIcon size={18} />
         </button>
 
-        {menuOpen && (
-          <div className="chats__menu chat-actions__menu" role="menu">
+        {menu.mounted && (
+          <div className={`chats__menu chat-actions__menu${menu.closing ? ' is-closing' : ''}`} role="menu">
             <button
               type="button"
               role="menuitem"

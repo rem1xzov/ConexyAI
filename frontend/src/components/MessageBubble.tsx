@@ -6,6 +6,7 @@ import { assistantPhase } from '../utils/assistantPhase';
 import { artifactsToMarkdown } from '../utils/artifacts';
 import { producedFiles } from '../utils/producedFiles';
 import { copyText } from '../utils/clipboard';
+import { triggerHaptic } from '../utils/haptics';
 import { ConexyLogo } from './ConexyLogo';
 import { ThinkingStep } from './ThinkingStep';
 import { VisionGallery } from './VisionGallery';
@@ -259,7 +260,7 @@ function MessageBubbleBase({
     pressTimer.current = window.setTimeout(() => {
       pressTimer.current = null;
       setMenuOpen(true);
-      navigator.vibrate?.(15);
+      triggerHaptic('medium');
     }, 450);
   }
 

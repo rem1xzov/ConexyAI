@@ -62,6 +62,9 @@ import {
   type QuickAction,
 } from './components/UiExtras';
 import { CursorTrail } from './components/CursorTrail';
+import { duration } from './motion/motionConfig';
+import { usePresence } from './motion/usePresence';
+import { triggerHaptic } from './utils/haptics';
 // GUEST_HERO: добавлено 2026-09-20
 import { GuestHero } from './components/GuestHero';
 // LEGAL_DOCS: добавлено 2026-09-25 — публичные правовые документы (`#/privacy`, `#/offer`, `#/refund`).
@@ -434,6 +437,10 @@ export default function App() {
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
   const [language, setLanguageState] = useState<string>(i18n.language);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // SETTINGS_PRESENCE: экран не исчезает за один кадр — exit-анимация перед размонтированием.
+  const settingsPresence = usePresence(settingsOpen, duration.screen);
+  const upgradePresence = usePresence(upgradeOpen, duration.screen);
+  const supportPresence = usePresence(supportOpen, duration.screen);
   // GET_APP: раздел, с которого открываются настройки (кнопка «Скачать приложение» ведёт в «Десктоп»).
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general');
   // LOCAL_STORAGE_BUDGET: добавлено 2026-09-24 — переписка открытого чата догружается с сервера.
@@ -3538,6 +3545,7 @@ export default function App() {
         search={search}
         sessions={visibleSessions}
         activeId={activeId}
+        loading={authPending}
         asideRef={sidebarPanelRef}
         onToggle={() => setSidebarOpen((o) => !o)}
         onTabChange={(tab) => guardLeave(() => {
@@ -3903,7 +3911,8 @@ export default function App() {
         />
       )}
 
-      {upgradeOpen && (
+      {upgradePresence.mounted && (
+        <div className={`ui-presence${upgradePresence.closing ? ' is-closing' : ''}`}>
         <UpgradeModal
           limitInfo={limitExceeded}
           busy={paymentBusy}
@@ -3915,6 +3924,7 @@ export default function App() {
           }}
           onBuy={handleUpgradeBuy}
         />
+        </div>
       )}
 
       {/* EMAIL_AUTH: добавлено 2026-09-19 */}
@@ -3957,7 +3967,11 @@ export default function App() {
       )}
 
       {/* SUPPORT: добавлено 2026-09-19 */}
-      {supportOpen && <SupportChat onClose={() => setSupportOpen(false)} onToast={showToast} />}
+      {supportPresence.mounted && (
+        <div className={`ui-presence${supportPresence.closing ? ' is-closing' : ''}`}>
+          <SupportChat onClose={() => setSupportOpen(false)} onToast={showToast} />
+        </div>
+      )}
 
       {/* SHARE_ADMIN: комментарий и необязательный скриншот перед отправкой чата админу. */}
       {shareAdminSession && (
@@ -3977,7 +3991,8 @@ export default function App() {
       {phoneSetupOpen && <PhoneSetupModal onClose={() => setPhoneSetupOpen(false)} />}
 
       {/* SETTINGS: добавлено 2026-09-19 */}
-      {settingsOpen && (
+      {settingsPresence.mounted && (
+        <div className={`ui-presence${settingsPresence.closing ? ' is-closing' : ''}`}>
         <SettingsModal
           theme={theme}
           language={language}
@@ -4000,6 +4015,7 @@ export default function App() {
           email={user?.email}
           onChangePassword={changePassword}
         />
+        </div>
       )}
 
       {/* WEB_DEVICE: добавлено 2026-10-18 — «ПК не в сети» при отправке хода на ПК. */}

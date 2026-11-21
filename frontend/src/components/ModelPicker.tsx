@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConexyModel, ReasoningEffort } from '../types/api';
 import { CheckIcon, ChevronDownIcon } from './Icons';
+import { duration } from '../motion/motionConfig';
+import { usePresence } from '../motion/usePresence';
+import { triggerHaptic } from '../utils/haptics';
 
 interface ModelOption {
   value: ConexyModel;
@@ -101,6 +104,7 @@ export function ModelPicker({
   plain = false,
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
+  const menu = usePresence(open, duration.fast);
   const ref = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
 
@@ -147,6 +151,7 @@ export function ModelPicker({
     }
     onModelChange(m.value);
     setOpen(false);
+    triggerHaptic('selection');
   }
 
   /** Строка заблокирована по тарифу: подсвечиваем бейджем, но клик оставляем рабочим. */
@@ -156,7 +161,10 @@ export function ModelPicker({
     <div className="modelpicker" ref={ref}>
       <button
         className="modelpicker__trigger"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          setOpen((o) => !o);
+          triggerHaptic('light');
+        }}
         aria-expanded={open}
         type="button"
         style={plain ? { background: 'transparent', border: 'none', boxShadow: 'none', padding: '4px 0' } : undefined}
@@ -168,8 +176,8 @@ export function ModelPicker({
         </span>
       </button>
 
-      {open && (
-        <div className="modelpicker__menu">
+      {menu.mounted && (
+        <div className={`modelpicker__menu${menu.closing ? ' is-closing' : ''}`}>
           {options.map((m) => (
             <button
               key={m.value}

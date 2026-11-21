@@ -13908,3 +13908,145 @@ html:not([data-theme="light"]) .chat-actions__btn {
     transform: none !important;
   }
 }
+/* ================= MOTION_SYSTEM ================= */
+@keyframes motionMenuIn {
+  from { opacity: 0; transform: translate3d(0, 4px, 0) scale(0.94); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+@keyframes motionMenuOut {
+  from { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+  to { opacity: 0; transform: translate3d(0, 2px, 0) scale(0.97); }
+}
+@keyframes motionOverlayIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes motionOverlayOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes motionPanelIn {
+  from { opacity: 0; transform: translate3d(0, 10px, 0) scale(0.985); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+@keyframes motionPanelOut {
+  from { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+  to { opacity: 0; transform: translate3d(0, 8px, 0) scale(0.985); }
+}
+@keyframes motionSlideInRight {
+  from { opacity: 0; transform: translate3d(28px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes motionSlideOutRight {
+  from { opacity: 1; transform: translate3d(0, 0, 0); }
+  to { opacity: 0; transform: translate3d(24px, 0, 0); }
+}
+@keyframes motionFadeUp {
+  from { opacity: 0; transform: translate3d(0, 6px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+/* Меню модели и «три точки»: вход 150ms, выход 110ms. */
+.modelpicker__menu,
+.chat-actions__menu {
+  transform-origin: bottom right;
+  animation: motionMenuIn var(--motion-menu, 150ms) var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)) both;
+  will-change: transform, opacity;
+}
+.chat-actions__menu { transform-origin: top right; }
+.modelpicker__menu.is-closing,
+.chat-actions__menu.is-closing {
+  animation: motionMenuOut var(--motion-menu-out, 110ms) var(--ease-in, cubic-bezier(0.4, 0, 1, 1)) forwards;
+  pointer-events: none;
+}
+
+/* Настройки/тарифы/поддержка: fullscreen slide + crossfade, exit перед размонтированием. */
+.ui-presence .dialog-overlay { animation: motionOverlayIn var(--motion-screen, 240ms) var(--ease-out) both; }
+.ui-presence .settings-modal,
+.ui-presence .dialog-card { animation: motionSlideInRight var(--motion-screen, 240ms) var(--ease-out) both; }
+.ui-presence.is-closing .dialog-overlay { animation: motionOverlayOut var(--motion-screen, 240ms) var(--ease-in) forwards; }
+.ui-presence.is-closing .settings-modal,
+.ui-presence.is-closing .dialog-card { animation: motionSlideOutRight var(--motion-screen, 240ms) var(--ease-in) forwards; }
+
+/* Обычные модалки тоже не появляются за один кадр. */
+.dialog-overlay { animation: motionOverlayIn var(--motion-screen, 240ms) var(--ease-out) both; }
+.dialog-card { animation: motionPanelIn var(--motion-screen, 240ms) var(--ease-out) both; }
+
+/* Действия и дисклеймер появляются после завершения генерации. */
+.msg-actions,
+.msg-disclaimer {
+  animation: motionFadeUp var(--motion-bubble, 220ms) var(--ease-out) both;
+}
+
+/* Хвост стриминга проявляется мягко. */
+.stream-tail {
+  animation: motionFadeUp var(--motion-base, 180ms) var(--ease-out) both;
+  white-space: pre-wrap;
+}
+
+/* Press states на телефоне. */
+@media (pointer: coarse) {
+  button,
+  [role='button'],
+  .chats__item,
+  .settings-nav__item,
+  .chats__menu-item {
+    transition:
+      transform var(--motion-press, 100ms) ease-out,
+      background-color var(--motion-press, 100ms) ease-out,
+      color var(--motion-press, 100ms) ease-out;
+  }
+  button:active:not(:disabled),
+  [role='button']:active,
+  .chats__item:active,
+  .settings-nav__item:active,
+  .chats__menu-item:active {
+    transform: scale(0.97);
+  }
+}
+
+/* Skeleton shimmer для списков загрузки. */
+@keyframes motionShimmer {
+  from { transform: translate3d(-100%, 0, 0); }
+  to { transform: translate3d(100%, 0, 0); }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
+  animation: motionShimmer 1.35s linear infinite;
+}
+.skeleton-line {
+  height: 12px;
+  margin: 9px 6px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  position: relative;
+  overflow: hidden;
+}
+.skeleton-line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
+  animation: motionShimmer 1.35s linear infinite;
+}
+.skeleton-line:nth-child(2) { width: 86%; }
+.skeleton-line:nth-child(3) { width: 68%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .modelpicker__menu,
+  .chat-actions__menu,
+  .dialog-overlay,
+  .dialog-card,
+  .ui-presence .settings-modal,
+  .ui-presence .dialog-card,
+  .msg-actions,
+  .msg-disclaimer,
+  .stream-tail,
+  .skeleton::after,
+  .skeleton-line::after {
+    animation: none !important;
+  }
+}

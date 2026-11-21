@@ -39,6 +39,8 @@ interface SidebarProps {
   search: string;
   sessions: ChatSession[];
   activeId: string | null;
+  /** SKELETON: пока история грузится, вместо «Нет сессий» показываем мерцающие строки. */
+  loading?: boolean;
   onToggle: () => void;
   onTabChange: (tab: ChatSessionKind) => void;
   onNewSession: (kind: ChatSessionKind) => void;
@@ -87,6 +89,7 @@ export function Sidebar(props: SidebarProps) {
     search,
     sessions,
     activeId,
+    loading,
     onToggle,
     onTabChange,
     onNewSession,
@@ -304,7 +307,15 @@ export function Sidebar(props: SidebarProps) {
           <div className="chats">
             <div className="chats__label">{listLabel}</div>
             {filtered.length === 0 ? (
-              <p className="muted chats__empty">{t('sidebar.noSessions')}</p>
+              loading ? (
+                <div className="chats__skeleton" aria-hidden="true">
+                  <div className="skeleton-line" />
+                  <div className="skeleton-line" />
+                  <div className="skeleton-line" />
+                </div>
+              ) : (
+                <p className="muted chats__empty">{t('sidebar.noSessions')}</p>
+              )
             ) : (
               <ul className="chats__list">
                 {filtered.map((s) => (

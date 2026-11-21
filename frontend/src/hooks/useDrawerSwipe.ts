@@ -166,6 +166,7 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
 
   const dragRef = useRef<DragState | null>(null);
   const settleTimer = useRef<number | null>(null);
+  const springFrame = useRef<number | null>(null);
   const watchdogTimer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -218,13 +219,33 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
       }
     };
 
-    const settle = (open: boolean) => {
-      paint(open ? drawerWidth() : 0, true);
-      if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
-      settleTimer.current = window.setTimeout(() => {
-        settleTimer.current = null;
-        handBackToCss();
-      }, SETTLE_MS);
+    const settle = (open: boolean, fromPx: number, velocityPxPerMs: number) => {
+      // DRAWER_SPRING: доводка на пружине с учётом скорости жеста, а не по фиксированной CSS-кривой.
+      // stiffness/damping/mass — из motionConfig.spring.drawer.
+      const target = open ? drawerWidth() : 0;
+      const stiffness = 350;
+      const damping = 32;
+      const mass = 1;
+      if (springFrame.current !== null) cancelAnimationFrame(springFrame.current);
+      let x = fromPx;
+      let v = velocityPxPerMs * 1000; // px/ms -> px/s
+      let last = performance.now();
+      const step = (now: number) => {
+        const dt = Math.min(0.032, Math.max(0.001, (now - last) / 1000));
+        last = now;
+        const acceleration = (-stiffness * (x - target) - damping * v) / mass;
+        v += acceleration * dt;
+        x += v * dt;
+        paint(Math.min(drawerWidth(), Math.max(0, x)), false);
+        if (Math.abs(x - target) < 0.5 && Math.abs(v) < 6) {
+          paint(target, false);
+          handBackToCss();
+          springFrame.current = null;
+          return;
+        }
+        springFrame.current = requestAnimationFrame(step);
+      };
+      springFrame.current = requestAnimationFrame(step);
     };
 
     const clearWatchdog = () => {
@@ -259,7 +280,7 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
         if (open) latest.current.onOpen();
         else latest.current.onClose();
       }
-      settle(open);
+      settle(open, drag.offsetPx, velocity);
     };
 
     const armWatchdog = () => {
@@ -284,6 +305,11 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
       if (settleTimer.current !== null) {
         window.clearTimeout(settleTimer.current);
         settleTimer.current = null;
+        handBackToCss();
+      }
+      if (springFrame.current !== null) {
+        cancelAnimationFrame(springFrame.current);
+        springFrame.current = null;
         handBackToCss();
       }
 
@@ -369,6 +395,7 @@ export function useDrawerSwipe(options: DrawerSwipeOptions): void {
       window.removeEventListener('blur', onInterrupted);
       document.removeEventListener('visibilitychange', onInterrupted);
       if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
+      if (springFrame.current !== null) cancelAnimationFrame(springFrame.current);
       if (watchdogTimer.current !== null) window.clearTimeout(watchdogTimer.current);
     };
   }, []);

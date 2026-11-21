@@ -16,6 +16,7 @@ import { useIsMobile, useMediaQuery } from '../hooks/useMediaQuery';
 import { mergeTranscript } from '../utils/voiceTranscript';
 import { isMobileApp, nativeSpeech } from '../utils/mobile';
 import { ModelPicker } from './ModelPicker';
+import { triggerHaptic } from '../utils/haptics';
 import { SkillsDialog } from './SkillsDialog';
 import { VoiceWaveIcon, MicIcon, PlusIcon, SendIcon, StopIcon, UploadIcon, PhotoIcon, CameraIcon, CodeIcon, CloseIcon, LightbulbIcon } from './Icons';
 
@@ -372,6 +373,7 @@ export function InputBar({
     // Clear optimistically so the composer feels instant, then hand everything back if the
     // request never made it to the model — the user should not have to retype anything.
     const pending = attachments;
+    triggerHaptic('light');
     setValue('');
     setAttachments([]);
     if (textareaRef.current) {
