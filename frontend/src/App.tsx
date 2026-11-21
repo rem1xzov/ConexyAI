@@ -56,6 +56,7 @@ import { ChatOptions } from './components/ChatOptions';
 // мобильная навигация, библиотека промптов и палитра быстрых действий.
 import { PlanProgress } from './components/ChatExtras';
 import {
+  ArtifactsSheet,
   MobileBottomNav,
   OnboardingChecklist,
   PromptLibrary,
@@ -391,6 +392,8 @@ export default function App() {
   // UI_EXTRAS: библиотека промптов и палитра быстрых действий (Ctrl+K / Ctrl+P).
   const [promptLibOpen, setPromptLibOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // MOBILE_ARTIFACTS: список артефактов из ответов модели в нижней навигации.
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
   // UI_PREFERENCES: интерфейсные переключатели из «Персонализации» (эффект курсора и скрытие
   // элементов тулбара агента). По умолчанию всё выключено — до загрузки настроек ничего не мигает.
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(DEFAULT_UI_PREFERENCES);
@@ -3529,7 +3532,7 @@ export default function App() {
       {/* GLASS_AURA: базовый слой с цветными пятнами под стеклом — без него backdrop-filter на
           однородном фоне не читается. Идёт ДО incognito-aura, чтобы непрозрачная аура инкогнито
           (рисуется позже, тот же z-index) перекрывала его и режим инкогнито не ломался. */}
-      <div className="glass-aura" aria-hidden="true" />
+
       {incognitoActive && <div className="incognito-aura" aria-hidden="true" />}
       <ConnectionBanner />
       <div className={`app${isMobile && sidebarOpen ? ' app--drawer-open' : ''}${keyboardOpen ? ' app--keyboard-open' : ''}`}>
@@ -3883,6 +3886,7 @@ export default function App() {
         <MobileBottomNav
           activeTab={activeTab}
           onTabChange={(kind) => guardLeave(() => handleTabChange(kind))}
+          onArtifacts={() => setArtifactsOpen(true)}
           onSettings={() => setSettingsOpen(true)}
         />
       )}
@@ -3947,6 +3951,9 @@ export default function App() {
         onClose={() => setPaletteOpen(false)}
         actions={quickActions}
       />
+      {isMobile && artifactsOpen && (
+        <ArtifactsSheet sessions={sessions} onClose={() => setArtifactsOpen(false)} />
+      )}
 
       {/* WORKSPACE_DIRTY: добавлено 2026-09-24 — подтверждение ухода из чата с несохранёнными файлами. */}
       {pendingLeave && (

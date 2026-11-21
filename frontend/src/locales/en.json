@@ -121,6 +121,8 @@
     "planDone": "All steps completed",
     "planPending": "Waiting to start",
     "promptsTitle": "Prompt library",
+    "artifactsTitle": "Artifacts",
+    "artifactsEmpty": "Artifacts will appear when the model produces code or a document.",
     "promptDelete": "Delete prompt",
     "promptName": "Title",
     "promptText": "Prompt text",

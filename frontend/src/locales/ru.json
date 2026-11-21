@@ -121,6 +121,8 @@
     "planDone": "Все шаги выполнены",
     "planPending": "Ожидает старта",
     "promptsTitle": "Библиотека промптов",
+    "artifactsTitle": "Артефакты",
+    "artifactsEmpty": "Артефакты появятся, когда модель создаст код или документ.",
     "promptDelete": "Удалить промпт",
     "promptName": "Название",
     "promptText": "Текст промпта",

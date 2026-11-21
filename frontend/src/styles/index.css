@@ -3,35 +3,35 @@
 @tailwind utilities;
 
 :root {
-  --surface: rgba(26, 28, 35, 0.6);
-  --surface-solid: #1a1c23;
-  --surface-2: #24262e;
-  --border: rgba(255, 255, 255, 0.08);
-  --text: #ece7ee;
-  --muted: #a79bae;
-  --accent: #c68bd4;
-  --accent-soft: rgba(198, 139, 212, 0.14);
-  --danger: #ff6b7a;
-  --ok: #4ade80;
-  --warn: #fbbf24;
-  --cherry: #e64980;
-  --bg-body: linear-gradient(180deg, #24111e 0%, #140811 40%, #060205 100%);
-  --bg-sidebar: rgba(0, 0, 0, 0.3);
-  --bg-main: rgba(0, 0, 0, 0.2);
+  --surface: rgba(27, 29, 34, 0.72);
+  --surface-solid: #1b1d22;
+  --surface-2: #23262c;
+  --border: rgba(255, 255, 255, 0.09);
+  --text: #ece8e0;
+  --muted: #918c85;
+  --accent: #d46c90;
+  --accent-soft: rgba(212, 108, 144, 0.14);
+  --danger: #e27986;
+  --ok: #82c79c;
+  --warn: #e2b86b;
+  --cherry: #d46c90;
+  --bg-body: #101114;
+  --bg-sidebar: rgba(0, 0, 0, 0.26);
+  --bg-main: rgba(0, 0, 0, 0.16);
   --bg-overlay: rgba(0, 0, 0, 0.6);
-  --bg-input: rgba(255, 255, 255, 0.04);
+  --bg-input: rgba(255, 255, 255, 0.045);
   --bg-hover: rgba(255, 255, 255, 0.06);
-  --bg-soft: rgba(0, 0, 0, 0.25);
-  --code-bg: #12141a;
+  --bg-soft: rgba(0, 0, 0, 0.24);
+  --code-bg: #101114;
   /* Card elevation is a dark-theme no-op; the light theme opts in. */
   --shadow-soft: none;
   /* STREAM_BADGES: inline code / key term pill */
   --badge-border: rgba(82, 82, 91, 0.6);
   --badge-bg: rgba(38, 38, 38, 0.7);
-  --badge-text: #fb7185;
+  --badge-text: #e08aa5;
   /* LOGO_SWEEP: добавлено 2026-09-20 */
-  --logo-track: rgba(236, 231, 238, 0.16);
-  --logo-band: #f4e8fb;
+  --logo-track: rgba(236, 232, 224, 0.16);
+  --logo-band: #f6e9ef;
   --logo-glow: var(--accent);
   /* LOGO_SWEEP: display face for the start-screen greeting (light serif, Claude-style). */
   --font-display: ui-serif, Georgia, 'Iowan Old Style', 'Palatino Linotype', Palatino, serif;
@@ -13320,4 +13320,101 @@ body::before {
   .inputbar--expanded .mic-btn:not(.prompt-btn) {
     margin-left: 0;
   }
+}
+
+/* ================= NEW_DESIGN_2026: единая палитра и кнопки ================= */
+/* Тёмная тема: графит + приглушённый ягодный акцент (как в мобильном макете).
+   Светлую тему не трогаем — она остаётся прежней. */
+html:not([data-theme="light"]) .inputbar {
+  background: rgba(27, 29, 34, 0.78);
+  border-color: rgba(255, 255, 255, 0.09);
+  border-radius: 24px;
+}
+html:not([data-theme="light"]) .inputbar:focus-within {
+  border-color: var(--accent);
+}
+html:not([data-theme="light"]) .microphone-btn,
+html:not([data-theme="light"]) .mic-btn {
+  border-radius: 999px;
+}
+html:not([data-theme="light"]) .modelpicker__trigger {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  padding: 7px 11px;
+}
+html:not([data-theme="light"]) .modelpicker__menu {
+  background: #1a1c21;
+  border-color: rgba(255, 255, 255, 0.09);
+}
+html:not([data-theme="light"]) .modelpicker__item:hover {
+  background: #23262c;
+}
+html:not([data-theme="light"]) .modelpicker__item--active,
+html:not([data-theme="light"]) .modelpicker__item[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+html:not([data-theme="light"]) .send-btn {
+  background: var(--accent);
+  color: #1b0e13;
+}
+html:not([data-theme="light"]) .chat-actions__btn {
+  border-radius: 999px;
+}
+/* PC: плашка ввода по центру, как на мобилке. */
+@media (min-width: 821px) {
+  .chat-stage__composer {
+    display: flex;
+    justify-content: center;
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+  .chat-stage__composer .inputbar-wrap {
+    width: 100%;
+    max-width: 820px;
+    margin: 0 auto;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .chat-stage__composer .inputbar {
+    margin-left: auto;
+    margin-right: auto;
+    max-width: 820px;
+  }
+  .chat-stage__composer .modelpicker__trigger {
+    min-height: 36px;
+  }
+  /* Кнопки: круглые, спокойные, отправка — единственный акцент. */
+  .chat-stage__composer .icon-btn,
+  .chat-stage__composer .mic-btn,
+  .chat-stage__composer .prompt-btn {
+    width: 38px;
+    height: 38px;
+    border-radius: 999px;
+  }
+  .chat-stage__composer .send-btn {
+    width: 38px;
+    height: 38px;
+  }
+}
+.modal-title,
+.dialog-title {
+  letter-spacing: -0.01em;
+}
+/* Модель везде подписана коротко: Flash / Pro / Coder / Cowork. */
+.modelpicker__label-short { display: inline; }
+/* ================= MOBILE_ARTIFACTS_BROWSER ================= */
+.artifacts-browser__list { padding: 8px 10px 14px; max-height: min(68vh, 620px); overflow-y: auto; }
+.artifacts-browser__empty { color: var(--muted); font-size: 13px; line-height: 1.5; padding: 16px 12px; margin: 0; }
+.artifacts-browser__row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 10px; border: 1px solid var(--border);
+  border-radius: 12px; background: var(--bg-input); color: var(--text); text-align: left; cursor: pointer; margin-bottom: 8px; }
+.artifacts-browser__row:hover { background: var(--bg-hover); border-color: var(--accent); }
+.artifacts-browser__icon { width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; color: var(--muted); flex: 0 0 auto; }
+.artifacts-browser__main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.artifacts-browser__name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifacts-browser__meta { color: var(--muted); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifacts-browser__chev { color: var(--muted); font-size: 18px; }
+@media (max-width: 820px) {
+  .artifacts-browser { max-height: 88dvh; }
+  .artifacts-browser__list { max-height: none; padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ChatSessionKind } from '../types/chat';
-import { CloseIcon, SearchIcon, TerminalIcon, UserIcon } from './Icons';
+import type { ChatSession, ChatSessionKind } from '../types/chat';
+import { CloseIcon, CopyIcon, SearchIcon, TerminalIcon, UserIcon } from './Icons';
 import { ChatGlyphIcon, SlidersGlyphIcon } from './MobileIcons';
 
 /**
@@ -197,18 +197,19 @@ export function OnboardingChecklist({
 export function MobileBottomNav({
   activeTab,
   onTabChange,
+  onArtifacts,
   onSettings,
 }: {
   activeTab: ChatSessionKind;
   onTabChange: (tab: ChatSessionKind) => void;
+  onArtifacts: () => void;
   onSettings: () => void;
 }) {
   const { t } = useTranslation();
-  // MOBILE_NAV: иконки тонкие и спокойные, как в Claude: чат, терминал агента, ученики, настройки.
+  // NEW_MOBILE_NAV: Чат / Агент / Артефакты / Настройки — как в новом макете.
   const tabs: { kind: ChatSessionKind; label: string; icon: JSX.Element }[] = [
     { kind: 'chat', label: t('sidebar.tabs.chat'), icon: <ChatGlyphIcon size={21} /> },
     { kind: 'projects', label: t('sidebar.tabs.agent'), icon: <TerminalIcon size={21} /> },
-    { kind: 'students', label: t('sidebar.tabs.students'), icon: <UserIcon size={21} /> },
   ];
   return (
     <nav className="mobile-nav" aria-label={t('extras.mobileNav')}>
@@ -223,6 +224,14 @@ export function MobileBottomNav({
           <span>{tab.label}</span>
         </button>
       ))}
+      <button type="button" className="mobile-nav__btn" onClick={onArtifacts}>
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="m12 3 9 5-9 5-9-5 9-5Z" />
+          <path d="m3 13 9 5 9-5" />
+          <path d="m3 17 9 5 9-5" />
+        </svg>
+        <span>{t('extras.artifactsTitle')}</span>
+      </button>
       <button type="button" className="mobile-nav__btn" onClick={onSettings}>
         <SlidersGlyphIcon size={21} />
         <span>{t('account.settings')}</span>
@@ -231,6 +240,113 @@ export function MobileBottomNav({
   );
 }
 
+// ---------------------------------------------------------------- artifacts browser
+
+interface ArtifactItem {
+  id: string;
+  name: string;
+  lang: string;
+  code: string;
+  session: string;
+}
+
+function collectArtifacts(sessions: ChatSession[]): ArtifactItem[] {
+  const out: ArtifactItem[] = [];
+  for (const session of sessions) {
+    for (const message of session.messages) {
+      if (message.role !== 'assistant' || !message.content) continue;
+      const re = /```([\w+#.-]*)\r?\n([\s\S]*?)```/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(message.content)) && out.length < 60) {
+        const code = m[2].trim();
+        if (!code) continue;
+        const first = code.split('\n').find((l) => l.trim().length > 0) ?? '';
+        out.push({
+          id: `${message.id}-${out.length}`,
+          name: first.replace(/^[#/*\s-]+/, '').slice(0, 60) || session.title,
+          lang: (m[1] || 'text').toLowerCase(),
+          code,
+          session: session.title,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+export function ArtifactsSheet({
+  sessions,
+  onClose,
+}: {
+  sessions: ChatSession[];
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const items = useMemo(() => collectArtifacts(sessions), [sessions]);
+  const [active, setActive] = useState<ArtifactItem | null>(null);
+
+  return (
+    <div className="artifact-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="artifact-modal artifacts-browser" role="dialog" aria-modal="true">
+        <div className="artifact-modal__head">
+          <div className="artifact-modal__title">
+            {active ? active.name : t('extras.artifactsTitle')}
+          </div>
+          <button className="icon-btn" type="button" onClick={onClose} aria-label={t('common.close')}>
+            <CloseIcon size={16} />
+          </button>
+        </div>
+
+        {!active && (
+          <div className="artifacts-browser__list">
+            {items.length === 0 ? (
+              <p className="artifacts-browser__empty">{t('extras.artifactsEmpty')}</p>
+            ) : (
+              items.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="artifacts-browser__row"
+                  onClick={() => setActive(item)}
+                >
+                  <span className="artifacts-browser__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="m8 8-4 4 4 4M16 8l4 4-4 4M13 5l-2 14" />
+                    </svg>
+                  </span>
+                  <span className="artifacts-browser__main">
+                    <span className="artifacts-browser__name">{item.name}</span>
+                    <span className="artifacts-browser__meta">{item.lang} · {item.session}</span>
+                  </span>
+                  <span className="artifacts-browser__chev" aria-hidden="true">›</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+
+        {active && (
+          <>
+            <div className="artifact-modal__lang">{active.lang}</div>
+            <pre className="artifact-modal__code">{active.code}</pre>
+            <div className="artifact-modal__actions">
+              <button className="dialog-btn" type="button" onClick={() => setActive(null)}>
+                {t('common.back')}
+              </button>
+              <button
+                className="dialog-btn dialog-btn--primary"
+                type="button"
+                onClick={() => void navigator.clipboard?.writeText(active.code)}
+              >
+                <CopyIcon size={14} /> {t('extras.copy')}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 // ---------------------------------------------------------------- quick actions (Ctrl+K)
 
 export interface QuickAction {

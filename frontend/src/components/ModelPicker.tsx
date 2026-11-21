@@ -122,7 +122,7 @@ export function ModelPicker({
   }, []);
 
   const options = mode === 'code' ? [CODER_MODEL, COWORK_MODEL] : [FLASH_MODEL, PRO_MODEL];
-  const current = ALL_MODELS.find((o) => o.value === model) ?? options[0];
+  const current = options.find((o) => o.value === model) ?? ALL_MODELS.find((o) => o.value === model) ?? options[0];
   const isAgent = mode === 'code';
   // ORCHESTRA: строка оркестра есть только в режиме Coder. На младших тарифах она не исчезает, а
   // показывается заблокированной с кнопкой «Обновить» — как у Claude: видно, что возможность есть,
@@ -157,7 +157,6 @@ export function ModelPicker({
         aria-expanded={open}
         type="button"
       >
-        <span className="modelpicker__label-full">{current.label}</span>
         <span className="modelpicker__label-short">{current.shortLabel}</span>
         {executionTarget && onDevice && <span className="modelpicker__target-badge">{t('device.pcBadge')}</span>}
         <span className="chevron">
@@ -185,7 +184,7 @@ export function ModelPicker({
               type="button"
             >
               <span className="modelpicker__name">
-                {m.label}
+                {m.shortLabel}
                 {m.value === model && (
                   <span className="modelpicker__check">
                     <CheckIcon size={14} />
