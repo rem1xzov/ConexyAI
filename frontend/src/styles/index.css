@@ -14050,3 +14050,93 @@ html:not([data-theme="light"]) .chat-actions__btn {
     animation: none !important;
   }
 }
+/* ================= BOTTOM_SHEET ================= */
+.bottom-sheet-root {
+  position: fixed;
+  inset: 0;
+  z-index: 520;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.bottom-sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+  animation: motionOverlayIn var(--motion-screen, 240ms) var(--ease-out) both;
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+.bottom-sheet-panel {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  max-height: 88dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-solid, #1b1d22);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 26px 26px 0 0;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -20px 60px rgba(0, 0, 0, 0.45);
+  animation: bottomSheetIn var(--motion-screen, 240ms) var(--ease-out) both;
+  will-change: transform, opacity;
+  touch-action: pan-y;
+}
+.bottom-sheet-panel.is-dragging {
+  animation: none;
+  transition: none;
+}
+.bottom-sheet-root.is-closing .bottom-sheet-backdrop {
+  animation: motionOverlayOut var(--motion-menu-out, 110ms) var(--ease-in) forwards;
+}
+.bottom-sheet-root.is-closing .bottom-sheet-panel {
+  animation: bottomSheetOut var(--motion-menu-out, 110ms) var(--ease-in) forwards;
+  pointer-events: none;
+}
+.bottom-sheet-handle {
+  flex: 0 0 auto;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  cursor: grab;
+}
+.bottom-sheet-handle:active { cursor: grabbing; }
+.bottom-sheet-handle__bar {
+  width: 40px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.24);
+}
+.bottom-sheet-title {
+  flex: 0 0 auto;
+  padding: 0 20px 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.bottom-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 12px 8px;
+  -webkit-overflow-scrolling: touch;
+}
+@keyframes bottomSheetIn {
+  from { opacity: 0.6; transform: translate3d(0, 100%, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes bottomSheetOut {
+  from { opacity: 1; transform: translate3d(0, 0, 0); }
+  to { opacity: 0.7; transform: translate3d(0, 100%, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bottom-sheet-panel,
+  .bottom-sheet-backdrop {
+    animation: none !important;
+  }
+}
