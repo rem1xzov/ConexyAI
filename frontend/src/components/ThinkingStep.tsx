@@ -110,48 +110,49 @@ export const ThinkingStep = memo(function ThinkingStep({
         />
       </button>
 
-      {bodyVisible && (text.trim() || search) && (
-        <div className={`think-step__panel${expanded ? ' think-step__panel--expanded' : ''}`}>
-          {text.trim() && (
-            expanded ? (
-              <div className="think-step__body think-step__body--full">{text}</div>
-            ) : (
-              <div
-                ref={streamRef}
-                className="think-step__stream"
-                style={{
-                  maxHeight: STREAM_MAX_HEIGHT,
-                  WebkitMaskImage: STREAM_MASK,
-                  maskImage: STREAM_MASK,
-                }}
-              >
-                {text}
-              </div>
-            )
-          )}
-          {search && search.count > 0 && (
-            <button
-              type="button"
-              className="think-step__search"
-              onClick={search.onClick}
-              disabled={!search.onClick}
+      <div
+        className={`think-step__panel${bodyVisible ? '' : ' is-collapsed'}${expanded ? ' think-step__panel--expanded' : ''}`}
+        aria-hidden={!bodyVisible}
+      >
+        {bodyVisible && text.trim() && (
+          expanded ? (
+            <div className="think-step__body think-step__body--full">{text}</div>
+          ) : (
+            <div
+              ref={streamRef}
+              className="think-step__stream"
+              style={{
+                maxHeight: STREAM_MAX_HEIGHT,
+                WebkitMaskImage: STREAM_MASK,
+                maskImage: STREAM_MASK,
+              }}
             >
-              <SearchIcon size={14} />
-              <span>{t('timeline.webPages', { count: search.count })}</span>
-              <span className="think-step__favicons" aria-hidden="true">
-                {search.hosts.slice(0, 4).map((host) => (
-                  <img
-                    key={host}
-                    src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32`}
-                    alt=""
-                    loading="lazy"
-                  />
-                ))}
-              </span>
-            </button>
-          )}
-        </div>
-      )}
+              {text}
+            </div>
+          )
+        )}
+        {bodyVisible && search && search.count > 0 && (
+          <button
+            type="button"
+            className="think-step__search"
+            onClick={search.onClick}
+            disabled={!search.onClick}
+          >
+            <SearchIcon size={14} />
+            <span>{t('timeline.webPages', { count: search.count })}</span>
+            <span className="think-step__favicons" aria-hidden="true">
+              {search.hosts.slice(0, 4).map((host) => (
+                <img
+                  key={host}
+                  src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32`}
+                  alt=""
+                  loading="lazy"
+                />
+              ))}
+            </span>
+          </button>
+        )}
+      </div>
     </div>
   );
 });

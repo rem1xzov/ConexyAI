@@ -69,3 +69,15 @@ export function closeStreamingInline(text: string): string {
 export function sanitizeStreamingTail(text: string): string {
   return text.replace(/(\*{1,2}|~{1,2}|`{1,3}|_{1,2})$/, '');
 }
+
+/**
+ * Хвост рендерится как обычный текст, поэтому убираем из него Markdown-маркеры,
+ * чтобы на экране не мелькали сырые «**» и «`».
+ */
+export function plainStreamTail(text: string): string {
+  return text
+    .replace(/`{1,3}/g, '')
+    .replace(/\*{1,2}/g, '')
+    .replace(/~{1,2}/g, '')
+    .replace(/_{1,2}/g, '');
+}

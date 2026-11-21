@@ -1,6 +1,13 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { splitArtifacts } from '../../utils/artifacts';
-import { settledPrefix, STREAM_PARSE_INTERVAL_MS, closeStreamingInline, sanitizeStreamingTail } from '../../utils/streamText';
+import {
+  settledPrefix,
+  STREAM_PARSE_INTERVAL_MS,
+  closeStreamingInline,
+  sanitizeStreamingTail,
+  plainStreamTail,
+} from '../../utils/streamText';
+import { useSmoothStream } from '../../hooks/useSmoothStream';
 import { Markdown } from '../Markdown';
 import { ArtifactCard } from './ArtifactCard';
 import { getArtifactState, openArtifact, registerMessageArtifacts, unregisterMessage } from './store';
@@ -20,6 +27,26 @@ function isWideScreen(): boolean {
 }
 
 /**
+ * TOKEN_FADE: последнее слово хвоста получает плавное проявление; уже показанные слова
+ * остаются стабильными. История и завершённые ответы не анимируются вовсе.
+ */
+function StreamingTail({ text }: { text: string }) {
+  const lastBreak = Math.max(text.lastIndexOf(' '), text.lastIndexOf('\n'));
+  const stable = text.slice(0, lastBreak + 1);
+  const word = text.slice(lastBreak + 1);
+  return (
+    <>
+      {stable}
+      {word && (
+        <span className="stream-word" key={stable.length}>
+          {word}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
  * ARTIFACTS: добавлено 2026-09-24 — текст ответа ассистента: Markdown между тегами
  * <conexy_artifact> и карточки артефактов на месте самих тегов.
  *
@@ -36,9 +63,11 @@ export const AssistantContent = memo(function AssistantContent({
   // parser sees; everything after it is appended as plain text at the bottom, so the answer still
   // grows every frame and only its formatting catches up on the next tick. When the stream ends the
   // whole text is parsed once.
+  // SMOOTH_STREAM: сетевые чанки сглаживаются в равномерный поток на rAF.
+  const smoothContent = useSmoothStream(content, streaming);
   const [parsedContent, setParsedContent] = useState(() => settledPrefix(content));
-  const liveContentRef = useRef(content);
-  liveContentRef.current = content;
+  const liveContentRef = useRef(smoothContent);
+  liveContentRef.current = smoothContent;
 
   useEffect(() => {
     if (!streaming) {
@@ -54,8 +83,8 @@ export const AssistantContent = memo(function AssistantContent({
 
   // Content can shrink or be replaced (regenerate, edit, resume), and then the settled prefix is no
   // longer a prefix at all — showing a stale tail after it would duplicate text.
-  const settled = content.startsWith(parsedContent) ? parsedContent : content;
-  const rawTail = settled === content ? '' : content.slice(settled.length);
+  const settled = smoothContent.startsWith(parsedContent) ? parsedContent : smoothContent;
+  const rawTail = settled === smoothContent ? '' : smoothContent.slice(settled.length);
   const tail = streaming ? sanitizeStreamingTail(rawTail) : rawTail;
 
   // STREAM_SANITIZER: во время стриминга закрываем незавершённые **, `, ~~ до рендера.
@@ -109,8 +138,12 @@ export const AssistantContent = memo(function AssistantContent({
           />
         ),
       )}
-      {/* The not-yet-parsed tail of a live answer: plain text, updated every frame. */}
-      {tail && <span className="stream-tail">{tail}</span>}
+      {/* The not-yet-parsed tail of a live answer: plain text, growing every frame. */}
+      {tail && (
+        <span className="stream-tail">
+          {streaming ? <StreamingTail text={plainStreamTail(tail)} /> : tail}
+        </span>
+      )}
     </>
   );
 });

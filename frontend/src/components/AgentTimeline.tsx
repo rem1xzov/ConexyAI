@@ -167,7 +167,9 @@ function WebResearchGroup({ blocks, renderRow }: WebResearchGroupProps) {
   const results = collectResults(
     blocks.filter((block) => block.name === 'web_search').map((block) => block.output),
   );
-  if (running) {
+  // STABLE_WEB_FOUND: как только источники появились, строка найденного не должна исчезать
+  // на время перехода к ответу и появляться заново в конце.
+  if (running && results.length === 0) {
     const lastQuery = [...searches].reverse().find((event) => (event.command ?? '').trim())?.command?.trim();
     const lastPage = [...pages].reverse().find((event) => (event.command ?? '').trim())?.command?.trim();
     const label = lastPage && pages.length >= searches.length
@@ -255,11 +257,17 @@ function collapseThoughts(blocks: TurnBlock[]): TurnBlock[] {
 
   const content = thoughts.map((thought) => thought.content.trim()).filter(Boolean).join('\n\n');
   const allClosed = thoughts.every((thought) => thought.durationMs !== undefined);
+  // THINKING_TIMER: считаем от первого шага до конца последнего, включая паузы на инструменты
+  // (например, веб-поиск) — иначе счётчик «сбрасывался» при каждом новом thought-блоке.
+  const firstStartedAt = thoughts[0].startedAt;
+  const lastEndedAt = Math.max(
+    ...thoughts.map((thought) => thought.startedAt + (thought.durationMs ?? 0)),
+  );
   const merged: TurnThoughtBlock = {
     ...thoughts[0],
     content,
     durationMs: allClosed
-      ? thoughts.reduce((total, thought) => total + (thought.durationMs ?? 0), 0)
+      ? Math.max(0, lastEndedAt - firstStartedAt)
       : undefined,
   };
 
