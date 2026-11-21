@@ -21,13 +21,15 @@ interface ArtifactCardProps {
   artifact: ParsedArtifact;
   /** Registry key of this occurrence (`${messageId}:${index}`), used to open exactly this version. */
   entryKey: string;
+  /** STREAM_ABORT: поток остановлен, финальный тег так и не пришёл — это черновик, не «создаю». */
+  interrupted?: boolean;
 }
 
 /**
  * ARTIFACTS: добавлено 2026-09-24 — карточка на месте тега <conexy_artifact> в сообщении.
  * Клик открывает правую панель именно на этой версии артефакта.
  */
-export const ArtifactCard = memo(function ArtifactCard({ artifact, entryKey }: ArtifactCardProps) {
+export const ArtifactCard = memo(function ArtifactCard({ artifact, entryKey, interrupted = false }: ArtifactCardProps) {
   const { t } = useTranslation();
   // "Version 2" only when the same identifier occurs more than once in this chat.
   const versionNumber = useArtifactSelector((s) => {
@@ -61,8 +63,7 @@ export const ArtifactCard = memo(function ArtifactCard({ artifact, entryKey }: A
       >
         <span className="artifact-card__icon" aria-hidden="true">
           {pending ? <span className="artifact-card__spinner" /> : <ArtifactIcon type={artifact.type} size={20} />}
-        </span>
-        <span className="artifact-card__text">
+        </span>        <span className="artifact-card__text">
           <span className="artifact-card__title">{title}</span>
           <span className="artifact-card__meta">{meta}</span>
         </span>

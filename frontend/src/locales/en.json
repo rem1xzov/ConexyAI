@@ -1276,6 +1276,7 @@
     "mermaidRendering": "Drawing the diagram…",
     "mermaidError": "Could not draw the diagram:",
     "artifactCreating": "Creating artifact…",
+    "artifactDraft": "draft",
     "artifactUntitled": "Untitled artifact",
     "artifactVersion": "version {{n}}",
     "versions": "Versions",

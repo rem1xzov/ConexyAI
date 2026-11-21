@@ -1293,6 +1293,7 @@
     "mermaidRendering": "Рисую схему…",
     "mermaidError": "Не удалось построить схему:",
     "artifactCreating": "Создаю артефакт…",
+    "artifactDraft": "черновик",
     "artifactUntitled": "Артефакт без названия",
     "artifactVersion": "версия {{n}}",
     "versions": "Версии",

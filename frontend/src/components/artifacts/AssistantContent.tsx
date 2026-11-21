@@ -90,11 +90,20 @@ export const AssistantContent = memo(function AssistantContent({
   // STREAM_SANITIZER: во время стриминга закрываем незавершённые **, `, ~~ до рендера.
   const sanitizedSettled = streaming ? closeStreamingInline(settled) : settled;
   const segments = useMemo(() => splitArtifacts(sanitizedSettled, streaming), [sanitizedSettled, streaming]);
+
+  // ARTIFACT_ISOLATION: разбираем ВЕСЬ сглаженный текст, а не только settled-префикс.
+  // Иначе содержимое уже открытого <conexy_artifact> шло в stream-tail и протекало в чат.
+  const fullSegments = useMemo(
+    () => splitArtifacts(smoothContent, streaming),
+    [smoothContent, streaming],
+  );
+  const hasArtifact = fullSegments.some((segment) => segment.kind === 'artifact');
+  const artifactSegments = hasArtifact ? fullSegments : segments;
   // An artifact whose opening tag is still arriving has no reliable identifier yet, so it is not
   // registered (it is always the last one, which keeps the `messageId:index` keys stable).
   const artifacts = useMemo(
-    () => segments.flatMap((s) => (s.kind === 'artifact' && !s.artifact.pendingTag ? [s.artifact] : [])),
-    [segments],
+    () => artifactSegments.flatMap((s) => (s.kind === 'artifact' && !s.artifact.pendingTag ? [s.artifact] : [])),
+    [artifactSegments],
   );
 
   useEffect(() => {
@@ -120,6 +129,31 @@ export const AssistantContent = memo(function AssistantContent({
     if (open && !open.auto) return;
     openArtifact(artifacts[live].identifier, null, { auto: true });
   }, [streaming, content, artifacts, messageId]);
+
+  if (hasArtifact) {
+    // Полная изоляция: всё, что после открытого тега, уже внутри артефакта.
+    // В чат попадает только карточка + Markdown, который был до/после закрытых артефактов.
+    return (
+      <>
+        {fullSegments.map((segment, i) =>
+          segment.kind === 'markdown' ? (
+            <Markdown
+              key={`md-${i}`}
+              text={streaming ? closeStreamingInline(segment.text) : segment.text}
+              streaming={streaming}
+            />
+          ) : (
+            <ArtifactCard
+              key={`artifact-${segment.index}`}
+              artifact={segment.artifact}
+              entryKey={`${messageId}:${segment.index}`}
+              interrupted={!streaming && !segment.artifact.complete}
+            />
+          ),
+        )}
+      </>
+    );
+  }
 
   if (segments.length === 1 && segments[0].kind === 'markdown' && !tail) {
     return <Markdown text={segments[0].text} streaming={streaming} />;
