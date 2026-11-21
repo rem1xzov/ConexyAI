@@ -107,18 +107,7 @@ export function ModelPicker({
   const ref = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
 
-  useEffect(() => {
-    function onClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, []);
-
-  // MODELPICKER_ESC: Escape закрывает меню (раньше оно закрывалось только кликом мимо и
-  // оставалось висеть поверх чата).
+  // ESC закрывает лист; клик по фону и свайп обрабатывает BottomSheet.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpen(false);

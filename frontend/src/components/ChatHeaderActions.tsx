@@ -47,15 +47,7 @@ export const ChatHeaderActions = memo(function ChatHeaderActions({
   const [projecting, setProjecting] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
 
-  // Click/tap anywhere outside the menu closes it.
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMenuOpen(false);
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [menuOpen]);
+  // Клик по фону/свайп/Back обрабатывает BottomSheet — document-close здесь только мешал.
 
   return (
     <div className="chat-actions">
