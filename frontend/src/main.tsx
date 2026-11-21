@@ -8,8 +8,10 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ArtifactPanelHost } from './components/artifacts/ArtifactPanel';
 import { checkMobileUpdate, listenForMobileAuth, showUpdateBanner } from './utils/mobile';
 import { startPhoneAgent } from './services/phoneAgent';
+import { installMotionVars } from './motion/motionConfig';
 import './styles/index.css';
 
+installMotionVars();
 applyTheme(getStoredTheme());
 applyDisplayPrefs();
 

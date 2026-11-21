@@ -376,8 +376,9 @@ export function InputBar({
     setAttachments([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
-      // SEND_KEEPS_FOCUS: клавиатура остаётся открытой после отправки.
-      textareaRef.current.focus();
+      // BLOCK1_KEYBOARD: после отправки сразу убираем фокус — клавиатура плавно уходит,
+      // шапка и лента не дёргаются на смене visualViewport.
+      textareaRef.current.blur();
     }
 
     const outcome = await onSend(prompt, pending);
