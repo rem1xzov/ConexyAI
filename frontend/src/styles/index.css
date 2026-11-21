@@ -13690,3 +13690,77 @@ html:not([data-theme="light"]) .chat-actions__btn {
     padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px));
   }
 }
+/* ================= COMPOSER_STABILITY_AND_ROUNDING ================= */
+@media (max-width: 820px) {
+  /* Скругления как у Claude, без превращения высокого поля в овал. */
+  .inputbar {
+    border-radius: 26px;
+    align-items: stretch;
+  }
+  .inputbar__row {
+    align-items: flex-end;
+    min-width: 0;
+  }
+  /* Кнопки зафиксированы по размеру: не разъезжаются и не «гуляют» при росте текста. */
+  .inputbar__row > .icon-btn,
+  .inputbar__row > .mic-btn,
+  .inputbar__row > .send-btn,
+  .inputbar__row > .prompt-btn,
+  .inputbar__row > .modelpicker {
+    flex: 0 0 auto;
+  }
+  .inputbar__row > .inputbar__textarea {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-height: min(30dvh, 132px);
+  }
+  /* Многострочный ввод: кнопки остаются внизу, поле растёт вверх. */
+  .inputbar--expanded .inputbar__row {
+    align-items: flex-end;
+  }
+  .inputbar--expanded .inputbar__row > .icon-btn,
+  .inputbar--expanded .inputbar__row > .mic-btn,
+  .inputbar--expanded .inputbar__row > .send-btn {
+    align-self: flex-end;
+  }
+
+  /* Панель: такие же крупные скругления, как в референсе. */
+  .mobile-nav {
+    border-radius: 28px;
+    height: 66px;
+    padding: 7px 8px;
+  }
+  .mobile-nav__btn {
+    min-width: 0;
+    white-space: nowrap;
+  }
+}
+/* Расширенный ввод: НЕ переносим кнопки на второй ряд — они должны стоять на месте. */
+@media (max-width: 820px) {
+  .inputbar--expanded .inputbar__row {
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    row-gap: 0;
+  }
+  .inputbar--expanded .inputbar__textarea {
+    order: 0;
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    padding: 6px 6px;
+  }
+  .inputbar--expanded .attach-wrap,
+  .inputbar--expanded .icon-btn,
+  .inputbar--expanded .mic-btn,
+  .inputbar--expanded .send-btn {
+    align-self: flex-end;
+  }
+  .inputbar--expanded .mic-btn,
+  .inputbar--expanded .mic-btn:not(.prompt-btn) {
+    margin-left: 0;
+  }
+  /* Поле выше — но кнопки остаются прижатыми вправо и вниз. */
+  .inputbar--expanded {
+    border-radius: 26px;
+  }
+}
