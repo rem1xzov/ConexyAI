@@ -61,6 +61,7 @@ import type { SubscriptionUsage, McpServerInput } from '../types/api';
 import { LEGAL_PATHS } from './legal/LegalPage';
 // MCP_OAUTH: внешняя ссылка открывается системным браузером в приложении и новой вкладкой в вебе.
 import { openExternalUrl } from '../utils/mobile';
+import { triggerHaptic } from '../utils/haptics';
 
 export type SettingsSection = 'general' | 'limits' | 'account' | 'personalization' | 'memory' | 'github' | 'mcp' | 'telegram' | 'desktop' | 'app' | 'phone';
 
@@ -349,6 +350,13 @@ const SECTIONS: { value: SettingsSection; key: string; Icon: typeof GearIcon }[]
 // MOBILE_APP: на телефоне раздел «Десктоп» бессмыслен (там exe для Windows), и вместо него
 // показывается «Приложение» со ссылкой на APK. На ПК — наоборот.
 const DESKTOP_UNSUITABLE = '(pointer: coarse), (max-width: 820px)';
+
+// SETTINGS_GROUPS: iOS/Claude-style секции вместо одного длинного списка.
+const SECTION_GROUPS: { key: string; values: SettingsSection[] }[] = [
+  { key: 'settings.groupAccount', values: ['account', 'limits', 'personalization', 'memory'] },
+  { key: 'settings.groupIntegrations', values: ['github', 'mcp', 'telegram'] },
+  { key: 'settings.groupApp', values: ['general', 'desktop', 'app', 'phone'] },
+];
 
 function desktopTabRelevant(): boolean {
   return typeof window.matchMedia === 'function' ? !window.matchMedia(DESKTOP_UNSUITABLE).matches : true;
@@ -1786,23 +1794,37 @@ export function SettingsModal({
             className={`settings-shell${narrow ? ' settings-shell--narrow' : ''}${narrow && mobilePane === 'body' ? ' settings-shell--detail' : ''}`}
           >
             <nav className="settings-nav" role="tablist">
-              {visibleSections.map((s) => (
-                <button
-                  key={s.value}
-                  role="tab"
-                  aria-selected={section === s.value}
-                  className={`settings-nav__item${section === s.value ? ' is-active' : ''}`}
-                  onClick={() => {
-                    setSection(s.value);
-                    if (narrow) setMobilePane('body');
-                  }}
-                  type="button"
-                >
-                  <s.Icon size={18} className="settings-nav__icon" />
-                  <span className="settings-nav__label">{t(s.key)}</span>
-                  <ChevronDownIcon size={16} className="settings-nav__chev" />
-                </button>
-              ))}
+              {SECTION_GROUPS.map((group) => {
+                const items = group.values
+                  .map((value) => visibleSections.find((s) => s.value === value))
+                  .filter((s): s is NonNullable<typeof s> => Boolean(s));
+                if (items.length === 0) return null;
+                return (
+                  <div className="settings-group" key={group.key}>
+                    <div className="settings-group__label">{t(group.key)}</div>
+                    <div className="settings-group__card">
+                      {items.map((s) => (
+                        <button
+                          key={s.value}
+                          role="tab"
+                          aria-selected={section === s.value}
+                          className={`settings-nav__item${section === s.value ? ' is-active' : ''}`}
+                          onClick={() => {
+                            triggerHaptic('selection');
+                            setSection(s.value);
+                            if (narrow) setMobilePane('body');
+                          }}
+                          type="button"
+                        >
+                          <s.Icon size={18} className="settings-nav__icon" />
+                          <span className="settings-nav__label">{t(s.key)}</span>
+                          <ChevronDownIcon size={16} className="settings-nav__chev" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </nav>
 
             <div className="settings-modal__body">

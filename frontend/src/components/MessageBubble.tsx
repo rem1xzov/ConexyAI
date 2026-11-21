@@ -311,7 +311,7 @@ function MessageBubbleBase({
     return (
       <div className={`w-full max-w-3xl mx-auto my-4 flex flex-col items-end px-2${enterMotion ? ' msg-enter' : ''}${dimmed ? ' msg--dimmed' : ''}`}>
         <div
-          className={`user-bubble relative chat-surface rounded-2xl px-5 py-3.5 shadow-sm ${editing ? 'w-full max-w-[85%]' : 'w-fit max-w-[85%]'}`}
+          className={`user-bubble relative chat-surface rounded-2xl px-4 py-2.5 shadow-sm ${editing ? 'w-full max-w-[85%]' : 'w-fit max-w-[85%]'}`}
           onContextMenu={(event) => {
             event.preventDefault();
             setMenuOpen(true);
@@ -327,9 +327,6 @@ function MessageBubbleBase({
           onTouchEnd={cancelPress}
           onTouchCancel={cancelPress}
         >
-          <div className="font-semibold text-xs chat-muted mb-1">{t('message.you')}</div>
-          {/* ATTACHMENTS_IN_BUBBLE: the files travel with this message, inside its bubble —
-              images as a compact grid, anything else as a file chip. */}
           {attachments.length > 0 && !editing && <AttachmentGrid attachments={attachments} />}
           {editing ? (
             <div className="w-full min-w-0">

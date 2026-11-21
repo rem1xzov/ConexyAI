@@ -9,6 +9,7 @@ import {
 import { createPortal } from 'react-dom';
 import { duration, easing, spring } from '../motion/motionConfig';
 import { usePresence } from '../motion/usePresence';
+import { registerSheetBack } from '../motion/sheetBackStack';
 import { triggerHaptic } from '../utils/haptics';
 
 /**
@@ -66,10 +67,12 @@ export function BottomSheet({
   const springFrameRef = useRef<number | null>(null);
   const [dragging, setDragging] = useState(false);
 
-  // ХАПТИК: лёгкий отклик в момент открытия.
+  // ХАПТИК: лёгкий отклик в момент открытия + системный Back закрывает верхний лист.
   useEffect(() => {
-    if (open) triggerHaptic('light');
-  }, [open]);
+    if (!open) return;
+    triggerHaptic('light');
+    return registerSheetBack(onClose);
+  }, [open, onClose]);
 
   // Escape закрывает лист.
   useEffect(() => {

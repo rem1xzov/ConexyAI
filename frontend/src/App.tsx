@@ -46,7 +46,7 @@ import { StatusBar, type AgentStatus } from './components/StatusBar';
 import { ConnectionBanner } from './components/ConnectionBanner';
 // LIVE_VOICE_DISABLED: закомментировано временно, см. 2026-09-17
 // import { LiveVoiceModal } from './components/LiveVoiceModal';
-import { MenuLinesIcon, PanelRightCloseIcon, PanelRightOpenIcon, GhostIcon } from './components/Icons';
+import { MenuLinesIcon, PanelRightCloseIcon, PanelRightOpenIcon, GhostIcon, EditIcon } from './components/Icons';
 // LOGO_SWEEP / CLAUDE_LAYOUT: добавлено 2026-09-20
 import { ConexyLogo } from './components/ConexyLogo';
 import { ChatLayout, type ChatQuickChip } from './components/ChatLayout';
@@ -64,6 +64,7 @@ import {
 import { CursorTrail } from './components/CursorTrail';
 import { duration } from './motion/motionConfig';
 import { usePresence } from './motion/usePresence';
+import { closeTopSheet } from './motion/sheetBackStack';
 import { triggerHaptic } from './utils/haptics';
 // GUEST_HERO: добавлено 2026-09-20
 import { GuestHero } from './components/GuestHero';
@@ -3428,6 +3429,7 @@ export default function App() {
     let disposed = false;
     let handle: { remove: () => Promise<void> } | null = null;
     void listenForAppBack(() => {
+      if (closeTopSheet()) return;
       const layers = backLayersRef.current;
       if (layers.sidebarOpen) {
         setSidebarOpen(false);
@@ -3625,38 +3627,51 @@ export default function App() {
                 <span className="chat-drop-overlay__text">{t('sync.dropFiles')}</span>
               </div>
             )}
-            {/* Mobile: the model picker lives in the chat header. */}
+            {/* Mobile: пустой чат — модель + инкогнито; после первого сообщения — название и новый чат. */}
             {isMobile && (
-              <div className="chat-header">
+              <div className={`chat-header${stageEmpty ? ' chat-header--empty' : ' chat-header--active'}`}>
                 <div className="chat-header__left">
-                  <ModelPicker
-                    model={model}
-                    onModelChange={handleModelChange}
-                    mode={isAgent ? 'code' : 'chat'}
-                    thinking={thinking}
-                    onThinkingChange={setThinking}
-                    reasoningEffort={reasoningEffort}
-                    onReasoningEffortChange={setReasoningEffort}
-                    smartSearch={smartSearch}
-                    onSmartSearchChange={setSmartSearch}
-                    locked={students}
-                    coworkLocked={coworkLocked}
-                    onCoworkLockedClick={handleUpgrade}
-                    orchestra={orchestra}
-                    onOrchestraChange={setOrchestra}
-                    orchestraAvailable={orchestraAvailable}
-                    onUpgradeClick={handleUpgrade}
-                    executionTarget={executionTargetSection}
-                    onDevice={executionTarget === 'device'}
-                    plain
-                  />
+                  {stageEmpty ? (
+                    <ModelPicker
+                      model={model}
+                      onModelChange={handleModelChange}
+                      mode={isAgent ? 'code' : 'chat'}
+                      thinking={thinking}
+                      onThinkingChange={setThinking}
+                      reasoningEffort={reasoningEffort}
+                      onReasoningEffortChange={setReasoningEffort}
+                      smartSearch={smartSearch}
+                      onSmartSearchChange={setSmartSearch}
+                      locked={students}
+                      coworkLocked={coworkLocked}
+                      onCoworkLockedClick={handleUpgrade}
+                      orchestra={orchestra}
+                      onOrchestraChange={setOrchestra}
+                      orchestraAvailable={orchestraAvailable}
+                      onUpgradeClick={handleUpgrade}
+                      executionTarget={executionTargetSection}
+                      onDevice={executionTarget === 'device'}
+                      plain
+                    />
+                  ) : (
+                    <div className="chat-header__title" title={activeSession?.title ?? ''}>
+                      {activeSession?.title ?? t('chat.newChat')}
+                    </div>
+                  )}
                 </div>
                 <div className="chat-header__actions">
-                  {isAgent ? (
-                    /* SUBSCRIPTION_TIERS: добавлено 2026-09-17 */
-                    <UsageIndicator usage={usage} />
+                  {stageEmpty ? (
+                    isAgent ? <UsageIndicator usage={usage} /> : incognitoControl
                   ) : (
-                    incognitoControl
+                    <button
+                      type="button"
+                      className="chat-actions__btn"
+                      onClick={() => guardLeave(() => handleNewSession(activeTab))}
+                      title={t('chat.newChat')}
+                      aria-label={t('chat.newChat')}
+                    >
+                      <EditIcon size={18} />
+                    </button>
                   )}
                   {chatActions}
                 </div>
@@ -3720,6 +3735,12 @@ export default function App() {
                     onLogin={() => setAuthModal('login')}
                     onRegister={() => setAuthModal('register')}
                   />
+                ) : incognitoActive ? (
+                  <div className="incognito-hero">
+                    <GhostIcon size={54} />
+                    <div className="incognito-hero__title">{t('chat.incognitoTitle')}</div>
+                    <p className="incognito-hero__text">{t('chat.incognitoHeroText')}</p>
+                  </div>
                 ) : authPending ? null : (
                   <div className="chat-hero-row">
                     <ConexyLogo size={36} />
@@ -3833,6 +3854,7 @@ export default function App() {
                     onCancelEdit={handleCancelEdit}
                     onComposerFocus={() => setComposerFocused(true)}
                     onComposerBlur={() => setComposerFocused(false)}
+                    showMobileModel={!stageEmpty}
                   />
                 </>
               }

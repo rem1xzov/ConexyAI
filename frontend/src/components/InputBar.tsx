@@ -16,6 +16,7 @@ import { useIsMobile, useMediaQuery } from '../hooks/useMediaQuery';
 import { mergeTranscript } from '../utils/voiceTranscript';
 import { isMobileApp, nativeSpeech } from '../utils/mobile';
 import { ModelPicker } from './ModelPicker';
+import { BottomSheet } from './BottomSheet';
 import { triggerHaptic } from '../utils/haptics';
 import { SkillsDialog } from './SkillsDialog';
 import { VoiceWaveIcon, MicIcon, PlusIcon, SendIcon, StopIcon, UploadIcon, PhotoIcon, CameraIcon, CodeIcon, CloseIcon, LightbulbIcon } from './Icons';
@@ -93,6 +94,8 @@ interface InputBarProps {
   // FOCUS_MODE: the start screen collapses its greeting while the composer has focus (mobile only).
   onComposerFocus?: () => void;
   onComposerBlur?: () => void;
+  /** Мобильный чат: компактный чип модели внутри нижней панели (только после первого сообщения). */
+  showMobileModel?: boolean;
   // COMPOSER_EDIT: добавлено 2026-10-01 — на телефоне «Изменить» открывает сообщение прямо в
   // композере (как в Gemini), а не в inline-редакторе внутри пузыря.
   /** Сообщение, открытое на редактирование в композере (null — обычный ввод). */
@@ -129,6 +132,7 @@ export function InputBar({
   externalFiles,
   onComposerFocus,
   onComposerBlur,
+  showMobileModel = false,
   editTarget,
   onSubmitEdit,
   onCancelEdit,
@@ -198,13 +202,7 @@ export function InputBar({
   const nativeListenersRef = useRef<Array<{ remove: () => Promise<void> | void }>>([]);
 
   useEffect(() => {
-    function onClickOutside(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', onClickOutside);
-    return () => document.removeEventListener('mousedown', onClickOutside);
+    // ATTACH_BOTTOM_SHEET: клик вне меню больше не нужен — закрытием занимается сам лист.
   }, []);
 
   // Stop any in-progress recognition if the component unmounts.
@@ -1088,41 +1086,15 @@ export function InputBar({
           <div className="attach-wrap" ref={menuRef}>
           <button
             className="icon-btn attach-btn"
-            onClick={() => setMenuOpen((o) => !o)}
+            onClick={() => {
+              setMenuOpen((o) => !o);
+              triggerHaptic('light');
+            }}
             title={t('input.addFiles')}
             aria-label={t('input.addFiles')}
           >
             <PlusIcon size={20} />
           </button>
-
-          {menuOpen && (
-            <div className="attach-menu">
-              <button className="attach-menu__item" onClick={() => fileRef.current?.click()}>
-                <UploadIcon size={17} /> {t('input.uploadFiles')}
-              </button>
-              <button className="attach-menu__item" onClick={() => photoRef.current?.click()}>
-                <PhotoIcon size={17} /> {t('input.photos')}
-              </button>
-              {/* Camera capture only makes sense on devices with a camera. */}
-              {isMobile && (
-                <button className="attach-menu__item" onClick={() => cameraRef.current?.click()}>
-                  <CameraIcon size={17} /> {t('input.takePhoto')}
-                </button>
-              )}
-              <button className="attach-menu__item" onClick={() => codeRef.current?.click()}>
-                <CodeIcon size={17} /> {t('input.importCode')}
-              </button>
-              <button
-                className="attach-menu__item"
-                onClick={() => {
-                  setMenuOpen(false);
-                  setSkillsOpen(true);
-                }}
-              >
-                <LightbulbIcon size={17} /> {t('skills.menu')}
-              </button>
-            </div>
-          )}
         </div>
 
         <input
@@ -1222,6 +1194,33 @@ export function InputBar({
           />
         )}
 
+        {/* Mobile: компактный чип модели рядом с кнопками — не тянуться в верхний угол. */}
+        {isMobile && showMobileModel && (
+          <div className="inputbar__modelchip">
+            <ModelPicker
+              model={model}
+              onModelChange={onModelChange}
+              mode={mode}
+              thinking={thinking}
+              onThinkingChange={onThinkingChange}
+              reasoningEffort={reasoningEffort}
+              onReasoningEffortChange={onReasoningEffortChange}
+              smartSearch={smartSearch}
+              onSmartSearchChange={onSmartSearchChange}
+              locked={locked}
+              coworkLocked={coworkLocked}
+              onCoworkLockedClick={onCoworkLockedClick}
+              orchestra={orchestra}
+              onOrchestraChange={onOrchestraChange}
+              orchestraAvailable={orchestraAvailable}
+              onUpgradeClick={onUpgradeClick}
+              executionTarget={executionTarget}
+              onDevice={executionOnDevice}
+              plain
+            />
+          </div>
+        )}
+
         <button
           className="mic-btn prompt-btn"
           onClick={() => window.dispatchEvent(new Event('conexy:open-prompts'))}
@@ -1277,6 +1276,76 @@ export function InputBar({
         )}
         </div>
       </div>
+      <BottomSheet
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        title={t('input.addFiles')}
+        ariaLabel={t('input.addFiles')}
+      >
+        <div className="sheet-attach">
+          <div className="sheet-attach__grid">
+            {isMobile && (
+              <button
+                type="button"
+                className="sheet-attach__card"
+                onClick={() => {
+                  setMenuOpen(false);
+                  cameraRef.current?.click();
+                }}
+              >
+                <CameraIcon size={24} />
+                <span>{t('input.takePhoto')}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="sheet-attach__card"
+              onClick={() => {
+                setMenuOpen(false);
+                photoRef.current?.click();
+              }}
+            >
+              <PhotoIcon size={24} />
+              <span>{t('input.photos')}</span>
+            </button>
+            <button
+              type="button"
+              className="sheet-attach__card"
+              onClick={() => {
+                setMenuOpen(false);
+                fileRef.current?.click();
+              }}
+            >
+              <UploadIcon size={24} />
+              <span>{t('input.uploadFiles')}</span>
+            </button>
+          </div>
+          <div className="sheet-attach__list">
+            <button
+              type="button"
+              className="sheet-row"
+              onClick={() => {
+                setMenuOpen(false);
+                codeRef.current?.click();
+              }}
+            >
+              <CodeIcon size={19} />
+              <span>{t('input.importCode')}</span>
+            </button>
+            <button
+              type="button"
+              className="sheet-row"
+              onClick={() => {
+                setMenuOpen(false);
+                setSkillsOpen(true);
+              }}
+            >
+              <LightbulbIcon size={19} />
+              <span>{t('skills.menu')}</span>
+            </button>
+          </div>
+        </div>
+      </BottomSheet>
     </div>
   );
 }

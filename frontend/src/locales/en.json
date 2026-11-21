@@ -167,6 +167,8 @@
   },
   "chat": {
     "incognito": "Incognito",
+    "incognitoTitle": "Incognito mode",
+    "incognitoHeroText": "Chats in this mode are not saved to history and are not used in memory",
     "incognitoHint": "Incognito chat: the dialog is not saved to history and is not used to remember you",
     "chipFlash": "Quick answer",
     "chipPro": "Deep analysis",
@@ -228,6 +230,9 @@
   },
   "settings": {
     "title": "Settings",
+    "groupAccount": "Account",
+    "groupIntegrations": "Integrations",
+    "groupApp": "App",
     "theme": "Theme",
     "language": "Language",
     "themeLight": "Light",
@@ -822,6 +827,7 @@
     "goodNight": "Good night, {{name}}. What shall we dig into?"
   },
   "model": {
+    "title": "Model",
     "flashDesc": "Fast chat, quick answers, basic help.",
     "proDesc": "Advanced reasoning, complex analysis, refactoring.",
     "coderDesc": "Autonomous coding: terminal, files, Playwright, GitHub.",

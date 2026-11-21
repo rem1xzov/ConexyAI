@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { ConexyModel, ReasoningEffort } from '../types/api';
 import { CheckIcon, ChevronDownIcon } from './Icons';
 import { duration } from '../motion/motionConfig';
-import { usePresence } from '../motion/usePresence';
+import { BottomSheet } from './BottomSheet';
 import { triggerHaptic } from '../utils/haptics';
 
 interface ModelOption {
@@ -104,7 +104,6 @@ export function ModelPicker({
   plain = false,
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
-  const menu = usePresence(open, duration.fast);
   const ref = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
 
@@ -176,8 +175,13 @@ export function ModelPicker({
         </span>
       </button>
 
-      {menu.mounted && (
-        <div className={`modelpicker__menu${menu.closing ? ' is-closing' : ''}`}>
+      <BottomSheet
+        open={open}
+        onClose={() => setOpen(false)}
+        title={t('model.title')}
+        ariaLabel={t('model.title')}
+      >
+        <div className="modelpicker__sheet">
           {options.map((m) => (
             <button
               key={m.value}
@@ -310,7 +314,7 @@ export function ModelPicker({
             </>
           )}
         </div>
-      )}
+      </BottomSheet>
     </div>
   );
 }
