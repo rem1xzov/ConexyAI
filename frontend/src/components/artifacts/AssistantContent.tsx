@@ -122,14 +122,14 @@ export const AssistantContent = memo(function AssistantContent({
   }, [streaming, content, artifacts, messageId]);
 
   if (segments.length === 1 && segments[0].kind === 'markdown' && !tail) {
-    return <Markdown text={segments[0].text} />;
+    return <Markdown text={segments[0].text} streaming={streaming} />;
   }
 
   return (
     <>
       {segments.map((segment, i) =>
         segment.kind === 'markdown' ? (
-          <Markdown key={`md-${i}`} text={segment.text} />
+          <Markdown key={`md-${i}`} text={segment.text} streaming={streaming} />
         ) : (
           <ArtifactCard
             key={`artifact-${segment.index}`}

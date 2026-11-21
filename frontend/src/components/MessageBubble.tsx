@@ -428,6 +428,7 @@ function MessageBubbleBase({
         streaming={streaming}
         onCommandDecision={onCommandDecision}
         statusPill={statusPill}
+        answerStarted={streaming && content.trim().length > 0}
         onOpenPath={onOpenFile}
         agents={message.agents}
         cursors={message.agentCursors}

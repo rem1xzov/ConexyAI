@@ -14538,3 +14538,45 @@ html:not([data-theme="light"]) .inputbar:focus-within .send-btn:not(:disabled) {
 @media (prefers-reduced-motion: reduce) {
   .stream-word { animation: none !important; }
 }
+/* STABLE_WEB_FOUND: никаких opacity-анимаций — плашка来源 не должна мигать. */
+.web-found,
+.web-found:active {
+  animation: none !important;
+  opacity: 1 !important;
+  transition: none !important;
+}
+
+/* Слова в стриминге: обычный inline, чтобы «Ap / ple» не рвалось. */
+@keyframes wordFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.stream-word {
+  display: inline;
+  animation: wordFadeIn 220ms ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stream-word { animation: none !important; opacity: 1; }
+}
+/* SCROLL_BUTTON_RIGHT: справа над полем, не по центру текста; видна только при отдалении. */
+.scroll-to-bottom {
+  left: auto;
+  right: 16px;
+  bottom: 12px;
+  transform: translateY(6px);
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.48);
+}
+.scroll-to-bottom--visible {
+  transform: translateY(0);
+}
+@media (max-width: 820px) {
+  .scroll-to-bottom {
+    right: 14px;
+    bottom: 12px;
+    width: 42px;
+    height: 42px;
+  }
+  .scroll-to-bottom--visible { transform: translateY(0); }
+}

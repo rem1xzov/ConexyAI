@@ -40,6 +40,8 @@ interface AgentTimelineProps {
   onCommandDecision?: CommandDecisionHandler;
   /** Live status shown when no block is currently running. */
   statusPill?: { label: string } | null;
+  /** Первый токен финального ответа уже пришёл — только тогда reasoning сворачивается. */
+  answerStarted?: boolean;
   /** Opens a path from an action row in the workspace editor. */
   onOpenPath?: (path: string) => void;
   // ORCHESTRA: состав команды — когда задан, лента рисуется карточками по агентам.
@@ -293,6 +295,7 @@ export function AgentTimeline({
   streaming = false,
   onCommandDecision,
   statusPill,
+  answerStarted = false,
   onOpenPath,
   agents,
   cursors,
@@ -323,7 +326,9 @@ export function AgentTimeline({
     if (block.type === 'thought') return streaming && block.durationMs === undefined;
     return false;
   });
-  const showStatusRow = Boolean(statusPill) && !somethingRunning;
+  const hasThoughtBlock = feed.some((block) => block.type === 'thought');
+  // Дублирующую строку статуса под уже показанным «Размышление» не выводим.
+  const showStatusRow = Boolean(statusPill) && !somethingRunning && !hasThoughtBlock;
 
   const renderBlock = (block: TurnBlock, index: number) => {
     switch (block.type) {
@@ -336,7 +341,7 @@ export function AgentTimeline({
             durationMs={block.durationMs}
             // THINKING_ONCE: the merged plate may sit above later text, so liveness comes from the
             // block itself rather than from being the last item in the feed.
-            running={streaming && block.durationMs === undefined}
+            running={streaming && !answerStarted}
           />
         );
 
@@ -418,12 +423,15 @@ export function AgentTimeline({
         let end = index;
         while (end < list.length && isWebBlock(list[end])) end++;
         const run = list.slice(index, end) as TurnToolBlock[];
+        // STABLE_WEB_BLOCK: один и тот же компонент и стабильный key на весь run поиска.
+        // Раньше при первом web-блоке рисовалась обычная строка, потом подменялась группой —
+        // из-за этого плашка «Найдено N» монтировалась заново и мигала.
         nodes.push(
-          run.length === 1 ? (
-            renderBlock(run[0], index)
-          ) : (
-            <WebResearchGroup key={`web-${run[0].id}`} blocks={run} renderRow={(row) => renderBlock(row, index)} />
-          ),
+          <WebResearchGroup
+            key={`search-sources-${run[0].id}`}
+            blocks={run}
+            renderRow={(row) => renderBlock(row, index)}
+          />,
         );
         index = end - 1;
         continue;

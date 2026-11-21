@@ -77,8 +77,8 @@ export function ChatFeed({
   // One epsilon for «мы всё ещё у хвоста»: осознанного движения вверх на 10px достаточно, чтобы
   // выключить автоследование, поэтому читающего выше пользователя больше никуда не тянет.
   const MANUAL_SCROLL_EPSILON_PX = 10;
-  // Кнопка «вниз» ждёт куда большего сдвига: иначе она мигала бы от любого толчка.
-  const SCROLL_BUTTON_THRESHOLD_PX = 140;
+  // Кнопка «вниз» скрыта, пока пользователь в пределах 80px от низа.
+  const SCROLL_BUTTON_THRESHOLD_PX = 80;
 
   /** Instant scroll (no animation) — used when following the stream token by token. */
   const jumpToBottom = useCallback(() => {

@@ -29,7 +29,20 @@ function isTermBadge(text: string): boolean {
  */
 const BARE_URL = /(https?:\/\/[^\s<>"']+)/g;
 
-function renderTextWithLinks(value: string): ReactNode {
+function renderTextWithLinks(value: string, streaming = false): ReactNode {
+  // TOKEN_FADE: только во время активного стрима разбиваем текст на слова.
+  // display:inline (не inline-block) — иначе слова рвутся на переносе («Ap / ple»).
+  if (streaming) {
+    return value.split(/(\s+)/).map((part, index) => {
+      if (!part) return null;
+      if (/^\s+$/.test(part)) return part;
+      return (
+        <span key={index} className="stream-word">
+          {part}
+        </span>
+      );
+    });
+  }
   if (!value.includes('http')) return value;
   const parts = value.split(BARE_URL);
   return parts.map((part, index) => {
@@ -47,11 +60,11 @@ function renderTextWithLinks(value: string): ReactNode {
   });
 }
 
-function renderInlineNodes(nodes: Inline[]): ReactNode[] {
+function renderInlineNodes(nodes: Inline[], streaming = false): ReactNode[] {
   return nodes.map((node, i) => {
     switch (node.type) {
       case 'text':
-        return <Fragment key={i}>{renderTextWithLinks(node.value)}</Fragment>;
+        return <Fragment key={i}>{renderTextWithLinks(node.value, streaming)}</Fragment>;
       case 'code':
         return (
           <code key={i} className="chat-code">
@@ -65,31 +78,31 @@ function renderInlineNodes(nodes: Inline[]): ReactNode[] {
       case 'link':
         return (
           <a key={i} href={node.href} target="_blank" rel="noreferrer noopener">
-            {renderInlineNodes(node.children)}
+            {renderInlineNodes(node.children, streaming)}
           </a>
         );
       case 'strong':
         return (
           <strong key={i} className={isTermBadge(inlineText(node.children)) ? 'font-semibold chat-term' : 'font-semibold'}>
-            {renderInlineNodes(node.children)}
+            {renderInlineNodes(node.children, streaming)}
           </strong>
         );
       case 'em':
-        return <em key={i}>{renderInlineNodes(node.children)}</em>;
+        return <em key={i}>{renderInlineNodes(node.children, streaming)}</em>;
       case 'del':
-        return <del key={i}>{renderInlineNodes(node.children)}</del>;
+        return <del key={i}>{renderInlineNodes(node.children, streaming)}</del>;
       default:
         return null;
     }
   });
 }
 
-function InlineText({ text }: { text: string }) {
+function InlineText({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const nodes = useMemo(() => parseInline(text), [text]);
-  return <>{renderInlineNodes(nodes)}</>;
+  return <>{renderInlineNodes(nodes, streaming)}</>;
 }
 
-function TableBlock({ header, aligns, rows }: { header: string[]; aligns: TableAlign[]; rows: string[][] }) {
+function TableBlock({ header, aligns, rows, streaming = false }: { header: string[]; aligns: TableAlign[]; rows: string[][]; streaming?: boolean }) {
   return (
     // The wrapper is what scrolls horizontally: a wide table must never stretch the chat column.
     // DRAWER_TABLE: data-no-drawer-swipe — свайп по таблице никогда не открывает боковое меню.
@@ -99,7 +112,7 @@ function TableBlock({ header, aligns, rows }: { header: string[]; aligns: TableA
           <tr>
             {header.map((cell, idx) => (
               <th key={idx} style={{ textAlign: aligns[idx] ?? 'left' }}>
-                <InlineText text={cell} />
+                <InlineText text={cell} streaming={streaming} />
               </th>
             ))}
           </tr>
@@ -110,7 +123,7 @@ function TableBlock({ header, aligns, rows }: { header: string[]; aligns: TableA
               {header.map((_, colIdx) => (
                 <td key={colIdx} style={{ textAlign: aligns[colIdx] ?? 'left' }}>
                   {/* A short row is padded rather than skipped, so columns stay aligned. */}
-                  <InlineText text={row[colIdx] ?? ''} />
+                  <InlineText text={row[colIdx] ?? ''} streaming={streaming} />
                 </td>
               ))}
             </tr>
@@ -124,6 +137,8 @@ function TableBlock({ header, aligns, rows }: { header: string[]; aligns: TableA
 interface RenderContext {
   /** Tight list items render their paragraphs inline (no paragraph margins). */
   tight: boolean;
+  /** STREAMING_WORDS: включать плавное появление слов по границам. */
+  streaming: boolean;
   taskLabels: { done: string; todo: string };
 }
 
@@ -133,18 +148,18 @@ function renderBlocks(blocks: Block[], ctx: RenderContext): ReactNode[] {
       case 'paragraph':
         return ctx.tight ? (
           <div key={key} className="markdown__tight">
-            <InlineText text={block.text} />
+            <InlineText text={block.text} streaming={ctx.streaming} />
           </div>
         ) : (
           <p key={key} className="my-1">
-            <InlineText text={block.text} />
+            <InlineText text={block.text} streaming={ctx.streaming} />
           </p>
         );
       case 'heading': {
         const Tag = block.level === 1 ? 'h2' : block.level === 2 ? 'h3' : 'h4';
         return (
           <Tag key={key} className="font-semibold chat-text mt-3 mb-1 first:mt-0">
-            <InlineText text={block.text} />
+            <InlineText text={block.text} streaming={ctx.streaming} />
           </Tag>
         );
       }
@@ -164,7 +179,7 @@ function renderBlocks(blocks: Block[], ctx: RenderContext): ReactNode[] {
           </blockquote>
         );
       case 'table':
-        return <TableBlock key={key} header={block.header} aligns={block.aligns} rows={block.rows} />;
+        return <TableBlock key={key} header={block.header} aligns={block.aligns} rows={block.rows} streaming={ctx.streaming} />;
       case 'list': {
         const items = block.items.map((item, idx) => (
           <li key={idx} className={item.checked !== undefined ? 'markdown__task' : undefined}>
@@ -207,13 +222,16 @@ function renderBlocks(blocks: Block[], ctx: RenderContext): ReactNode[] {
 
 interface MarkdownProps {
   text: string;
+  /** Активный стрим: слова появляются через tokenFadeIn; история — без анимации. */
+  streaming?: boolean;
 }
 
-export const Markdown = memo(function Markdown({ text }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ text, streaming = false }: MarkdownProps) {
   const { t } = useTranslation();
   const blocks = useMemo(() => parseMarkdown(text), [text]);
   const ctx: RenderContext = {
     tight: false,
+    streaming,
     taskLabels: { done: t('render.taskDone'), todo: t('render.taskTodo') },
   };
   return <div className="markdown">{renderBlocks(blocks, ctx)}</div>;

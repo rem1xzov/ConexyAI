@@ -70,8 +70,12 @@ export function useSmoothStream(target: string, streaming: boolean): string {
         setDisplay(target);
       } else if (current.length < target.length) {
         const remaining = target.length - current.length;
-        // 2–10 символов за кадр: поток ровный, но успевает за сетью.
-        const step = Math.min(10, Math.max(2, Math.ceil(remaining / 30)));
+        // Базовый поток — 2–4 символа за кадр. При большом отставании ускоряемся,
+        // чтобы не отставать от бэкенда (но всё равно плавно).
+        const step =
+          remaining > 80
+            ? Math.min(16, Math.max(4, Math.ceil(remaining / 12)))
+            : Math.min(4, Math.max(2, Math.ceil(remaining / 20)));
         const next = target.slice(0, current.length + step);
         displayRef.current = next;
         setDisplay(next);
