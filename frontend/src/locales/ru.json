@@ -952,6 +952,8 @@
   },
   "timeline": {
     "thinking": "Размышления",
+    "reasoningActive": "Размышление",
+    "reasonedFor": "Размышлял {{duration}}",
     "thinkingEmpty": "Модель не оставила текста для этого шага",
     "copyCommand": "Копировать команду",
     "copied": "Скопировано",

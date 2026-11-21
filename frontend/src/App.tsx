@@ -3855,6 +3855,7 @@ export default function App() {
                     onComposerFocus={() => setComposerFocused(true)}
                     onComposerBlur={() => setComposerFocused(false)}
                     showMobileModel={!stageEmpty}
+                    resetKey={activeId ?? 'new-chat'}
                   />
                 </>
               }

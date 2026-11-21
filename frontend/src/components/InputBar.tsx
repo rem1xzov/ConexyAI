@@ -96,6 +96,8 @@ interface InputBarProps {
   onComposerBlur?: () => void;
   /** Мобильный чат: компактный чип модели внутри нижней панели (только после первого сообщения). */
   showMobileModel?: boolean;
+  /** DRAFT_RESET: ключ чата — при смене очищаем черновик, высоту textarea и снимаем фокус. */
+  resetKey?: string;
   // COMPOSER_EDIT: добавлено 2026-10-01 — на телефоне «Изменить» открывает сообщение прямо в
   // композере (как в Gemini), а не в inline-редакторе внутри пузыря.
   /** Сообщение, открытое на редактирование в композере (null — обычный ввод). */
@@ -133,6 +135,7 @@ export function InputBar({
   onComposerFocus,
   onComposerBlur,
   showMobileModel = false,
+  resetKey,
   editTarget,
   onSubmitEdit,
   onCancelEdit,
@@ -145,6 +148,18 @@ export function InputBar({
   const coarsePointer = useMediaQuery('(pointer: coarse)');
   const enterInsertsNewline = isMobile || coarsePointer;
   const [value, setValue] = useState('');
+  // DRAFT_RESET: черновик не должен переезжать в другой чат.
+  const lastResetKeyRef = useRef(resetKey);
+  useEffect(() => {
+    if (resetKey === undefined || lastResetKeyRef.current === resetKey) return;
+    lastResetKeyRef.current = resetKey;
+    setValue('');
+    setAttachments([]);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.blur();
+    }
+  }, [resetKey]);
   // PROMPTS/FOLLOWUP: кнопки «Промпты» (Ctrl+P) и подсказки кладут текст в композер событием,
   // чтобы не протаскивать колбэки через всё дерево.
   useEffect(() => {

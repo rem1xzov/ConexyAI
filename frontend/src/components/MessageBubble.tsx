@@ -13,7 +13,6 @@ import { VisionGallery } from './VisionGallery';
 import { AttachmentGrid } from './AttachmentGrid';
 import { AgentTimeline, feedSummary } from './AgentTimeline';
 import { blocksFromLegacy } from '../utils/turnBlocks';
-import { DurationBadge } from './StepDuration';
 import { TodoPanel } from './TodoPanel';
 import { AssistantContent } from './artifacts/AssistantContent';
 import { ProducedFiles } from './ProducedFiles';
@@ -413,7 +412,11 @@ function MessageBubbleBase({
 
       {/* 1. Thought process: exactly one collapsible plate per answer, before the answer text. */}
       {showThinkingAccordion && (
-        <ThinkingStep text={thinking} running={streaming && phase === 'thinking'} />
+        <ThinkingStep
+          text={thinking}
+          running={streaming && phase === 'thinking'}
+          startedAt={message.createdAt}
+        />
       )}
 
       {/* 2. Chronological feed: reasoning rows, tool rows and the model's own text in the order
@@ -461,7 +464,6 @@ function MessageBubbleBase({
       {showGeneratingLogo && (
         <div className="msg-generating">
           <ConexyLogo size={24} active />
-          <DurationBadge startedAt={turnStart} className="thinking-timer" />
         </div>
       )}
 

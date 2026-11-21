@@ -1,63 +1,157 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDownIcon, LightbulbIcon } from './Icons';
+import { ChevronDownIcon, LightbulbIcon, SearchIcon } from './Icons';
 
-// AGENT_FEED_ZED: добавлено 2026-09-23
 /**
- * One reasoning step of an agent run, in the compact Zed-style form: a light "Размышления"
- * header with a bulb icon that expands to reveal the reasoning text underneath.
- *
- * It replaces the old per-step row that printed the full backend label ("Обдумываю следующий шаг…")
- * plus a per-step stopwatch on every line — a stack of near-identical lines with a restarted
- * counter next to each of them, which is what made the feed look like it was looping. There is no
- * timer left here on purpose: a single honest counter for the whole turn lives at the bottom of the
- * feed, so nothing on screen resets to `1с` several times per answer.
+ * REASONING_BLOCK
+ * Блок «Размышления» в стиле мобильного DeepSeek:
+ *  - во время генерации — окно-телесуфлёр с маской и автоскроллом;
+ *  - после завершения — компактная строка «Размышлял N сек ›»;
+ *  - таймер живёт внутри заголовка, отдельного счётчика под блоком нет.
  */
-interface ThinkingStepProps {
-  /** Reasoning text shown when the block is expanded. */
-  text: string;
-  /** True while this is still the step the agent is working in. */
-  running: boolean;
+export interface ThinkingSearchInfo {
+  count: number;
+  hosts: string[];
+  onClick?: () => void;
 }
 
-export const ThinkingStep = memo(function ThinkingStep({ text, running }: ThinkingStepProps) {
-  const { t } = useTranslation();
-  // Open while the step is live, collapse once it is over — unless the user toggled it themselves,
-  // in which case their choice wins for the rest of this step's life (tracked with a ref so the
-  // auto-collapse does not fight a manual click).
-  const [open, setOpen] = useState(running);
-  const userToggled = useRef(false);
+interface ThinkingStepProps {
+  /** Reasoning text shown when expanded. */
+  text: string;
+  /** True while the model is still thinking in this step. */
+  running: boolean;
+  /** When thinking started (for the in-header timer). */
+  startedAt?: number;
+  /** Final duration for a finished block, if the source already knows it. */
+  durationMs?: number;
+  /** Optional web-search step rendered inside the reasoning flow. */
+  search?: ThinkingSearchInfo;
+}
 
+const STREAM_MAX_HEIGHT = 124;
+const STREAM_MASK = 'linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%)';
+
+function formatDuration(ms: number): string {
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  return `${seconds} сек`;
+}
+
+export const ThinkingStep = memo(function ThinkingStep({
+  text,
+  running,
+  startedAt,
+  durationMs,
+  search,
+}: ThinkingStepProps) {
+  const { t } = useTranslation();
+  // null — автоматический режим: во время генерации открыто, после — свёрнуто.
+  const [manual, setManual] = useState<boolean | null>(null);
+  const [elapsed, setElapsed] = useState(() =>
+    startedAt ? Math.max(0, Date.now() - startedAt) : 0,
+  );
+  const streamRef = useRef<HTMLDivElement>(null);
+  const finalRef = useRef(durationMs ?? 0);
+
+  // Сброс ручного выбора на смене фазы: завершение всегда сворачивает блок.
   useEffect(() => {
-    if (userToggled.current) return;
-    setOpen(running);
+    setManual(null);
   }, [running]);
 
+  // Живой таймер в заголовке.
+  useEffect(() => {
+    if (!running) {
+      if (startedAt && !durationMs) finalRef.current = Math.max(finalRef.current, elapsed);
+      return;
+    }
+    const from = startedAt ?? Date.now();
+    const tick = () => setElapsed(Math.max(0, Date.now() - from));
+    tick();
+    const timer = window.setInterval(tick, 500);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running, startedAt]);
+
+  // Автоскролл окна-телесуфлёра к последним пришедшим токенам.
+  useEffect(() => {
+    if (!running || manual === true) return;
+    const el = streamRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [text, running, manual]);
+
+  const bodyVisible = manual ?? running;
+  const expanded = manual === true;
+  const finalMs = durationMs ?? finalRef.current ?? elapsed;
+  const shownMs = running ? elapsed : finalMs;
+  const title = running
+    ? t('timeline.reasoningActive')
+    : t('timeline.reasonedFor', { duration: formatDuration(shownMs) });
+
   function toggle() {
-    userToggled.current = true;
-    setOpen((v) => !v);
+    setManual(bodyVisible ? false : true);
   }
 
-  const body = text.trim() || t('timeline.thinkingEmpty');
-
   return (
-    <div className={`think-step ${running ? 'think-step--running' : ''}`}>
+    <div className={`think-step${running ? ' think-step--running' : ''}`}>
       <button
         type="button"
         className="think-step__head"
         onClick={toggle}
-        aria-expanded={open}
-        title={t('timeline.thinking')}
+        aria-expanded={bodyVisible}
+        title={title}
       >
-        <LightbulbIcon size={13} className="think-step__icon" />
-        <span className="think-step__title">{t('timeline.thinking')}</span>
+        <LightbulbIcon size={14} className="think-step__icon" />
+        <span className="think-step__title">{title}</span>
         {running && <span className="think-step__pulse" aria-hidden="true" />}
+        {running && <span className="think-step__timer">{formatDuration(shownMs)}</span>}
         <ChevronDownIcon
-          size={12}
-          className={`think-step__chevron ${open ? 'think-step__chevron--open' : ''}`}
+          size={14}
+          className={`think-step__chevron ${bodyVisible ? 'think-step__chevron--open' : ''}`}
         />
       </button>
-      {open && <div className="think-step__body">{body}</div>}
+
+      {bodyVisible && (text.trim() || search) && (
+        <div className={`think-step__panel${expanded ? ' think-step__panel--expanded' : ''}`}>
+          {text.trim() && (
+            expanded ? (
+              <div className="think-step__body think-step__body--full">{text}</div>
+            ) : (
+              <div
+                ref={streamRef}
+                className="think-step__stream"
+                style={{
+                  maxHeight: STREAM_MAX_HEIGHT,
+                  WebkitMaskImage: STREAM_MASK,
+                  maskImage: STREAM_MASK,
+                }}
+              >
+                {text}
+              </div>
+            )
+          )}
+          {search && search.count > 0 && (
+            <button
+              type="button"
+              className="think-step__search"
+              onClick={search.onClick}
+              disabled={!search.onClick}
+            >
+              <SearchIcon size={14} />
+              <span>{t('timeline.webPages', { count: search.count })}</span>
+              <span className="think-step__favicons" aria-hidden="true">
+                {search.hosts.slice(0, 4).map((host) => (
+                  <img
+                    key={host}
+                    src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32`}
+                    alt=""
+                    loading="lazy"
+                  />
+                ))}
+              </span>
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 });

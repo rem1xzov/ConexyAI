@@ -943,6 +943,8 @@
   },
   "timeline": {
     "thinking": "Thinking",
+    "reasoningActive": "Thinking",
+    "reasonedFor": "Thought for {{duration}}",
     "thinkingEmpty": "The model left no text for this step",
     "copyCommand": "Copy command",
     "copied": "Copied",

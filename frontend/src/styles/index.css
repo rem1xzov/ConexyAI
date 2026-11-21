@@ -14318,3 +14318,163 @@ html:not([data-theme="light"]) .send-btn:not(:disabled) {
 html:not([data-theme="light"]) .inputbar:focus-within .send-btn:not(:disabled) {
   transform: scale(1.04);
 }
+/* ================= REASONING_DEEPSEEK ================= */
+.think-step {
+  margin: 6px 0 8px;
+  min-width: 0;
+}
+.think-step__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--motion-press, 100ms) ease;
+}
+.think-step__head:active { background: var(--bg-hover); }
+.think-step__head:hover { color: var(--text); }
+.think-step__icon { flex: 0 0 auto; color: var(--accent); opacity: 0.9; }
+.think-step__title { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.think-step__timer {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+.think-step__chevron { flex: 0 0 auto; transition: transform var(--motion-base, 180ms) var(--ease-out); }
+.think-step__chevron--open { transform: rotate(180deg); }
+
+.think-step__panel {
+  margin: 2px 0 6px 22px;
+  min-width: 0;
+}
+.think-step__stream {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 4px 4px 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  scrollbar-width: none;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+}
+.think-step__stream::-webkit-scrollbar { width: 0; height: 0; }
+.think-step__body--full {
+  border-left: 2px solid rgba(255, 255, 255, 0.10);
+  padding: 2px 0 4px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.think-step__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  margin-top: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.think-step__search:disabled { cursor: default; }
+.think-step__search > svg { color: var(--muted); flex: 0 0 auto; }
+.think-step__favicons { margin-left: auto; display: flex; align-items: center; padding-left: 6px; }
+.think-step__favicons img {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  object-fit: cover;
+}
+.think-step__favicons img + img { margin-left: -6px; }
+
+/* «Найдено N страниц» с фавиконками в стиле DeepSeek. */
+.web-found {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.web-found:hover { color: var(--text); }
+.web-found__favicons { display: inline-flex; align-items: center; padding-left: 4px; }
+.web-found__favicons img {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  object-fit: cover;
+}
+.web-found__favicons img + img { margin-left: -6px; }
+.web-found__chevron { opacity: 0.7; }
+/* ================= INPUT_TWO_ROW ================= */
+@media (max-width: 820px) {
+  .inputbar__row {
+    flex-wrap: wrap !important;
+    align-items: flex-end;
+    row-gap: 6px;
+  }
+  /* Верхняя строка: textarea на всю ширину, авто-рост до ~5 строк. */
+  .inputbar__row > .inputbar__textarea,
+  .inputbar--expanded .inputbar__row > .inputbar__textarea,
+  .inputbar--expanded .inputbar__textarea {
+    order: -10 !important;
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    min-width: 0;
+    max-height: 108px;
+    padding: 5px 6px 2px;
+  }
+  /* Нижняя строка: + и модель слева, микрофон и отправка справа; всегда внизу. */
+  .inputbar__row .attach-wrap { order: 0; }
+  .inputbar__row .inputbar__modelchip { order: 1; }
+  .inputbar__row .prompt-btn { order: 2; display: none; }
+  .inputbar__row .mic-btn { order: 3; margin-left: auto; }
+  .inputbar__row .send-btn { order: 4; }
+  .inputbar__row .icon-btn,
+  .inputbar__row .mic-btn,
+  .inputbar__row .send-btn,
+  .inputbar__row .modelpicker { flex: 0 0 auto; align-self: flex-end; }
+  .inputbar {
+    align-items: stretch;
+  }
+}
+/* Нижняя строка: микрофон/отправка всегда справа, в т.ч. в expanded-режиме. */
+@media (max-width: 820px) {
+  .inputbar__row .mic-btn:not(.prompt-btn),
+  .inputbar--expanded .inputbar__row .mic-btn:not(.prompt-btn) {
+    margin-left: auto !important;
+    align-self: flex-end;
+  }
+  .inputbar__row .send-btn {
+    margin-left: 0 !important;
+    align-self: flex-end;
+  }
+}

@@ -183,10 +183,21 @@ function WebResearchGroup({ blocks, renderRow }: WebResearchGroupProps) {
     );
   }
   if (results.length > 0) {
+    const sourceHosts = [...new Set(results.map((result) => result.host).filter(Boolean))];
     return (
       <>
         <button type="button" className="web-found" onClick={() => setSheetOpen(true)}>
-          {t('webSheet.found', { count: results.length })}
+          <span>{t('webSheet.found', { count: results.length })}</span>
+          <span className="web-found__favicons" aria-hidden="true">
+            {sourceHosts.slice(0, 4).map((host) => (
+              <img
+                key={host}
+                src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32`}
+                alt=""
+                loading="lazy"
+              />
+            ))}
+          </span>
           <span className="web-found__chevron" aria-hidden="true">›</span>
         </button>
         {sheetOpen && <WebResultsSheet results={results} onClose={() => setSheetOpen(false)} />}
@@ -313,6 +324,8 @@ export function AgentTimeline({
           <ThinkingStep
             key={block.id}
             text={block.content}
+            startedAt={block.startedAt}
+            durationMs={block.durationMs}
             // THINKING_ONCE: the merged plate may sit above later text, so liveness comes from the
             // block itself rather than from being the last item in the feed.
             running={streaming && block.durationMs === undefined}
