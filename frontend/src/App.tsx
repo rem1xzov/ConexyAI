@@ -3644,6 +3644,7 @@ export default function App() {
                     onUpgradeClick={handleUpgrade}
                     executionTarget={executionTargetSection}
                     onDevice={executionTarget === 'device'}
+                    plain
                   />
                 </div>
                 <div className="chat-header__actions">

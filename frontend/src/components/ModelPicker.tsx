@@ -75,6 +75,8 @@ interface ModelPickerProps {
   // WEB_DEVICE: раздел «Где выполнять» (DeviceTargetBar) и метка «ПК» на кнопке.
   executionTarget?: ReactNode;
   onDevice?: boolean;
+  /** PLAIN_HEADER: в мобильной шапке модель без фона-пилюли. */
+  plain?: boolean;
 }
 
 export function ModelPicker({
@@ -96,6 +98,7 @@ export function ModelPicker({
   onUpgradeClick,
   executionTarget,
   onDevice = false,
+  plain = false,
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -156,6 +159,7 @@ export function ModelPicker({
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         type="button"
+        style={plain ? { background: 'transparent', border: 'none', boxShadow: 'none', padding: '4px 0' } : undefined}
       >
         <span className="modelpicker__label-short">{current.shortLabel}</span>
         {executionTarget && onDevice && <span className="modelpicker__target-badge">{t('device.pcBadge')}</span>}

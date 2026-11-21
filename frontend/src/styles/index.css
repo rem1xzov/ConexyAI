@@ -13781,3 +13781,38 @@ html:not([data-theme="light"]) .chat-actions__btn {
     flex-grow: 0;
   }
 }
+/* Поднимаем нижнюю панель и композер от нижнего края и от клавиатуры. */
+@media (max-width: 820px) {
+  .mobile-nav {
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+  .main {
+    padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  }
+  .chat-stage__composer {
+    padding-bottom: 12px;
+  }
+  /* При открытой клавиатуре — заметный зазор, а не вплотную. */
+  .app:has(.inputbar textarea:focus) .chat-stage__composer {
+    padding-bottom: 18px;
+  }
+  /* Настройки: панель на той же высоте, без щели. */
+  .app--settings-open .dialog-overlay:has(.settings-modal) {
+    padding-bottom: calc(82px + env(safe-area-inset-bottom, 0px));
+  }
+  .app--settings-open .settings-modal.settings-modal--wide {
+    padding-bottom: calc(94px + env(safe-area-inset-bottom, 0px));
+  }
+}
+/* Финально: у модели в шапке нет никакой плашки. */
+@media (max-width: 820px) {
+  .chat-header .modelpicker__trigger,
+  .chat-header .modelpicker__trigger:hover,
+  .chat-header .modelpicker__trigger:focus,
+  .chat-header .modelpicker__trigger[aria-expanded="true"] {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    padding: 4px 0 !important;
+  }
+}
