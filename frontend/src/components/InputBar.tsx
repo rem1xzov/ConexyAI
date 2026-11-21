@@ -282,6 +282,10 @@ export function InputBar({
   // COMPOSER_EDIT: открыть выбранное сообщение прямо в поле ввода и поставить курсор в конец.
   // При ОТМЕНЕ возвращаем черновик, который был в поле до входа в правку.
   const valueRef = useRef(value);
+  // SEND_TOUCH_GUARD: на телефоне тап по кнопке сначала забирал фокус у textarea, клавиатура
+  // закрывалась, композер перестраивался — click терялся. Отправляем на pointerdown и гасим
+  // последующий click, чтобы не отправить сообщение дважды.
+  const touchSendAtRef = useRef(0);
   valueRef.current = value;
   const editPrevRef = useRef<{ content: string; previous: string } | null>(null);
 
@@ -374,7 +378,11 @@ export function InputBar({
     const pending = attachments;
     setValue('');
     setAttachments([]);
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      // SEND_KEEPS_FOCUS: клавиатура остаётся открытой после отправки.
+      textareaRef.current.focus();
+    }
 
     const outcome = await onSend(prompt, pending);
     if (outcome && outcome.ok === false) {
@@ -1248,7 +1256,17 @@ export function InputBar({
         ) : (
           <button
             type="submit"
-            onClick={() => void submit()}
+            onClick={() => {
+              if (Date.now() - touchSendAtRef.current < 700) return;
+              void submit();
+            }}
+            onPointerDown={(e) => {
+              if (e.pointerType === 'mouse') return;
+              // Не даём кнопке забрать фокус: клавиатура остаётся открытой.
+              e.preventDefault();
+              touchSendAtRef.current = Date.now();
+              void submit();
+            }}
             title={uploading ? t('input.uploading') : t('common.send')}
             aria-label={uploading ? t('input.uploading') : t('common.send')}
             className="send-btn"

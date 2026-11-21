@@ -13764,3 +13764,20 @@ html:not([data-theme="light"]) .chat-actions__btn {
     border-radius: 26px;
   }
 }
+/* Не оставляем пустой экран при вводе: приветствие остаётся над композером, как у Gemini. */
+@media (max-width: 820px) {
+  .chat-stage.chat-stage--composer-focused .chat-stage__hero-inner {
+    max-height: 180px;
+    opacity: 1;
+    transform: none;
+    overflow: hidden;
+  }
+  .chat-stage.chat-stage--composer-focused .chat-stage__hero {
+    flex-grow: 1;
+    align-items: center;
+    justify-content: center;
+  }
+  .chat-stage.chat-stage--composer-focused .chat-stage__tail {
+    flex-grow: 0;
+  }
+}
