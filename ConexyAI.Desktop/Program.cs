@@ -21,7 +21,7 @@ const string Usage = """
         --output-format text|json|stream-json         text — только ответ, json — один объект,
                                                       stream-json — события по строке (JSONL)
         --permission-mode default|auto|plan           auto — команды без подтверждения, plan — только план
-        --max-turns <N>                               лимит шагов инструментов за ход
+        --max-turns <N>                               мягкий лимит шагов: после N инструменты блокируются, агент обязан дать итог
         --effort low|high                              сколько «думает» модель (по умолчанию high)
         --agent coder|cowork · --team · --with-mcp · --no-hooks · --timeout <сек>
         stdin дописывается к запросу: git diff | conexy -p "review this"

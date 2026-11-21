@@ -72,6 +72,14 @@ public sealed class AgentSession : IAsyncDisposable
     public string Effort { get; set; } = Environment.GetEnvironmentVariable("CONEXY_EFFORT") ?? "high";
 
     private int _toolCalls;
+    // STEP_BUDGET_SOFT: после исчерпания --max-turns инструменты запрещаются, но ход НЕ обрывается:
+    // модель обязана получить шанс написать финальный итог (и вызвать turn_diff), иначе StopGeneration
+    // убивал серверный прогон вместе с субагентами и пользователь оставался без ответа и diff.
+    private int _budgetDeniedCalls;
+    private const int MaxBudgetDeniedCalls = 4;
+    // FINAL_REPORT_TAIL: серверный OnCompleted несёт хвост, которого нет в токенах (Change Summary,
+    // diff с ПК). Раньше при любом стриме он игнорировался — отсюда «нет финального diff».
+    private bool _reportTailAppended;
     private readonly System.Text.StringBuilder _answer = new();
 
     /// <summary>
@@ -162,7 +170,11 @@ public sealed class AgentSession : IAsyncDisposable
         _hub.On<JsonElement, string?>("OnAgentStatus", (payload, _) => OnAgentStatus(payload));
         // AGENT_CURSOR: где каждый агент действует на экране — оверлей рисует разноцветные курсоры.
         _hub.On<JsonElement, string?>("AgentCursor", (payload, _) => OnAgentCursor(payload));
-        _hub.On<JsonElement, string?>("OnCompleted", (_, _) => _turn?.TrySetResult(null));
+        _hub.On<JsonElement, string?>("OnCompleted", (payload, _) =>
+        {
+            FeedReportTail(payload);
+            _turn?.TrySetResult(null);
+        });
         _hub.On<string, string?>("OnError", (message, _) => _turn?.TrySetResult(message));
         _hub.On<Guid, string?>("OnStopped", (_, _) => _turn?.TrySetResult("Остановлено."));
 
@@ -264,9 +276,11 @@ public sealed class AgentSession : IAsyncDisposable
         _inTurn = true;
         _turnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _streamedAnything = false;
+        _reportTailAppended = false;
         _needBullet = true;
         _answer.Clear();
         _toolCalls = 0;
+        _budgetDeniedCalls = 0;
         if (!Headless)
             Ui.Busy();
 
@@ -317,6 +331,61 @@ public sealed class AgentSession : IAsyncDisposable
         }
     }
 
+    private void FeedReportTail(JsonElement payload)
+    {
+        if (_reportTailAppended || payload.ValueKind != JsonValueKind.Object)
+            return;
+        if (payload.TryGetProperty("Result", out var result) && result.ValueKind == JsonValueKind.String)
+            FeedReportTail(result.GetString());
+        else if (payload.TryGetProperty("result", out var lower) && lower.ValueKind == JsonValueKind.String)
+            FeedReportTail(lower.GetString());
+    }
+
+    /// <summary>
+    /// FINAL_REPORT_TAIL: в режиме стрима OnContentToken даёт только текст модели. Серверный
+    /// Result дополнительно содержит Change Summary и diff с ПК; без этого хвоста финальный
+    /// diff терялся, если ход завершался по лимиту шагов.
+    /// </summary>
+    private void FeedReportTail(string? result)
+    {
+        if (_reportTailAppended || string.IsNullOrWhiteSpace(result))
+            return;
+
+        var report = result.Trim();
+        var streamed = _answer.ToString().Trim();
+        string tail;
+        if (streamed.Length == 0)
+        {
+            tail = report;
+        }
+        else if (report.StartsWith(streamed, StringComparison.Ordinal))
+        {
+            tail = report[streamed.Length..];
+        }
+        else
+        {
+            var at = report.IndexOf(streamed, StringComparison.Ordinal);
+            if (at < 0)
+                return;
+            tail = report[(at + streamed.Length)..];
+        }
+
+        tail = tail.TrimStart();
+        if (tail.Length == 0)
+            return;
+        _reportTailAppended = true;
+        var text = "\n\n" + tail;
+        _answer.Append(text);
+        if (Headless)
+        {
+            Event?.Invoke(new AgentContent(text));
+            return;
+        }
+        Ui.AssistantStart();
+        Ui.Md.Feed(text);
+        Ui.FlushText();
+    }
+
     private async Task WatchdogAsync(Guid taskId, CancellationToken ct)
     {
         try
@@ -338,6 +407,10 @@ public sealed class AgentSession : IAsyncDisposable
                         Ui.Md.Feed(run.Result);
                         Ui.FlushText();
                     }
+                }
+                else
+                {
+                    FeedReportTail(run.Result);
                 }
                 _turn?.TrySetResult(run.Status == "Completed" ? null : $"Задача завершилась со статусом {run.Status}.");
                 return;
@@ -506,16 +579,36 @@ public sealed class AgentSession : IAsyncDisposable
     {
         // HEADLESS: зашитый max-turns в терминах клиента — число вызовов инструментов за ход.
         // Служебные project_rules/turn_diff не считаем: это не шаги задачи.
-        if (MaxToolCalls > 0 && tool is not ("project_rules" or "turn_diff")
-            && Interlocked.Increment(ref _toolCalls) > MaxToolCalls)
+        if (MaxToolCalls > 0 && tool is not ("project_rules" or "turn_diff"))
         {
-            await SendResultAsync(callId, ToolResult.Fail(
-                $"Лимит шагов (--max-turns {MaxToolCalls}) исчерпан. Останови работу и дай итог."));
-            _turn?.TrySetResult($"Достигнут лимит шагов (--max-turns {MaxToolCalls}).");
-            if (LastTaskId is { } running)
-                _ = _hub.InvokeAsync("StopGeneration", running);
-            _turnCts?.Cancel();
-            return;
+            var used = Interlocked.Increment(ref _toolCalls);
+            if (used > MaxToolCalls)
+            {
+                _budgetDeniedCalls++;
+                // STEP_BUDGET_SOFT: не рвём ход. Возвращаем модели отказ инструмента и требуем итог.
+                // turn_diff разрешён и после лимита — иначе пропадёт финальный diff.
+                var demand = _budgetDeniedCalls <= MaxBudgetDeniedCalls
+                    ? $"Лимит шагов (--max-turns {MaxToolCalls}) исчерпан. Инструменты отключены. " +
+                      "Не вызывай больше инструменты: прямо сейчас напиши финальный итог — что сделано, " +
+                      "какие файлы изменены, что осталось и какие проверки прошли. " +
+                      "Если нужен итоговый diff, вызови только serve-инструмент turn_diff (он не расходует шаги)."
+                    : $"Инструменты отключены: лимит шагов (--max-turns {MaxToolCalls}) исчерпан. " +
+                      "Ответь обычным текстом с итогом, без вызовов инструментов.";
+                await SendResultAsync(callId, ToolResult.Fail(demand));
+                if (_budgetDeniedCalls == 1)
+                {
+                    if (!Headless)
+                    {
+                        Ui.Idle();
+                        Ui.ShowToolResult(new ToolResult(
+                            $"Лимит шагов исчерпан — прошу финальный итог без инструментов.", false));
+                        Ui.Busy();
+                    }
+                }
+                // Если модель упорно игнорирует запрет, серверный MaxIterations всё равно завершит прогон
+                // штатным wrap-up. Клиентский StopGeneration здесь не вызываем — он убивал субагентов.
+                return;
+            }
         }
 
         // TELEGRAM_LOGIN: вход в Telegram, запущенный из настроек сайта/телефона — без проекта и подтверждений.

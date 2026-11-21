@@ -2992,7 +2992,35 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // SELF_CORRECTION: раньше красная сборка на этом пути бросала исключение — задача падала в
         // Failed, а всё, что модель уже написала, пропадало. Исчерпанный лимит шагов или бюджет
         // ошибок — не повод выбрасывать ответ: отдаём написанное и честно говорим, что ещё падает.
-        var accumulated = StripToolMarkup(_streamedOutput.ToString().Trim());
+        // BUDGET_WRAPUP: предел шагов/бюджет ошибок — это не повод обрывать прогон без ответа.
+        // Делаем один финальный ход БЕЗ инструментов, чтобы модель подвела итог; затем отдаём
+        // Change Summary (файлы/команды), иначе пользователь видел «агент сломался» и ни diff'а.
+        var budgetStopped = !tokenBudgetExceeded && (toolBudgetExhausted || completedSteps >= stepLimit);
+        string? budgetWrapText = null;
+        if (budgetStopped && !ct.IsCancellationRequested)
+        {
+            try
+            {
+                await group.SendAsync("OnLog",
+                    "[Budget] Лимит автономных шагов исчерпан — прошу финальный итог без инструментов.", ct);
+                messages.Add(new ChatMessage("system", PromptFragments.FinalStepWrapUp));
+                var wrapTurn = await RunModelTurnAsync(taskId, messages, ct, disableTools: true);
+                budgetWrapText = StripToolMarkup(ExtractTextContent(wrapTurn.Message)).Trim();
+                if (budgetWrapText.Length == 0)
+                    budgetWrapText = null;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Модель не смогла дать финальный текст — отдадим детерминированный отчёт ниже.
+                _logger.LogWarning(ex, "Agent budget wrap-up turn failed; using deterministic report. task={TaskId}", taskId);
+            }
+        }
+
+        var accumulated = budgetWrapText ?? StripToolMarkup(_streamedOutput.ToString().Trim());
         // P2_DEFINITION_OF_DONE: и на аварийном завершении приписка о проверке строится системой.
         var stillFailing = BuildVerificationNote(changedFiles.Count, buildHealth, selfCorrections, _profile.AuditsCode);
         // TOKEN_SOFT_LIMIT: изменено 2026-10-06 — прогон больше НЕ обрывается на лимите, поэтому
@@ -3019,18 +3047,28 @@ public class ConexyAgentRunner : IConexyAgentRunner
         }
         await RunHooksAsync(taskId, chatId, "after_task", HookValues(chatId, "after_task"), null, ct);
 
-        if (accumulated.Length > 0)
+        // COMPLETION_REPORT: аварийное завершение тоже должно отдавать Change Summary — иначе UI
+        // показывает «агент сломался» без единого списка изменённых файлов.
+        string BuildStopAnswer(string text)
         {
-            return await FinishAsync(AppendNote(accumulated, note), TurnOutcome.Stopped);
+            var answer = AppendNote(text, note);
+            return changedFiles.Count > 0 || executedCommands.Count > 0
+                ? BuildFinalReport(answer, changedFiles, executedCommands)
+                : answer;
         }
 
-        return await FinishAsync(AppendNote(
+        if (accumulated.Length > 0)
+        {
+            return await FinishAsync(BuildStopAnswer(accumulated),
+                budgetStopped ? TurnOutcome.ForcedFinal : TurnOutcome.Stopped);
+        }
+
+        return await FinishAsync(BuildStopAnswer(
             tokenBudgetExceeded
                 ? "Лимит токенов вашего тарифа исчерпан — дождитесь сброса лимита, чтобы продолжить."
                 : toolBudgetExhausted
                     ? "Не удалось завершить задачу: инструменты, которые нужны агенту, не работают в этом окружении. Запустите задачу заново после устранения ограничения."
-                    : "Достигнут предел шагов для одной задачи. Продолжите или уточните задачу отдельным сообщением.",
-            note),
+                    : "Достигнут предел шагов для одной задачи. Продолжите или уточните задачу отдельным сообщением."),
             tokenBudgetExceeded ? TurnOutcome.TokenBudget
                 : toolBudgetExhausted ? TurnOutcome.Failed
                 : TurnOutcome.ForcedFinal);
