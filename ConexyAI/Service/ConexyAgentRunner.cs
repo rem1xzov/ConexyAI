@@ -4066,8 +4066,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 worker.Report = string.IsNullOrWhiteSpace(text) ? "(готово)" : text.Trim();
                 await group.SendAsync("OnAgentStatus", new
                 {
-                    stage = worker.LoopSuspected ? "error" : "idle",
-                    label = worker.LoopSuspected ? "Остановлен: повторяющийся цикл" : "Готово",
+                    stage = "idle",
+                    label = "Готово",
                     file = (string?)null,
                     agentId = identity.Id,
                     agentRole = spec.Role
@@ -4607,7 +4607,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
                 // TEAM_SUPERVISION: пишем каждое действие и полный (обрезанный) вывод в журнал.
                 // Повторяющаяся последовательность действий сразу даёт алерт ведущему и самому помощнику.
-                var progress = !result.IsError && AgentLoopGuard.IsProgressTool(toolName, call.Function.Arguments);
+                var progress = !result.IsError && workerFiles.Count > filesBefore;
                 var alert = teamMonitor.Record(
                     "tool", toolName, Truncate(call.Function.Arguments, 220), result.Output, result.IsError, progress);
                 if (alert is not null)
@@ -4641,25 +4641,12 @@ public class ConexyAgentRunner : IConexyAgentRunner
             TouchWorker(taskId, identity.Id, workerFiles.Count > filesBefore ? "правит файлы…" : "выполняет команду…");
             if (workerFiles.Count > filesBefore || workerCommands.Count > commandsBefore)
                 lastProgress.Restart();
+            if (selfWorker is not null && !teamMonitor.LoopSuspected)
+                selfWorker.LoopSuspected = false;
 
-            // TEAM_SUPERVISION: если помощник проигнорировал несколько предупреждений и продолжает цикл,
-            // останавливаем его с частичным отчётом — ведущий сразу увидит это и продолжит сам.
-            if (teamMonitor.LoopWarnings >= 3)
-            {
-                if (selfWorker is not null)
-                {
-                    selfWorker.LoopSuspected = true;
-                    selfWorker.Failed = true;
-                }
-                answer.Append("\n\n[система] Помощник остановлен harness: повторяющийся цикл без прогресса. " +
-                              "Частичный результат сохранён.");
-                selfRun?.LeadInbox.Enqueue(
-                    $"[{identity.Role}] остановлен harness после {teamMonitor.LoopWarnings} предупреждений о цикле. " +
-                    "Проверь частичный отчёт и при необходимости продолжи сам или дай команду через team_message.");
-                await group.SendAsync("OnLog",
-                    $"[Orchestra] [{identity.Role}] остановлен после повторяющегося цикла.", ct);
-                break;
-            }
+            // TEAM_SUPERVISION: harness НЕ обрывает помощника сам — он лишь сигналит ведущему.
+            // Остановка/переинструктаж — решение ведущего через interrupt_agent/team_message.
+            // Иначе три предупреждения убивали полезную работу трёх субагентов за 6 минут.
 
             // WORKER_BUDGET_RENEW: помощник на длинной задаче не должен обрываться на 40 шагах.
             // Продлеваем окно, пока он реально двигает файлы/команды; от зависаний защищает watchdog.

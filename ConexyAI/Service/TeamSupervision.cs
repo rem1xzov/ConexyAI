@@ -142,19 +142,22 @@ public sealed class TeamMonitor
         if (tools.Count < 6)
             return null;
 
-        // A B A B: повторяющийся блок любой длины 2..16 — это общий признак цикла,
-        // а не конкретная команда. Разные команды в той же последовательности тоже ловятся.
-        for (var length = 2; length <= 16 && tools.Count >= length * 2; length++)
+        // A B A B A B: повторяющийся блок любой длины 2..16 — это общий признак цикла,
+        // а не конкретная команда. Требуем минимум ТРИ повтора и отсутствие реального прогресса
+        // (правок файлов) внутри блока: иначе три штатные проверки подряд — ещё не петля.
+        for (var length = 2; length <= 16 && tools.Count >= length * 3; length++)
         {
             var last = tools.Skip(tools.Count - length).ToArray();
             var previous = tools.Skip(tools.Count - length * 2).Take(length).ToArray();
-            if (!SameSequence(last, previous))
+            var beforePrevious = tools.Skip(tools.Count - length * 3).Take(length).ToArray();
+            if (!SameSequence(last, previous) || !SameSequence(last, beforePrevious))
+                continue;
+            if (last.Any(e => e.Progress) || previous.Any(e => e.Progress) || beforePrevious.Any(e => e.Progress))
                 continue;
 
-            // Точный повтор разрешён только если блок не состоит целиком из прогрессивных правок:
-            // повторная сборка/тест с тем же результатом — тоже цикл, а две разные правки — нет.
+            // Сигнатура включает вывод: три одинаковых прохода с одинаковым результатом.
             var signature = string.Join("|", last.Select(e => e.Tool + ":" + Hash(e.Summary + e.Output)));
-            return ($"последовательность из {length} действий повторяется без нового результата", signature);
+            return ($"последовательность из {length} действий повторяется три раза без нового результата", signature);
         }
 
         // Последние 10 действий не дали ни одной правки/успешной команды и выдача повторяется.
