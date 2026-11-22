@@ -14580,3 +14580,30 @@ html:not([data-theme="light"]) .inputbar:focus-within .send-btn:not(:disabled) {
   }
   .scroll-to-bottom--visible { transform: translateY(0); }
 }
+/* ================= ARTIFACT_DOCK ================= */
+/* На ПК артефакт — вторая IDE-колонка справа: .app резервирует ширину, панель стоит в этой
+   зоне и не перекрывает чат. На мобильном класс не включается — там прежний full-screen sheet. */
+:root {
+  --artifact-dock-width: clamp(380px, 44vw, 760px);
+}
+
+.app {
+  transition: padding-right 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+body.artifact-docked .app {
+  padding-right: calc(var(--safe-right, 0px) + var(--artifact-dock-width));
+}
+
+body.artifact-docked .artifact-panel {
+  width: var(--artifact-dock-width);
+  min-width: 380px;
+  max-width: var(--artifact-dock-width);
+  box-shadow: none;
+}
+
+@media (max-width: 768px) {
+  body.artifact-docked .app {
+    padding-right: var(--safe-right, 0px);
+  }
+}

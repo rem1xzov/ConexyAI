@@ -137,6 +137,15 @@ function ArtifactPanel() {
     };
   }, [isOpen, mobile]);
 
+  // ARTIFACT_DOCK: на ПК артефакт — вторая встроенная IDE-панель справа, а не оверлей поверх
+  // страницы. Класс на body уменьшает .app ровно на ширину панели; на мобильном (<=768px) не
+  // применяется — там остаётся прежний полноэкранный лист.
+  useEffect(() => {
+    const docked = isOpen && !mobile;
+    document.body.classList.toggle('artifact-docked', docked);
+    return () => document.body.classList.remove('artifact-docked');
+  }, [isOpen, mobile]);
+
   if (!resolved) return null;
 
   const { artifact, versions, current } = resolved;
