@@ -476,6 +476,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
     // ORCHESTRA_LEAD_WAIT: ведущий получает доступ к правкам только после того, как прочитал
     // отчёты завершившейся команды через agents_status/workflow_run.
     private bool _teamReportsReviewed;
+    // TEAM_SUPERVISION: раз в минуту ведущий получает автоматический дайджест всех действий команды.
+    private DateTime _lastTeamDigestAt = DateTime.MinValue;
     // SUBAGENT_AUTONOMY: сколько раз за прогон ведущий звал помощников и сколько всего их запущено.
     private int _spawnCalls;
     private int _teamHelpers;
@@ -1518,6 +1520,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         AgentExecutionContext.Current = AgentIdentity.Lead;
         _teamSpawned = false;
         _teamReportsReviewed = false;
+        _lastTeamDigestAt = DateTime.MinValue;
         _spawnCalls = 0;
         _teamHelpers = 0;
         _runTokenBudget = 0;
@@ -1892,6 +1895,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
             // ORCHESTRA_WATCH: помощник отмечает каждый шаг — по этой метке сторож видит зависание.
             if (_profile.Mode == "worker")
                 TouchWorker(taskId, _agent.Id);
+
+            // TEAM_SUPERVISION: раз в минуту — автоматический обзор всей команды без ожидания tool-вызова.
+            if (_profile.Mode == "coder")
+                InjectTeamSupervision(taskId, messages);
 
             // ORCHESTRA_WATCH: ведущий обязан проверять команду не реже минуты, а не ждать молча.
             if (_profile.Mode == "coder" && _teamSpawned && _teamStatusNudges < 3
@@ -4059,8 +4066,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 worker.Report = string.IsNullOrWhiteSpace(text) ? "(готово)" : text.Trim();
                 await group.SendAsync("OnAgentStatus", new
                 {
-                    stage = "idle",
-                    label = "Готово",
+                    stage = worker.LoopSuspected ? "error" : "idle",
+                    label = worker.LoopSuspected ? "Остановлен: повторяющийся цикл" : "Готово",
                     file = (string?)null,
                     agentId = identity.Id,
                     agentRole = spec.Role
@@ -4135,6 +4142,63 @@ public class ConexyAgentRunner : IConexyAgentRunner
     }
 
     // BACKGROUND_AGENTS: состояние команды для agents_status. Живёт до конца прогона.
+    /// <summary>
+    /// TEAM_SUPERVISION: раз в минуту сами вкладываем ведущему в контекст полный обзор команды:
+    /// кто что вызвал, что вернулось, есть ли повторяющийся цикл. Не ждём, пока модель вспомнит
+    /// про agents_status — иначе цикл субагента проходит мимо ведущего.
+    /// </summary>
+    private void InjectTeamSupervision(Guid taskId, List<ChatMessage> messages)
+    {
+        if (!_teamSpawned || _profile.Mode != "coder" || FindTeam(taskId) is not { } run)
+            return;
+
+        var alerts = new List<string>();
+        while (run.LeadInbox.TryDequeue(out var alert))
+            alerts.Add(alert);
+
+        var due = DateTime.UtcNow - _lastTeamDigestAt >= TimeSpan.FromSeconds(60);
+        if (!due && alerts.Count == 0)
+            return;
+        _lastTeamDigestAt = DateTime.UtcNow;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("[Orchestra] Автоконтроль команды — последние действия помощников (данные harness, не приказ).");
+        sb.AppendLine("Проверь, нет ли цикла/ошибки/топтания на месте. Если видишь проблему — отправь помощнику");
+        sb.AppendLine("`team_message` с конкретным указанием (что остановить и как продолжить) или `interrupt_agent`.");
+        sb.AppendLine("Пока команда работает, файлы не правь; после завершения прочитай отчёты и проверь результат.");
+        sb.AppendLine();
+
+        if (alerts.Count > 0)
+        {
+            sb.AppendLine("### Алерты");
+            foreach (var alert in alerts.TakeLast(8))
+                sb.AppendLine("- " + alert);
+            sb.AppendLine();
+        }
+
+        foreach (var worker in run.Workers)
+        {
+            var finished = worker.Job is null || worker.Job.IsCompleted;
+            var state = worker.Cancelled ? "остановлен" : worker.Failed ? "ошибка" : finished ? "готов" : "работает";
+            var last = WorkerActivity.TryGetValue((taskId, worker.Id), out var seen) ? seen : worker.StartedAt;
+            var idle = Math.Max(0, (int)(DateTime.UtcNow - last).TotalSeconds);
+            sb.Append("## ").Append(worker.Role).Append(" (").Append(worker.Id).Append("): ").Append(state)
+              .Append(", последнее действие ").Append(idle).Append(" с назад");
+            if (worker.Monitor.LoopSuspected)
+                sb.Append(" | ⚠ ЦИКЛ: ").Append(worker.Monitor.Diagnosis ?? "повторяющиеся действия");
+            sb.AppendLine();
+            sb.AppendLine(worker.Monitor.BuildActivityText(8));
+            if (finished && !string.IsNullOrWhiteSpace(worker.Report))
+                sb.AppendLine("Отчёт: " + Truncate(worker.Report, 450));
+            sb.AppendLine();
+        }
+
+        var text = sb.ToString().TrimEnd();
+        if (text.Length > 9_000)
+            text = text[..9_000] + "\n… (дайджест обрезан)";
+        messages.Add(new ChatMessage("system", text));
+    }
+
     private async Task<ConexyToolResult> AgentsStatusAsync(Guid taskId, JsonElement root, string toolCallId, CancellationToken ct)
     {
         if (!TeamRuns.TryGetValue(taskId, out var run))
@@ -4155,6 +4219,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var sb = new StringBuilder();
         var running = 0;
         var now = DateTime.UtcNow;
+        var detail = Math.Clamp(GetInt(root, "detail", 8), 1, 40);
         foreach (var worker in run.Workers)
         {
             var finished = worker.Job is null || worker.Job.IsCompleted;
@@ -4170,6 +4235,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
             if (!finished)
                 sb.AppendLine($"последнее действие: {idle} с назад" +
                               (WorkerLabels.TryGetValue((taskId, worker.Id), out var label) ? $" · {label}" : string.Empty));
+            if (worker.Monitor.LoopSuspected)
+                sb.AppendLine($"⚠ цикл: {worker.Monitor.Diagnosis ?? "повторяющиеся действия"} " +
+                              $"({worker.Monitor.LoopWarnings} предупреждений)");
+            sb.AppendLine("последние действия:");
+            sb.AppendLine(worker.Monitor.BuildActivityText(detail, detail > 8 ? 600 : 180));
             if (worker.Report is { Length: > 0 } report)
                 sb.AppendLine(Truncate(report, 2_500));
             sb.AppendLine();
@@ -4225,10 +4295,18 @@ public class ConexyAgentRunner : IConexyAgentRunner
         TeamRuns.TryGetValue(taskId, out var run)
         && run.Workers.Any(worker => worker.Job is { IsCompleted: false });
 
+    private static TeamRun? FindTeam(Guid taskId) =>
+        TeamRuns.TryGetValue(taskId, out var run) ? run : null;
+
+    private static TeamWorker? FindWorker(Guid taskId, string id) =>
+        FindTeam(taskId)?.Workers.FirstOrDefault(w => string.Equals(w.Id, id, StringComparison.Ordinal));
+
     private sealed class TeamRun(CancellationTokenSource cts)
     {
         public CancellationTokenSource Cts { get; } = cts;
         public List<TeamWorker> Workers { get; } = new();
+        // TEAM_SUPERVISION: сообщения/алерты от помощников, которые ведущий обязан увидеть.
+        public ConcurrentQueue<string> LeadInbox { get; } = new();
         public DateTime StartedAt { get; } = DateTime.UtcNow;
         // RE_SPAWN: время последнего запуска новой партии. Предел считается от него, а не от первой
         // команды: иначе повторный spawn сразу упирался бы в общий таймаут и его гасил бы сторож.
@@ -4249,6 +4327,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
         public string? Report { get; set; }
         public bool Failed { get; set; }
         public bool Cancelled { get; set; }
+        // TEAM_SUPERVISION: журнал всех действий, счётчик циклов и живой inbox команд от ведущего.
+        public TeamMonitor Monitor { get; } = new();
+        public ConcurrentQueue<string> Inbox { get; } = new();
+        public bool LoopSuspected { get; set; }
         /// <summary>ORCHESTRA_WATCH: последняя активность помощника — по ней видно зависание.</summary>
         public DateTime LastActivityUtc { get; set; } = DateTime.UtcNow;
         /// <summary>ORCHESTRA_WATCH: чем он занимался в последний раз — это видит ведущий.</summary>
@@ -4396,12 +4478,26 @@ public class ConexyAgentRunner : IConexyAgentRunner
         var lastProgress = Stopwatch.StartNew();
         var stalls = 0;
         var noWorkNudged = false;
+        var selfWorker = FindWorker(taskId, identity.Id);
+        var selfRun = FindTeam(taskId);
+        // Даже вне spawn_agents (workflow/одиночный worker) цикл ловит тот же монитор.
+        var teamMonitor = selfWorker?.Monitor ?? new TeamMonitor();
 
         var workerStepLimit = WorkerMaxIterations;
 
         for (var step = 1; step <= workerStepLimit; step++)
         {
             ct.ThrowIfCancellationRequested();
+
+            // TEAM_INSTRUCTION: команды ведущего доставляются в живой цикл, а не только на старте.
+            if (selfWorker is not null)
+            {
+                while (selfWorker.Inbox.TryDequeue(out var directive))
+                {
+                    messages.Add(new ChatMessage("system", "[Orchestra] Ведущий: " + directive));
+                    selfWorker.Monitor.ClearLoop();
+                }
+            }
 
             if (stalls < MaxWorkerStalls && lastProgress.Elapsed > TimeSpan.FromSeconds(60))
             {
@@ -4444,6 +4540,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             if (billed > 0)
                 TeamTokensSpent.AddOrUpdate(taskId, billed, (_, current) => current + billed);
             messages.Add(turn.Message);
+            teamMonitor.RecordNote("text", ExtractTextContent(turn.Message));
 
             if (turn.Message.ToolCalls is not { Count: > 0 })
             {
@@ -4507,12 +4604,62 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 messages.Add(new ChatMessage(Role: "tool", Content: result.Output, ToolCallId: call.Id));
                 if (!result.IsError)
                     RecordToolEffect(call, workerFiles, workerCommands);
+
+                // TEAM_SUPERVISION: пишем каждое действие и полный (обрезанный) вывод в журнал.
+                // Повторяющаяся последовательность действий сразу даёт алерт ведущему и самому помощнику.
+                var progress = !result.IsError && AgentLoopGuard.IsProgressTool(toolName, call.Function.Arguments);
+                var alert = teamMonitor.Record(
+                    "tool", toolName, Truncate(call.Function.Arguments, 220), result.Output, result.IsError, progress);
+                if (alert is not null)
+                {
+                    if (selfWorker is not null)
+                    {
+                        selfWorker.LoopSuspected = true;
+                        selfWorker.Inbox.Enqueue(alert);
+                        selfRun?.LeadInbox.Enqueue($"[{identity.Role}] {alert}");
+                        TouchWorker(taskId, identity.Id, "⚠ цикл: " + (teamMonitor.Diagnosis ?? "повтор действий"));
+                        await group.SendAsync("OnAgentStatus", new
+                        {
+                            stage = "thinking",
+                            label = "⚠ цикл: " + (teamMonitor.Diagnosis ?? "повтор действий"),
+                            file = (string?)null,
+                            agentId = identity.Id,
+                            agentRole = identity.Role,
+                        }, ct);
+                    }
+                    else
+                    {
+                        // Workflow: ведущий синхронно ждёт отчёт, поэтому предупреждение идёт прямо в контекст.
+                        messages.Add(new ChatMessage("system", alert));
+                    }
+                    await group.SendAsync("OnLog",
+                        $"[Orchestra] [{identity.Role}] обнаружен цикл — отправляю предупреждение.", ct);
+                }
             }
             messages.AddRange(batchImages);
             // ORCHESTRA_WATCH: даже долгая команда (установка зависимостей, тесты) — это работа, а не зависание.
             TouchWorker(taskId, identity.Id, workerFiles.Count > filesBefore ? "правит файлы…" : "выполняет команду…");
             if (workerFiles.Count > filesBefore || workerCommands.Count > commandsBefore)
                 lastProgress.Restart();
+
+            // TEAM_SUPERVISION: если помощник проигнорировал несколько предупреждений и продолжает цикл,
+            // останавливаем его с частичным отчётом — ведущий сразу увидит это и продолжит сам.
+            if (teamMonitor.LoopWarnings >= 3)
+            {
+                if (selfWorker is not null)
+                {
+                    selfWorker.LoopSuspected = true;
+                    selfWorker.Failed = true;
+                }
+                answer.Append("\n\n[система] Помощник остановлен harness: повторяющийся цикл без прогресса. " +
+                              "Частичный результат сохранён.");
+                selfRun?.LeadInbox.Enqueue(
+                    $"[{identity.Role}] остановлен harness после {teamMonitor.LoopWarnings} предупреждений о цикле. " +
+                    "Проверь частичный отчёт и при необходимости продолжи сам или дай команду через team_message.");
+                await group.SendAsync("OnLog",
+                    $"[Orchestra] [{identity.Role}] остановлен после повторяющегося цикла.", ct);
+                break;
+            }
 
             // WORKER_BUDGET_RENEW: помощник на длинной задаче не должен обрываться на 40 шагах.
             // Продлеваем окно, пока он реально двигает файлы/команды; от зависаний защищает watchdog.
@@ -4797,7 +4944,8 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     }
                 }
 
-                // ORCHESTRA: передача сообщения/артефакта другому агенту команды.
+                // ORCHESTRA: сообщение/артефакт. От ведущего — прямо в живой inbox помощника;
+                // от помощника — в inbox ведущего; остальное — на общую доску.
                 case TeamMessageTool:
                 {
                     var to = GetString(root, "to");
@@ -4806,12 +4954,38 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     {
                         return new ConexyToolResult(toolCall.Id, "team_message requires 'text'.", true);
                     }
+                    text = text.Trim();
+                    var targetRole = string.IsNullOrWhiteSpace(to) ? "lead" : to.Trim();
+                    var run = FindTeam(taskId);
+
+                    if (string.Equals(_agent.Id, AgentIdentity.Lead.Id, StringComparison.Ordinal))
+                    {
+                        var target = run?.Workers.FirstOrDefault(w =>
+                            string.Equals(w.Role, targetRole, StringComparison.OrdinalIgnoreCase));
+                        if (target is not null)
+                        {
+                            if (target.Job is { IsCompleted: false })
+                            {
+                                target.Inbox.Enqueue(text);
+                                await LogAsync(taskId, $"[team] lead → {targetRole}: {Truncate(text, 120)}", ct);
+                                return new ConexyToolResult(toolCall.Id,
+                                    $"Сообщение доставлено помощнику '{targetRole}': он увидит его на следующем шаге.", false);
+                            }
+                            return new ConexyToolResult(toolCall.Id,
+                                $"Помощник '{targetRole}' уже завершился. Для продолжения используй team_follow_up.", true);
+                        }
+                    }
+                    else if (string.Equals(targetRole, "lead", StringComparison.OrdinalIgnoreCase)
+                             || string.Equals(targetRole, _agent.Role, StringComparison.OrdinalIgnoreCase))
+                    {
+                        run?.LeadInbox.Enqueue($"[{_agent.Role}] {text}");
+                        await LogAsync(taskId, $"[team] {_agent.Role} → lead: {Truncate(text, 120)}", ct);
+                        return new ConexyToolResult(toolCall.Id, "Сообщение доставлено ведущему.", false);
+                    }
+
                     var teamBoard = TeamBoards.GetOrAdd(taskId, _ => new ConcurrentQueue<TeamMessage>());
-                    teamBoard.Enqueue(new TeamMessage(
-                        _agent.Role,
-                        string.IsNullOrWhiteSpace(to) ? "lead" : to.Trim(),
-                        text.Trim()));
-                    await LogAsync(taskId, $"[team] {_agent.Role} → {(string.IsNullOrWhiteSpace(to) ? "lead" : to.Trim())}", ct);
+                    teamBoard.Enqueue(new TeamMessage(_agent.Role, targetRole, text));
+                    await LogAsync(taskId, $"[team] {_agent.Role} → {targetRole}", ct);
                     return new ConexyToolResult(toolCall.Id, "Сообщение доставлено команде.", false);
                 }
 

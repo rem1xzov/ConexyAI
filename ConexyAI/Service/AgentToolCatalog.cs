@@ -93,8 +93,9 @@ public static class AgentToolCatalog
             }, "role", "brief")),
 
         Tool("team_message",            "Send a message or an artifact to another agent of this run: a helper role, or 'lead' " +
-            "for the leading agent. Use it to hand a dependent result to a helper or to ask for a " +
-            "clarification, then continue your own work — do not wait for the reply.",
+            "for the leading agent. To a RUNNING helper this is a live control channel: the helper receives it " +
+            "on its next step, so use it to stop a loop, change the approach, or give a concrete correction. " +
+            "Use `agents_status` first if you need to see what it is doing; do not wait inside this call.",
             Object(new()
             {
                 ["to"] = Str("Recipient role, or 'lead'."),
@@ -109,6 +110,7 @@ public static class AgentToolCatalog
             Object(new()
             {
                 ["wait_seconds"] = Int("Seconds to wait for unfinished helpers (0-120, default 0).", 0, 120, 0),
+                ["detail"] = Int("How many recent tool calls/outputs per helper to show (1-40). Use 20+ to inspect a suspected loop.", 1, 40, 8),
             })),
 
         // ---------------------------------------------------------------- browser
