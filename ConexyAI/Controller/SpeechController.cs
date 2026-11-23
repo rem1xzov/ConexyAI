@@ -66,19 +66,19 @@ public class SpeechController : ControllerBase
         catch (InvalidOperationException ex)
         {
             _logger.LogWarning("SpeechKit not configured: {Error}", ex.Message);
-            return StatusCode(503, new { error = ex.Message });
+            return StatusCode(503, new { error = "Распознавание речи временно недоступно." });
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogError(ex, "Yandex STT API failed: {Message}", ex.Message);
+            _logger.LogError(ex, "Yandex STT API failed.");
             var status = ex.StatusCode ?? System.Net.HttpStatusCode.BadRequest;
-            return StatusCode((int)status, new { error = ex.Message });
+            return StatusCode((int)status, new { error = UserFacingError.Upstream(status) });
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             // HttpClient.Timeout fired (TaskCanceledException derives from OperationCanceledException).
             _logger.LogWarning("Yandex STT timed out.");
-            return StatusCode(504, new { error = "Yandex STT timeout" });
+            return StatusCode(504, new { error = "Распознавание речи не ответило вовремя." });
         }
 
         if (!result.Success)

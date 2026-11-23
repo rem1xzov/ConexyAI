@@ -1,5 +1,7 @@
 namespace ConexyAI.Service.Prompts;
 
+using ConexyAI.Configuration;
+
 // ARTIFACTS: добавлено 2026-09-24 — общие куски системных промптов (контракт C-9). Одна формулировка
 // на все режимы: агенты (Coder, Cowork) дописывают их к своим уставам, чат-режимы — к своим промптам.
 // Формат тега менять только вместе с парсером на фронтенде.
@@ -83,10 +85,53 @@ public static class PromptFragments
         - Агент Coder — работа с кодом в изолированной рабочей области: чтение и запись файлов, терминал (команды), запуск и проверка кода, снимки страниц (Playwright), интеграция с GitHub, редактор с предпросмотром.
         - Агент Cowork — исследование и документы: веб-поиск и чтение страниц, составление документов и таблиц (Office-форматы). Терминала, GitHub и запуска кода у Cowork нет. Cowork доступен только на платных тарифах (см. тариф ниже).
 
-        Тарифы: Free (бесплатный), Go, Pro, ProMax, Ultra (годовой); у администраторов — полный доступ без лимитов. Чем выше тариф, тем больше лимиты на число запросов и на объём токенов. Агент Coder и его рабочая область (файлы, терминал, GitHub) доступны на ВСЕХ тарифах, включая Free, — отличается только лимит токенов; платным является только Cowork. Если пользователь на бесплатном тарифе, это НЕ значит, что у него нет доступа к рабочей области: доступ есть, ограничен лишь объём токенов. Точные цены и текущие лимиты пользователь видит в интерфейсе (раздел подписки и индикатор расхода) — не называй конкретные суммы и числа наугад; вместо этого предложи посмотреть там.
+        Тарифы: Free (бесплатный), Go, Pro, ProMax и Ultra (ежемесячные). Чем выше тариф, тем больше лимиты на запросы и токены. Агент Coder и его рабочая область (файлы, терминал, GitHub) доступны на ВСЕХ тарифах, включая Free, — отличается только лимит токенов; платным является только Cowork. Точные актуальные цены и лимиты перечислены в блоке «Актуальные тарифы» ниже: используй именно его и не называй старые цены/лимиты из памяти. Если цена или лимит не указаны — отправь пользователя в раздел «Тарифы» в интерфейсе.
 
         Общее для всех режимов: история чатов (закрепление, переименование, удаление), тёмная и светлая темы, русский и английский интерфейс, потоковые ответы с показом рассуждений.
         """;
+
+    /// <summary>
+    /// TARIFF_KNOWLEDGE: тарифы и лимиты берутся из конфигурации сервера (appsettings), а не из
+    /// захардкоженного текста. Модель всегда видит актуальные цены, названия и объёмы после смены тарифов.
+    /// </summary>
+    public static string Tariffs(SubscriptionLimitsOptions limits, PaymentPlansOptions? plans)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("## Актуальные тарифы (источник: настройки сервера)");
+        AppendTier(sb, "Free", "бесплатно", limits.Free);
+        AppendTier(sb, "Go", Price(plans?.Find("Go")), limits.Go);
+        AppendTier(sb, "Pro", Price(plans?.Find("Pro")), limits.Pro);
+        AppendTier(sb, "ProMax", Price(plans?.Find("ProMax")), limits.ProMax);
+        AppendTier(sb, "Ultra", Price(plans?.Find("Ultra")), limits.Ultra);
+        var topUp = plans?.Find("TokenCoder");
+        if (topUp is { Kind: "token", TokenAmount: > 0 })
+            sb.AppendLine($"- Дополнительные токены Coder: {topUp.TokenAmount:N0} за {topUp.AmountRub} ₽ разово; складываются с лимитом тарифа.");
+        sb.Append("- Если пользователь спрашивает о цене/лимите, опирайся на этот блок. Если число не указано — не выдумывай, предложи открыть «Тарифы» в интерфейсе.");
+        return sb.ToString();
+    }
+
+    private static string Price(PaymentPlan? plan) =>
+        plan is { AmountRub: > 0 } ? $"{plan.AmountRub} ₽ / {Math.Max(1, plan.Months)} мес." : "цена в интерфейсе";
+
+    private static void AppendTier(System.Text.StringBuilder sb, string name, string price, TierLimits t)
+    {
+        var parts = new List<string>
+        {
+            $"Flash {t.FlashRequestsPerWindow}/{Window(t.FlashWindowDays, "нед.")}",
+            $"Pro {t.ProRequestsPerWindow}/{Window(t.ProWindowDays, "нед.")}",
+            $"Coder {t.AgentTokenBudget:N0} токенов/{Window(t.AgentWindowDays, "30 дн.")}",
+        };
+        if (t.AgentDailyTokenBudget > 0)
+            parts.Add($"дневной потолок Coder {t.AgentDailyTokenBudget:N0}");
+        parts.Add(t.CoworkEnabled
+            ? (t.CoworkRequestsPerWindow > 0 ? $"Cowork {t.CoworkRequestsPerWindow}/{Window(t.CoworkWindowDays, "нед.")}" : "Cowork без запросов")
+            : "Cowork недоступен");
+        sb.AppendLine($"- {name} — {price}: {string.Join(", ", parts)}.");
+    }
+
+    private static string Window(int days, string fallback) =>
+        days <= 0 ? fallback.TrimEnd('.') : days == 1 ? "день" : days == 7 ? "нед" : $"{days} дн.";
+
 
     // USER_CONTEXT: добавлено 2026-09-27
     /// <summary>
@@ -108,7 +153,7 @@ public static class PromptFragments
             ## Кто с тобой говорит
             - Сейчас с тобой общается {who}.
             - {cowork}
-            - Не приписывай пользователю возможностей, которых нет на его тарифе, и не называй точные цены и лимиты наизусть — они видны в интерфейсе (раздел подписки и индикатор расхода).
+            - Не приписывай пользователю возможностей, которых нет на его тарифе. Актуальные цены и лимиты — в блоке «Актуальные тарифы» ниже; называй только их, не бери старые значения из памяти.
             """;
     }
 
@@ -119,7 +164,7 @@ public static class PromptFragments
     public static string AudienceLine(bool isAdmin, string? tier) =>
         isAdmin
             ? "## Кто тобой пользуется\nПользователь — администратор сервиса: лимиты на него не действуют."
-            : $"## Кто тобой пользуется\nПользователь на тарифе {TierLabel(tier)}. Точные лимиты и цены он видит в интерфейсе — не называй их наизусть.";
+            : $"## Кто тобой пользуется\nПользователь на тарифе {TierLabel(tier)}. Актуальные цены и лимиты — в блоке «Актуальные тарифы» ниже; не бери старые значения из памяти.";
 
     // SUPPORT_BOT: добавлено 2026-10-07
     /// <summary>

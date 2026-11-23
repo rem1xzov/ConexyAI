@@ -7,6 +7,7 @@ using ConexyAI.Model;
 using ConexyAI.Repository;
 using ConexyAI.Service.Web;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
 namespace ConexyAI.Service;
@@ -78,6 +79,15 @@ public class ConexyBackgroundWorker : BackgroundService
         + "\n\n" + Prompts.PromptFragments.ContentPolicyCrisis
         + "\n\n" + Prompts.PromptFragments.ProductKnowledge
         + "\n\n" + Prompts.PromptFragments.AudienceContext(job.IsAdmin, job.Tier);
+
+    private static string BuildTariffBlock(IServiceProvider services)
+    {
+        var limits = services.GetService<IOptions<SubscriptionLimitsOptions>>()?.Value;
+        if (limits is null)
+            return string.Empty;
+        var plans = services.GetService<IOptions<PaymentPlansOptions>>()?.Value;
+        return Prompts.PromptFragments.Tariffs(limits, plans);
+    }
 
     public ConexyBackgroundWorker(
         IConexyQueue queue,
@@ -340,7 +350,8 @@ public class ConexyBackgroundWorker : BackgroundService
                         + "\n\n" + Prompts.PromptFragments.ContentPolicy
                         + "\n\n" + Prompts.PromptFragments.ContentPolicyCrisis
                         + "\n\n" + Prompts.PromptFragments.ProductKnowledge
-                        + "\n\n" + Prompts.PromptFragments.AudienceContext(job.IsAdmin, job.Tier)),
+                        + "\n\n" + Prompts.PromptFragments.AudienceContext(job.IsAdmin, job.Tier))
+                        + "\n\n" + BuildTariffBlock(scope.ServiceProvider),
                 // OFFICE_FORMATS: document attachments are read into the message for every mode (the
                 // model never saw them before), and the same text lands in the history.
                 UserMessage: AttachmentText.ComposeUserMessage(job.Prompt, job.Attachments),
@@ -502,17 +513,18 @@ public class ConexyBackgroundWorker : BackgroundService
             {
                 outcome = TurnOutcome.Failed;
                 _logger.LogError(ex, "Failed to execute task {TaskId}", job.TaskId);
+                var safeError = UserFacingError.From(ex);
 
                 // WEB_DEVICE: и при ошибке веб должен увидеть, что уже изменено на ПК.
                 if (isAgent)
                     failedDeviceDiff = await Device.DeviceTurnDiff.CollectAsync(scope.ServiceProvider, _hubContext, job, _logger, CancellationToken.None);
 
                 entity.Status = ConexyStatus.Failed;
-                entity.Result = ex.Message;
+                entity.Result = safeError;
                 entity.FinishedAt = DateTime.UtcNow;
                 await repository.SaveChangesAsync(CancellationToken.None);
 
-                await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnError", ex.Message);
+                await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnError", safeError);
             }
             finally
             {
@@ -545,7 +557,7 @@ public class ConexyBackgroundWorker : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to process task {TaskId}", job.TaskId);
-            try { await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnError", ex.Message); } catch { }
+            try { await _hubContext.Clients.Group($"task_{job.TaskId}").SendAsync("OnError", UserFacingError.From(ex)); } catch { }
         }
         finally
         {

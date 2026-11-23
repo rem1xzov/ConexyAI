@@ -111,19 +111,37 @@ function extractServerMessage(data: unknown): string | null {
 const HTML_LIKE = /<!doctype|<html|<head|<body|<\/\w+\s*>/i;
 const MAX_LENGTH = 220;
 
+// Secrets/IDs from provider/proxy errors must never reach the UI. This is defence in depth:
+// the server already sanitizes, but an old/stored message or a proxy body can still contain them.
+const SECRET_LIKE =
+  /sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(authorization|bearer|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password)\s*[:=]\s*[^\s,;]+/gi;
+const REQUEST_ID_LIKE = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b|\b[0-9a-fA-F]{24,}\b/g;
+
+/** Public, bounded error text with tokens/request IDs/internal URLs removed. */
+export function safeErrorText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  let text = value.trim();
+  if (!text) return null;
+  if (HTML_LIKE.test(text)) return null;
+  if (text.length > 600 && text.includes('<')) return null;
+  // Raw upstream JSON has no place in the UI.
+  if (/^[\[{]/.test(text) || /"error"\s*:|invalid_request_error/i.test(text)) {
+    text = 'Не удалось обработать запрос. Проверьте вложение и повторите.';
+  }
+  text = text
+    .replace(SECRET_LIKE, '***')
+    .replace(REQUEST_ID_LIKE, '<id>')
+    .replace(/https?:\/\/[^\s"'<>]+/gi, '<url>')
+    .replace(/[A-Za-z]:\\[^\s"'<>]+/g, '<path>')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > MAX_LENGTH ? `${text.slice(0, MAX_LENGTH)}…` : text || null;
+}
+
 /**
  * Flattens and truncates a candidate message, or returns null when it looks like an HTML error page.
  * Returning null lets the caller fall back to a localised sentence instead of showing markup.
  */
 function safeText(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-
-  const text = value.trim();
-  if (!text) return null;
-  if (HTML_LIKE.test(text)) return null;
-  // A very long body with stray angle brackets is markup too, just without a doctype.
-  if (text.length > 600 && text.includes('<')) return null;
-
-  const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length > MAX_LENGTH ? `${flat.slice(0, MAX_LENGTH)}…` : flat;
+  return safeErrorText(value);
 }

@@ -1,4 +1,5 @@
 using ConexyAI.Contract;
+using ConexyAI.Configuration;
 using ConexyAI.Entity;
 using ConexyAI.Hub;
 using ConexyAI.Model;
@@ -7,6 +8,7 @@ using ConexyAI.Service.Admin;
 using ConexyAI.Service.Prompts;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace ConexyAI.Service;
 
@@ -69,19 +71,26 @@ public class SupportService : ISupportService
     private readonly ILogger<SupportService> _logger;
     // ADMIN_ALERTS: необязателен — тесты поддержки не шлют push, прод уведомляет владельца.
     private readonly IAdminNotifier? _adminNotifier;
+    // TARIFF_KNOWLEDGE: бот поддержки тоже видит актуальные тарифы из конфигурации сервера.
+    private readonly IOptions<SubscriptionLimitsOptions>? _limits;
+    private readonly IOptions<PaymentPlansOptions>? _plans;
 
     public SupportService(
         ISupportRepository repository,
         IHubContext<ConexyHub> hubContext,
         IConexyLlmClient llm,
         ILogger<SupportService> logger,
-        IAdminNotifier? adminNotifier = null)
+        IAdminNotifier? adminNotifier = null,
+        IOptions<SubscriptionLimitsOptions>? limits = null,
+        IOptions<PaymentPlansOptions>? plans = null)
     {
         _repository = repository;
         _hubContext = hubContext;
         _llm = llm;
         _logger = logger;
         _adminNotifier = adminNotifier;
+        _limits = limits;
+        _plans = plans;
     }
 
     public async Task<SupportTicketDto> GetOrCreateTicketAsync(Guid userId, CancellationToken ct = default)
@@ -324,9 +333,11 @@ public class SupportService : ISupportService
         }
     }
 
-    private static List<ChatMessage> BuildBotMessages(SupportTicket ticket)
+    private List<ChatMessage> BuildBotMessages(SupportTicket ticket)
     {
         var messages = new List<ChatMessage> { new("system", PromptFragments.SupportBot) };
+        if (_limits?.Value is { } limits)
+            messages.Add(new ChatMessage("system", PromptFragments.Tariffs(limits, _plans?.Value)));
         foreach (var m in ticket.Messages.OrderBy(x => x.CreatedAt))
         {
             switch (m.AuthorType)

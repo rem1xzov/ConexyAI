@@ -636,15 +636,17 @@ public class IdeController : ControllerBase
 
     private ActionResult MapError(Exception ex)
     {
+        static string Safe(Exception error) =>
+            UserFacingError.Scrub(error.Message, 180) is { Length: > 0 } text ? text : "Не удалось выполнить файловую операцию.";
         return ex switch
         {
             // WORKSPACE_JAIL: a command is running in the workspace — retry later.
             WorkspaceBusyException => Conflict(new { error = "WORKSPACE_BUSY" }),
-            UnauthorizedAccessException => BadRequest(new { error = ex.Message }),
-            FileNotFoundException => NotFound(new { error = ex.Message }),
-            DirectoryNotFoundException => NotFound(new { error = ex.Message }),
-            InvalidOperationException => Conflict(new { error = ex.Message }),
-            IOException => BadRequest(new { error = ex.Message }),
+            UnauthorizedAccessException => BadRequest(new { error = Safe(ex) }),
+            FileNotFoundException => NotFound(new { error = Safe(ex) }),
+            DirectoryNotFoundException => NotFound(new { error = Safe(ex) }),
+            InvalidOperationException => Conflict(new { error = Safe(ex) }),
+            IOException => BadRequest(new { error = Safe(ex) }),
             _ => StatusCode(StatusCodes.Status500InternalServerError, new { error = "INTERNAL_ERROR" })
         };
     }

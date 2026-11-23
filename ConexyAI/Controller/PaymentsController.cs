@@ -2,6 +2,7 @@ using System.Text.Json;
 using ConexyAI.Configuration;
 using ConexyAI.Contract;
 using ConexyAI.Extensions;
+using ConexyAI.Service;
 using ConexyAI.Service.Payments;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -53,16 +54,16 @@ public class PaymentsController : ControllerBase
         }
         catch (ArgumentException ex)
         {
-            return BadRequest(new { error = "UNKNOWN_PLAN", message = ex.Message });
+            return BadRequest(new { error = "UNKNOWN_PLAN", message = UserFacingError.Scrub(ex.Message, 160) });
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException)
         {
-            // Платёжный провайдер не настроен (нет shopId/секрета) — это ошибка конфигурации сервера.
-            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "PAYMENTS_DISABLED", message = ex.Message });
+            // Платёжный провайдер не настроен (нет shopId/секрета) — ошибка конфигурации сервера.
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "PAYMENTS_DISABLED", message = "Оплата временно недоступна." });
         }
-        catch (YooKassaException ex)
+        catch (YooKassaException)
         {
-            return StatusCode(StatusCodes.Status502BadGateway, new { error = "PAYMENT_PROVIDER_ERROR", message = ex.Message });
+            return StatusCode(StatusCodes.Status502BadGateway, new { error = "PAYMENT_PROVIDER_ERROR", message = "Платёжный сервис временно недоступен. Попробуйте позже." });
         }
     }
 

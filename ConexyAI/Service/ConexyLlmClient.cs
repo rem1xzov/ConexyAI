@@ -80,7 +80,10 @@ public class ConexyLlmClient : IConexyLlmClient
         CancellationToken ct = default,
         LlmRoute? route = null)
     {
-        var resolved = _routes.Resolve(modelType, ContainsImages(messages), route);
+        var (safeMessages, removedImages) = ImagePayloadGuard.Sanitize(messages);
+        if (removedImages > 0)
+            _logger.LogWarning("Image payload guard removed {Count} invalid/unsupported image block(s) for task {TaskId}.", removedImages, taskId);
+        var resolved = _routes.Resolve(modelType, ContainsImages(safeMessages), route);
         var baseUrl = resolved.BaseUrl;
         var apiKey = resolved.ApiKey;
         var upstreamModel = resolved.Model;
@@ -88,7 +91,7 @@ public class ConexyLlmClient : IConexyLlmClient
 
         var payload = new LlmChatRequest(
             Model: upstreamModel,
-            Messages: messages,
+            Messages: safeMessages,
             Tools: tools.Count > 0 ? tools : null,
             ToolChoice: tools.Count > 0 ? "auto" : null,
             ReasoningEffort: resolvedReasoningEffort,
@@ -114,8 +117,9 @@ public class ConexyLlmClient : IConexyLlmClient
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = Bounded(await response.Content.ReadAsStringAsync(ct));
-                _logger.LogError("DeepSeek API Error [{StatusCode}]: {Body}", response.StatusCode, responseBody);
-                throw new HttpRequestException($"Upstream LLM error ({response.StatusCode}): {responseBody}");
+                _logger.LogError("DeepSeek API Error [{StatusCode}] task {TaskId}: bodyBytes={Bytes}",
+                    (int)response.StatusCode, taskId, responseBody.Length);
+                throw new SafeUserFacingException(UserFacingError.Upstream(response.StatusCode));
             }
 
             var body = await response.Content.ReadAsStringAsync(ct);
@@ -134,7 +138,7 @@ public class ConexyLlmClient : IConexyLlmClient
         catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
         {
             _logger.LogError(ex, "DeepSeek API request timed out after {Timeout}s", RequestTimeout.TotalSeconds);
-            throw new HttpRequestException($"Upstream LLM request timed out after {RequestTimeout.TotalSeconds} seconds.", ex);
+            throw new SafeUserFacingException("Модель не ответила вовремя. Попробуйте ещё раз.", ex);
         }
     }
 
@@ -187,7 +191,10 @@ public class ConexyLlmClient : IConexyLlmClient
         [EnumeratorCancellation] CancellationToken ct = default,
         LlmRoute? route = null)
     {
-        var resolved = _routes.Resolve(modelType, ContainsImages(messages), route);
+        var (safeMessages, removedImages) = ImagePayloadGuard.Sanitize(messages);
+        if (removedImages > 0)
+            _logger.LogWarning("Image payload guard removed {Count} invalid/unsupported image block(s) for stream task {TaskId}.", removedImages, taskId);
+        var resolved = _routes.Resolve(modelType, ContainsImages(safeMessages), route);
         var baseUrl = resolved.BaseUrl;
         var apiKey = resolved.ApiKey;
         var upstreamModel = resolved.Model;
@@ -195,7 +202,7 @@ public class ConexyLlmClient : IConexyLlmClient
 
         var payload = new LlmChatRequest(
             Model: upstreamModel,
-            Messages: messages,
+            Messages: safeMessages,
             Tools: tools is { Count: > 0 } ? tools : null,
             ToolChoice: tools is { Count: > 0 } ? toolChoice ?? "auto" : null,
             Stream: true,
@@ -250,11 +257,11 @@ public class ConexyLlmClient : IConexyLlmClient
                 _logger.LogError(
                     "Flash stream aborted: no first token within {Seconds}s on task {TaskId} (including retries).",
                     FlashNoProgressTimeout.TotalSeconds, taskId);
-                throw new HttpRequestException(FlashTimeoutMessage, ex);
+                throw new SafeUserFacingException(FlashTimeoutMessage, ex);
             }
 
             _logger.LogError(ex, "DeepSeek stream request timed out after {Timeout}s", RequestTimeout.TotalSeconds);
-            throw new HttpRequestException($"Upstream LLM stream timed out after {RequestTimeout.TotalSeconds} seconds.", ex);
+            throw new SafeUserFacingException(StreamTimeoutMessage, ex);
         }
 
         using (response)
@@ -264,8 +271,9 @@ public class ConexyLlmClient : IConexyLlmClient
             if (!response.IsSuccessStatusCode)
             {
                 var errBody = Bounded(await response.Content.ReadAsStringAsync(ct));
-                _logger.LogError("DeepSeek API Error [{StatusCode}]: {Body}", response.StatusCode, errBody);
-                throw new HttpRequestException($"Upstream LLM error ({response.StatusCode}): {errBody}");
+                _logger.LogError("DeepSeek API Error [{StatusCode}] task {TaskId}: bodyBytes={Bytes}",
+                    (int)response.StatusCode, taskId, errBody.Length);
+                throw new SafeUserFacingException(UserFacingError.Upstream(response.StatusCode));
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -297,8 +305,8 @@ public class ConexyLlmClient : IConexyLlmClient
                     _logger.LogError(
                         "DeepSeek stream exceeded {Minutes} minutes on task {TaskId}; aborting.",
                         MaxStreamDuration.TotalMinutes, taskId);
-                    throw new HttpRequestException(
-                        $"Upstream LLM stream ran longer than {MaxStreamDuration.TotalMinutes:0} minutes.");
+                    throw new SafeUserFacingException(
+                        "Модель слишком долго отвечает. Попробуйте ещё раз.");
                 }
 
                 // FLASH_TIMEOUT: нет токенов дольше порога — модель зависла (либо шлёт только
@@ -308,7 +316,7 @@ public class ConexyLlmClient : IConexyLlmClient
                     _logger.LogError(
                         "DeepSeek stream made no progress for {Seconds}s on task {TaskId}; aborting.",
                         progressTimeout.TotalSeconds, taskId);
-                    throw new HttpRequestException(timeoutMessage);
+                    throw new SafeUserFacingException(timeoutMessage);
                 }
 
                 string? line;
@@ -324,7 +332,7 @@ public class ConexyLlmClient : IConexyLlmClient
                         ex,
                         "DeepSeek stream stalled: no data for {IdleSeconds}s on task {TaskId}.",
                         progressTimeout.TotalSeconds, taskId);
-                    throw new HttpRequestException(timeoutMessage, ex);
+                    throw new SafeUserFacingException(timeoutMessage, ex);
                 }
 
                 if (line is null)

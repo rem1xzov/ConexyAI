@@ -579,7 +579,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             }
             catch (Exception ex)
             {
-                return (call.Id, Result: new ConexyToolResult(call.Id, "Tool error (fetch_web_page): " + ex.Message, true));
+                return (call.Id, Result: new ConexyToolResult(call.Id, UserFacingError.Tool(ex, "fetch_web_page"), true));
             }
         });
 
@@ -628,7 +628,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             }
             catch (Exception ex)
             {
-                return (call.Id, Result: new ConexyToolResult(call.Id, $"Tool error ({call.Function.Name}): {ex.Message}", true));
+                return (call.Id, Result: new ConexyToolResult(call.Id, UserFacingError.Tool(ex, call.Function.Name), true));
             }
             finally
             {
@@ -2669,7 +2669,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         toolName, taskId);
                     result = new ConexyToolResult(
                         toolCall.Id,
-                        $"Tool error ({toolName}): {ex.Message}",
+                        UserFacingError.Tool(ex, toolName),
                         true);
                 }
 
@@ -3760,7 +3760,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Agent hook {Event} crashed. task={TaskId}", eventName, taskId);
-                failureNotes?.Add($"[Hook {eventName}] `{resolved}` crashed: {ex.Message}");
+                failureNotes?.Add($"[Hook {eventName}] `{resolved}` crashed: {UserFacingError.Scrub(ex.Message, 160)}");
             }
         }
     }
@@ -3858,7 +3858,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Workflow step {StepId} failed. task={TaskId}", step.Id, taskId);
-                return $"ошибка: {ex.Message}";
+                return $"ошибка: {UserFacingError.Scrub(ex.Message, 200)}";
             }
         }
     }
@@ -4084,7 +4084,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 // как об обычном результате инструмента.
                 _logger.LogWarning(ex, "Orchestra: agent {Role} failed task={TaskId}", spec.Role, taskId);
                 worker.Failed = true;
-                worker.Report = $"(агент {spec.Role} завершился с ошибкой: {ex.Message})";
+                worker.Report = $"(агент {spec.Role} завершился с ошибкой: {UserFacingError.Scrub(ex.Message, 200)})";
             }
         }
     }
@@ -4597,7 +4597,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     catch (Exception ex)
                     {
                         _logger.LogWarning(ex, "Worker tool {Tool} failed task={TaskId}", toolName, taskId);
-                        result = new ConexyToolResult(call.Id, $"Tool '{toolName}' failed: {ex.Message}", true);
+                        result = new ConexyToolResult(call.Id, UserFacingError.Tool(ex, toolName), true);
                     }
                 }
 
@@ -4927,7 +4927,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                         _logger.LogWarning(ex, "Team follow-up failed for {Role}. task={TaskId}", resolvedRole, taskId);
                         followWorker.Failed = true;
                         return new ConexyToolResult(toolCall.Id,
-                            $"Продолжение помощника '{resolvedRole}' не удалось: {ex.Message}", true);
+                            $"Продолжение помощника '{resolvedRole}' не удалось: {UserFacingError.Scrub(ex.Message, 200)}", true);
                     }
                 }
 
@@ -5581,7 +5581,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         }
         catch (Exception ex)
         {
-            return new ConexyToolResult(toolCall.Id, $"Execution error: {ex.Message}", true);
+            return new ConexyToolResult(toolCall.Id, UserFacingError.Tool(ex, toolCall.Function.Name), true);
         }
     }
 
@@ -6826,6 +6826,10 @@ public class ConexyAgentRunner : IConexyAgentRunner
             if (detected is null)
                 return new ConexyToolResult(toolCall.Id,
                     $"view_image: '{path}' is not a supported image (png, jpg, jpeg, webp, gif, bmp).", true);
+            if (!ImagePayloadGuard.IsModelImageMime(detected) || !ImagePayloadGuard.IsValidImage(bytes, detected))
+                return new ConexyToolResult(toolCall.Id,
+                    $"view_image: '{path}' is not a valid png/jpeg/webp image for the model. " +
+                    "Сохрани скриншот в PNG или JPEG и повтори.", true);
 
             base64 = Convert.ToBase64String(bytes);
             contentType = detected;
@@ -6834,6 +6838,27 @@ public class ConexyAgentRunner : IConexyAgentRunner
         else
         {
             return new ConexyToolResult(toolCall.Id, "view_image requires 'path' (a workspace image) or 'name' (an attached image).", true);
+        }
+
+        // IMAGE_PAYLOAD_GUARD: не отправляем модели битую/неподдерживаемую картинку — она уронила бы
+        // весь ход 400-й ошибкой провайдера. Лучше вернуть точную tool-ошибку и продолжить задачу.
+        try
+        {
+            var imageBytes = Convert.FromBase64String(base64);
+            var actualType = ImageContent.DetectContentType(imageBytes);
+            if (actualType is null || !ImagePayloadGuard.IsModelImageMime(actualType)
+                || !ImagePayloadGuard.IsValidImage(imageBytes, actualType))
+            {
+                return new ConexyToolResult(toolCall.Id,
+                    $"view_image: '{label}' is not a valid png/jpeg/webp image for the model. " +
+                    "Сохрани изображение в PNG или JPEG и повтори.", true);
+            }
+            contentType = actualType;
+            base64 = Convert.ToBase64String(imageBytes);
+        }
+        catch (FormatException)
+        {
+            return new ConexyToolResult(toolCall.Id, $"view_image: '{label}' contains invalid image data.", true);
         }
 
         await LogAsync(taskId, $"[View Image] {label}", ct);
@@ -7307,12 +7332,19 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
     private async Task LogAsync(Guid taskId, string message, CancellationToken ct)
     {
-        await _hubContext.Clients.Group($"task_{taskId}").SendAsync("OnLog", message, ct);
+        await _hubContext.Clients.Group($"task_{taskId}").SendAsync("OnLog", UserFacingError.Scrub(message, 1_600), ct);
     }
 
     private async Task SendAgentStatusAsync(Guid taskId, string stage, string label, string? file = null, CancellationToken ct = default)
     {
-        await _hubContext.Clients.Group($"task_{taskId}").SendAsync("OnAgentStatus", new { stage, label, file, agentId = _agent.Id, agentRole = _agent.Role }, ct);
+        await _hubContext.Clients.Group($"task_{taskId}").SendAsync("OnAgentStatus", new
+        {
+            stage,
+            label = UserFacingError.Scrub(label, 260),
+            file,
+            agentId = _agent.Id,
+            agentRole = _agent.Role
+        }, ct);
     }
 
     private async Task SendFileCreatedAsync(Guid taskId, string path, CancellationToken ct)

@@ -17,7 +17,7 @@ import { TodoPanel } from './TodoPanel';
 import { AssistantContent } from './artifacts/AssistantContent';
 import { ProducedFiles } from './ProducedFiles';
 import { MessageActions } from './MessageActions';
-// WEB_DEVICE: добавлено 2026-10-18
+import { safeErrorText } from '../utils/humanError';// WEB_DEVICE: добавлено 2026-10-18
 import { MessageExtras } from './ChatExtras';
 import { DeviceTurnExtras, DeviceQuestionCards } from './DeviceTurnExtras';
 import { VariantPager } from './VariantPager';
@@ -468,7 +468,7 @@ function MessageBubbleBase({
         </div>
       )}
 
-      {message.error && <div className="msg__error">{message.error}</div>}
+      {message.error && <div className="msg__error">{safeErrorText(message.error) ?? t('errors.default')}</div>}
       {hasScreenshots && <VisionGallery screenshots={screenshots} />}
       {/* M22: screenshots are not kept in local storage; say so instead of letting them vanish. */}
       {!hasScreenshots && (message.screenshotsOmitted ?? 0) > 0 && (
