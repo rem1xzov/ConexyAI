@@ -277,6 +277,22 @@ public class DeviceController : ControllerBase
         return Ok(new { ok = true });
     }
 
+    // VISUAL_DESKTOP: «+ Добавить рабочее пространство…» в окне визуального десктопа. Папку выбирает
+    // сам пользователь в диалоге на ПК (браузер не имеет доступа к файловой системе), клиент добавляет
+    // её в projects.json и перерегистрирует список — веб затем обновляет список и выделяет новый проект.
+    /// <summary>Просит подключённый клиент открыть выбор папки на ПК и добавить рабочую область.</summary>
+    [HttpPost("workspace")]
+    [Authorize]
+    public async Task<IActionResult> AddWorkspace(CancellationToken ct)
+    {
+        var userId = User.GetUserId();
+        if (!_bridge.IsOnline(userId))
+            return NotFound(new { error = "DESKTOP_OFFLINE", message = "ConexyAI Desktop сейчас не подключён к серверу." });
+
+        await _bridge.SendEventAsync(userId, "AddWorkspace", new { }, ct);
+        return Ok(new { ok = true });
+    }
+
     /// <summary>Отменить ждущую ПК задачу.</summary>
     [HttpDelete("queue/{taskId:guid}")]
     [Authorize]

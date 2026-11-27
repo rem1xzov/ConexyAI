@@ -170,7 +170,13 @@ public sealed class AgentSession : IAsyncDisposable
             VisualDesktop.ShowConsole();
             return Task.CompletedTask;
         });
-        _hub.On<JsonElement, string?>("ToolAction", (payload, _) => OnServerToolAction(payload));
+        // VISUAL_DESKTOP: «+ Добавить рабочее пространство…» в окне — папку выбирают на этом ПК,
+        // потому что браузер не имеет доступа к файловой системе.
+        _hub.On<JsonElement>("AddWorkspace", payload =>
+        {
+            _ = Task.Run(AddWorkspaceFromDialogAsync);
+            return Task.CompletedTask;
+        });        _hub.On<JsonElement, string?>("ToolAction", (payload, _) => OnServerToolAction(payload));
         _hub.On<JsonElement, string?>("AgentTeam", (payload, _) => OnTeam(payload));
         _hub.On<JsonElement, string?>("OnAgentStatus", (payload, _) => OnAgentStatus(payload));
         // AGENT_CURSOR: где каждый агент действует на экране — оверлей рисует разноцветные курсоры.
@@ -578,6 +584,84 @@ public sealed class AgentSession : IAsyncDisposable
             Mcp.TelegramLogin.RemoteCancel();
             return ToolResult.Ok("""{"state":"idle"}""");
         }
+    }
+
+    /// <summary>
+    /// VISUAL_DESKTOP: добавить рабочую область из веб-окна. Диалог выбора папки показывается на этом
+    /// ПК (браузер не может выбрать папку), затем папка попадает в projects.json и список проектов
+    /// перерегистрируется на сервере — веб после refresh() видит новую рабочую область.
+    /// </summary>
+    private async Task AddWorkspaceFromDialogAsync()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        try
+        {
+            var picked = await Task.Run(PickWorkspaceFolder);
+            if (string.IsNullOrWhiteSpace(picked))
+                return;
+
+            var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(picked.Trim().Trim('"')));
+            if (!Directory.Exists(path))
+            {
+                Ui.Error("Выбранная папка не найдена.");
+                return;
+            }
+            if (Workspace.WhyUnsafe(path) is { } unsafeWorkspace)
+            {
+                Ui.Error($"Папка не подходит: {unsafeWorkspace}. Выберите папку проекта.");
+                return;
+            }
+
+            var store = ProjectStore.Load();
+            var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (store.Projects.FirstOrDefault(p => p.Path.Equals(path, cmp)) is null)
+            {
+                var name = Path.GetFileName(path);
+                if (string.IsNullOrWhiteSpace(name))
+                    name = path;
+                store.Projects.Add(new DeviceProject { Id = Guid.NewGuid().ToString(), Name = name, Path = path });
+                store.Save();
+                Ui.Info("  ◦ добавлена рабочая область: " + path);
+            }
+
+            _device.ReloadProjects();
+            await RegisterAsync();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            Ui.Error("Не удалось добавить рабочую область: " + ex.Message);
+        }
+    }
+
+    /// <summary>Нативный диалог выбора папки Windows (через PowerShell, чтобы не тащить WinForms в TFM).</summary>
+    private static string? PickWorkspaceFolder()
+    {
+        const string script =
+            "Add-Type -AssemblyName System.Windows.Forms; " +
+            "$d = New-Object System.Windows.Forms.FolderBrowserDialog; " +
+            "$d.Description = 'Выберите рабочую область ConexyAI'; " +
+            "$d.UseDescriptionForTitle = $true; $d.ShowNewFolderButton = $true; " +
+            "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }";
+        var start = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        start.ArgumentList.Add("-NoProfile");
+        start.ArgumentList.Add("-STA");
+        start.ArgumentList.Add("-Command");
+        start.ArgumentList.Add(script);
+        using var process = System.Diagnostics.Process.Start(start);
+        if (process is null)
+            return null;
+        var output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        var line = output.Trim();
+        return line.Length == 0 ? null : line;
     }
 
     private async Task OnExecuteToolAsync(Guid callId, Guid taskId, string tool, string argumentsJson)

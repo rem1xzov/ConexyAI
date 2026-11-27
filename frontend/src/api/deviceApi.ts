@@ -118,6 +118,19 @@ export async function cancelQueuedTask(taskId: string): Promise<void> {
   await http.delete(`/device/queue/${encodeURIComponent(taskId)}`);
 }
 
+// WORKSPACE_MENU: добавлено 2026-11-27 — «+ Добавить рабочее пространство…» в окне визуального
+// десктопа. Папку выбирает сам пользователь в нативном диалоге на ПК: браузер не имеет доступа к
+// файловой системе, поэтому веб лишь просит подключённый клиент открыть выбор папки, добавить её в
+// projects.json и перерегистрировать список — новый проект виден после `device.refresh()`.
+/**
+ * Asks the connected PC to open its native folder picker and register the chosen folder.
+ * Resolves when the event was delivered to the PC; `404 { error: 'DESKTOP_OFFLINE' }` when no PC is
+ * connected. The new project appears in `getDeviceStatus()` after the desktop re-registers.
+ */
+export async function addWorkspace(): Promise<void> {
+  await http.post('/device/workspace');
+}
+
 // MOBILE_APP: приложение для Android. Версия и ссылка на APK приходят из последнего релиза
 // на GitHub, где лежит ассет conexy-android.apk.
 export interface MobileClientInfo {

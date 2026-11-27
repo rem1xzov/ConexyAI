@@ -104,7 +104,7 @@ import { DeviceTargetBar } from './components/DeviceTargetBar';
 import { WorkspaceChip, WorkspaceSection } from './components/WorkspacePicker';
 import { DeviceTurnContext, type DeviceTurnActions } from './components/DeviceTurnExtras';
 import { useDeviceStatus } from './hooks/useDeviceStatus';
-import { cancelQueuedTask, runQueuedTaskInSandbox, type DeviceStatus } from './api/deviceApi';
+import { addWorkspace, cancelQueuedTask, runQueuedTaskInSandbox, type DeviceStatus } from './api/deviceApi';
 import {
   readDeviceProject,
   readExecutionTarget,
@@ -2035,8 +2035,80 @@ export default function App() {
   }
 
   function changeDeviceProject(projectId: string) {
-    writeDeviceProject(activeId, projectId);
+    // `activeIdRef` — тот же чат, что и `activeId` при обычном клике; ref нужен ещё и опросу ниже:
+    // он может завершиться после смены чата и должен записать выбор в тот чат, что открыт сейчас.
+    writeDeviceProject(activeIdRef.current, projectId);
     setStoredDeviceProject(projectId);
+  }
+
+  // WORKSPACE_MENU: добавлено 2026-11-27 — «+ Добавить рабочее пространство…» в окне `/desktop`.
+  // Веб не имеет доступа к файловой системе: кнопка просит подключённый ПК открыть нативный диалог
+  // выбора папки, после чего клиент добавляет папку в свой список и перерегистрируется. Новый проект
+  // появляется только в GET /device/status, поэтому после запроса опрашиваем статус ~60 с и, когда
+  // список вырос, сразу переключаемся на новую папку и сообщаем об успехе.
+  const [addingWorkspace, setAddingWorkspace] = useState(false);
+  const workspacePollRef = useRef<number | null>(null);
+  const workspaceAddAttemptRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      if (workspacePollRef.current) window.clearTimeout(workspacePollRef.current);
+    },
+    [],
+  );
+
+  async function handleAddWorkspace() {
+    // Действие имеет смысл только в визуальном десктопе: в обычном вебе ПК может быть не настроен,
+    // а пункт меню там и не показывается. Повторный клик во время запроса игнорируем.
+    if (!visualDesktop || addingWorkspace) return;
+    const attempt = ++workspaceAddAttemptRef.current;
+    const before = device.status?.projects ?? [];
+    const beforeIds = new Set(before.map((p) => p.id));
+
+    setAddingWorkspace(true);
+    try {
+      await addWorkspace();
+    } catch (e) {
+      setAddingWorkspace(false);
+      // Бэкенд отвечает 404 { error: 'DESKTOP_OFFLINE' }, когда ПК не подключён: это понятная
+      // причина, а не поломка — показываем отдельный текст.
+      const body = (e as { response?: { data?: unknown } } | null)?.response?.data;
+      const code = body && typeof body === 'object' ? (body as { error?: unknown }).error : undefined;
+      showToast(code === 'DESKTOP_OFFLINE' ? t('device.workspaceDesktopOffline') : t('device.workspaceAddFailed'));
+      return;
+    }
+
+    showToast(t('device.workspaceDialogOpened'));
+    const deadline = Date.now() + 60_000;
+
+    const poll = async () => {
+      // Пользователь мог закрыть меню и нажать «Добавить» ещё раз — старый опрос должен замолчать.
+      if (attempt !== workspaceAddAttemptRef.current) return;
+      const next = await device.refresh();
+      if (attempt !== workspaceAddAttemptRef.current) return;
+      const projects = next?.projects ?? [];
+      const added = projects.find((p) => !beforeIds.has(p.id));
+      if (added || projects.length > before.length) {
+        const newId = added?.id ?? projects[projects.length - 1]?.id;
+        if (newId) changeDeviceProject(newId);
+        setAddingWorkspace(false);
+        showToast(t('device.workspaceAdded'));
+        return;
+      }
+      if (Date.now() >= deadline) {
+        setAddingWorkspace(false);
+        // 60 с прошло, а папка так и не появилась: диалог могли отменить или клиент не успел.
+        showToast(t('device.workspaceAddFailed'));
+        return;
+      }
+      workspacePollRef.current = window.setTimeout(() => {
+        void poll();
+      }, 2000);
+    };
+
+    workspacePollRef.current = window.setTimeout(() => {
+      void poll();
+    }, 2000);
   }
 
   type OfflineChoice = Exclude<DeviceOfflinePolicy, 'fail'> | null;
@@ -3578,6 +3650,8 @@ export default function App() {
         status={device.status}
         projectId={deviceProjectId}
         onProjectChange={changeDeviceProject}
+        onAddWorkspace={handleAddWorkspace}
+        adding={addingWorkspace}
         disabled={agentRunning}
       />
     ) : (
@@ -3605,6 +3679,8 @@ export default function App() {
         status={device.status}
         projectId={deviceProjectId}
         onProjectChange={changeDeviceProject}
+        onAddWorkspace={handleAddWorkspace}
+        adding={addingWorkspace}
         disabled={agentRunning}
       />
     ) : undefined;
