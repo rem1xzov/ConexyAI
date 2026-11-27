@@ -10,6 +10,7 @@ const string Usage = """
 
       conexy login [--url <адрес>] [--key <ключ>]   сохранить ключ (выпускается на сайте в настройках)
       conexy [--dir <папка>]                        чат с агентом; рабочая папка — текущая или --dir
+      conexy --visual [--dir <папка>]               сразу открыть визуальный десктоп (веб-версию в окне)
       conexy logout                                 забыть ключ
       conexy selftest                               проверить локальные инструменты без сервера
       conexy doctor [--json]                        проверить вход, сервер, SignalR, папку и обновления
@@ -90,6 +91,9 @@ try
             return await Doctor.RunAsync(args);
 
         case "logout":
+            // VISUAL_DESKTOP: вместе с ключом забываем и вход визуального окна, иначе на общем ПК оно
+            // осталось бы авторизованным под прежним аккаунтом.
+            VisualDesktop.Reset();
             ClientConfig.Delete();
             Console.WriteLine("Ключ удалён.");
             return 0;
@@ -352,6 +356,8 @@ static int RemoteCommand(string[] args)
 static async Task<int> LoginAsync(string[] args)
 {
     var config = ClientConfig.Load();
+    var previousKey = config.GetKey();
+    var previousServerUrl = config.ServerUrl?.TrimEnd('/');
     // SERVER_URL_HTTPS: адрес из --url, отличный от сохранённого, — громко предупреждаем.
     if (Option(args, "--url") is { } cliUrl && NormalizeUrl(cliUrl) is { } normalizedCli)
         ClientConfig.WarnIfHostChanged(config.ServerUrl, normalizedCli, "--url");
@@ -400,6 +406,13 @@ static async Task<int> LoginAsync(string[] args)
     config.ServerUrl = url.TrimEnd('/');
     config.SetKey(key.Trim());
     config.Save();
+    // VISUAL_DESKTOP: новый ключ или другой сервер могли принадлежать другому аккаунту — стираем вход
+    // и профиль визуального окна, чтобы оно не осталось авторизованным под прежним пользователем.
+    if (!string.Equals(previousKey, key.Trim(), StringComparison.Ordinal)
+        || !string.Equals(previousServerUrl, config.ServerUrl, StringComparison.OrdinalIgnoreCase))
+    {
+        VisualDesktop.Reset();
+    }
     if (Option(args, "--proxy") is { } proxy)
     {
         if (!NetProxy.IsValid(proxy))
@@ -580,6 +593,13 @@ static async Task<int> ChatAsync(string[] args)
                 return code.Value;
         }
     }
+
+    // VISUAL_DESKTOP: визуальный десктоп — та же веб-версия, но в отдельном окне на этом ПК. Окно и
+    // консоль работают с одним аккаунтом; VisualDesktop.HotkeyLabel переключает между ними в любой момент.
+    // Стартуем горячую клавишу всегда, окно по флагу --visual или по команде /visual.
+    VisualDesktop.StartHotkey();
+    if (args.Contains("--visual"))
+        Ui.Info("  " + await VisualDesktop.OpenAsync(server));
 
     var approver = new ConsoleApprover { AutoMode = args.Contains("--auto") };
     // EFFORT: флаг на запуск важнее сохранённого значения; /effort меняет его на лету.
@@ -888,6 +908,11 @@ static void PrintHelp()
             // LOCAL_WORKER: локальная модель ПК как субагент облачного агента.
             ("/local [on|off|url|model|test]", "локальная модель на этом ПК (Ollama/LM Studio): облачный ведущий может запускать на ней субагента"),
             ("/permissions", "команды без вопроса в этом проекте\nadd <команда> · remove N · clear"),
+        ]),
+        ("Консоль и визуальный десктоп", [
+            ("/visual", "веб-версия ConexyAI в отдельном окне на этом ПК — как сайт, но без вкладок и адресной строки\n/gui — то же · /visual off — закрыть · /visual status — состояние"),
+            ("/console", "свернуть визуальное окно и остаться в консоли; " + VisualDesktop.HotkeyLabel +
+                         " переключает консоль ↔ визуальный режим в любой момент"),
         ]),
         ("Фоновая работа с сайта", [
             ("/daemon on", "работать в фоне и запускаться вместе с Windows: задачи с сайта («Мой ПК») выполняются и при закрытом окне; текущая папка становится проектом"),
@@ -1242,6 +1267,29 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                     {
                         Ui.Info("/bubble — показать круг · /bubble off — убрать · /bubble status — журнал.");
                     }
+                    break;
+                // VISUAL_DESKTOP: веб-версия ConexyAI в отдельном окне рядом с консолью.
+                case "/visual" or "/gui":
+                    switch (arg.ToLowerInvariant())
+                    {
+                        case "off" or "close" or "закрыть":
+                            Ui.Info(VisualDesktop.Close()
+                                ? "Визуальный десктоп закрыт. Вернуться: /visual."
+                                : "Визуальный десктоп сейчас не открыт. /visual — открыть.");
+                            break;
+                        case "status" or "статус":
+                            Ui.Info("  " + VisualDesktop.Describe());
+                            break;
+                        default:
+                            Ui.Info("  Открываю визуальный десктоп…");
+                            Ui.Info("  " + await VisualDesktop.OpenAsync(server));
+                            break;
+                    }
+                    break;
+                case "/console":
+                    Ui.Info(VisualDesktop.ShowConsole()
+                        ? "Свернул визуальный десктоп — вы в консоли. Вернуться: /visual или " + VisualDesktop.HotkeyLabel + "."
+                        : "Визуальный десктоп сейчас не открыт — вы уже в консоли. /visual — открыть веб-версию.");
                     break;
                 case "/control":
                 {

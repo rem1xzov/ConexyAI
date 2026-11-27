@@ -9,6 +9,8 @@ import { ArtifactPanelHost } from './components/artifacts/ArtifactPanel';
 import { checkMobileUpdate, listenForMobileAuth, showUpdateBanner } from './utils/mobile';
 import { startPhoneAgent } from './services/phoneAgent';
 import { installMotionVars } from './motion/motionConfig';
+// VISUAL_DESKTOP: окно визуального десктопа ищем по уникальному заголовку документа.
+import { isVisualDesktopPath, VISUAL_DESKTOP_TITLE } from './utils/desktopMode';
 import './styles/index.css';
 
 installMotionVars();
@@ -29,6 +31,12 @@ startPhoneAgent();
 void checkMobileUpdate().then((update) => {
   if (update) showUpdateBanner(update);
 });
+
+// VISUAL_DESKTOP: консольный клиент открывает этот же SPA по `/desktop` в своём окне Chromium
+// app-mode и находит это окно по заголовку, поэтому заголовок ставим до первого рендера.
+if (isVisualDesktopPath(window.location.pathname)) {
+  document.title = VISUAL_DESKTOP_TITLE;
+}
 
 // GLOBAL_ERROR_BOUNDARY: добавлено 2026-09-23
 // Обёртка стоит на самом корне, а не внутри App: только так она ловит и ошибку самого App

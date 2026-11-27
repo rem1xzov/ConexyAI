@@ -115,6 +115,32 @@ public sealed class ServerClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// VISUAL_DESKTOP: одноразовый код, которым визуальное окно (веб-версия в Edge/Chrome) входит в
+    /// тот же аккаунт, что и консольный клиент. Код живёт две минуты, сгорает при первом использовании
+    /// и не даёт долговременного доступа. null — сервер код не выдал: окно откроется без автовхода.
+    /// </summary>
+    public async Task<string?> CreateVisualHandoffAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "api/auth/desktop-handoff");
+            request.Headers.Authorization = new("Bearer", await GetTokenAsync(ct));
+            using var response = await _http.SendAsync(request, ct);
+            if (response.StatusCode != HttpStatusCode.OK)
+                return null;
+
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            return doc.RootElement.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String
+                ? code.GetString()
+                : null;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or InvalidOperationException or TaskCanceledException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>Ставит задачу в очередь. Сообщение об ошибке сервера (лимиты, занятость) — в исключении.</summary>
     public async Task<Guid> StartRunAsync(
         string prompt, Guid chatId, bool orchestra, IReadOnlyList<PendingAttachment> attachments, CancellationToken ct,

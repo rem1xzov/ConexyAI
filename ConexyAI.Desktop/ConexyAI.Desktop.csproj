@@ -8,7 +8,7 @@
         <AssemblyName>conexy</AssemblyName>
         <RootNamespace>ConexyAI.Desktop</RootNamespace>
         <InvariantGlobalization>true</InvariantGlobalization>
-        <Version>0.9.51</Version>
+        <Version>0.9.52</Version>
         <ApplicationIcon>conexy.ico</ApplicationIcon>
         <Company>ConexyAI</Company>
         <Product>ConexyAI Desktop</Product>
@@ -16,6 +16,10 @@
         <Copyright>ConexyAI</Copyright>
         <FileVersion>$(Version).0</FileVersion>
     </PropertyGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="ConexyAI.Tests" />
+    </ItemGroup>
 
     <ItemGroup>
         <PackageReference Include="MailKit" Version="4.18.1" />

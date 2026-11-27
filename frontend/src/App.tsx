@@ -15,6 +15,9 @@ import { useAuth } from './hooks/useAuth';
 import { readGitHubToken, clearGitHubToken } from './utils/githubToken';
 // MCP: личные MCP-серверы пользователя (внешние сервисы под его аккаунтом).
 import { readMcpServers, clearMcpServers } from './utils/mcpServers';
+// VISUAL_DESKTOP: в окне визуального десктопа путь `/desktop`, но ссылки «Поделиться» должны
+// вести на обычный корень сайта — поэтому pathname пропускаем через publicPath.
+import { publicPath } from './utils/desktopMode';
 import { useIsMobile } from './hooks/useMediaQuery';
 // FILE_DROP: добавлено 2026-09-24 (L11)
 import { useFileDropZone, usePreventWindowFileDrop } from './hooks/useFileDrop';
@@ -217,13 +220,15 @@ function chatIdFromHash(hash: string): string | null {
 }
 
 function chatLink(id: string): string {
-  return `${window.location.origin}${window.location.pathname}#/chat/${id}`;
+  // VISUAL_DESKTOP: из окна `/desktop` ссылка должна вести на корень сайта, а не на служебный путь.
+  return `${window.location.origin}${publicPath(window.location.pathname)}#/chat/${id}`;
 }
 
 // SHARE_PUBLIC: добавлено 2026-10-01
 /** Публичная ссылка на чат. Токен выдаёт сервер; он же служит разрешением на чтение. */
 function publicShareUrl(token: string): string {
-  return `${window.location.origin}${window.location.pathname}#/shared/${token}`;
+  // VISUAL_DESKTOP: публичный адрес не должен содержать `/desktop`.
+  return `${window.location.origin}${publicPath(window.location.pathname)}#/shared/${token}`;
 }
 
 function sharedTokenFromHash(hash: string): string | null {

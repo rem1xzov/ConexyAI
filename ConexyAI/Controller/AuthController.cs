@@ -187,6 +187,9 @@ public class AuthController : ControllerBase
     // первом использовании, поэтому перехват deep link не даёт долговременного доступа.
     // SEC_MOBILE_PKCE: и без code_verifier, который знает только начавшее вход приложение, код ничего не стоит.
     // Код сжигается и при неверном verifier — перебирать нечего.
+    // VISUAL_DESKTOP: у кода визуального десктопа Challenge пустой — этот код выпущен сервером уже
+    // аутентифицированному клиенту и доставлен в его собственное локальное окно, поэтому PKCE к нему
+    // не применяется и code_verifier не требуется (проверка ниже срабатывает только для мобильных кодов).
     /// <summary>Exchanges the one-time handoff code from the app link (plus the PKCE verifier) for a JWT.</summary>
     [HttpPost("handoff")]
     [EnableRateLimiting(AuthRateLimitPolicies.GitHubOAuth)]
@@ -198,10 +201,43 @@ public class AuthController : ControllerBase
         if (entry.ExpiresUtc < DateTime.UtcNow)
             return BadRequest(new { error = "code_expired" });
 
-        if (!VerifyPkce(request.CodeVerifier, entry.Challenge))
+        if (entry.Challenge.Length > 0 && !VerifyPkce(request.CodeVerifier, entry.Challenge))
             return BadRequest(new { error = "invalid_code_verifier", message = MobileOutdatedMessage });
 
         return Ok(entry.Token);
+    }
+
+    // VISUAL_DESKTOP: «визуальный рабочий стол» — консольный клиент открывает веб-приложение в своём
+    // отдельном окне Chromium (app-mode) и должен войти в него без второго ручного логина. Код
+    // выпускается по уже аутентифицированному JWT вызывающего клиента и доставляется в его же
+    // локальное окно (не через публичный deep link, как мобильный handoff), поэтому PKCE здесь не
+    // нужен: перехватить код можно только вместе с самой сессией клиента. Код живёт две минуты и
+    // сжигается при первом обмене, как и мобильный.
+    /// <summary>Issues a one-time handoff code for the desktop client's visual app window.</summary>
+    [HttpPost("desktop-handoff")]
+    [Authorize]
+    [EnableRateLimiting(AuthRateLimitPolicies.DeviceToken)]
+    public async Task<IActionResult> DesktopHandoff(CancellationToken ct)
+    {
+        if (!User.TryGetUserId(out var userId))
+            return Unauthorized();
+
+        var user = await _userRepository.GetByIdAsync(userId, ct);
+        if (user is null)
+            return Unauthorized();
+
+        // Тот же одноразовый код, что у мобильного handoff (16 случайных байт hex), но с пустым
+        // Challenge — признаком того, что PKCE-verifier при обмене не требуется.
+        var code = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+        var now = DateTime.UtcNow;
+        MobileHandoffs[code] = (_tokenService.CreateToken(user), string.Empty, now.Add(MobileHandoffTtl));
+
+        foreach (var stale in MobileHandoffs.Where(pair => pair.Value.ExpiresUtc < now).Select(pair => pair.Key).ToList())
+            MobileHandoffs.TryRemove(stale, out _);
+
+        // Код — это сессия: ответ не должен осесть ни в одном кеше.
+        Response.Headers.CacheControl = "no-store";
+        return Ok(new { code });
     }
 
     // DOMAIN_SSO: первый шаг переноса сессии. Вызывается обычным переходом браузера (не fetch),
