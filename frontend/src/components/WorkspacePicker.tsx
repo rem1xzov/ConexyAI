@@ -60,24 +60,26 @@ const MENU_MAX_HEIGHT = 360;
 const headingStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 6,
+  gap: 8,
+  fontSize: 14,
+  fontWeight: 600,
 };
 
 const statusRowStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 5,
+  gap: 6,
   minWidth: 0,
-  padding: '0 10px 6px',
-  fontSize: 12,
+  padding: '0 2px 8px',
+  fontSize: 12.5,
 };
 
 const hintStyle: CSSProperties = {
   display: 'block',
-  padding: '0 10px 8px',
+  padding: '0 2px 6px',
   color: 'var(--muted)',
-  fontSize: 11.5,
-  lineHeight: 1.35,
+  fontSize: 12.5,
+  lineHeight: 1.45,
 };
 
 const commandStyle: CSSProperties = {
@@ -98,15 +100,15 @@ const sectionTriggerStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,
-  width: 'calc(100% - 20px)',
-  height: 40,
-  margin: '2px 10px 6px',
+  width: '100%',
+  height: 44,
+  margin: '2px 0 8px',
   padding: '0 12px',
-  borderRadius: 10,
-  background: 'var(--surface-2)',
+  borderRadius: 12,
+  background: 'var(--bg-input, #141416)',
   color: 'var(--text)',
   fontFamily: 'inherit',
-  fontSize: 13,
+  fontSize: 13.5,
   textAlign: 'left',
   transition: 'border-color 120ms ease, background 120ms ease',
 };
@@ -117,14 +119,14 @@ const chipTriggerStyle: CSSProperties = {
   gap: 6,
   flex: '0 0 auto',
   minWidth: 0,
-  maxWidth: 180,
-  height: 33,
-  padding: '0 10px',
+  maxWidth: 200,
+  height: 34,
+  padding: '0 12px',
   borderRadius: 999,
-  background: 'var(--surface-2)',
+  background: 'transparent',
   color: 'var(--text)',
   fontFamily: 'inherit',
-  fontSize: 12,
+  fontSize: 12.5,
   lineHeight: 1,
   whiteSpace: 'nowrap',
   transition: 'border-color 120ms ease, background 120ms ease',
@@ -165,11 +167,10 @@ const menuStyle: CSSProperties = {
   padding: 6,
   overflowY: 'auto',
   overscrollBehavior: 'contain',
-  border: '1px solid var(--border)',
-  borderRadius: 12,
-  // Reference: `--surface-solid` dark popup; the literal is only a fallback for an unthemed page.
-  background: 'var(--surface-solid, #17121c)',
-  boxShadow: '0 12px 32px rgba(0, 0, 0, 0.55)',
+  border: '1px solid rgba(255, 255, 255, 0.09)',
+  borderRadius: 14,
+  background: '#17171a',
+  boxShadow: '0 16px 40px rgba(0, 0, 0, 0.6)',
 };
 
 function itemStyle(highlighted: boolean): CSSProperties {
@@ -186,7 +187,7 @@ function itemStyle(highlighted: boolean): CSSProperties {
     background: highlighted ? 'var(--bg-hover, rgba(255, 255, 255, 0.06))' : 'transparent',
     color: 'var(--text)',
     fontFamily: 'inherit',
-    fontSize: 13,
+    fontSize: 13.5,
     textAlign: 'left',
     whiteSpace: 'nowrap',
     cursor: 'pointer',

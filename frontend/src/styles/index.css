@@ -14718,3 +14718,114 @@ body.artifact-docked .artifact-panel {
     padding-right: var(--safe-right, 0px);
   }
 }
+/* ================= VISUAL_DESKTOP: DSH-подобная чёткая поверхность =================
+   Окно визуального десктопа (/desktop) должно выглядеть как референс DeepSeek Harness:
+   ровный тёмный фон без цветных «стёкол», чёткий текст, плотная панель листа без
+   прозрачности и blur, аккуратные пилюли в композере. Скоуп — только атрибут
+   html[data-visual-desktop]; обычный веб и мобильное приложение не меняются. */
+html[data-visual-desktop='true'] body {
+  background: #0a0a0b;
+}
+html[data-visual-desktop='true'] .glass-aura,
+html[data-visual-desktop='true'] .cursor-trail,
+html[data-visual-desktop='true'] .incognito-aura {
+  display: none !important;
+}
+html[data-visual-desktop='true'] .main {
+  background: #0a0a0b;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-visual-desktop='true'] .chat-header {
+  background: transparent;
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+html[data-visual-desktop='true'] .inputbar {
+  background: #141416;
+  border-color: rgba(255, 255, 255, 0.09);
+  border-radius: 24px;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-visual-desktop='true'] .inputbar:focus-within {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+html[data-visual-desktop='true'] .inputbar textarea {
+  font-size: 14.5px;
+}
+html[data-visual-desktop='true'] .bottom-sheet-backdrop {
+  background: rgba(0, 0, 0, 0.65);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-visual-desktop='true'] .bottom-sheet-panel {
+  background: #101012;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 -24px 80px rgba(0, 0, 0, 0.65);
+}
+html[data-visual-desktop='true'] .bottom-sheet-handle__bar {
+  background: rgba(255, 255, 255, 0.18);
+}
+html[data-visual-desktop='true'] .bottom-sheet-title {
+  padding: 2px 24px 14px;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+html[data-visual-desktop='true'] .bottom-sheet-body {
+  padding: 0 16px 10px;
+}
+html[data-visual-desktop='true'] .modelpicker__sheet {
+  padding: 0 2px 10px;
+}
+html[data-visual-desktop='true'] .modelpicker__item {
+  padding: 13px 12px;
+  gap: 4px;
+  border-radius: 12px;
+}
+html[data-visual-desktop='true'] .modelpicker__name {
+  font-size: 14.5px;
+  font-weight: 600;
+}
+html[data-visual-desktop='true'] .modelpicker__desc {
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #8b8d94;
+}
+html[data-visual-desktop='true'] .modelpicker__divider {
+  margin: 10px 6px;
+  background: rgba(255, 255, 255, 0.07);
+}
+html[data-visual-desktop='true'] .modelpicker__thinking {
+  padding: 10px 12px;
+}
+html[data-visual-desktop='true'] .modelpicker__thinking-title {
+  font-size: 14px;
+}
+html[data-visual-desktop='true'] .modelpicker__thinking-desc {
+  font-size: 13px;
+  line-height: 1.45;
+}
+html[data-visual-desktop='true'] .modelpicker__reasoning-option {
+  padding: 9px 0;
+  border-radius: 10px;
+  font-size: 12.5px;
+}
+html[data-visual-desktop='true'] .modelpicker__trigger {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+html[data-visual-desktop='true'] .modelpicker__trigger:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+html[data-visual-desktop='true'] .workspace-chip__trigger:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+html[data-visual-desktop='true'] .device-target__heading {
+  color: var(--text);
+  letter-spacing: 0;
+}

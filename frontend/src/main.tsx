@@ -36,6 +36,9 @@ void checkMobileUpdate().then((update) => {
 // app-mode и находит это окно по заголовку, поэтому заголовок ставим до первого рендера.
 if (isVisualDesktopPath(window.location.pathname)) {
   document.title = VISUAL_DESKTOP_TITLE;
+  // VISUAL_DESKTOP: атрибут включает «плотную» тему окна (без стеклянных размытий и цветных
+  // пятен) — визуально как референс DeepSeek Harness; обычный сайт и приложение его не видят.
+  document.documentElement.dataset.visualDesktop = 'true';
 }
 
 // GLOBAL_ERROR_BOUNDARY: добавлено 2026-09-23
