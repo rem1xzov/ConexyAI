@@ -1064,6 +1064,7 @@
     "you": "You",
     "disclaimer": "Conexy is not a human and can make mistakes. Always check the answers.",
     "thinking": "Thinking…",
+    "activity": "Working:",
     "showThinking": "Thought process",
     "copy": "Copy",
     "copied": "Copied",
@@ -1437,5 +1438,14 @@
     "projectsCount_one": "{{count}} project",
     "projectsCount_other": "{{count}} projects",
     "queueTitle": "Queued tasks"
+  },
+  "visualDesktop": {
+    "backToConsole": "Back to console",
+    "backToConsoleHint": "Minimize the visual window and return to the terminal",
+    "switching": "Switching…",
+    "switchedToConsole": "Minimizing the visual window — the terminal is active again",
+    "noDesktop": "ConexyAI Desktop is not connected, so there is nothing to switch to. Start the client on your PC.",
+    "oldServer": "This server does not support switching to the console. Update the server and ConexyAI Desktop.",
+    "switchFailed": "Could not switch to the console. Make sure ConexyAI Desktop is running and try again."
   }
 }

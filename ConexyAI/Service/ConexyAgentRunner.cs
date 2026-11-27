@@ -2472,9 +2472,9 @@ public class ConexyAgentRunner : IConexyAgentRunner
                     return await FinishAsync(AppendNote(answer, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote, completionNote)), TurnOutcome.Completed);
                 }
 
-                // File changes were made: return the final report plus a summary card.
+                // File changes were made: return the final report (only the changed files) plus a summary card.
                 // BACKGROUND_AGENTS: перед итогом даём фоновым помощникам шанс дописать файлы.
-                return await FinishAsync(BuildFinalReport(AppendNote(finalText, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote, completionNote)), changedFiles, executedCommands), TurnOutcome.Completed);
+                return await FinishAsync(BuildFinalReport(AppendNote(finalText, JoinNotes(naturalTokenNote, verificationNote, integrityNote, unverifiedClaimNote, completionNote)), changedFiles), TurnOutcome.Completed);
             }
 
             // AGENT_TOOL_FAILURES: инструменты, упавшие именно в этом ходе (для одного сообщения
@@ -2537,7 +2537,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
             {
                 var toolName = toolCall.Function.Name;
                 // COWORK_MODE: a tool outside the mode's profile is never executed, and a refused
-                // call must not show up in the "Commands executed" summary either.
+                // call must not be counted as an executed command either.
                 var toolAllowed = IsToolAllowed(toolName);
 
                 // BATCH_DEDUP: второй идентичный идемпотентный вызов в том же ответе не выполняем —
@@ -2743,7 +2743,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
 
                 // DANGEROUS_CMD_CONFIRM: добавлено 2026-09-17
                 // A rejected dangerous command was never executed, so it must not appear
-                // in the final "Commands executed" summary.
+                // in the executed-commands bookkeeping (the final report lists files only).
                 if (toolName == "bash" && result.Output.StartsWith("USER_REJECTED:", StringComparison.OrdinalIgnoreCase))
                 {
                     var rejectedCommand = ReadCommandArgument(toolCall);
@@ -3013,7 +3013,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
         // ошибок — не повод выбрасывать ответ: отдаём написанное и честно говорим, что ещё падает.
         // BUDGET_WRAPUP: предел шагов/бюджет ошибок — это не повод обрывать прогон без ответа.
         // Делаем один финальный ход БЕЗ инструментов, чтобы модель подвела итог; затем отдаём
-        // Change Summary (файлы/команды), иначе пользователь видел «агент сломался» и ни diff'а.
+        // Change Summary (ТОЛЬКО изменённые файлы), иначе пользователь видел «агент сломался» и ни diff'а.
         var budgetStopped = !tokenBudgetExceeded && (toolBudgetExhausted || completedSteps >= stepLimit);
         string? budgetWrapText = null;
         if (budgetStopped && !ct.IsCancellationRequested)
@@ -3067,12 +3067,13 @@ public class ConexyAgentRunner : IConexyAgentRunner
         await RunHooksAsync(taskId, chatId, "after_task", HookValues(chatId, "after_task"), null, ct);
 
         // COMPLETION_REPORT: аварийное завершение тоже должно отдавать Change Summary — иначе UI
-        // показывает «агент сломался» без единого списка изменённых файлов.
+        // показывает «агент сломался» без единого списка изменённых файлов. Отчёт перечисляет только
+        // файлы: команды, exit code и пайплайны в итог не попадают (FINAL_REPORT_FILES_ONLY).
         string BuildStopAnswer(string text)
         {
             var answer = AppendNote(text, note);
-            return changedFiles.Count > 0 || executedCommands.Count > 0
-                ? BuildFinalReport(answer, changedFiles, executedCommands)
+            return changedFiles.Count > 0
+                ? BuildFinalReport(answer, changedFiles)
                 : answer;
         }
 
@@ -7754,45 +7755,67 @@ public class ConexyAgentRunner : IConexyAgentRunner
         return string.Join("\n", parts);
     }
 
-    private static string BuildFinalReport(
-        string finalText,
-        IReadOnlyCollection<string> changedFiles,
-        IReadOnlyCollection<string> commands)
+    /// <summary>FINAL_REPORT_FILES_ONLY: сколько файлов перечисляем в отчёте, дальше — «… и ещё N.».</summary>
+    private const int ReportFileLimit = 20;
+
+    /// <summary>
+    /// FINAL_REPORT_FILES_ONLY: итоговый отчёт после хода агента содержит ТОЛЬКО изменённые файлы.
+    /// Секции «Commands executed:» больше нет: раньше она приклеивала к ответу простыню вроде
+    /// `cd ... && dotnet run ... 2>&1 | tail -6` и `exit code 0`, и пользователь видел эти команды
+    /// в «diff» после каждого хода. В отчёт попадает только список файлов; строки, похожие на
+    /// команды, отбрасываются, даже если когда-нибудь окажутся во входной коллекции.
+    /// </summary>
+    public static string BuildFinalReport(string finalText, IReadOnlyCollection<string> changedFiles)
     {
         var sb = new StringBuilder();
 
         if (!string.IsNullOrWhiteSpace(finalText))
         {
-            sb.AppendLine(finalText.Trim());
+            sb.Append(finalText.Trim());
         }
 
-        sb.AppendLine();
-        sb.AppendLine("=== Change Summary ===");
+        var files = changedFiles
+            .Where(IsReportFilePath)
+            .Select(file => CodeSafe(file!, 160))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
 
-        if (changedFiles.Count > 0)
+        if (files.Count > 0)
         {
+            if (sb.Length > 0)
+            {
+                sb.AppendLine().AppendLine();
+            }
+
+            sb.AppendLine("=== Change Summary ===");
             sb.AppendLine("Files changed:");
-            foreach (var file in changedFiles)
+            foreach (var file in files.Take(ReportFileLimit))
             {
-                sb.AppendLine($"- `{CodeSafe(file, 160)}`");
+                sb.AppendLine($"- `{file}`");
             }
-        }
-
-        if (commands.Count > 0)
-        {
-            sb.AppendLine("Commands executed:");
-            // SUMMARY_NO_MATH: команды раньше уходили в чат как есть. Скрипт PowerShell с `$tmp`, `$_` и `$z`
-            // превращался в формулы: клиент видел столбики букв вместо текста. Теперь — одна строка в
-            // `code span`, где никакой разметки нет, и список ограничен — это сводка, а не транскрипт.
-            foreach (var command in commands.Take(12))
-            {
-                sb.AppendLine($"- `{CodeSafe(command, 160)}`");
-            }
-            if (commands.Count > 12)
-                sb.AppendLine($"… и ещё {commands.Count - 12}.");
+            if (files.Count > ReportFileLimit)
+                sb.AppendLine($"… и ещё {files.Count - ReportFileLimit}.");
         }
 
         return sb.ToString().Trim();
+    }
+
+    /// <summary>
+    /// FINAL_REPORT_FILES_ONLY: в отчёт идут только похожие на путь строки. Команды оболочки
+    /// (`&&`, `2>&1`, `exit code`) и многострочный текст в список файлов не попадают ни при каких
+    /// аргументах — отчёт не должен уметь писать в ответ ничего, кроме имён файлов.
+    /// </summary>
+    private static bool IsReportFilePath(string? file)
+    {
+        if (string.IsNullOrWhiteSpace(file)) return false;
+
+        var value = file.Trim();
+        return !value.Contains('\n') && !value.Contains('\r')
+               && !value.Contains("&&", StringComparison.Ordinal)
+               && !value.Contains("2>&1", StringComparison.Ordinal)
+               && !value.Contains("exit code", StringComparison.OrdinalIgnoreCase)
+               && !value.Contains("Commands executed", StringComparison.OrdinalIgnoreCase)
+               && !value.Contains("выполнено команд", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

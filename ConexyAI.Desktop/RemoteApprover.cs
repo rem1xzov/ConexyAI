@@ -147,11 +147,19 @@ public sealed class RemoteApprover : ICommandApprover
 /// </summary>
 public sealed class RoutingApprover(ICommandApprover? console, RemoteApprover remote, Func<string>? remoteLevel = null) : ICommandApprover
 {
-    // Вопросы (не разрешения) по-прежнему идут туда, откуда пришла задача.
-    private ICommandApprover QuestionTarget =>
-        console is null || ToolCallContext.Current is { Remote: true } ? remote : console;
+    // VISUAL_DESKTOP: пока терминал свёрнут (пользователь работает в визуальном десктопе),
+    // подтверждения задач с сайта спрашиваем в вебе, а не в невидимой консоли. Ход, начатый в самой
+    // консоли (Remote=false), по-прежнему спрашивает в терминале — ConsoleApprover сам вернёт окно.
+    private static bool WebApprovals => ToolCallContext.Current is { Remote: true } && VisualDesktop.ConsoleHiddenByVisual;
+
+    // Вопросы (не разрешения) идут туда, откуда пришла задача, с той же поправкой на визуальный режим.
+    private ICommandApprover QuestionTarget => console is null || WebApprovals ? remote : console;
 
     private string Level => remoteLevel?.Invoke() ?? ClientConfig.LoadRemoteApprovalLevel();
+
+    /// <summary>Локальное подтверждение в консоли или запрос в веб — по источнику задачи и режиму окна.</summary>
+    private Task<bool> Route(Func<Task<bool>> local, Func<Task<bool>> web) =>
+        console is null || WebApprovals ? web() : local();
 
     /// <summary>Почему демон не спрашивает сайт об этом действии (null — можно спросить).</summary>
     internal static string? RemoteRefusal(string level, string title, string details, bool sensitive)
@@ -189,20 +197,24 @@ public sealed class RoutingApprover(ICommandApprover? console, RemoteApprover re
     }
 
     public Task<bool> ApproveAsync(string command, string workingDirectory, CancellationToken ct) =>
-        console?.ApproveAsync(command, workingDirectory, ct)
-        ?? RemoteAsync("Bash", command, false, () => remote.ApproveAsync(command, workingDirectory, ct));
+        Route(
+            () => console!.ApproveAsync(command, workingDirectory, ct),
+            () => RemoteAsync("Bash", command, false, () => remote.ApproveAsync(command, workingDirectory, ct)));
 
     public Task<bool> ApproveAsync(string title, string details, string workingDirectory, CancellationToken ct) =>
-        console?.ApproveAsync(title, details, workingDirectory, ct)
-        ?? RemoteAsync(title, details, false, () => remote.ApproveAsync(title, details, workingDirectory, ct));
+        Route(
+            () => console!.ApproveAsync(title, details, workingDirectory, ct),
+            () => RemoteAsync(title, details, false, () => remote.ApproveAsync(title, details, workingDirectory, ct)));
 
     public Task<bool> ApproveCommandAsync(string command, string? description, string workingDirectory, CancellationToken ct) =>
-        console?.ApproveCommandAsync(command, description, workingDirectory, ct)
-        ?? RemoteAsync("Bash", command, false, () => remote.ApproveCommandAsync(command, description, workingDirectory, ct));
+        Route(
+            () => console!.ApproveCommandAsync(command, description, workingDirectory, ct),
+            () => RemoteAsync("Bash", command, false, () => remote.ApproveCommandAsync(command, description, workingDirectory, ct)));
 
     public Task<bool> ApproveSensitiveAsync(string title, string details, string where, CancellationToken ct) =>
-        console?.ApproveSensitiveAsync(title, details, where, ct)
-        ?? RemoteAsync(title, details, true, () => remote.ApproveSensitiveAsync(title, details, where, ct));
+        Route(
+            () => console!.ApproveSensitiveAsync(title, details, where, ct),
+            () => RemoteAsync(title, details, true, () => remote.ApproveSensitiveAsync(title, details, where, ct)));
 
     public Task<string?> AskUserAsync(string question, string[] options, CancellationToken ct) =>
         QuestionTarget.AskUserAsync(question, options, ct);

@@ -16,8 +16,9 @@ import { readGitHubToken, clearGitHubToken } from './utils/githubToken';
 // MCP: личные MCP-серверы пользователя (внешние сервисы под его аккаунтом).
 import { readMcpServers, clearMcpServers } from './utils/mcpServers';
 // VISUAL_DESKTOP: в окне визуального десктопа путь `/desktop`, но ссылки «Поделиться» должны
-// вести на обычный корень сайта — поэтому pathname пропускаем через publicPath.
-import { publicPath } from './utils/desktopMode';
+// вести на обычный корень сайта — поэтому pathname пропускаем через publicPath. Там же живёт
+// кнопка «В консоль», которую показываем только в этом окне.
+import { isVisualDesktopPath, publicPath } from './utils/desktopMode';
 import { useIsMobile } from './hooks/useMediaQuery';
 // FILE_DROP: добавлено 2026-09-24 (L11)
 import { useFileDropZone, usePreventWindowFileDrop } from './hooks/useFileDrop';
@@ -37,6 +38,8 @@ import {
   shouldUsePhone,
 } from './services/phoneAgent';
 import { PhoneSetupModal } from './components/PhoneSetupModal';
+// VISUAL_DESKTOP: добавлено 2026-11-27 — кнопка «В консоль» в шапке окна `/desktop`.
+import { VisualDesktopConsoleButton } from './components/VisualDesktopConsoleButton';
 import { Sidebar } from './components/Sidebar';
 import { ChatFeed } from './components/ChatFeed';
 // SHARE_PUBLIC: публичная страница чата открывается по #/shared/<token> без входа в аккаунт.
@@ -2227,6 +2230,11 @@ export default function App() {
           : 'Ready';
   const agentActivity = agentRunning ? (lastAssistant?.currentAction?.label ?? null) : null;
 
+  // VISUAL_DESKTOP: окно визуального десктопа (`/desktop`) — единственное место, где имеет смысл
+  // кнопка возврата в терминал: консольный клиент открывает именно этот путь в отдельном окне.
+  // Путь меняется только вместе со страницей (роутинг живёт в хэше), поэтому читаем его за рендер.
+  const visualDesktop = isVisualDesktopPath(window.location.pathname);
+
   // Reset the editor cursor info when switching sessions.
   useEffect(() => {
     setCursorInfo(null);
@@ -3705,6 +3713,8 @@ export default function App() {
                     </button>
                   )}
                   {chatActions}
+                  {/* VISUAL_DESKTOP: возврат в терминал — в шапке, то есть виден без прокрутки. */}
+                  {visualDesktop && <VisualDesktopConsoleButton onToast={showToast} />}
                 </div>
               </div>
             )}
@@ -3737,6 +3747,8 @@ export default function App() {
                 {/* SUBSCRIPTION_TIERS: кольцо токенов — по умолчанию включено, скрывается в «Персонализации». */}
                 {!uiPreferences.hideUsageRing && <UsageIndicator usage={usage} />}
                 {chatActions}
+                {/* VISUAL_DESKTOP: возврат в терминал — в шапке, то есть виден без прокрутки. */}
+                {visualDesktop && <VisualDesktopConsoleButton onToast={showToast} />}
               </div>
             )}
             {/* INCOGNITO_CHAT / LOGO_SWEEP / CHAT_ACTIONS: desktop chat header (chat and students —
@@ -3748,6 +3760,8 @@ export default function App() {
                 <div className="chat-header__actions">
                   {incognitoControl}
                   {chatActions}
+                  {/* VISUAL_DESKTOP: возврат в терминал — в шапке, то есть виден без прокрутки. */}
+                  {visualDesktop && <VisualDesktopConsoleButton onToast={showToast} />}
                 </div>
               </div>
             )}

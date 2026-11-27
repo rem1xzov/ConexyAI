@@ -60,6 +60,8 @@ public sealed class ConsoleApprover : ICommandApprover
             if (_auto && destructive is null)
                 return true;
 
+            EnsureConsoleVisible();
+
             // APPROVAL_BADGE: пока человек решает, на круге горит значок «нужно подтверждение».
             using var badge = ApprovalBadge.Enter();
 
@@ -95,6 +97,7 @@ public sealed class ConsoleApprover : ICommandApprover
         await _gate.WaitAsync(ct);
         try
         {
+            EnsureConsoleVisible();
             using var badge = ApprovalBadge.Enter();
             if (!Ui.Ansi)
                 return await AskPlainAsync(details, where, ct, allowAuto: false);
@@ -117,6 +120,7 @@ public sealed class ConsoleApprover : ICommandApprover
         await _gate.WaitAsync(ct);
         try
         {
+            EnsureConsoleVisible();
             if (!Ui.Ansi)
             {
                 Console.WriteLine();
@@ -140,8 +144,7 @@ public sealed class ConsoleApprover : ICommandApprover
     }
 
     private async Task<bool> AskPlainAsync(string command, string workingDirectory, CancellationToken ct, string? description = null, bool allowAuto = true)
-    {
-        Console.WriteLine();
+    {        Console.WriteLine();
         Console.WriteLine($"Агент хочет выполнить команду в {workingDirectory}:");
         if (description is not null)
             Console.WriteLine("  " + description);
@@ -159,5 +162,16 @@ public sealed class ConsoleApprover : ICommandApprover
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// VISUAL_DESKTOP: если терминал свёрнут, потому что пользователь работает в визуальном десктопе,
+    /// возвращаем окно на экран перед вопросом — иначе подтверждение уйдёт в невидимое окно и задача
+    /// будет молча ждать ответа (локальный ход нельзя показывать в вебе: там нет этого чата).
+    /// </summary>
+    private static void EnsureConsoleVisible()
+    {
+        if (VisualDesktop.ConsoleHiddenByVisual)
+            VisualDesktop.RestoreConsoleWindow();
     }
 }

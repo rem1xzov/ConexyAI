@@ -12,7 +12,7 @@ import { ThinkingStep } from './ThinkingStep';
 import { VisionGallery } from './VisionGallery';
 import { AttachmentGrid } from './AttachmentGrid';
 import { AgentTimeline, feedSummary } from './AgentTimeline';
-import { blocksFromLegacy } from '../utils/turnBlocks';
+import { blocksFromLegacy, isTerminalToolStatus } from '../utils/turnBlocks';
 import { TodoPanel } from './TodoPanel';
 import { AssistantContent } from './artifacts/AssistantContent';
 import { ProducedFiles } from './ProducedFiles';
@@ -69,6 +69,35 @@ interface MessageBubbleProps {
 // что секундомер сразу показывал «10м 3с». Момент, когда сообщение (снова) перешло в streaming,
 // запоминаем здесь; карта живёт на уровне модуля, поэтому переживает переключение чатов, когда
 // пузырь размонтируется и монтируется заново.
+// LIVE_ACTIVITY: добавлено 2026-11-27 (жалоба #3) — после того как финальный ответ уже выведен,
+// ход продолжается проверками (сборка, тесты, аудитор), и без индикатора чат выглядит зависшим.
+// Строка живёт под ответом всё время, пока сообщение в статусе `streaming` и сервер прислал
+// `currentAction.label` («Проверяю изменения (аудитор)…», «Запускаю тесты: …» и т.п.), и исчезает
+// вместе с завершением хода. Стили — только утилиты Tailwind, цвета — из переменных темы, поэтому
+// индикатор совпадает с остальным чатом в обеих темах.
+function AgentActivityLine({ label }: { label: string }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="mt-3 flex w-fit max-w-full items-center gap-2 rounded-full border border-[color:var(--border)] bg-[var(--bg-soft)] px-3 py-1.5 text-[13px] leading-snug"
+    >
+      <span className="relative flex h-2.5 w-2.5 shrink-0" aria-hidden="true">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[color:var(--accent)] opacity-60" />
+        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[color:var(--accent)]" />
+      </span>
+      <span className="shrink-0 text-[color:var(--muted)]">{t('message.activity')}</span>
+      <span className="min-w-0 truncate text-[color:var(--text)]">{label}</span>
+      <span className="ml-0.5 flex shrink-0 items-center gap-0.5" aria-hidden="true">
+        <span className="inline-block h-1 w-1 animate-bounce rounded-full bg-[color:var(--accent)] [animation-delay:-0.3s]" />
+        <span className="inline-block h-1 w-1 animate-bounce rounded-full bg-[color:var(--accent)] [animation-delay:-0.15s]" />
+        <span className="inline-block h-1 w-1 animate-bounce rounded-full bg-[color:var(--accent)]" />
+      </span>
+    </div>
+  );
+}
+
 const turnStartedAt = new Map<string, number>();
 
 function useTurnStart(messageId: string, status: ChatMessage['status'], createdAt: number): number {
@@ -185,6 +214,18 @@ function MessageBubbleBase({
     currentAction && !isFlash && currentAction.stage !== 'idle' && currentAction.label
       ? { label: currentAction.label }
       : null;
+  // LIVE_ACTIVITY: пока ход идёт, сервер присылает текущую фазу в `currentAction`. Показываем её
+  // отдельной строкой под ответом, но только там, где собственная плашка AgentTimeline не видна:
+  // таймлайн прячет её, если в ленте есть блок размышлений или ещё что-то выполняется. Именно это
+  // и происходило у агентских ходов — блок размышлений есть всегда, поэтому проверка после готового
+  // ответа («Проверяю изменения (аудитор)…», «Запускаю тесты: …») вообще не была видна.
+  const hasThoughtBlock = feed.some((block) => block.type === 'thought');
+  const feedStepRunning = feed.some((block) => {
+    if (block.type === 'tool') return !isTerminalToolStatus(block.status);
+    return block.type === 'thought' && streaming && block.durationMs === undefined;
+  });
+  const timelineShowsStatus = Boolean(statusPill) && !feedStepRunning && !hasThoughtBlock;
+  const activityLabel = streaming && statusPill && !timelineShowsStatus ? statusPill.label : null;
   const showActions = message.status !== 'streaming';
   // FILE_CARDS: files the agent wrote during this turn, derived from its logs and editor events.
   const logs = message.logs;
@@ -457,6 +498,11 @@ function MessageBubbleBase({
 
       {/* CHAT_EXTRAS: источники, follow-up подсказки и артефакт с кодом под готовым ответом. */}
       {message.status === 'complete' && !agentTurn && <MessageExtras message={message} />}
+
+      {/* LIVE_ACTIVITY: строка текущей фазы — под уже выведенным ответом (в том числе под длинным
+          и полностью отрисованным), поэтому проверка после ответа видна в самом чате, а не только
+          в тонком статус-баре внизу. До завершения хода остаётся на месте. */}
+      {activityLabel && <AgentActivityLine label={activityLabel} />}
 
       {/* 5. Running light: last element of the message while generating, so it starts directly
           under the timeline and is pushed down as the answer grows. This is the ONLY stopwatch in

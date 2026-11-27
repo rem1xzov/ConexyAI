@@ -45,10 +45,20 @@ public static class VisualDesktop
     private static readonly object Sync = new();
     private static readonly object LogSync = new();
     private static int _hotkeyStarted;
+    private static int _watcherStarted;
+    private static int _consoleHidden;
     private static Process? _browser;
 
     /// <summary>Профиль визуального окна: свой вход, история и настройки, отдельно от браузера пользователя.</summary>
-    public static string ProfileDir => Path.Combine(ProjectStore.ConfigDir, "visual-desktop");
+    /// <summary>
+    /// Профиль окна: вход, история и настройки визуального десктопа. По умолчанию лежит рядом с
+    /// настройками клиента; CONEXY_VISUAL_PROFILE_DIR переносит его на другой диск (портативная
+    /// установка, тесты в песочнице, где профиль пользователя недоступен).
+    /// </summary>
+    public static string ProfileDir =>
+        Environment.GetEnvironmentVariable("CONEXY_VISUAL_PROFILE_DIR") is { Length: > 0 } custom
+            ? Path.GetFullPath(custom)
+            : Path.Combine(ProjectStore.ConfigDir, "visual-desktop");
 
     public static string LogPath => Path.Combine(ProjectStore.ConfigDir, "visual-desktop.log");
 
@@ -60,6 +70,13 @@ public static class VisualDesktop
 
     /// <summary>Горячую клавишу вообще пытались зарегистрировать (интерактивный клиент это делает всегда).</summary>
     public static bool HotkeyStarted { get; private set; }
+
+    /// <summary>
+    /// Консоль свёрнута, потому что пользователь ушёл в визуальный десктоп. Пока это так, локальные
+    /// подтверждения не задаются в скрытом терминале: задачи с сайта спрашивают в вебе, а ход из самой
+    /// консоли временно возвращает окно терминала на экран.
+    /// </summary>
+    public static bool ConsoleHiddenByVisual => Volatile.Read(ref _consoleHidden) == 1;
 
     /// <summary>Открыто ли сейчас окно визуального десктопа.</summary>
     public static bool IsOpen => CurrentWindow() != IntPtr.Zero;
@@ -74,7 +91,8 @@ public static class VisualDesktop
         if (open != IntPtr.Zero)
         {
             FocusWindow(open);
-            return "Визуальный десктоп уже открыт — поднял окно." + ToggleHint;
+            HideConsoleWindow();
+            return "Визуальный десктоп уже открыт — поднял окно." + ReturnHint;
         }
 
         if (!OperatingSystem.IsWindows())
@@ -111,7 +129,10 @@ public static class VisualDesktop
             if (window == IntPtr.Zero)
                 continue;
             FocusWindow(window);
-            return "Открыл визуальный десктоп: это веб-версия в отдельном окне, вход — как на сайте." + ToggleHint;
+            // Терминал больше не нужен: пользователь работает в визуальном окне. Так подтверждения
+            // задач с сайта не приходят в скрытую консоль (см. RoutingApprover).
+            HideConsoleWindow();
+            return "Открыл визуальный десктоп: это веб-версия в отдельном окне, вход — как на сайте." + ToggleHint + ReturnHint;
         }
 
         return "Браузер запущен, но окно визуального десктопа пока не появилось. " + ToggleHint;
@@ -126,28 +147,27 @@ public static class VisualDesktop
             if (IsForeground(window))
             {
                 ShowWindow(window, SwMinimize);
-                FocusConsole();
+                RestoreConsoleWindow();
                 return "Визуальный десктоп свёрнут — вы в консоли.";
             }
 
             FocusWindow(window);
-            return "Переключился на визуальный десктоп.";
+            HideConsoleWindow();
+            return "Переключился на визуальный десктоп." + ReturnHint;
         }
 
         return await OpenAsync(ServerClient.Current);
     }
 
-    /// <summary>Сворачивает окно визуального десктопа и возвращает фокус в консоль.</summary>
+    /// <summary>Сворачивает окно визуального десктопа и возвращает пользователя в консоль.</summary>
     public static bool ShowConsole()
     {
         var window = CurrentWindow();
-        if (window == IntPtr.Zero)
-            return false;
-
-        if (!IsIconic(window))
+        if (window != IntPtr.Zero && !IsIconic(window))
             ShowWindow(window, SwMinimize);
-        FocusConsole();
-        return true;
+        // Даже если окна нет, ранее свёрнутую терминалом консоль нужно вернуть на экран.
+        RestoreConsoleWindow();
+        return window != IntPtr.Zero;
     }
 
     /// <summary>Сворачивает окно визуального десктопа, не трогая фокус (его уже держит консоль).</summary>
@@ -168,7 +188,70 @@ public static class VisualDesktop
         if (window == IntPtr.Zero)
             return false;
         PostMessage(window, WmClose, IntPtr.Zero, IntPtr.Zero);
+        // Закрыли окно — пользователь остался без интерфейса: возвращаем консоль сразу.
+        RestoreConsoleWindow();
         return true;
+    }
+
+    /// <summary>
+    /// Скрывает (сворачивает) окно консоли, пока пользователь работает в визуальном десктопе.
+    /// Пока оно скрыто, подтверждения задач с сайта спрашиваются в вебе, а не в невидимом терминале.
+    /// </summary>
+    private static void HideConsoleWindow()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        var console = ConsoleWindow();
+        if (console == IntPtr.Zero)
+            return;
+        ShowWindow(console, SwMinimize);
+        Volatile.Write(ref _consoleHidden, 1);
+        Log("console minimized for the visual desktop");
+    }
+
+    /// <summary>Возвращает на экран консоль, которую мы свернули при переходе в визуальный режим.</summary>
+    public static bool RestoreConsoleWindow()
+    {
+        if (!OperatingSystem.IsWindows())
+            return false;
+        var console = ConsoleWindow();
+        if (console == IntPtr.Zero)
+            return false;
+        FocusWindow(console);
+        Volatile.Write(ref _consoleHidden, 0);
+        return true;
+    }
+
+    /// <summary>
+    /// Следит за визуальным окном: если пользователь закрыл его крестиком, консоль возвращается на
+    /// экран сама — без этого клиент остался бы в фоне со свёрнутым терминалом.
+    /// </summary>
+    public static void StartWatcher()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        if (Interlocked.Exchange(ref _watcherStarted, 1) == 1)
+            return;
+
+        var thread = new Thread(ConsoleWatcherLoop)
+        {
+            IsBackground = true,
+            Name = "conexy-visual-console-watch",
+        };
+        thread.Start();
+    }
+
+    private static void ConsoleWatcherLoop()
+    {
+        while (true)
+        {
+            Thread.Sleep(700);
+            if (!ConsoleHiddenByVisual || CurrentWindow() != IntPtr.Zero)
+                continue;
+            // Окно визуального десктопа закрыто внешне — возвращаем терминал.
+            if (RestoreConsoleWindow())
+                Log("visual desktop closed; console restored");
+        }
     }
 
     /// <summary>
@@ -194,6 +277,7 @@ public static class VisualDesktop
             Thread.Sleep(500);
             DeleteProfile();
         }
+        RestoreConsoleWindow();
     }
 
     private static bool DeleteProfile()
@@ -243,6 +327,9 @@ public static class VisualDesktop
                 ? "Microsoft Edge / Google Chrome не найдены — доступна только веб-версия в браузере."
                 : "Браузер: " + browser,
             "Профиль окна (вход и настройки): " + ProfileDir,
+            ConsoleHiddenByVisual
+                ? "Терминал свёрнут: вы в визуальном режиме. /console или кнопка «В консоль» вернут его."
+                : "Терминал на экране.",
             HotkeyRegistered
                 ? "Переключение консоль ↔ визуальный режим: " + HotkeyLabel + "."
                 : HotkeyStarted
@@ -306,6 +393,9 @@ public static class VisualDesktop
     }
 
     private static string ToggleHint => HotkeyRegistered ? " " + HotkeyLabel + " — переключиться на консоль." : string.Empty;
+
+    /// <summary>Как вернуться из визуального окна в терминал — показывается после открытия окна.</summary>
+    public const string ReturnHint = " Вернуться в консоль: /console или кнопка «В консоль» в окне.";
 
     private static void Launch(string browser, string url)
     {

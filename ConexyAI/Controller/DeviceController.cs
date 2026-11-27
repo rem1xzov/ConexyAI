@@ -262,6 +262,21 @@ public class DeviceController : ControllerBase
     public async Task<IActionResult> QueueToSandbox(Guid taskId, CancellationToken ct) =>
         await _deviceQueue.MoveToSandboxAsync(User.GetUserId(), taskId, ct) ? NoContent() : NotFound();
 
+    // VISUAL_DESKTOP: кнопка «В консоль» в окне визуального десктопа. Клиент на ПК сворачивает окно и
+    // возвращает пользователя в терминал; сервер лишь передаёт событие активному устройству владельца.
+    /// <summary>Просит подключённый клиент на ПК свернуть визуальное окно и вернуть терминал.</summary>
+    [HttpPost("console")]
+    [Authorize]
+    public async Task<IActionResult> SwitchToConsole(CancellationToken ct)
+    {
+        var userId = User.GetUserId();
+        if (!_bridge.IsOnline(userId))
+            return NotFound(new { error = "DESKTOP_OFFLINE", message = "ConexyAI Desktop сейчас не подключён к серверу." });
+
+        await _bridge.SendEventAsync(userId, "SwitchToConsole", new { }, ct);
+        return Ok(new { ok = true });
+    }
+
     /// <summary>Отменить ждущую ПК задачу.</summary>
     [HttpDelete("queue/{taskId:guid}")]
     [Authorize]

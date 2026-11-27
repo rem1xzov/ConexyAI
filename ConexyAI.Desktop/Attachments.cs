@@ -52,20 +52,57 @@ public static partial class Attachments
         if (Pending.Count >= MaxFiles)
             return $"Можно прикрепить не больше {MaxFiles} файлов.";
 
-        var info = new FileInfo(path);
-        // Тот же файл мог прийти дважды (наш Ctrl+V и вставка пути самим терминалом) — не дублируем.
-        if (Pending.Any(p => p.FileName == info.Name && p.Bytes.Length == info.Length))
-            return null;
-        if (info.Length > MaxFileBytes)
-            return $"Файл «{info.Name}» больше {MaxFileBytes / 1024 / 1024} МБ.";
-        if (TotalBytes + info.Length > MaxTotalBytes)
-            return "Суммарный размер вложений больше 30 МБ.";
+        FileInfo info;
+        try
+        {
+            info = new FileInfo(path);
+            if (info.Length > MaxFileBytes)
+                return $"Файл «{info.Name}» больше {MaxFileBytes / 1024 / 1024} МБ.";
+            if (TotalBytes + info.Length > MaxTotalBytes)
+                return "Суммарный размер вложений больше 30 МБ.";
+            // Тот же файл мог прийти дважды (наш Ctrl+V и вставка пути самим терминалом) — не дублируем.
+            if (Pending.Any(p => p.FileName == info.Name && p.Bytes.Length == info.Length))
+                return null;
+        }
+        catch (Exception ex) when (IsFileAccessError(ex))
+        {
+            return FileReadError(Path.GetFileName(path), ex);
+        }
+
+        byte[] bytes;
+        try
+        {
+            // ATTACHMENT_READ: файл мог быть открыт в другой программе (Word/PDF-вьюер) или лежать на
+            // сетевой шаре, которая отвалилась. Раньше это исключение валило весь клиент — теперь
+            // возвращаем понятную ошибку, а сессия продолжает работать.
+            bytes = File.ReadAllBytes(path);
+        }
+        catch (Exception ex) when (IsFileAccessError(ex))
+        {
+            return FileReadError(info.Name, ex);
+        }
 
         var ext = info.Extension;
         var type = Types.TryGetValue(ext, out var t) ? t : "text/plain";
-        Pending.Add(new PendingAttachment(info.Name, type, File.ReadAllBytes(path), type.StartsWith("image/")));
+        Pending.Add(new PendingAttachment(info.Name, type, bytes, type.StartsWith("image/")));
         return null;
     }
+
+    /// <summary>Ошибки доступа к файлу, которые нельзя ронять исключением в интерактивной сессии.</summary>
+    private static bool IsFileAccessError(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException or NotSupportedException
+            or ArgumentException or PathTooLongException or System.Security.SecurityException;
+
+    /// <summary>Человеческое объяснение, почему файл не прочитался (без сырых стеков и кодов Win32).</summary>
+    private static string FileReadError(string name, Exception ex) => ex switch
+    {
+        UnauthorizedAccessException => $"Нет доступа к файлу «{name}». Проверьте права и повторите.",
+        FileNotFoundException or DirectoryNotFoundException => $"Файл «{name}» не найден.",
+        PathTooLongException => $"Путь к файлу «{name}» слишком длинный.",
+        IOException => $"Не удалось прочитать файл «{name}»: он занят другой программой " +
+                      "(или сеть/диск отвалились). Закройте файл и повторите.",
+        _ => $"Не удалось прочитать файл «{name}».",
+    };
 
     public static void Clear() => Pending.Clear();
 
@@ -117,10 +154,19 @@ public static partial class Attachments
             catch (UriFormatException) { return m.Value; }
         });
 
-        string Resolve(string p)
+        string? Resolve(string p)
         {
             p = p.Trim().Trim('"');
-            return Path.IsPathRooted(p) ? p : Path.GetFullPath(Path.Combine(root, p));
+            try
+            {
+                return Path.IsPathRooted(p) ? p : Path.GetFullPath(Path.Combine(root, p));
+            }
+            catch (Exception ex) when (IsFileAccessError(ex))
+            {
+                // Кривой путь из перетаскивания (недопустимые символы, слишком длинный) — просто не
+                // считаем это вложением, текст остаётся как есть и уходит модели.
+                return null;
+            }
         }
 
         // Относительные имена в кавычках — обычный текст задачи («открой "app.js"»), а не вложение:
@@ -130,7 +176,7 @@ public static partial class Attachments
             if (!anyPath && !Path.IsPathRooted(raw.Trim().Trim('"')))
                 return false;
             var full = Resolve(raw);
-            if (!File.Exists(full))
+            if (full is null || !File.Exists(full))
                 return false;
             if (AddFile(full) is { } err)
                 errors.Add(err);
@@ -238,9 +284,14 @@ public static partial class Attachments
                         added.Add(name);
                     }
                 }
+                catch (Exception ex) when (IsFileAccessError(ex))
+                {
+                    // Временный файл картинки уже убран или недоступен — не роняем вставку.
+                    errors = "Не удалось прочитать картинку из буфера обмена.";
+                }
                 finally
                 {
-                    try { File.Delete(temp); } catch (IOException) { }
+                    try { File.Delete(temp); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                 }
             }
             else if (raw.StartsWith("TEXT:"))

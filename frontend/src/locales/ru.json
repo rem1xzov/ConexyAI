@@ -1075,6 +1075,7 @@
     "you": "Вы",
     "disclaimer": "Conexy не человек и может ошибаться. Обязательно проверяйте ответы.",
     "thinking": "Думаю…",
+    "activity": "Выполняю:",
     "showThinking": "Процесс размышлений",
     "copy": "Копировать",
     "copied": "Скопировано",
@@ -1458,5 +1459,14 @@
     "projectsCount_many": "{{count}} проектов",
     "projectsCount_other": "{{count}} проекта",
     "queueTitle": "Задачи в очереди"
+  },
+  "visualDesktop": {
+    "backToConsole": "В консоль",
+    "backToConsoleHint": "Свернуть визуальное окно и вернуться в терминал",
+    "switching": "Переключаю…",
+    "switchedToConsole": "Сворачиваю визуальное окно — терминал снова активен",
+    "noDesktop": "ConexyAI Desktop не подключён — переключаться некуда. Запустите клиент на ПК.",
+    "oldServer": "Сервер не поддерживает переход в консоль. Обновите сервер и ConexyAI Desktop.",
+    "switchFailed": "Не удалось перейти в консоль. Убедитесь, что ConexyAI Desktop запущен, и попробуйте ещё раз."
   }
 }

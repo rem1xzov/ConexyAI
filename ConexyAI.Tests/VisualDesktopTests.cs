@@ -12,6 +12,7 @@ internal static class VisualDesktopTests
     {
         TestRegistry.Add("visual desktop: the window opens the /desktop route with a one-time handoff", UrlAsync);
         TestRegistry.Add("visual desktop: title, route and profile are the app-specific contract", ContractAsync);
+        TestRegistry.Add("visual desktop: CONEXY_VISUAL_PROFILE_DIR relocates the window profile", ProfileOverrideAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -44,6 +45,28 @@ internal static class VisualDesktopTests
             "the visual desktop window is a Windows-only feature");
         Assert(VisualDesktop.HotkeyLabel == "Ctrl+Alt+Shift+V",
             "the switch hotkey must stay a collision-safe combo (Ctrl+Alt+V is Word's Paste Special)");
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Профиль окна можно унести с системного диска: пригодится и для портативной установки, и для
+    /// прогонов в песочнице, где профиль пользователя недоступен на запись.
+    /// </summary>
+    private static Task ProfileOverrideAsync()
+    {
+        var previous = Environment.GetEnvironmentVariable("CONEXY_VISUAL_PROFILE_DIR");
+        var custom = Path.Combine(Path.GetTempPath(), "conexy-visual-profile-test");
+        try
+        {
+            Environment.SetEnvironmentVariable("CONEXY_VISUAL_PROFILE_DIR", custom);
+            Assert(VisualDesktop.ProfileDir == Path.GetFullPath(custom),
+                "the override is used verbatim (normalised) when it is set");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CONEXY_VISUAL_PROFILE_DIR", previous);
+        }
+
         return Task.CompletedTask;
     }
 }

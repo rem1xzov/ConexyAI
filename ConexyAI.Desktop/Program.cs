@@ -598,6 +598,8 @@ static async Task<int> ChatAsync(string[] args)
     // консоль работают с одним аккаунтом; VisualDesktop.HotkeyLabel переключает между ними в любой момент.
     // Стартуем горячую клавишу всегда, окно по флагу --visual или по команде /visual.
     VisualDesktop.StartHotkey();
+    // VISUAL_DESKTOP: если окно закрыли крестиком, консоль возвращается на экран сама.
+    VisualDesktop.StartWatcher();
     if (args.Contains("--visual"))
         Ui.Info("  " + await VisualDesktop.OpenAsync(server));
 
@@ -1017,6 +1019,11 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
 
     Ui.Banner(root, server.BaseUrl.Replace("https://", string.Empty));
     Ui.SetProject(root);
+    // VISUAL_DESKTOP: команда должна быть на виду, а не только в /help — пользователь должен видеть,
+    // как переключиться в веб-версию и обратно, без поиска по справке.
+    Ui.Info(VisualDesktop.IsSupported
+        ? "  Визуальный десктоп: /visual — открыть веб-версию в окне · " + VisualDesktop.HotkeyLabel + " — переключение консоль ↔ окно"
+        : "  Веб-версия: /visual — открыть ConexyAI в браузере");
     if (firstBanner && approver.AutoMode)
         Ui.Info("  Авто-режим включён: команды выполняются без подтверждения.");
     // WEB_DEVICE: добавлено 2026-10-18 — на сервере побеждает последняя регистрация устройства.

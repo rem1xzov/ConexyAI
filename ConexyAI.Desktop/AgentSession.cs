@@ -163,6 +163,13 @@ public sealed class AgentSession : IAsyncDisposable
             }
             Ui.Md.Feed(delta);
         });
+        // VISUAL_DESKTOP: кнопка «В консоль» в визуальном окне просит клиент свернуть окно и вернуть
+        // терминал. Событие приходит от сервера на активное устройство пользователя.
+        _hub.On<JsonElement>("SwitchToConsole", _ =>
+        {
+            VisualDesktop.ShowConsole();
+            return Task.CompletedTask;
+        });
         _hub.On<JsonElement, string?>("ToolAction", (payload, _) => OnServerToolAction(payload));
         _hub.On<JsonElement, string?>("AgentTeam", (payload, _) => OnTeam(payload));
         _hub.On<JsonElement, string?>("OnAgentStatus", (payload, _) => OnAgentStatus(payload));

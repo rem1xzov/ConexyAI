@@ -848,3 +848,13 @@ export async function runDebug(
   const { data } = await http.post<DebugResult>(`/sessions/${sessionId}/debug/run`, { path, breakpoints, recordAll });
   return data;
 }
+
+// VISUAL_DESKTOP: добавлено 2026-11-27 — кнопка «В консоль» в окне визуального десктопа.
+// Сервер передаёт событие `SwitchToConsole` подключённому клиенту на ПК, который сворачивает
+// визуальное окно и возвращает пользователя в терминал. Ответ 200 — событие передано клиенту;
+// 404 (тело `{ error: "DESKTOP_OFFLINE", ... }`) — десктоп не подключён; старый сервер отвечает
+// обычным 404 без поля `error` — его обрабатывает вызывающая сторона (VisualDesktopConsoleButton).
+/** Asks the connected desktop client to minimize the visual window and focus the terminal. */
+export async function switchToConsole(): Promise<void> {
+  await http.post('/device/console');
+}
