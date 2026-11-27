@@ -14829,3 +14829,86 @@ html[data-visual-desktop='true'] .device-target__heading {
   color: var(--text);
   letter-spacing: 0;
 }
+/* VISUAL_DESKTOP: композер как в референсе DeepSeek — пилюли рабочей области и режима НАД полем,
+   большое поле ввода, внутри снизу плюс, режим доступа, микрофон и отправка. */
+html[data-visual-desktop='true'] .inputbar-wrap {
+  max-width: 900px;
+}
+html[data-visual-desktop='true'] .inputbar__visual-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto 8px;
+  padding: 0 4px;
+}
+html[data-visual-desktop='true'] .inputbar__visual-chips .modelpicker {
+  min-width: 0;
+}
+html[data-visual-desktop='true'] .inputbar__visual-chips .modelpicker__trigger {
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: #1a1a1c;
+  color: var(--text);
+  font-size: 12.5px;
+}
+html[data-visual-desktop='true'] .inputbar__visual-chips .modelpicker__trigger:hover {
+  background: #202023;
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--text);
+}
+html[data-visual-desktop='true'] .inputbar__visual-chips .modelpicker__target-badge {
+  display: none;
+}
+html[data-visual-desktop='true'] .inputbar--visual {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto;
+  grid-template-areas:
+    'ta ta ta ta ta'
+    'plus access . mic send';
+  align-items: center;
+  gap: 8px;
+  max-width: 900px;
+  min-height: 116px;
+  padding: 12px 14px 10px;
+  border-radius: 18px;
+  background: #141416;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+}
+html[data-visual-desktop='true'] .inputbar--visual:focus-within {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+html[data-visual-desktop='true'] .inputbar--visual .inputbar__row {
+  display: contents;
+}
+html[data-visual-desktop='true'] .inputbar--visual .inputbar__attachments {
+  grid-column: 1 / -1;
+}
+html[data-visual-desktop='true'] .inputbar--visual .inputbar__textarea {
+  grid-area: ta;
+  min-height: 54px;
+  max-height: 160px;
+  padding: 2px 4px;
+  background: transparent;
+  border: none;
+  font-size: 14.5px;
+  line-height: 1.5;
+  resize: none;
+}
+html[data-visual-desktop='true'] .inputbar--visual .attach-wrap {
+  grid-area: plus;
+}
+html[data-visual-desktop='true'] .inputbar--visual .composer-access {
+  grid-area: access;
+}
+html[data-visual-desktop='true'] .inputbar--visual .mic-btn {
+  grid-area: mic;
+  justify-self: end;
+}
+html[data-visual-desktop='true'] .inputbar--visual .send-btn {
+  grid-area: send;
+  justify-self: end;
+}

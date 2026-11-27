@@ -176,7 +176,26 @@ public sealed class AgentSession : IAsyncDisposable
         {
             _ = Task.Run(AddWorkspaceFromDialogAsync);
             return Task.CompletedTask;
-        });        _hub.On<JsonElement, string?>("ToolAction", (payload, _) => OnServerToolAction(payload));
+        });
+        // VISUAL_DESKTOP: пилюля режима доступа в окне — «Запись в рабочей области» / «Полный доступ».
+        // Настройка хранится локально на ПК (как /control) и сразу уходит на сервер.
+        _hub.On<JsonElement>("SetDeviceControl", payload =>
+        {
+            var full = payload.ValueKind == JsonValueKind.Object
+                       && payload.TryGetProperty("fullControl", out var value)
+                       && value.ValueKind == JsonValueKind.True;
+            ClientConfig.SaveFullPcControl(full);
+            _ = Task.Run(async () =>
+            {
+                try { await RegisterAsync(); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { }
+            });
+            Ui.Info(full
+                ? "  ◦ полный доступ к ПК включён из визуального десктопа (как /control on)"
+                : "  ◦ доступ к ПК: запись в рабочей области с подтверждениями");
+            return Task.CompletedTask;
+        });
+        _hub.On<JsonElement, string?>("ToolAction", (payload, _) => OnServerToolAction(payload));
         _hub.On<JsonElement, string?>("AgentTeam", (payload, _) => OnTeam(payload));
         _hub.On<JsonElement, string?>("OnAgentStatus", (payload, _) => OnAgentStatus(payload));
         // AGENT_CURSOR: где каждый агент действует на экране — оверлей рисует разноцветные курсоры.

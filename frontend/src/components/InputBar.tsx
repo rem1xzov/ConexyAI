@@ -92,6 +92,10 @@ interface InputBarProps {
   // VISUAL_DESKTOP: компактный чип рабочей области (папка на ПК) рядом с кнопкой модели. Передаётся
   // только окном `/desktop`; в вебе и мобильном приложении его нет.
   workspaceChip?: React.ReactNode;
+  // VISUAL_DESKTOP: композер окна как в референсе DeepSeek — пилюли над полем и режим доступа/модель
+  // в нижней строке внутри поля.
+  visualDesktop?: boolean;
+  accessChip?: React.ReactNode;
   // FILE_DROP: добавлено 2026-09-24 (L11) — файлы, брошенные на колонку чата; nonce отличает
   // повторный бросок тех же файлов.
   externalFiles?: { files: File[]; nonce: number } | null;
@@ -136,6 +140,8 @@ export function InputBar({
   executionTarget,
   executionOnDevice,
   workspaceChip,
+  visualDesktop = false,
+  accessChip,
   externalFiles,
   onComposerFocus,
   onComposerBlur,
@@ -1013,6 +1019,29 @@ export function InputBar({
   // const isFlashModel = model === 'ConexyV1-flash';
   // const showVoiceButton = isFlashModel && !hasInputText;
 
+  // VISUAL_DESKTOP: модель-пикер рендерится либо в строке ввода, либо пилюлей над полем (как режим в референсе).
+  const renderModelPicker = () => (
+    <ModelPicker
+      model={model}
+      onModelChange={onModelChange}
+      mode={mode}
+      thinking={thinking}
+      onThinkingChange={onThinkingChange}
+      reasoningEffort={reasoningEffort}
+      onReasoningEffortChange={onReasoningEffortChange}
+      smartSearch={smartSearch}
+      onSmartSearchChange={onSmartSearchChange}
+      coworkLocked={coworkLocked}
+      onCoworkLockedClick={onCoworkLockedClick}
+      locked={locked}
+      orchestra={orchestra}
+      onOrchestraChange={onOrchestraChange}
+      orchestraAvailable={orchestraAvailable}
+      onUpgradeClick={onUpgradeClick}
+      executionTarget={executionTarget}
+      onDevice={executionOnDevice}
+    />
+  );
   return (
     <div className="inputbar-wrap">
       {skillsOpen && <SkillsDialog onClose={() => setSkillsOpen(false)} />}
@@ -1061,8 +1090,17 @@ export function InputBar({
         </div>
       )}
 
+      {/* VISUAL_DESKTOP: как в референсе — рабочая область и режим пилюлями над полем ввода. */}
+      {!isMobile && visualDesktop && (
+        <div className="inputbar__visual-chips">
+          {workspaceChip}
+          <span className="inputbar__visual-mode">{renderModelPicker()}</span>
+        </div>
+      )}
+
+
       <div
-        className={`inputbar ${attachments.length > 0 ? 'inputbar--attachments' : ''} ${editTarget ? 'inputbar--editing' : ''} ${expanded ? 'inputbar--expanded' : ''}`}
+        className={`inputbar ${attachments.length > 0 ? 'inputbar--attachments' : ''} ${editTarget ? 'inputbar--editing' : ''} ${expanded ? 'inputbar--expanded' : ''} ${visualDesktop ? 'inputbar--visual' : ''}`}
       >
         {/* ATTACHMENT_UPLOAD: превью живёт ВНУТРИ композера (как в Gemini), а не отдельной полосой
             над ним: так видно, что фото прикреплено к сообщению, а не висит само по себе. */}
@@ -1184,7 +1222,7 @@ export function InputBar({
           spellCheck={!isMobile}
           rows={1}
           disabled={disabled}
-          placeholder={t('input.placeholder')}
+          placeholder={visualDesktop ? t('input.placeholderVisual') : t('input.placeholder')}
           value={value}
           onChange={(e) => {
             // Высоту подгоняет лейаут-эффект по value — второй вызов здесь был лишним reflow.
@@ -1199,31 +1237,9 @@ export function InputBar({
 
         {/* VISUAL_DESKTOP: чип рабочей области — только в окне `/desktop` (проп передаёт App).
             Стоит рядом с кнопкой модели: папку видно и можно сменить, не открывая меню моделей. */}
-        {!isMobile && workspaceChip}
+        {!isMobile && !visualDesktop && workspaceChip}
 
-        {/* Desktop only: on mobile the model picker lives in the chat header. */}
-        {!isMobile && (
-          <ModelPicker
-            model={model}
-            onModelChange={onModelChange}
-            mode={mode}
-            thinking={thinking}
-            onThinkingChange={onThinkingChange}
-            reasoningEffort={reasoningEffort}
-            onReasoningEffortChange={onReasoningEffortChange}
-            smartSearch={smartSearch}
-            onSmartSearchChange={onSmartSearchChange}
-            coworkLocked={coworkLocked}
-            onCoworkLockedClick={onCoworkLockedClick}
-            locked={locked}
-            orchestra={orchestra}
-            onOrchestraChange={onOrchestraChange}
-            orchestraAvailable={orchestraAvailable}
-            onUpgradeClick={onUpgradeClick}
-            executionTarget={executionTarget}
-            onDevice={executionOnDevice}
-          />
-        )}
+        {!isMobile && !visualDesktop && renderModelPicker()}
 
         {/* Mobile: компактный чип модели рядом с кнопками — не тянуться в верхний угол. */}
         {isMobile && showMobileModel && (
@@ -1272,6 +1288,8 @@ export function InputBar({
         >
           <MicIcon size={19} />
         </button>
+
+        {!isMobile && visualDesktop && accessChip}
 
         {isGenerating ? (
           <button

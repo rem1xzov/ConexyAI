@@ -40,6 +40,8 @@ import {
 import { PhoneSetupModal } from './components/PhoneSetupModal';
 // VISUAL_DESKTOP: добавлено 2026-11-27 — кнопка «В консоль» в шапке окна `/desktop`.
 import { VisualDesktopConsoleButton } from './components/VisualDesktopConsoleButton';
+// VISUAL_DESKTOP: пилюля режима доступа в композере окна («Запись в рабочей области» / «Полный доступ»).
+import { AccessModeChip } from './components/ComposerAccessMode';
 import { Sidebar } from './components/Sidebar';
 import { ChatFeed } from './components/ChatFeed';
 // SHARE_PUBLIC: публичная страница чата открывается по #/shared/<token> без входа в аккаунт.
@@ -104,7 +106,7 @@ import { DeviceTargetBar } from './components/DeviceTargetBar';
 import { WorkspaceChip, WorkspaceSection } from './components/WorkspacePicker';
 import { DeviceTurnContext, type DeviceTurnActions } from './components/DeviceTurnExtras';
 import { useDeviceStatus } from './hooks/useDeviceStatus';
-import { addWorkspace, cancelQueuedTask, runQueuedTaskInSandbox, type DeviceStatus } from './api/deviceApi';
+import { addWorkspace, cancelQueuedTask, runQueuedTaskInSandbox, setDeviceFullControl, type DeviceStatus } from './api/deviceApi';
 import {
   readDeviceProject,
   readExecutionTarget,
@@ -2111,6 +2113,18 @@ export default function App() {
     }, 2000);
   }
 
+  // VISUAL_DESKTOP: переключение режима доступа из композера окна. Значение хранится на ПК и
+  // приходит в /device/status (fullControl); после смены обновляем статус и показываем тост.
+  const fullControl = device.status?.fullControl === true;
+  async function handleAccessModeChange(full: boolean) {
+    try {
+      await setDeviceFullControl(full);
+      await device.refresh();
+      showToast(t(full ? 'device.accessSwitchedFull' : 'device.accessSwitchedWrite'));
+    } catch {
+      showToast(t('device.accessFailed'));
+    }
+  }
   type OfflineChoice = Exclude<DeviceOfflinePolicy, 'fail'> | null;
   const [deviceOfflinePrompt, setDeviceOfflinePrompt] = useState<((choice: OfflineChoice) => void) | null>(null);
   const deviceRef = useRef({} as {
@@ -4011,6 +4025,14 @@ export default function App() {
                     executionOnDevice={executionOnDevice}
                     // VISUAL_DESKTOP: только окно десктопа показывает чип рабочей области.
                     workspaceChip={workspaceChip}
+                    visualDesktop={visualDesktop}
+                    accessChip={
+                      <AccessModeChip
+                        fullControl={fullControl}
+                        onChange={(full) => void handleAccessModeChange(full)}
+                        disabled={!device.status?.online}
+                      />
+                    }
                     externalFiles={droppedFiles}
                     editTarget={composerEdit}
                     onSubmitEdit={handleSubmitEdit}

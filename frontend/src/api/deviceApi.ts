@@ -94,6 +94,8 @@ export interface DeviceStatus {
   workspace: string | null;
   projects: DeviceProject[];
   queued: DeviceQueuedTask[];
+  // VISUAL_DESKTOP: включён ли полный доступ к ПК (пилюля режима в композере окна).
+  fullControl: boolean;
 }
 
 export async function getDeviceStatus(): Promise<DeviceStatus> {
@@ -105,10 +107,17 @@ export async function getDeviceStatus(): Promise<DeviceStatus> {
     workspace: data?.workspace ?? null,
     projects: Array.isArray(data?.projects) ? data.projects : [],
     queued: Array.isArray(data?.queued) ? data.queued : [],
+    fullControl: Boolean(data?.fullControl),
   };
 }
 
 /** Runs a task that is waiting for the PC in the server sandbox instead. */
+// VISUAL_DESKTOP: переключение режима доступа из композера окна («Запись в рабочей области» / «Полный доступ»).
+// Сервер передаёт событие клиенту на ПК; клиент сохраняет настройку и перерегистрируется.
+export async function setDeviceFullControl(fullControl: boolean): Promise<void> {
+  await http.post('/device/control', { fullControl });
+}
+
 export async function runQueuedTaskInSandbox(taskId: string): Promise<void> {
   await http.post(`/device/queue/${encodeURIComponent(taskId)}/sandbox`);
 }

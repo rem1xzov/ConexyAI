@@ -13,6 +13,9 @@ public sealed record CreateDeviceKeyRequest(string? Name);
 
 public sealed record ExchangeDeviceKeyRequest(string Key);
 
+// VISUAL_DESKTOP: запрос из окна «Полный доступ к ПК» (пилюля режима в композере).
+public sealed record SetDeviceControlRequest(bool FullControl);
+
 [ApiController]
 [Route("api/device")]
 public class DeviceController : ControllerBase
@@ -245,6 +248,8 @@ public class DeviceController : ControllerBase
             name = info?.Name,
             os = info?.Os,
             workspace = info?.Workspace,
+            // VISUAL_DESKTOP: режим доступа к ПК для пилюли в композере («Запись в рабочей области» / «Полный доступ»).
+            fullControl = info?.FullControl ?? false,
             projects = (info?.Projects ?? Array.Empty<DeviceProject>()).Select(p => new { id = p.Id, name = p.Name }),
             queued = _deviceQueue.List(userId).Select(q => new
             {
@@ -280,6 +285,21 @@ public class DeviceController : ControllerBase
     // VISUAL_DESKTOP: «+ Добавить рабочее пространство…» в окне визуального десктопа. Папку выбирает
     // сам пользователь в диалоге на ПК (браузер не имеет доступа к файловой системе), клиент добавляет
     // её в projects.json и перерегистрирует список — веб затем обновляет список и выделяет новый проект.
+    // VISUAL_DESKTOP: пилюля режима доступа в композере окна. Пользователь переключает, может ли
+    // агент действовать на ПК без подтверждений; клиент сохраняет настройку у себя и перерегистрируется.
+    /// <summary>Переключает полный доступ к ПК из окна визуального десктопа.</summary>
+    [HttpPost("control")]
+    [Authorize]
+    public async Task<IActionResult> SetFullControl([FromBody] SetDeviceControlRequest? request, CancellationToken ct)
+    {
+        var userId = User.GetUserId();
+        if (!_bridge.IsOnline(userId))
+            return NotFound(new { error = "DESKTOP_OFFLINE", message = "ConexyAI Desktop сейчас не подключён к серверу." });
+
+        await _bridge.SendEventAsync(userId, "SetDeviceControl", new { fullControl = request?.FullControl == true }, ct);
+        return Ok(new { ok = true });
+    }
+
     /// <summary>Просит подключённый клиент открыть выбор папки на ПК и добавить рабочую область.</summary>
     [HttpPost("workspace")]
     [Authorize]
