@@ -55,25 +55,36 @@ public record ImageUrlContent(
 public static class ChatMessageFactory
 {
     /// <summary>
-    /// Builds the first user message. When image attachments are present they are
-    /// packed as image_url content blocks alongside the text.
+    /// Builds the first user message. Every image attachment the model can consume is packed as an
+    /// image_url content block alongside the text.
+    /// <para>
+    /// ATTACHMENT_MEDIA: an attachment is an image when its bytes say so, not merely when the client
+    /// declared an image MIME — Android pickers and some browsers send photos as
+    /// application/octet-stream, and such a photo used to disappear from the model's view. The data
+    /// URL carries the content-derived MIME because the provider detects the format from the bytes.
+    /// </para>
     /// </summary>
     public static ChatMessage User(string prompt, IReadOnlyList<TaskAttachment>? attachments = null)
     {
-        var images = attachments?
-            .Where(a => a.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        var images = new List<(string ContentType, string Base64)>();
+        foreach (var attachment in attachments ?? Array.Empty<TaskAttachment>())
+        {
+            var contentType = AttachmentMedia.ModelImageType(attachment);
+            var base64 = attachment.ContentBase64?.Trim();
+            if (contentType is null || string.IsNullOrEmpty(base64))
+                continue;
+            images.Add((contentType, base64));
+        }
 
-        if (images is null || images.Count == 0)
+        if (images.Count == 0)
         {
             return new ChatMessage("user", prompt);
         }
 
         var blocks = new List<ContentBlock> { new("text", prompt) };
-        foreach (var image in images)
+        foreach (var (contentType, base64) in images)
         {
-            var dataUrl = $"data:{image.ContentType};base64,{image.ContentBase64}";
-            blocks.Add(new ContentBlock("image_url", ImageUrl: new ImageUrlContent(dataUrl)));
+            blocks.Add(new ContentBlock("image_url", ImageUrl: new ImageUrlContent($"data:{contentType};base64,{base64}")));
         }
 
         return new ChatMessage("user", blocks);

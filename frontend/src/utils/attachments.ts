@@ -1,6 +1,6 @@
 import type { TaskAttachment } from '../types/api';
 import type { MessageAttachment } from '../types/chat';
-import { base64ToBlob, saveOriginal } from './attachmentStore';
+import { base64ToBlob, loadOriginal, saveOriginal } from './attachmentStore';
 
 // BUGFIX_ATTACHMENTS: добавлено 2026-09-21
 // The old whitelist accepted images and plain text-ish MIME types only, so documents (.docx,
@@ -35,14 +35,23 @@ const ALLOWED_EXTENSIONS = new Set([
 ]);
 
 // ATTACHMENT_SIZE_LIMIT: изменено 2026-09-24 (M24)
-// Сервер принимает тело `POST /api/conexy/run` до 55 000 000 байт ([RequestSizeLimit] на
-// контроллере), а файлы едут внутри JSON в base64 (+1/3 к размеру). Сырые 40 МБ дают ~53.3 МБ
-// base64 — с запасом на текст запроса и JSON. Прежний лимит в 45 МБ сырых байт превращался в
-// ~60 МБ тела и получал 413 уже ПОСЛЕ полной загрузки.
+// Вложения едут внутри JSON в base64 (+1/3 к размеру). Провайдер модели принимает тело запроса
+// до 48 MiB, а сервер — до 55 000 000 байт; клиент держит себя ниже обоих лимитов с запасом.
 /** Raw (not base64) bytes of every file of one message together. */
-export const MAX_TOTAL_ATTACHMENT_BYTES = 40_000_000;
-/** Estimated request body the client allows itself — safely below the server's 55 MB. */
-export const MAX_REQUEST_BYTES = 54_000_000;
+export const MAX_TOTAL_ATTACHMENT_BYTES = 34_000_000;
+/** Estimated request body the client allows itself — safely below the provider's 48 MiB. */
+export const MAX_REQUEST_BYTES = 48_000_000;
+
+// IMAGE_NORMALIZATION: добавлено 2026-11-27 — модель принимает JPEG, PNG, GIF и WebP, определяя формат
+// по содержимому, а провайдер ограничивает тело запроса. Поэтому большие фото ужимаются на клиенте, а
+// формат/тип берутся из сигнатуры файла, а не из необязательного `file.type` браузера.
+/** Photos above this raw size are downscaled so a batch of them still fits the provider limits. */
+const IMAGE_OPTIMIZE_ABOVE_BYTES = 4_000_000;
+/** Longest edge of an image handed to the model; bigger photos lose no useful model detail. */
+const IMAGE_MAX_EDGE = 2048;
+const JPEG_QUALITY = 0.85;
+/** Formats the model accepts by content (see DeepSeek vision limits). */
+const MODEL_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 /** Raw size of the attached files (decoded from their base64 length). */
 export function attachmentBytes(attachments: TaskAttachment[]): number {
@@ -85,25 +94,11 @@ export function fileToAttachment(
   // ATTACHMENT_PROGRESS: доля прочитанного (0..1) — по ней композер рисует ползунок загрузки.
   onProgress?: (fraction: number) => void,
 ): Promise<TaskAttachment> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onprogress = (e) => {
-      if (onProgress && e.lengthComputable && e.total > 0) {
-        onProgress(Math.min(1, e.loaded / e.total));
-      }
-    };
-    reader.onload = () => {
-      const result = reader.result as string; // "data:<mime>;base64,<data>"
-      const comma = result.indexOf(',');
-      onProgress?.(1);
-      resolve({
-        fileName: file.name,
-        contentBase64: comma >= 0 ? result.slice(comma + 1) : result,
-        contentType: file.type || 'application/octet-stream',
-      });
-    };
-    reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'));
-    reader.readAsDataURL(file);
+  return readFileAsDataUrl(file, onProgress).then((dataUrl) => {
+    const comma = dataUrl.indexOf(',');
+    const base64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+    onProgress?.(1);
+    return prepareAttachment(file.name, base64, declaredMime(file));
   });
 }
 
@@ -177,7 +172,201 @@ const MIME_TO_EXT: Record<string, string> = {
   'image/gif': 'gif',
   'image/bmp': 'bmp',
   'image/svg+xml': 'svg',
+  'application/pdf': 'pdf',
+  'application/rtf': 'rtf',
+  'application/msword': 'doc',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.ms-powerpoint': 'ppt',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'application/vnd.oasis.opendocument.text': 'odt',
+  'text/plain': 'txt',
+  'text/markdown': 'md',
+  'text/csv': 'csv',
+  'application/json': 'json',
+  'application/xml': 'xml',
+  'application/zip': 'zip',
 };
+
+const EXT_TO_MIME: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif',
+  bmp: 'image/bmp', svg: 'image/svg+xml',
+  pdf: 'application/pdf', rtf: 'application/rtf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  odt: 'application/vnd.oasis.opendocument.text',
+  txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', json: 'application/json', xml: 'application/xml',
+  yaml: 'application/yaml', yml: 'application/yaml', log: 'text/plain', zip: 'application/zip',
+};
+
+/**
+ * An image the browser/our encoder cannot turn into a format the model accepts (e.g. HEIC on
+ * Chromium, a corrupt file). The composer reports it by name instead of silently dropping it.
+ */
+export class UnsupportedImageError extends Error {
+  constructor(readonly fileName: string) {
+    super(`Unsupported image: ${fileName}`);
+    this.name = 'UnsupportedImageError';
+  }
+}
+
+/** `file.type` when the browser actually knows it, otherwise the type implied by the extension. */
+function declaredMime(file: File): string {
+  const type = (file.type || '').trim().toLowerCase();
+  if (type && type !== 'application/octet-stream') return type;
+  return EXT_TO_MIME[extensionOf(file.name)] ?? 'application/octet-stream';
+}
+
+function readFileAsDataUrl(file: File, onProgress?: (fraction: number) => void): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onprogress = (e) => {
+      if (onProgress && e.lengthComputable && e.total > 0) {
+        onProgress(Math.min(1, e.loaded / e.total));
+      }
+    };
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function base64Size(base64: string): number {
+  return Math.floor((base64.length * 3) / 4);
+}
+
+/** MIME по первым байтам base64 (сигнатура), без декодирования всего файла. */
+function sniffImageMime(base64: string): string | undefined {
+  let prefix: string;
+  try {
+    const slice = base64.length > 64 ? base64.slice(0, 64) : base64;
+    prefix = atob(slice);
+  } catch {
+    return undefined;
+  }
+  const bytes = Array.from(prefix, (c) => c.charCodeAt(0));
+  const at = (i: number) => bytes[i] ?? -1;
+  if (at(0) === 0x89 && at(1) === 0x50 && at(2) === 0x4e && at(3) === 0x47) return 'image/png';
+  if (at(0) === 0xff && at(1) === 0xd8 && at(2) === 0xff) return 'image/jpeg';
+  if (at(0) === 0x47 && at(1) === 0x49 && at(2) === 0x46 && at(3) === 0x38) return 'image/gif';
+  if (at(0) === 0x42 && at(1) === 0x4d) return 'image/bmp';
+  if (
+    at(0) === 0x52 && at(1) === 0x49 && at(2) === 0x46 && at(3) === 0x46 &&
+    at(8) === 0x57 && at(9) === 0x45 && at(10) === 0x42 && at(11) === 0x50
+  ) {
+    return 'image/webp';
+  }
+  return undefined;
+}
+
+function renameToMime(fileName: string, mime: string): string {
+  const ext = MIME_TO_EXT[mime];
+  if (!ext) return fileName;
+  const dot = fileName.lastIndexOf('.');
+  return `${dot > 0 ? fileName.slice(0, dot) : fileName}.${ext}`;
+}
+
+function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Image could not be decoded'));
+    img.src = dataUrl;
+  });
+}
+
+/** Re-encodes an image into a provider-supported format, downscaling it when it is large. */
+async function transcodeImage(img: HTMLImageElement, sourceMime: string): Promise<{ mime: string; base64: string }> {
+  const scale = Math.min(1, IMAGE_MAX_EDGE / Math.max(img.width || 1, img.height || 1));
+  const width = Math.max(1, Math.round((img.width || 1) * scale));
+  const height = Math.max(1, Math.round((img.height || 1) * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas is unavailable');
+
+  // PNG keeps transparency and crisp UI text; photos become smaller JPEGs on a white background.
+  const mime = sourceMime === 'image/png' ? 'image/png' : 'image/jpeg';
+  if (mime === 'image/jpeg') {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+  }
+  ctx.drawImage(img, 0, 0, width, height);
+
+  const dataUrl = canvas.toDataURL(mime, JPEG_QUALITY);
+  const comma = dataUrl.indexOf(',');
+  return { mime, base64: comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl };
+}
+
+/**
+ * Makes one attachment safe for the model: images get a content-derived type, and oversized or
+ * unsupported images are re-encoded into JPEG/PNG. Everything else keeps its bytes untouched.
+ */
+async function prepareAttachment(fileName: string, base64: string, declared: string): Promise<TaskAttachment> {
+  const detected = sniffImageMime(base64);
+  const looksLikeImage = detected !== undefined || declared.startsWith('image/');
+  if (!looksLikeImage) {
+    return { fileName, contentBase64: base64, contentType: declared };
+  }
+
+  const sourceMime = detected ?? declared;
+  if (sourceMime === 'image/gif') {
+    // Animated GIFs are accepted by the model as-is; re-encoding would lose the animation.
+    return { fileName: renameToMime(fileName, 'image/gif'), contentBase64: base64, contentType: 'image/gif' };
+  }
+
+  const smallEnough = base64Size(base64) <= IMAGE_OPTIMIZE_ABOVE_BYTES;
+  if (MODEL_IMAGE_MIMES.has(sourceMime) && smallEnough) {
+    return { fileName: renameToMime(fileName, sourceMime), contentBase64: base64, contentType: sourceMime };
+  }
+
+  let img: HTMLImageElement;
+  try {
+    img = await loadImage(`data:${sourceMime};base64,${base64}`);
+  } catch {
+    // The browser cannot decode this image (HEIC on Chromium, a corrupt file, SVG where content
+    // sniffing failed). Say so by name instead of sending a payload the model will reject.
+    throw new UnsupportedImageError(fileName);
+  }
+
+  const encoded = await transcodeImage(img, sourceMime);
+  return {
+    fileName: renameToMime(fileName, encoded.mime),
+    contentBase64: encoded.base64,
+    contentType: encoded.mime,
+  };
+}
+
+/**
+ * Rebuilds the attachments of an already sent message from this device's original store.
+ *
+ * TURN_REPLAY: "сгенерировать заново", "продолжить" и правка сообщения пересобирают ход с тем же
+ * текстом, и раньше они отправляли пустой список вложений — модель внезапно «переставала видеть»
+ * фото, которые пользователь уже прикладывал. Оригиналы лежат в attachmentStore; если их нет на
+ * этом устройстве, ход просто пойдёт без картинок, как раньше.
+ */
+export async function attachmentsFromMessage(message: {
+  attachments?: MessageAttachment[];
+}): Promise<TaskAttachment[]> {
+  const saved = message.attachments ?? [];
+  if (saved.length === 0) return [];
+
+  const restored: TaskAttachment[] = [];
+  for (const attachment of saved) {
+    if (!attachment.originalId) continue;
+    const blob = await loadOriginal(attachment.originalId);
+    if (!blob) continue;
+    try {
+      const file = new File([blob], attachment.fileName, { type: attachment.contentType });
+      restored.push(await fileToAttachment(file));
+    } catch (e) {
+      console.warn('[Attachments] could not restore an attachment for the turn', attachment.fileName, String(e));
+    }
+  }
+  return restored;
+}
 
 /**
  * Clipboard images rarely carry a meaningful name, so give the pasted file a stable

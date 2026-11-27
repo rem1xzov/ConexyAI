@@ -869,6 +869,7 @@
     "placeholder": "Message…",
     "editingMessage": "Editing message",
     "unsupportedFiles": "Couldn't attach: {{names}}. Images, PDFs, documents, spreadsheets and text files are supported.",
+    "imageFormatUnsupported": "The photo wasn't attached: {{names}}. The model accepts JPEG, PNG, GIF and WebP — save the photo in one of these formats.",
     "removeFile": "Remove {{name}}",
     "uploading": "Uploading…",
     "waitForUpload": "Wait for the files to finish uploading — they can't be sent yet.",

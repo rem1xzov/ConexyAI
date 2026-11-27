@@ -437,7 +437,7 @@ public static class AgentToolCatalog
         Tool("read_image",
             "Look at an image: a design mock, a screenshot of a bug, a diagram. Pass `file_path` for an " +
             "image of the workspace or `name` for an image attached to the current message. " +
-            "Supported: png, jpg, jpeg, webp, gif, bmp, up to 8 MB. Attachments are also saved into " +
+            "Supported: png, jpg, jpeg, webp, gif, up to 8 MB. Attachments are also saved into " +
             "the workspace root, so they can be reopened by path. Use it whenever the user says " +
             "'make it look like this image' or 'the screenshot shows ...' — text tools show images " +
             "as binary.",

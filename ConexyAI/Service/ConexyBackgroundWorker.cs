@@ -720,9 +720,11 @@ public class ConexyBackgroundWorker : BackgroundService
     /// </summary>
     private async Task<string?> PrepareAttachmentNoteAsync(IServiceProvider services, ConexyJob job, CancellationToken ct)
     {
+        // ATTACHMENT_MEDIA: картинки идут модели отдельными image-блоками, а не как файлы для
+        // read_document_file; раньше фото без image-MIME (Android: application/octet-stream) попадало
+        // в эту заметку как документ, и агент пытался читать его текстом.
         var files = job.Attachments?.Where(a =>
-            !string.IsNullOrWhiteSpace(a.FileName) &&
-            !(a.ContentType ?? string.Empty).StartsWith("image/", StringComparison.OrdinalIgnoreCase)).ToList();
+            !string.IsNullOrWhiteSpace(a.FileName) && !AttachmentMedia.IsImage(a)).ToList();
         if (files is not { Count: > 0 }) return null;
 
         var placed = new List<string>();

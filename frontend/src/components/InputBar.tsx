@@ -10,6 +10,7 @@ import type { ConexyModel, ReasoningEffort, SendOutcome, TaskAttachment } from '
   isAllowedMime,
   MAX_REQUEST_BYTES,
   pastedImageFile,
+  UnsupportedImageError,
 } from '../utils/attachments';
 import { useIsMobile, useMediaQuery } from '../hooks/useMediaQuery';
 // VOICE_DUP_FIX: склейка распознанного текста по перекрытию (см. utils/voiceTranscript).
@@ -448,6 +449,9 @@ export function InputBar({
 
   async function addFiles(files: FileList | File[], skipMimeCheck = false) {
     const rejected: string[] = [];
+    // IMAGE_NORMALIZATION: картинка, которую браузер сам не смог перекодировать в формат модели
+    // (например, HEIC в Chromium), называется отдельно и не пропадает молча.
+    const unsupportedImages: string[] = [];
     // ATTACHMENT_SIZE_LIMIT (M24): файл, который не влезает в лимит сообщения, отклоняется ДО
     // чтения — а не после загрузки всего запроса на сервер.
     const oversized: string[] = [];
@@ -517,7 +521,8 @@ export function InputBar({
         );
       } catch (err) {
         console.error('[Attachments] failed to read file', file.name, err);
-        rejected.push(file.name);
+        if (err instanceof UnsupportedImageError) unsupportedImages.push(err.fileName);
+        else rejected.push(file.name);
         setAttachments((prev) => prev.filter((a) => a.id !== draft.id));
         if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
       }
@@ -526,6 +531,9 @@ export function InputBar({
     setMenuOpen(false);
     const problems: string[] = [];
     if (rejected.length > 0) problems.push(t('input.unsupportedFiles', { names: rejected.join(', ') }));
+    if (unsupportedImages.length > 0) {
+      problems.push(t('input.imageFormatUnsupported', { names: unsupportedImages.join(', ') }));
+    }
     if (oversized.length > 0) {
       problems.push(t('sync.filesOverLimit', {
         names: oversized.join(', '),

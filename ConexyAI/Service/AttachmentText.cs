@@ -29,22 +29,37 @@ public static class AttachmentText
         // TEXT_DECODING: добавлено 2026-09-24 (ревью M6) — сообщение сохраняется в историю (Postgres):
         // NUL или одиночный суррогат в нём роняли вставку, и терялся весь ход.
         prompt = TextSanitizer.Clean(prompt);
-        var documents = attachments?
-            .Where(a => !a.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        if (documents is null || documents.Count == 0)
+        if (attachments is null || attachments.Count == 0)
         {
             return prompt;
         }
 
         var sb = new System.Text.StringBuilder(prompt);
         var budget = MaxCharsPerMessage;
-        foreach (var attachment in documents)
+        foreach (var attachment in attachments)
         {
             var name = TextSanitizer.Truncate(TextSanitizer.Clean(Path.GetFileName(attachment.FileName ?? string.Empty)), 200);
             if (string.IsNullOrWhiteSpace(name)) name = "вложение";
 
+            // ATTACHMENT_MEDIA: поддерживаемое моделью изображение уходит отдельным image-блоком
+            // (ChatMessageFactory), поэтому в текст его не дублируем.
+            if (AttachmentMedia.ModelImageType(attachment) is not null)
+            {
+                continue;
+            }
+
             sb.Append("\n\n");
+
+            // Неподдерживаемый формат картинки больше не превращается в «текст не извлекается»:
+            // модель и пользователь должны понимать, почему вложение не видно.
+            if (AttachmentMedia.IsImage(attachment))
+            {
+                var format = AttachmentMedia.NormalizeMime(attachment.ContentType);
+                sb.Append($"[Вложение «{name}»: изображение в формате {(format.Length > 0 ? format : "неизвестном")} не отправлено модели. " +
+                          $"Поддерживаются {AttachmentMedia.SupportedImageFormats} — сохраните картинку в одном из них.]");
+                continue;
+            }
+
             var text = Extract(attachment, name);
             if (text is null)
             {

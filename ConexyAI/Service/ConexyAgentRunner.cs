@@ -6787,13 +6787,14 @@ public class ConexyAgentRunner : IConexyAgentRunner
             if (attachment is null)
                 return new ConexyToolResult(toolCall.Id,
                     $"view_image: no attached image named '{wanted}'. Attached images: {DescribeImageAttachments()}.", true);
-            if (!attachment.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            // ATTACHMENT_MEDIA: вложение может прийти без image-MIME (Android отдаёт application/octet-stream);
+            // решает содержимое, а окончательную проверку формата делает общий guard ниже.
+            if (!AttachmentMedia.IsImage(attachment))
                 return new ConexyToolResult(toolCall.Id, $"view_image: attachment '{wanted}' is not an image ({attachment.ContentType}).", true);
-
             base64 = attachment.ContentBase64?.Trim() ?? string.Empty;
             if (base64.Length == 0)
                 return new ConexyToolResult(toolCall.Id, $"view_image: attachment '{wanted}' is empty.", true);
-            contentType = attachment.ContentType;
+            contentType = AttachmentMedia.NormalizeMime(attachment.ContentType);
             label = wanted;
         }
         else if (!string.IsNullOrWhiteSpace(path))
@@ -6825,11 +6826,11 @@ public class ConexyAgentRunner : IConexyAgentRunner
             var detected = ImageContent.DetectContentType(bytes, path);
             if (detected is null)
                 return new ConexyToolResult(toolCall.Id,
-                    $"view_image: '{path}' is not a supported image (png, jpg, jpeg, webp, gif, bmp).", true);
+                    $"view_image: '{path}' is not a supported image (png, jpg, jpeg, webp, gif).", true);
             if (!ImagePayloadGuard.IsModelImageMime(detected) || !ImagePayloadGuard.IsValidImage(bytes, detected))
                 return new ConexyToolResult(toolCall.Id,
-                    $"view_image: '{path}' is not a valid png/jpeg/webp image for the model. " +
-                    "Сохрани скриншот в PNG или JPEG и повтори.", true);
+                    $"view_image: '{path}' is not a png/jpeg/gif/webp image the model accepts. " +
+                    "Сохрани его в PNG или JPEG и повтори.", true);
 
             base64 = Convert.ToBase64String(bytes);
             contentType = detected;
@@ -6850,7 +6851,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
                 || !ImagePayloadGuard.IsValidImage(imageBytes, actualType))
             {
                 return new ConexyToolResult(toolCall.Id,
-                    $"view_image: '{label}' is not a valid png/jpeg/webp image for the model. " +
+                    $"view_image: '{label}' is not a png/jpeg/gif/webp image the model accepts. " +
                     "Сохрани изображение в PNG или JPEG и повтори.", true);
             }
             contentType = actualType;
@@ -6872,7 +6873,7 @@ public class ConexyAgentRunner : IConexyAgentRunner
     private string DescribeImageAttachments()
     {
         var images = _job.Attachments?
-            .Where(a => a.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            .Where(AttachmentMedia.IsImage)
             .Select(a => Path.GetFileName(a.FileName ?? "image"))
             .ToList();
         return images is { Count: > 0 } ? string.Join(", ", images) : "none";

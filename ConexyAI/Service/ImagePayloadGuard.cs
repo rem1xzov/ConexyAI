@@ -1,26 +1,31 @@
-using System.Text;
 using ConexyAI.Contract;
 
 namespace ConexyAI.Service;
 
-// IMAGE_PAYLOAD_GUARD: модель принимает только png/jpeg/webp. Битой картинке, bmp/gif или картинке
-// с несовпадающим MIME нельзя ронять весь ход через 400 от провайдера: такой блок вырезается до
-// отправки, а текст задачи продолжает выполняться. Это не молчаливая потеря — факт пишется в лог.
+// IMAGE_PAYLOAD_GUARD: модель принимает изображения JPEG, PNG, GIF и WebP, определяя формат по
+// СОДЕРЖИМОМУ байтов (см. DeepSeek vision docs), а не по объявленному MIME. Наружу уходит нормализованный
+// data URL с типом, выведенным из сигнатуры: так фото, которое браузер/проводник отдал с неточным или
+// пустым MIME, доезжает до модели, а не вырезается молча.
+//
+// Задача гарда — не «проверить картинку целиком», а не дать провайдеру отклонить весь запрос из-за
+// неподдерживаемого формата или слишком большого вложения. Поэтому здесь всё по контракту провайдера:
+// формат по сигнатуре, лимит 32 МиБ на одно inline-изображение.
 public static class ImagePayloadGuard
 {
-    private const int MaxBytes = 8 * 1024 * 1024;
+    /// <summary>Лимит одного inline-изображения в запросе к модели (DeepSeek vision: 32 МиБ).</summary>
+    public const long MaxInlineImageBytes = 32L * 1024 * 1024;
 
-    public static bool IsModelImageMime(string? mime)
-    {
-        var normalized = (mime ?? string.Empty).Trim().ToLowerInvariant();
-        return normalized is "image/png" or "image/jpeg" or "image/jpg" or "image/webp";
-    }
+    public static bool IsModelImageMime(string? mime) => AttachmentMedia.IsModelImageMime(mime);
 
-    /// <summary>Нормализует data-url или возвращает null, если картинку нельзя отправлять модели.</summary>
+    /// <summary>
+    /// Нормализует data-url: тип берётся из содержимого, неподдерживаемый формат или превышение
+    /// лимита — <c>null</c>.
+    /// </summary>
     public static string? NormalizeDataUrl(string? dataUrl)
     {
         if (string.IsNullOrWhiteSpace(dataUrl))
             return null;
+
         var raw = dataUrl.Trim();
         if (!raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
             return null;
@@ -28,48 +33,41 @@ public static class ImagePayloadGuard
         var comma = raw.IndexOf(',');
         if (comma < 0)
             return null;
+
         var header = raw[5..comma];
         var payload = raw[(comma + 1)..];
         var parts = header.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var mime = parts.FirstOrDefault()?.ToLowerInvariant() ?? string.Empty;
         if (!parts.Any(p => p.Equals("base64", StringComparison.OrdinalIgnoreCase)))
             return null;
-        if (!IsModelImageMime(mime))
+
+        if (AttachmentMedia.ApproximateImageBytes(payload) is <= 0 or > MaxInlineImageBytes)
             return null;
 
-        byte[] bytes;
-        try { bytes = Convert.FromBase64String(payload); }
-        catch (FormatException) { return null; }
-        if (bytes.Length == 0 || bytes.LongLength > MaxBytes)
-            return null;
-        if (!IsValidImage(bytes, mime))
+        var detected = AttachmentMedia.DetectContentTypeFromBase64(payload);
+        if (detected is null || !AttachmentMedia.IsModelImageMime(detected))
             return null;
 
-        var normalizedMime = mime == "image/jpg" ? "image/jpeg" : mime;
-        return $"data:{normalizedMime};base64,{Convert.ToBase64String(bytes)}";
+        // Провайдер судит по содержимому, поэтому MIME в data-url — производное от сигнатуры, а не от
+        // того, что прислал клиент. Переводы строк в base64 внутри JSON не нужны и только вредят.
+        var mime = AttachmentMedia.NormalizeMime(detected);
+        var normalizedPayload = payload.IndexOfAny(['\r', '\n', ' ', '\t']) < 0
+            ? payload
+            : new string(payload.Where(c => !char.IsWhiteSpace(c)).ToArray());
+        return $"data:{mime};base64,{normalizedPayload}";
     }
 
+    /// <summary>
+    /// Являются ли байты изображением поддерживаемого моделью формата. Формат определяется по
+    /// содержимому; объявленный MIME не решает (провайдер тоже его игнорирует).
+    /// </summary>
     public static bool IsValidImage(byte[] bytes, string? declaredMime)
     {
-        var declared = (declaredMime ?? string.Empty).ToLowerInvariant();
-        if (declared == "image/jpg") declared = "image/jpeg";
-        if (!IsModelImageMime(declared))
-            return false;
-        var detected = ImageContent.DetectContentType(bytes);
-        if (detected is null)
-            return false;
-        if (!string.Equals(detected, declared, StringComparison.OrdinalIgnoreCase))
-            return false;
-        return detected switch
-        {
-            "image/png" => HasPngEnd(bytes),
-            "image/jpeg" => HasJpegEnd(bytes),
-            "image/webp" => bytes.Length >= 16,
-            _ => false,
-        };
+        _ = declaredMime; // параметр сохранён в сигнатуре ради читаемости вызовов: тип не решает.
+        var detected = AttachmentMedia.DetectContentType(bytes);
+        return detected is not null && AttachmentMedia.IsModelImageMime(detected);
     }
 
-    /// <summary>Копия сообщений без невалидных image_url-блоков.</summary>
+    /// <summary>Копия сообщений с нормализованными image_url-блоками; неподдерживаемые удаляются.</summary>
     public static (List<ChatMessage> Messages, int Removed) Sanitize(IReadOnlyList<ChatMessage> messages)
     {
         var removed = 0;
@@ -88,6 +86,7 @@ public static class ImagePayloadGuard
                 var block = blocks[i];
                 if (!string.Equals(block.Type, "image_url", StringComparison.OrdinalIgnoreCase))
                     continue;
+
                 var normalized = NormalizeDataUrl(block.ImageUrl?.Url);
                 if (normalized is null)
                 {
@@ -95,6 +94,7 @@ public static class ImagePayloadGuard
                     removed++;
                     continue;
                 }
+
                 blocks[i] = block with { ImageUrl = new ImageUrlContent(normalized) };
             }
 
@@ -103,21 +103,10 @@ public static class ImagePayloadGuard
                 result.Add(message with { Content = string.Empty });
                 continue;
             }
+
             result.Add(message with { Content = blocks });
         }
+
         return (result, removed);
     }
-
-    private static bool HasPngEnd(byte[] bytes)
-    {
-        var needle = Encoding.ASCII.GetBytes("IEND");
-        var from = Math.Max(0, bytes.Length - 64);
-        for (var i = bytes.Length - needle.Length; i >= from; i--)
-            if (bytes.AsSpan(i, needle.Length).SequenceEqual(needle))
-                return true;
-        return false;
-    }
-
-    private static bool HasJpegEnd(byte[] bytes) =>
-        bytes.Length >= 4 && bytes[^2] == 0xFF && bytes[^1] == 0xD9;
 }

@@ -111,7 +111,7 @@ import type { ChatSummary, ConexyModel, ConexyRequest, ConexyResponse, DeviceOff
 import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep, TurnBlock, AgentAction, TeamAgent } from './types/chat';
 import type { PendingActionPayload, SignalrCallbacks } from './types/signalr';
 // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
-import { toMessageAttachment } from './utils/attachments';
+import { attachmentsFromMessage, toMessageAttachment } from './utils/attachments';
 // INTERLEAVED_STREAM: добавлено 2026-09-24
 import {
   appendTextBlock,
@@ -3003,10 +3003,12 @@ export default function App() {
 
     // Find the user prompt this reply was answering.
     let prompt = '';
+    let source: ChatMessage | undefined;
     for (let i = idx - 1; i >= 0; i--) {
       const m = session.messages[i];
       if (m.role === 'user') {
         prompt = m.content;
+        source = m;
         break;
       }
     }
@@ -3014,7 +3016,14 @@ export default function App() {
 
     // C-10: only the answer of the chat's LAST turn can replace that turn on the server.
     const regenerate = !session.incognito && turnPersisted(target);
-    void startCompletion(session.id, prompt, [], false, undefined, regenerate, target.id, true).then(notifyOutcome);
+    // TURN_REPLAY: пересобираем ход с теми же вложениями — иначе «заново» молча отправляло бы
+    // запрос без фото, и модель переставала их видеть.
+    void (async () => {
+      const attachments = source ? await attachmentsFromMessage(source) : [];
+      await startCompletion(session.id, prompt, attachments, false, undefined, regenerate, target.id, true).then(
+        notifyOutcome,
+      );
+    })();
   }, [startCompletion, notifyOutcome, sessionBusy]);
 
   // VERSIONS: переключение вариантов ответа — только локальное состояние, без запроса.
@@ -3080,7 +3089,11 @@ export default function App() {
     const message = session.messages[index];
     if (!message || message.role !== 'user') return;
     const regenerate = !session.incognito && replacesLastTurn(session.messages, index);
-    void startCompletion(session.id, newContent, [], true, undefined, regenerate).then(notifyOutcome);
+    // TURN_REPLAY: правка текста не должна отбрасывать уже приложенные к сообщению файлы.
+    void (async () => {
+      const attachments = await attachmentsFromMessage(message);
+      await startCompletion(session.id, newContent, attachments, true, undefined, regenerate).then(notifyOutcome);
+    })();
   }, [startCompletion, notifyOutcome, sessionBusy]);
 
   // COMPOSER_EDIT: мобильный путь правки — сообщение открывается в поле ввода, а не в пузыре.
@@ -3134,7 +3147,13 @@ export default function App() {
     );
 
     const regenerate = !session.incognito && replacesLastTurn(session.messages, index);
-    void startCompletion(session.id, text, [], false, undefined, regenerate, assistantMessage?.id).then(notifyOutcome);
+    // TURN_REPLAY: вложение(я) правленого сообщения остаются с ходом.
+    void (async () => {
+      const attachments = await attachmentsFromMessage(message);
+      await startCompletion(session.id, text, attachments, false, undefined, regenerate, assistantMessage?.id).then(
+        notifyOutcome,
+      );
+    })();
   }, [startCompletion, notifyOutcome, sessionBusy]);
 
   const handleCancelEdit = useCallback(() => setComposerEdit(null), []);
@@ -3168,10 +3187,12 @@ export default function App() {
 
     // The prompt this answer belongs to.
     let prompt = '';
+    let source: ChatMessage | undefined;
     for (let i = index - 1; i >= 0; i--) {
       const m = session.messages[i];
       if (m.role === 'user') {
         prompt = m.content;
+        source = m;
         break;
       }
     }
@@ -3183,7 +3204,12 @@ export default function App() {
     // An answer stopped before the first token has nothing to resume from; the call is still made
     // with an empty prefix, so the model simply answers the prompt again inside the same message
     // instead of the button doing nothing at all.
-    void startCompletion(session.id, prompt, [], false, messageId).then(notifyOutcome);
+    // TURN_REPLAY: продолжаем ход с его вложениями — сервер вырезает предыдущий ход из истории,
+    // так что без повторной отправки фото пропали бы из контекста.
+    void (async () => {
+      const attachments = source ? await attachmentsFromMessage(source) : [];
+      await startCompletion(session.id, prompt, attachments, false, messageId).then(notifyOutcome);
+    })();
   }, [startCompletion, notifyOutcome, sessionBusy]);
 
   // STOP_CONFIRM: изменено 2026-09-24 (M17) — «Стоп» останавливает ход ОТКРЫТОГО чата: экран
