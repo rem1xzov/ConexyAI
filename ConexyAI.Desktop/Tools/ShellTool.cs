@@ -66,8 +66,7 @@ public static partial class CommandPolicy
     };
 
     /// <summary>Папка настроек клиента (ключ, токены коннекторов) — абсолютный путь для проверки разрешённых путей.</summary>
-    public static string ClientConfigDir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI");
+    public static string ClientConfigDir => ProjectStore.ConfigDir;
 
     /// <summary>Почему путь/команда касается секретов (null — не касается).</summary>
     public static string? SecretPathReason(string text)

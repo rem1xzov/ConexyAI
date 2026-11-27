@@ -14,8 +14,7 @@ public sealed class PermissionStore
 
     public Dictionary<string, List<string>> Projects { get; set; } = new();
 
-    private static string FilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI", "permissions.json");
+    private static string FilePath => Path.Combine(ProjectStore.ConfigDir, "permissions.json");
 
     public static PermissionStore Load()
     {

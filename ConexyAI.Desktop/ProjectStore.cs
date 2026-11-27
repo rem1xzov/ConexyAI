@@ -17,8 +17,16 @@ public sealed class ProjectStore
 {
     public List<DeviceProject> Projects { get; set; } = [];
 
-    public static string ConfigDir => System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI");
+    /// <summary>
+    /// Папка настроек клиента (config.json, чаты, права, профиль визуального окна). По умолчанию —
+    /// %APPDATA%\ConexyAI; CONEXY_HOME переносит всё в другое место: портативная установка на флешке,
+    /// несколько аккаунтов рядом, тесты без записи в профиль пользователя.
+    /// </summary>
+    public static string ConfigDir =>
+        Environment.GetEnvironmentVariable("CONEXY_HOME") is { Length: > 0 } home
+            ? System.IO.Path.GetFullPath(home)
+            : System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI");
 
     private static string FilePath => System.IO.Path.Combine(ConfigDir, "projects.json");
 

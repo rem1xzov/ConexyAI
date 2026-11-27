@@ -24,8 +24,8 @@ public static class CursorOverlay
 
             try
             {
-                var directory = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI");
+                // CONEXY_HOME: оверлей живёт рядом с настройками клиента (портативная установка/тесты).
+                var directory = ProjectStore.ConfigDir;
                 Directory.CreateDirectory(directory);
                 var scriptPath = Path.Combine(directory, "cursor-overlay.ps1");
                 File.WriteAllText(scriptPath, Script);
@@ -39,6 +39,8 @@ public static class CursorOverlay
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                 };
+                // Скрипт читает файл курсоров по этому пути, а не по жёстко прописанному %APPDATA%.
+                startInfo.Environment["CONEXY_CURSORS"] = Tools.CursorFeed.FilePath;
                 _process = Process.Start(startInfo);
                 AppDomain.CurrentDomain.ProcessExit += (_, _) => Stop();
             }
@@ -77,7 +79,8 @@ public static class CursorOverlay
         Add-Type -AssemblyName System.Drawing
         Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class CxWin { [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i); [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int i, int v); }'
 
-        $path = Join-Path $env:APPDATA 'ConexyAI\cursors.txt'
+        $path = $env:CONEXY_CURSORS
+        if (-not $path) { $path = Join-Path $env:APPDATA 'ConexyAI\cursors.txt' }
         $form = New-Object System.Windows.Forms.Form
         $form.FormBorderStyle = 'None'
         $form.ShowInTaskbar = $false

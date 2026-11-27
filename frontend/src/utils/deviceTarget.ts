@@ -57,6 +57,16 @@ export function resolveExecutionChoice(chatId: string): { target: ExecutionTarge
   return { target: draft, projectId: draftProject };
 }
 
+/**
+ * VISUAL_DESKTOP: в окне визуального десктопа агент ВСЕГДА выполняется на ПК пользователя. У старых
+ * чатов в хранилище может лежать 'sandbox' — он игнорируется, а рабочая область (проект на ПК) по-
+ * прежнему наследуется: у нового чата — из черновика (`resolveExecutionChoice`), у существующего —
+ * из его собственного сохранённого выбора.
+ */
+export function resolveDesktopExecutionChoice(chatId: string): { target: 'device'; projectId: string | null } {
+  return { target: 'device', projectId: resolveExecutionChoice(chatId).projectId };
+}
+
 /** Counts added/removed lines of a unified diff (headers excluded). */
 export function diffStats(diff: string): { added: number; removed: number } {
   let added = 0;

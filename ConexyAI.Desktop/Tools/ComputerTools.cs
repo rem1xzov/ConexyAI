@@ -159,7 +159,7 @@ public sealed class ComputerTools
     {
         try
         {
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI");
+            var dir = ProjectStore.ConfigDir;
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir, "control.log");
             if (File.Exists(path) && new FileInfo(path).Length > 2 * 1024 * 1024)

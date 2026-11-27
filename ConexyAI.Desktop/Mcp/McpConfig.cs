@@ -64,8 +64,7 @@ public sealed class McpConfig
     [JsonPropertyName("mcpServers")]
     public Dictionary<string, McpServerEntry> Servers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
-    public static string FilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI", "mcp.json");
+    public static string FilePath => Path.Combine(ProjectStore.ConfigDir, "mcp.json");
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true, ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
 

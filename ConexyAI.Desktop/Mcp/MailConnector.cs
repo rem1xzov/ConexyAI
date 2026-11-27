@@ -395,8 +395,7 @@ public sealed class MailState
     public string? SmtpHost { get; set; }
     public string? ProtectedPassword { get; set; }
 
-    private static string FilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI", "mail.json");
+    private static string FilePath => Path.Combine(ProjectStore.ConfigDir, "mail.json");
 
     public static MailState Load()
     {

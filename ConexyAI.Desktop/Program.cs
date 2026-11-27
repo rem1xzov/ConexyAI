@@ -11,6 +11,7 @@ const string Usage = """
       conexy login [--url <адрес>] [--key <ключ>]   сохранить ключ (выпускается на сайте в настройках)
       conexy [--dir <папка>]                        чат с агентом; рабочая папка — текущая или --dir
       conexy --visual [--dir <папка>]               сразу открыть визуальный десктоп (веб-версию в окне)
+      conexy --console [--dir <папка>]              сразу открыть консоль (важнее настройки /visual default)
       conexy logout                                 забыть ключ
       conexy selftest                               проверить локальные инструменты без сервера
       conexy doctor [--json]                        проверить вход, сервер, SignalR, папку и обновления
@@ -486,6 +487,9 @@ static int HooksCommand(string[] args)
 
 static async Task<int> ChatAsync(string[] args)
 {
+    // VISUAL_DESKTOP: запоминаем окно терминала, пока фокус в нём: после открытия визуального
+    // десктопа Chromium забирает фокус, и найти терминал, чтобы скрыть/вернуть его, уже сложно.
+    VisualDesktop.CaptureConsoleWindow();
     var config = ClientConfig.Load();
     var key = config.GetKey();
     if (string.IsNullOrWhiteSpace(config.ServerUrl) || string.IsNullOrWhiteSpace(key))
@@ -596,11 +600,14 @@ static async Task<int> ChatAsync(string[] args)
 
     // VISUAL_DESKTOP: визуальный десктоп — та же веб-версия, но в отдельном окне на этом ПК. Окно и
     // консоль работают с одним аккаунтом; VisualDesktop.HotkeyLabel переключает между ними в любой момент.
-    // Стартуем горячую клавишу всегда, окно по флагу --visual или по команде /visual.
+    // Что открыть при обычном запуске, пользователь решает сам (/visual default); флаги --visual и
+    // --console важнее сохранённой настройки — они для ярлыков и скриптов.
     VisualDesktop.StartHotkey();
     // VISUAL_DESKTOP: если окно закрыли крестиком, консоль возвращается на экран сама.
     VisualDesktop.StartWatcher();
-    if (args.Contains("--visual"))
+    var openVisual = args.Contains("--visual")
+                     || (!args.Contains("--console") && ClientConfig.LoadVisualDefault());
+    if (openVisual)
         Ui.Info("  " + await VisualDesktop.OpenAsync(server));
 
     var approver = new ConsoleApprover { AutoMode = args.Contains("--auto") };
@@ -913,7 +920,8 @@ static void PrintHelp()
         ]),
         ("Консоль и визуальный десктоп", [
             ("/visual", "веб-версия ConexyAI в отдельном окне на этом ПК — как сайт, но без вкладок и адресной строки\n/gui — то же · /visual off — закрыть · /visual status — состояние"),
-            ("/console", "свернуть визуальное окно и остаться в консоли; " + VisualDesktop.HotkeyLabel +
+            ("/visual default [on|off]", "что открывать при обычном запуске conexy (двойной клик по exe): визуальный десктоп или консоль"),
+            ("/console", "закрыть визуальное окно и вернуться в консоль; " + VisualDesktop.HotkeyLabel +
                          " переключает консоль ↔ визуальный режим в любой момент"),
         ]),
         ("Фоновая работа с сайта", [
@@ -1022,7 +1030,7 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
     // VISUAL_DESKTOP: команда должна быть на виду, а не только в /help — пользователь должен видеть,
     // как переключиться в веб-версию и обратно, без поиска по справке.
     Ui.Info(VisualDesktop.IsSupported
-        ? "  Визуальный десктоп: /visual — открыть веб-версию в окне · " + VisualDesktop.HotkeyLabel + " — переключение консоль ↔ окно"
+        ? "  Визуальный десктоп: /visual — веб-версия в отдельном окне · " + VisualDesktop.HotkeyLabel + " — переключение консоль ↔ окно · /visual default — что открывать при запуске"
         : "  Веб-версия: /visual — открыть ConexyAI в браузере");
     if (firstBanner && approver.AutoMode)
         Ui.Info("  Авто-режим включён: команды выполняются без подтверждения.");
@@ -1277,7 +1285,12 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                     break;
                 // VISUAL_DESKTOP: веб-версия ConexyAI в отдельном окне рядом с консолью.
                 case "/visual" or "/gui":
-                    switch (arg.ToLowerInvariant())
+                {
+                    // /visual default [on|off] — две части: разбираем глагол и значение отдельно.
+                    var space = arg.IndexOf(' ');
+                    var verb = (space < 0 ? arg : arg[..space]).ToLowerInvariant();
+                    var param = space < 0 ? string.Empty : arg[(space + 1)..].Trim().ToLowerInvariant();
+                    switch (verb)
                     {
                         case "off" or "close" or "закрыть":
                             Ui.Info(VisualDesktop.Close()
@@ -1287,15 +1300,29 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                         case "status" or "статус":
                             Ui.Info("  " + VisualDesktop.Describe());
                             break;
+                        // VISUAL_DESKTOP: что открывать при обычном запуске (двойной клик по exe) —
+                        // решает пользователь, а не разработчик: у кого-то консоль, у кого-то окно.
+                        case "default" or "по-умолчанию":
+                            var visualByDefault = param is "on" or "вкл" or "визуальный"
+                                ? true
+                                : param is "off" or "выкл" or "консоль"
+                                    ? false
+                                    : !ClientConfig.LoadVisualDefault();
+                            ClientConfig.SaveVisualDefault(visualByDefault);
+                            Ui.Info(visualByDefault
+                                ? "По умолчанию при запуске conexy теперь открывается визуальный десктоп (окно). Флаг --console важнее. /visual default off — вернуть консоль."
+                                : "По умолчанию при запуске conexy теперь открывается консоль. Флаг --visual важнее. /visual default on — визуальный десктоп.");
+                            break;
                         default:
                             Ui.Info("  Открываю визуальный десктоп…");
                             Ui.Info("  " + await VisualDesktop.OpenAsync(server));
                             break;
                     }
                     break;
+                }
                 case "/console":
                     Ui.Info(VisualDesktop.ShowConsole()
-                        ? "Свернул визуальный десктоп — вы в консоли. Вернуться: /visual или " + VisualDesktop.HotkeyLabel + "."
+                        ? "Закрыл визуальный десктоп — вы в консоли. Вернуться: /visual или " + VisualDesktop.HotkeyLabel + "."
                         : "Визуальный десктоп сейчас не открыт — вы уже в консоли. /visual — открыть веб-версию.");
                     break;
                 case "/control":

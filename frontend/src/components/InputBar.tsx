@@ -89,6 +89,9 @@ interface InputBarProps {
   // WEB_DEVICE: добавлено 2026-10-18 — раздел «Песочница / Мой ПК» в меню моделей.
   executionTarget?: React.ReactNode;
   executionOnDevice?: boolean;
+  // VISUAL_DESKTOP: компактный чип рабочей области (папка на ПК) рядом с кнопкой модели. Передаётся
+  // только окном `/desktop`; в вебе и мобильном приложении его нет.
+  workspaceChip?: React.ReactNode;
   // FILE_DROP: добавлено 2026-09-24 (L11) — файлы, брошенные на колонку чата; nonce отличает
   // повторный бросок тех же файлов.
   externalFiles?: { files: File[]; nonce: number } | null;
@@ -132,6 +135,7 @@ export function InputBar({
   onSend,
   executionTarget,
   executionOnDevice,
+  workspaceChip,
   externalFiles,
   onComposerFocus,
   onComposerBlur,
@@ -1192,6 +1196,10 @@ export function InputBar({
           onBlur={onComposerBlur}
           enterKeyHint={enterInsertsNewline ? 'enter' : 'send'}
         />
+
+        {/* VISUAL_DESKTOP: чип рабочей области — только в окне `/desktop` (проп передаёт App).
+            Стоит рядом с кнопкой модели: папку видно и можно сменить, не открывая меню моделей. */}
+        {!isMobile && workspaceChip}
 
         {/* Desktop only: on mobile the model picker lives in the chat header. */}
         {!isMobile && (

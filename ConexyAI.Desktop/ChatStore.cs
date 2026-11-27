@@ -33,8 +33,7 @@ public sealed class ChatStore
             Save();
     }
 
-    private static string FilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI", "chats.json");
+    private static string FilePath => Path.Combine(ProjectStore.ConfigDir, "chats.json");
 
     public static ChatStore Load()
     {

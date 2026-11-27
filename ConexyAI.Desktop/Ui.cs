@@ -552,7 +552,10 @@ public static partial class Ui
                     + (autoMode ? C(Yellow, ">> авто") + " " : string.Empty)
                     + (TeamMode && AgentMode == "coder" ? C("38;5;213", "* команда") + " " : string.Empty)
                     + (PlanMode ? C(Cyan, "◆ план") + " " : string.Empty);
-        var footer = "  " + modes + (_status.Length > 0 ? C(Cyan, _status) + Muted(" · ") : string.Empty) + Muted("/help");
+        // VISUAL_DESKTOP: /visual — такая же важная команда, как /help: переключение между консолью
+        // и окном должно быть на виду, а не только в справке.
+        var footer = "  " + modes + (_status.Length > 0 ? C(Cyan, _status) + Muted(" · ") : string.Empty)
+                     + C(Cyan, "/visual") + Muted(" · /help");
 
         // Ввод возможен ТОЛЬКО в строке внутри рамки: набранное пока агент работал отбрасываем, а саму строку
         // редактируем сами (ReadKey), чтобы текст никогда не попадал на рамку или в подсказку.

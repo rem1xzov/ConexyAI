@@ -13,6 +13,9 @@ export interface DeviceTurnActions {
   runInSandbox: (taskId: string) => Promise<void>;
   cancelQueued: (taskId: string) => Promise<void>;
   answerQuestion: (messageId: string, requestId: string, answer: string) => Promise<void>;
+  // VISUAL_DESKTOP: в окне визуального десктопа агент всегда работает на ПК, поэтому вариант
+  // «выполнить в песочнице» у задачи, ждущей ПК, не показываем — только отмена.
+  visualDesktop?: boolean;
 }
 
 export const DeviceTurnContext = createContext<DeviceTurnActions | null>(null);
@@ -84,9 +87,11 @@ function WaitingDeviceCard({ taskId, actions }: { taskId: string; actions: Devic
       </div>
       <p className="device-card__hint">{t('device.waitingHint')}</p>
       <div className="device-card__actions">
-        <button type="button" className="cmd-confirm__btn" disabled={busy} onClick={() => void run(actions.runInSandbox)}>
-          {t('device.runInSandbox')}
-        </button>
+        {!actions.visualDesktop && (
+                  <button type="button" className="cmd-confirm__btn" disabled={busy} onClick={() => void run(actions.runInSandbox)}>
+                      {t('device.runInSandbox')}
+                  </button>
+        )}
         <button type="button" className="cmd-confirm__btn cmd-confirm__btn--deny" disabled={busy} onClick={() => void run(actions.cancelQueued)}>
           {t('common.cancel')}
         </button>

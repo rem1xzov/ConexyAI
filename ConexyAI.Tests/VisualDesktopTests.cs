@@ -13,6 +13,7 @@ internal static class VisualDesktopTests
         TestRegistry.Add("visual desktop: the window opens the /desktop route with a one-time handoff", UrlAsync);
         TestRegistry.Add("visual desktop: title, route and profile are the app-specific contract", ContractAsync);
         TestRegistry.Add("visual desktop: CONEXY_VISUAL_PROFILE_DIR relocates the window profile", ProfileOverrideAsync);
+        TestRegistry.Add("visual desktop: CONEXY_HOME relocates client settings and the default startup mode persists", ConsoleHomeAsync);
     }
 
     private static void Assert(bool condition, string message) => TestRegistry.Assert(condition, message);
@@ -65,6 +66,45 @@ internal static class VisualDesktopTests
         finally
         {
             Environment.SetEnvironmentVariable("CONEXY_VISUAL_PROFILE_DIR", previous);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// CONEXY_HOME переносит все настройки клиента (config.json, чаты, права, профиль окна), а
+    /// /visual default решает, что открывать при двойном клике по exe. Проверяем на изолированной
+    /// папке, чтобы не трогать реальные настройки пользователя.
+    /// </summary>
+    private static Task ConsoleHomeAsync()
+    {
+        var previousHome = Environment.GetEnvironmentVariable("CONEXY_HOME");
+        var previousProfile = Environment.GetEnvironmentVariable("CONEXY_VISUAL_PROFILE_DIR");
+        var home = Path.Combine(Path.GetTempPath(), "conexy-home-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Environment.SetEnvironmentVariable("CONEXY_HOME", home);
+            Environment.SetEnvironmentVariable("CONEXY_VISUAL_PROFILE_DIR", null);
+            Directory.CreateDirectory(home);
+
+            Assert(ProjectStore.ConfigDir == Path.GetFullPath(home), "CONEXY_HOME is used as the settings folder");
+            Assert(VisualDesktop.ProfileDir == Path.Combine(Path.GetFullPath(home), "visual-desktop"),
+                "the window profile follows the relocated settings folder");
+
+            Assert(!ClientConfig.LoadVisualDefault(), "console is the default startup mode until the user changes it");
+            ClientConfig.SaveVisualDefault(true);
+            Assert(ClientConfig.LoadVisualDefault(), "the visual desktop can be chosen as the default startup mode");
+            var saved = File.ReadAllText(Path.Combine(home, "config.json"));
+            Assert(saved.Contains("\"VisualDefault\": true", StringComparison.Ordinal),
+                "the choice is persisted in the config file");
+            ClientConfig.SaveVisualDefault(false);
+            Assert(!ClientConfig.LoadVisualDefault(), "the default can be switched back to the console");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CONEXY_HOME", previousHome);
+            Environment.SetEnvironmentVariable("CONEXY_VISUAL_PROFILE_DIR", previousProfile);
+            try { Directory.Delete(home, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
 
         return Task.CompletedTask;

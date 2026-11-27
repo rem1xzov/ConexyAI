@@ -784,8 +784,7 @@ public sealed class GoogleState
         }
     }
 
-    private static string FilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI", "google.json");
+    private static string FilePath => Path.Combine(ProjectStore.ConfigDir, "google.json");
 
     public static GoogleState Load()
     {

@@ -38,6 +38,7 @@ public static class VisualDesktop
     private const uint VkV = 0x56;
     private const uint WmHotkey = 0x0312;
     private const uint WmClose = 0x0010;
+    private const int SwHide = 0;
     private const int SwShow = 5;
     private const int SwMinimize = 6;
     private const int SwRestore = 9;
@@ -47,7 +48,9 @@ public static class VisualDesktop
     private static int _hotkeyStarted;
     private static int _watcherStarted;
     private static int _consoleHidden;
+    private static IntPtr _consoleWindow;
     private static Process? _browser;
+    private static IntPtr _visualWindow;
 
     /// <summary>Профиль визуального окна: свой вход, история и настройки, отдельно от браузера пользователя.</summary>
     /// <summary>
@@ -87,6 +90,8 @@ public static class VisualDesktop
     /// </summary>
     public static async Task<string> OpenAsync(ServerClient? server, CancellationToken ct = default)
     {
+        // Пока окно не открылось, фокус ещё может быть в терминале — фиксируем его handle заранее.
+        CaptureConsoleWindow();
         var open = CurrentWindow();
         if (open != IntPtr.Zero)
         {
@@ -132,7 +137,7 @@ public static class VisualDesktop
             // Терминал больше не нужен: пользователь работает в визуальном окне. Так подтверждения
             // задач с сайта не приходят в скрытую консоль (см. RoutingApprover).
             HideConsoleWindow();
-            return "Открыл визуальный десктоп: это веб-версия в отдельном окне, вход — как на сайте." + ToggleHint + ReturnHint;
+            return "Открыл визуальный десктоп: это веб-версия в отдельном окне, вход — как на сайте. Терминал скрыт." + ToggleHint + ReturnHint;
         }
 
         return "Браузер запущен, но окно визуального десктопа пока не появилось. " + ToggleHint;
@@ -146,28 +151,26 @@ public static class VisualDesktop
         {
             if (IsForeground(window))
             {
-                ShowWindow(window, SwMinimize);
-                RestoreConsoleWindow();
-                return "Визуальный десктоп свёрнут — вы в консоли.";
+                ShowConsole();
+                return "Визуальный десктоп закрыт — вы в консоли.";
             }
 
             FocusWindow(window);
             HideConsoleWindow();
-            return "Переключился на визуальный десктоп." + ReturnHint;
+            return "Вернулся в визуальный десктоп." + ReturnHint;
         }
 
         return await OpenAsync(ServerClient.Current);
     }
 
-    /// <summary>Сворачивает окно визуального десктопа и возвращает пользователя в консоль.</summary>
+    /// <summary>
+    /// Режимы не живут одновременно: визуальное окно закрывается, консоль возвращается на экран.
+    /// Вызывается командой /console, кнопкой «В консоль» в окне и горячей клавишей.
+    /// </summary>
     public static bool ShowConsole()
     {
-        var window = CurrentWindow();
-        if (window != IntPtr.Zero && !IsIconic(window))
-            ShowWindow(window, SwMinimize);
-        // Даже если окна нет, ранее свёрнутую терминалом консоль нужно вернуть на экран.
-        RestoreConsoleWindow();
-        return window != IntPtr.Zero;
+        CloseVisualWindow();
+        return RestoreConsoleWindow();
     }
 
     /// <summary>Сворачивает окно визуального десктопа, не трогая фокус (его уже держит консоль).</summary>
@@ -184,39 +187,86 @@ public static class VisualDesktop
     /// <summary>Закрывает окно визуального десктопа (сессия входа остаётся в его профиле).</summary>
     public static bool Close()
     {
-        var window = CurrentWindow();
-        if (window == IntPtr.Zero)
-            return false;
-        PostMessage(window, WmClose, IntPtr.Zero, IntPtr.Zero);
+        var hadWindow = CurrentWindow() != IntPtr.Zero;
+        CloseVisualWindow();
         // Закрыли окно — пользователь остался без интерфейса: возвращаем консоль сразу.
         RestoreConsoleWindow();
-        return true;
+        return hadWindow;
     }
 
     /// <summary>
-    /// Скрывает (сворачивает) окно консоли, пока пользователь работает в визуальном десктопе.
-    /// Пока оно скрыто, подтверждения задач с сайта спрашиваются в вебе, а не в невидимом терминале.
+    /// Закрывает окно визуального десктопа и дожидается выхода процесса: если просто свернуть,
+    /// рядом останется живое окно, а пользователь просил переключаться между режимами, а не держать
+    /// оба. Закрытие последнего окна приложения завершает и Chromium этого профиля.
+    /// </summary>
+    private static void CloseVisualWindow()
+    {
+        var window = CurrentWindow();
+        if (window == IntPtr.Zero)
+        {
+            lock (Sync)
+            {
+                _browser?.Dispose();
+                _browser = null;
+            }
+            return;
+        }
+
+        var pid = ProcessIdOf(window);
+        PostMessage(window, WmClose, IntPtr.Zero, IntPtr.Zero);
+        for (var attempt = 0; attempt < 30 && CurrentWindow() != IntPtr.Zero; attempt++)
+            Thread.Sleep(100);
+        if (CurrentWindow() != IntPtr.Zero)
+            KillBrowser(pid);
+
+        _visualWindow = IntPtr.Zero;
+        lock (Sync)
+        {
+            _browser?.Dispose();
+            _browser = null;
+        }
+    }
+
+    /// <summary>
+    /// Прячет окно консоли, пока пользователь работает в визуальном десктопе: он не должен видеть
+    /// два интерфейса сразу. Скрытое окно остаётся живым — оно хранит сессию и горячую клавишу, —
+    /// и возвращается кнопкой «В консоль», /console или Ctrl+Alt+Shift+V.
     /// </summary>
     private static void HideConsoleWindow()
     {
         if (!OperatingSystem.IsWindows())
             return;
-        var console = ConsoleWindow();
+        var console = ConsoleWindowForHide();
         if (console == IntPtr.Zero)
             return;
-        ShowWindow(console, SwMinimize);
+        _consoleWindow = console;
+        // Сначала убираем окно с экрана (SW_HIDE), а если хост терминала не дал спрятать его —
+        // сворачиваем: в обоих случаях пользователь видит только визуальный десктоп.
+        ShowWindow(console, SwHide);
+        Thread.Sleep(150);
+        if (IsWindowVisible(console))
+            ShowWindow(console, SwMinimize);
         Volatile.Write(ref _consoleHidden, 1);
-        Log("console minimized for the visual desktop");
+        Log("console hidden: " + TitleOf(console) + " hwnd=" + console);
     }
 
-    /// <summary>Возвращает на экран консоль, которую мы свернули при переходе в визуальный режим.</summary>
+    /// <summary>Возвращает на экран консоль, которую мы спрятали при переходе в визуальный режим.</summary>
     public static bool RestoreConsoleWindow()
     {
         if (!OperatingSystem.IsWindows())
             return false;
-        var console = ConsoleWindow();
+
+        // Скрытое окно не находится перебором видимых окон — держим его handle, а при протухании
+        // ищем заново (например, после перезапуска терминала).
+        var console = _consoleWindow != IntPtr.Zero && IsWindow(_consoleWindow) ? _consoleWindow : ConsoleWindow();
         if (console == IntPtr.Zero)
+        {
+            Volatile.Write(ref _consoleHidden, 0);
             return false;
+        }
+
+        _consoleWindow = console;
+        ShowWindow(console, SwRestore);
         FocusWindow(console);
         Volatile.Write(ref _consoleHidden, 0);
         return true;
@@ -277,6 +327,7 @@ public static class VisualDesktop
             Thread.Sleep(500);
             DeleteProfile();
         }
+        _visualWindow = IntPtr.Zero;
         RestoreConsoleWindow();
     }
 
@@ -328,8 +379,10 @@ public static class VisualDesktop
                 : "Браузер: " + browser,
             "Профиль окна (вход и настройки): " + ProfileDir,
             ConsoleHiddenByVisual
-                ? "Терминал свёрнут: вы в визуальном режиме. /console или кнопка «В консоль» вернут его."
+                ? "Терминал скрыт: вы в визуальном режиме. /console или кнопка «В консоль» закроют окно и вернут терминал."
                 : "Терминал на экране.",
+            "По умолчанию при запуске: " + (ClientConfig.LoadVisualDefault() ? "визуальный десктоп" : "консоль") +
+            " (/visual default — переключить).",
             HotkeyRegistered
                 ? "Переключение консоль ↔ визуальный режим: " + HotkeyLabel + "."
                 : HotkeyStarted
@@ -530,16 +583,24 @@ public static class VisualDesktop
     /// </summary>
     private static IntPtr CurrentWindow()
     {
+        // Handle найденного один раз окна — самый надёжный признак: страница может сменить
+        // document.title (до деплоя новой версии веба), и поиск по заголовку перестал бы её находить.
+        if (_visualWindow != IntPtr.Zero && IsWindow(_visualWindow) && IsWindowVisible(_visualWindow))
+            return _visualWindow;
+
         var byTitle = WindowHandle();
         if (byTitle != IntPtr.Zero)
-            return byTitle;
+            return _visualWindow = byTitle;
 
         var launched = LaunchedWindowHandle();
         if (launched != IntPtr.Zero)
-            return launched;
+            return _visualWindow = launched;
 
         var provisional = ProvisionalTitle(ServerClient.Current?.BaseUrl);
-        return provisional is null ? IntPtr.Zero : FindWindow(null, provisional);
+        var provisionalWindow = provisional is null ? IntPtr.Zero : FindWindow(null, provisional);
+        if (provisionalWindow != IntPtr.Zero)
+            _visualWindow = provisionalWindow;
+        return provisionalWindow;
     }
 
     /// <summary>Главное окно браузера, запущенного этим процессом (Chromium создаёт его до загрузки страницы).</summary>
@@ -574,9 +635,94 @@ public static class VisualDesktop
     }
 
     /// <summary>
-    /// Окно консольного клиента: TUI ставит заголовок «Conexy» (Bubble.WindowTitle). В Windows Terminal
-    /// заголовок вкладки становится заголовком окна, поэтому ищем по тем же правилам, что и круг.
+    /// Запоминает окно терминала заранее — пока пользователь ещё в консоли. После запуска окна
+    /// визуального десктопа Chromium забирает фокус, а у Windows Terminal несколько top-level окон;
+    /// поэтому handle видимого терминала фиксируем до открытия окна (при /visual, --visual и старте).
     /// </summary>
+    public static void CaptureConsoleWindow()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        if (_consoleWindow != IntPtr.Zero && IsWindow(_consoleWindow) && IsWindowVisible(_consoleWindow))
+            return;
+
+        // 1. Активное окно — если это терминал клиента (заголовок ставит сам TUI: «Conexy»).
+        //    Проверяем именно заголовок, а не процесс: окно плавающего круга тоже живёт в
+        //    powershell.exe, и раньше проверка «процесс — терминал» прятала круг вместо консоли.
+        var foreground = GetForegroundWindow();
+        if (foreground != IntPtr.Zero && IsWindowVisible(foreground) && IsConsoleWindowTitle(TitleOf(foreground)))
+        {
+            _consoleWindow = foreground;
+            Log("console captured from foreground: " + DescribeWindow(foreground));
+            return;
+        }
+
+        // 2. Видимое окно терминала с заголовком клиента (активная вкладка Windows Terminal).
+        var byTitle = ConsoleWindow();
+        if (byTitle != IntPtr.Zero)
+        {
+            _consoleWindow = byTitle;
+            Log("console captured by title: " + DescribeWindow(byTitle));
+            return;
+        }
+
+        // 3. Классический conhost: GetConsoleWindow даёт само окно терминала, если у него есть
+        //    заголовок клиента. Служебное окно консоли (пустой заголовок) не берём.
+        var console = GetConsoleWindow();
+        if (console != IntPtr.Zero)
+        {
+            var root = GetAncestor(console, GaRoot);
+            if (root != IntPtr.Zero)
+                console = root;
+            if (IsWindowVisible(console) && IsConsoleWindowTitle(TitleOf(console)))
+            {
+                _consoleWindow = console;
+                Log("console captured by GetConsoleWindow: " + DescribeWindow(console));
+                return;
+            }
+        }
+
+        Log("console window not found; it will not be hidden");
+    }
+
+    private static string DescribeWindow(IntPtr window) =>
+        "'" + TitleOf(window) + "' hwnd=" + window;
+    /// <summary>
+    /// Окно терминала, в котором запущен клиент. Сохранённый handle — приоритет: он взят до того,
+    /// как фокус забрал визуальный десктоп.
+    /// </summary>
+    private static IntPtr ConsoleWindowForHide()
+    {
+        if (!OperatingSystem.IsWindows())
+            return IntPtr.Zero;
+        if (_consoleWindow != IntPtr.Zero && IsWindow(_consoleWindow) && IsWindowVisible(_consoleWindow))
+            return _consoleWindow;
+
+        var foreground = GetForegroundWindow();
+        if (foreground != IntPtr.Zero && IsConsoleWindowTitle(TitleOf(foreground)))
+            return foreground;
+
+        // Резерв: активное окно не терминал (фокус уже у браузера) — ищем по заголовку, а затем
+        // пробуем корень окна консоли текущего процесса (только если у него заголовок клиента).
+        var found = ConsoleWindow();
+        if (found != IntPtr.Zero)
+            return found;
+        var console = GetConsoleWindow();
+        if (console == IntPtr.Zero)
+            return IntPtr.Zero;
+        var root = GetAncestor(console, GaRoot);
+        if (root != IntPtr.Zero)
+            console = root;
+        return IsWindowVisible(console) && IsConsoleWindowTitle(TitleOf(console)) ? console : IntPtr.Zero;
+    }
+
+    private static bool IsConsoleWindowTitle(string title) =>
+        title.Length > 0
+        && (title.Equals(Bubble.WindowTitle, StringComparison.OrdinalIgnoreCase)
+            || title.StartsWith(Bubble.WindowTitle + " ", StringComparison.OrdinalIgnoreCase)
+            || title.StartsWith(Bubble.WindowTitle + " —", StringComparison.OrdinalIgnoreCase)
+            || title.Contains(" — " + Bubble.WindowTitle, StringComparison.OrdinalIgnoreCase));
+
     private static IntPtr ConsoleWindow()
     {
         var found = IntPtr.Zero;
@@ -584,13 +730,7 @@ public static class VisualDesktop
         {
             if (!IsWindowVisible(handle))
                 return true;
-            var title = TitleOf(handle);
-            if (title.Length == 0)
-                return true;
-            if (title.Equals(Bubble.WindowTitle, StringComparison.OrdinalIgnoreCase)
-                || title.StartsWith(Bubble.WindowTitle + " ", StringComparison.OrdinalIgnoreCase)
-                || title.StartsWith(Bubble.WindowTitle + " —", StringComparison.OrdinalIgnoreCase)
-                || title.Contains(" — " + Bubble.WindowTitle, StringComparison.OrdinalIgnoreCase))
+            if (IsConsoleWindowTitle(TitleOf(handle)))
             {
                 found = handle;
                 return false;
@@ -666,6 +806,9 @@ public static class VisualDesktop
     private static extern int GetWindowText(IntPtr window, StringBuilder text, int maxCount);
 
     [DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr window);
 
     [DllImport("user32.dll")]
@@ -679,6 +822,16 @@ public static class VisualDesktop
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
+
+    private const uint GaRoot = 2;
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetConsoleWindow();
+
+
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr window, uint flags);
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);

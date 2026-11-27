@@ -100,12 +100,15 @@ import type { SettingsSection } from './components/SettingsModal';
 import { ConfirmDialog } from './components/Dialog';
 // WEB_DEVICE: добавлено 2026-10-18
 import { DeviceTargetBar } from './components/DeviceTargetBar';
+// VISUAL_DESKTOP: в окне `/desktop` вместо «Песочница / Мой ПК» — рабочая область на ПК.
+import { WorkspaceChip, WorkspaceSection } from './components/WorkspacePicker';
 import { DeviceTurnContext, type DeviceTurnActions } from './components/DeviceTurnExtras';
 import { useDeviceStatus } from './hooks/useDeviceStatus';
 import { cancelQueuedTask, runQueuedTaskInSandbox, type DeviceStatus } from './api/deviceApi';
 import {
   readDeviceProject,
   readExecutionTarget,
+  resolveDesktopExecutionChoice,
   resolveExecutionChoice,
   writeDeviceProject,
   writeExecutionTarget,
@@ -2000,21 +2003,30 @@ export default function App() {
   const authPending = initializing || (Boolean(token) && !user && !profileFailed);
   const isGuest = !authenticated && !authPending;
 
+  // VISUAL_DESKTOP: окно визуального десктопа (`/desktop`). Объявлено здесь, потому что от него
+  // зависят и выбор «где выполнять» (ниже), и кнопка возврата в терминал в шапке. Путь меняется
+  // только вместе со страницей (роутинг живёт в хэше), поэтому читаем его за рендер.
+  const visualDesktop = isVisualDesktopPath(window.location.pathname);
+
   // WEB_DEVICE: добавлено 2026-10-18 — «Песочница / Мой ПК»: где выполняются инструменты Coder/Cowork.
+  // VISUAL_DESKTOP: в окне десктопа выбора нет — агент всегда работает на ПК пользователя.
   const deviceTargetVisible = authenticated && isAgentModel(model);
   const device = useDeviceStatus(deviceTargetVisible);
   const [executionTarget, setExecutionTargetState] = useState<ExecutionTarget>(
-    () => readExecutionTarget(activeId) ?? 'sandbox',
+    () => (visualDesktop ? 'device' : (readExecutionTarget(activeId) ?? 'sandbox')),
   );
   const [storedDeviceProject, setStoredDeviceProject] = useState<string | null>(() => readDeviceProject(activeId));
   useEffect(() => {
-    setExecutionTargetState(readExecutionTarget(activeId) ?? 'sandbox');
+    // VISUAL_DESKTOP: сохранённый 'sandbox' у старых чатов в окне десктопа не применяется.
+    setExecutionTargetState(visualDesktop ? 'device' : (readExecutionTarget(activeId) ?? 'sandbox'));
     setStoredDeviceProject(readDeviceProject(activeId));
-  }, [activeId]);
+  }, [activeId, visualDesktop]);
   const deviceProjects = device.status?.projects ?? [];
   const deviceProjectId = deviceProjects.some((p) => p.id === storedDeviceProject)
     ? storedDeviceProject
     : (deviceProjects[0]?.id ?? null);
+  // VISUAL_DESKTOP: в окне десктопа агент всегда на ПК — метка «ПК» у модели видна всегда.
+  const executionOnDevice = visualDesktop || executionTarget === 'device';
 
   function changeExecutionTarget(target: ExecutionTarget) {
     writeExecutionTarget(activeId, target);
@@ -2230,11 +2242,7 @@ export default function App() {
           : 'Ready';
   const agentActivity = agentRunning ? (lastAssistant?.currentAction?.label ?? null) : null;
 
-  // VISUAL_DESKTOP: окно визуального десктопа (`/desktop`) — единственное место, где имеет смысл
-  // кнопка возврата в терминал: консольный клиент открывает именно этот путь в отдельном окне.
-  // Путь меняется только вместе со страницей (роутинг живёт в хэше), поэтому читаем его за рендер.
-  const visualDesktop = isVisualDesktopPath(window.location.pathname);
-
+  // VISUAL_DESKTOP: `visualDesktop` объявлен выше — от него зависит выбор «где выполнять».
   // Reset the editor cursor info when switching sessions.
   useEffect(() => {
     setCursorInfo(null);
@@ -2662,13 +2670,21 @@ export default function App() {
 
     // WEB_DEVICE: добавлено 2026-10-18 — ход Coder/Cowork на ПК пользователя. Если ПК заведомо не в
     // сети, спрашиваем заранее; иначе шлём «fail» и спрашиваем, только если сервер ответит DEVICE_OFFLINE.
-    const deviceChoice = isAgentModel(live.model) ? resolveExecutionChoice(sessionId) : null;
+    // VISUAL_DESKTOP: в окне визуального десктопа агент ВСЕГДА работает на ПК пользователя — сохранённый
+    // у старого чата target 'sandbox' игнорируется, но рабочая область (проект на ПК) наследуется.
+    const desktopForcesDevice = isVisualDesktopPath(window.location.pathname);
+    const deviceChoice = isAgentModel(live.model)
+      ? desktopForcesDevice
+        ? resolveDesktopExecutionChoice(sessionId)
+        : resolveExecutionChoice(sessionId)
+      : null;
     const useDevice = deviceChoice?.target === 'device';
     let deviceOfflinePolicy: DeviceOfflinePolicy = 'fail';
     let deviceProjectId: string | undefined;
     if (useDevice) {
       const status = deviceRef.current.status;
       const projects = status?.projects ?? [];
+      // «Если ничего не выбрано — первая папка»: рабочая область, которую увидит пользователь в меню.
       deviceProjectId = projects.some((p) => p.id === deviceChoice.projectId)
         ? (deviceChoice.projectId ?? undefined)
         : (projects[0]?.id ?? deviceChoice.projectId ?? undefined);
@@ -3554,21 +3570,44 @@ export default function App() {
   }
 
   // WEB_DEVICE: «Песочница / Мой ПК» — раздел меню моделей (композер на ПК, шапка на телефоне).
+  // VISUAL_DESKTOP: в окне `/desktop` выбора «где выполнять» нет вообще — вместо него та же строка
+  // меню занята рабочей областью (папкой на ПК), а отправка всё равно всегда идёт на ПК.
   const executionTargetSection = deviceTargetVisible ? (
-    <DeviceTargetBar
-      target={executionTarget}
-      onTargetChange={changeExecutionTarget}
-      status={device.status}
-      hasKey={device.hasKey}
-      projectId={deviceProjectId}
-      onProjectChange={changeDeviceProject}
-      onOpenSetup={() => {
-        setSettingsSection('desktop');
-        setSettingsOpen(true);
-      }}
-      disabled={agentRunning}
-    />
+    visualDesktop ? (
+      <WorkspaceSection
+        status={device.status}
+        projectId={deviceProjectId}
+        onProjectChange={changeDeviceProject}
+        disabled={agentRunning}
+      />
+    ) : (
+      <DeviceTargetBar
+        target={executionTarget}
+        onTargetChange={changeExecutionTarget}
+        status={device.status}
+        hasKey={device.hasKey}
+        projectId={deviceProjectId}
+        onProjectChange={changeDeviceProject}
+        onOpenSetup={() => {
+          setSettingsSection('desktop');
+          setSettingsOpen(true);
+        }}
+        disabled={agentRunning}
+      />
+    )
   ) : undefined;
+
+  // VISUAL_DESKTOP: компактный чип рабочей области рядом с кнопкой модели в композере — папку видно
+  // и можно сменить, не открывая меню моделей. Только окно `/desktop`; в вебе и приложении чипа нет.
+  const workspaceChip =
+    visualDesktop && deviceTargetVisible ? (
+      <WorkspaceChip
+        status={device.status}
+        projectId={deviceProjectId}
+        onProjectChange={changeDeviceProject}
+        disabled={agentRunning}
+      />
+    ) : undefined;
 
   return (
     // WEB_DEVICE: добавлено 2026-10-18 — действия карточек «Ждёт ПК» и вопросов агента в ленте.
@@ -3689,7 +3728,8 @@ export default function App() {
                       orchestraAvailable={orchestraAvailable}
                       onUpgradeClick={handleUpgrade}
                       executionTarget={executionTargetSection}
-                      onDevice={executionTarget === 'device'}
+                      // VISUAL_DESKTOP: в окне десктопа метка «ПК» у модели видна всегда.
+                      onDevice={executionOnDevice}
                       plain
                     />
                   ) : (
@@ -3892,7 +3932,9 @@ export default function App() {
                     // onOpenLive={() => setIsLiveOpen(true)}
                     onSend={handleSend}
                     executionTarget={executionTargetSection}
-                    executionOnDevice={executionTarget === 'device'}
+                    executionOnDevice={executionOnDevice}
+                    // VISUAL_DESKTOP: только окно десктопа показывает чип рабочей области.
+                    workspaceChip={workspaceChip}
                     externalFiles={droppedFiles}
                     editTarget={composerEdit}
                     onSubmitEdit={handleSubmitEdit}
@@ -4086,13 +4128,18 @@ export default function App() {
         </div>
       )}
 
-      {/* WEB_DEVICE: добавлено 2026-10-18 — «ПК не в сети» при отправке хода на ПК. */}
+      {/* WEB_DEVICE: добавлено 2026-10-18 — «ПК не в сети» при отправке хода на ПК.
+          VISUAL_DESKTOP: в окне десктопа песочницы нет — там только «в очередь» или «отмена». */}
       {deviceOfflinePrompt && (
         <ConfirmDialog
           title={t('device.offlineTitle')}
           message={t('device.offlineMessage', { name: device.status?.name || t('device.unknownPc') })}
           confirmLabel={t('device.queue')}
-          extraAction={{ label: t('device.runInSandbox'), onClick: () => resolveDeviceOffline('sandbox') }}
+          extraAction={
+            visualDesktop
+              ? undefined
+              : { label: t('device.runInSandbox'), onClick: () => resolveDeviceOffline('sandbox') }
+          }
           onConfirm={() => resolveDeviceOffline('queue')}
           onCancel={() => resolveDeviceOffline(null)}
         />

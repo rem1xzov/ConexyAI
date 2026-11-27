@@ -20,8 +20,7 @@ public sealed class ServicesState
 {
     public Dictionary<string, Dictionary<string, StoredValue>> Services { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
-    public static string DefaultPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI", "services.json");
+    public static string DefaultPath => Path.Combine(ProjectStore.ConfigDir, "services.json");
 
     public static ServicesState Load(string path)
     {

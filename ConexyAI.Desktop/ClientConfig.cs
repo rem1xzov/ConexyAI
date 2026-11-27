@@ -29,6 +29,13 @@ public sealed class ClientConfig
     /// <summary>PC_CONTROL: агент управляет мышью и клавиатурой без подтверждения каждого действия.</summary>
     public bool FullPcControl { get; set; }
 
+    /// <summary>
+    /// VISUAL_DESKTOP: что открывать при обычном запуске `conexy` (двойной клик по exe без
+    /// аргументов) — консоль или визуальный десктоп. Пользователь выбирает командой
+    /// `/visual default`; явные флаги --visual/--console главнее этой настройки.
+    /// </summary>
+    public bool VisualDefault { get; set; }
+
     /// <summary>EFFORT: low | high — сколько «думает» модель на каждом шаге агента (medium = high).</summary>
     public string? ReasoningEffort { get; set; }
 
@@ -273,6 +280,37 @@ public sealed class ClientConfig
         config.Save();
     }
 
+    /// <summary>VISUAL_DESKTOP: открывать визуальный десктоп по умолчанию при обычном запуске.</summary>
+    public static bool LoadVisualDefault()
+    {
+        try
+        {
+            return File.Exists(FilePath)
+                && JsonSerializer.Deserialize<ClientConfig>(File.ReadAllText(FilePath))?.VisualDefault == true;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    public static void SaveVisualDefault(bool enabled)
+    {
+        ClientConfig config;
+        try
+        {
+            config = File.Exists(FilePath)
+                ? JsonSerializer.Deserialize<ClientConfig>(File.ReadAllText(FilePath)) ?? new ClientConfig()
+                : new ClientConfig();
+        }
+        catch (JsonException)
+        {
+            config = new ClientConfig();
+        }
+        config.VisualDefault = enabled;
+        config.Save();
+    }
+
     /// <summary>Уровень удалённых подтверждений из файла (читается на каждый запрос: демону не нужен перезапуск).</summary>
     public static string LoadRemoteApprovalLevel()
     {
@@ -315,8 +353,7 @@ public sealed class ClientConfig
 
     private static bool _urlWarned;
 
-    private static string FilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI", "config.json");
+    private static string FilePath => Path.Combine(ProjectStore.ConfigDir, "config.json");
 
     public static ClientConfig Load()
     {

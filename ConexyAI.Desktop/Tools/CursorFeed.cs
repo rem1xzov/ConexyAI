@@ -22,8 +22,7 @@ public static class CursorFeed
     private static readonly Dictionary<string, AgentCursorEntry> Entries = new(StringComparer.Ordinal);
 
     /// <summary>File the overlay sidecar polls (same folder as the bubble IPC files).</summary>
-    public static string FilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ConexyAI", "cursors.txt");
+    public static string FilePath => Path.Combine(ProjectStore.ConfigDir, "cursors.txt");
 
     public static void Update(AgentCursorEntry entry)
     {
