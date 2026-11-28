@@ -1303,16 +1303,29 @@ static async Task<(string Root, Guid ChatId)?> ChatInFolderAsync(
                         // VISUAL_DESKTOP: что открывать при обычном запуске (двойной клик по exe) —
                         // решает пользователь, а не разработчик: у кого-то консоль, у кого-то окно.
                         case "default" or "по-умолчанию":
-                            var visualByDefault = param is "on" or "вкл" or "визуальный"
-                                ? true
-                                : param is "off" or "выкл" or "консоль"
-                                    ? false
-                                    : !ClientConfig.LoadVisualDefault();
+                        {
+                            if (param.Length == 0)
+                            {
+                                Ui.Info("  При обычном запуске conexy сейчас открывается: " +
+                                        (ClientConfig.LoadVisualDefault() ? "визуальный десктоп (окно)." : "консоль.") +
+                                        " Задать: /visual default on|off");
+                                break;
+                            }
+                            if (param is not ("on" or "вкл" or "визуальный" or "окно" or "off" or "выкл" or "консоль"))
+                            {
+                                Ui.Info("  Использование: /visual default on|off (on — окно, off — консоль)");
+                                break;
+                            }
+                            var visualByDefault = param is "on" or "вкл" or "визуальный" or "окно";
                             ClientConfig.SaveVisualDefault(visualByDefault);
+                            // Переключили на консоль — сразу возвращаем её, чтобы выбор был виден сразу.
+                            if (!visualByDefault)
+                                VisualDesktop.ShowConsole();
                             Ui.Info(visualByDefault
-                                ? "По умолчанию при запуске conexy теперь открывается визуальный десктоп (окно). Флаг --console важнее. /visual default off — вернуть консоль."
-                                : "По умолчанию при запуске conexy теперь открывается консоль. Флаг --visual важнее. /visual default on — визуальный десктоп.");
+                                ? "По умолчанию при запуске conexy теперь открывается визуальный десктоп (окно). Флаг --console важнее."
+                                : "По умолчанию при запуске conexy теперь открывается консоль — окно закрыто, вы в терминале. Флаг --visual важнее.");
                             break;
+                        }
                         default:
                             Ui.Info("  Открываю визуальный десктоп…");
                             Ui.Info("  " + await VisualDesktop.OpenAsync(server));

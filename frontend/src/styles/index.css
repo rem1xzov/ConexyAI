@@ -14987,3 +14987,24 @@ html[data-visual-desktop='true'] .inputbar--visual .send-btn svg {
   width: 18px;
   height: 18px;
 }
+/* VISUAL_DESKTOP: убираем «матовое» затемнение и blur у всех оверлеев окна (меню, шторки,
+   диалоги) — покрытие не должно быть видно вообще, ни в агенте, ни в чате/учениках. */
+html[data-visual-desktop-window='true'] {
+  --bg-overlay: transparent;
+}
+html[data-visual-desktop-window='true'] .dialog-overlay,
+html[data-visual-desktop-window='true'] .sidebar-backdrop,
+html[data-visual-desktop-window='true'] .bottom-sheet-backdrop,
+html[data-visual-desktop-window='true'] .web-sheet__backdrop,
+html[data-visual-desktop-window='true'] .modal-backdrop {
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* Переключатель «что открывать при запуске» в шапке окна. */
+html[data-visual-desktop-window='true'] .desktop-default:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--text);
+}

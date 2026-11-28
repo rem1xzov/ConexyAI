@@ -16,6 +16,9 @@ public sealed record ExchangeDeviceKeyRequest(string Key);
 // VISUAL_DESKTOP: запрос из окна «Полный доступ к ПК» (пилюля режима в композере).
 public sealed record SetDeviceControlRequest(bool FullControl);
 
+// VISUAL_DESKTOP: выбор режима запуска клиента из окна (isual — открывать окно).
+public sealed record SetDesktopDefaultRequest(bool Visual);
+
 [ApiController]
 [Route("api/device")]
 public class DeviceController : ControllerBase
@@ -250,6 +253,8 @@ public class DeviceController : ControllerBase
             workspace = info?.Workspace,
             // VISUAL_DESKTOP: режим доступа к ПК для пилюли в композере («Запись в рабочей области» / «Полный доступ»).
             fullControl = info?.FullControl ?? false,
+            // VISUAL_DESKTOP: что клиент откроет при обычном запуске (окно или консоль).
+            visualDefault = info?.VisualDefault ?? false,
             projects = (info?.Projects ?? Array.Empty<DeviceProject>()).Select(p => new { id = p.Id, name = p.Name }),
             queued = _deviceQueue.List(userId).Select(q => new
             {
@@ -300,6 +305,18 @@ public class DeviceController : ControllerBase
         return Ok(new { ok = true });
     }
 
+    /// <summary>Задаёт, что клиент на ПК открывает при обычном запуске: окно или консоль.</summary>
+    [HttpPost("desktop-default")]
+    [Authorize]
+    public async Task<IActionResult> SetDesktopDefault([FromBody] SetDesktopDefaultRequest? request, CancellationToken ct)
+    {
+        var userId = User.GetUserId();
+        if (!_bridge.IsOnline(userId))
+            return NotFound(new { error = "DESKTOP_OFFLINE", message = "ConexyAI Desktop сейчас не подключён к серверу." });
+
+        await _bridge.SendEventAsync(userId, "SetDesktopDefault", new { visual = request?.Visual == true }, ct);
+        return Ok(new { ok = true });
+    }
     /// <summary>Просит подключённый клиент открыть выбор папки на ПК и добавить рабочую область.</summary>
     [HttpPost("workspace")]
     [Authorize]

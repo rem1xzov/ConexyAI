@@ -1467,6 +1467,12 @@
     "switchedToConsole": "Minimizing the visual window — the terminal is active again",
     "noDesktop": "ConexyAI Desktop is not connected, so there is nothing to switch to. Start the client on your PC.",
     "oldServer": "This server does not support switching to the console. Update the server and ConexyAI Desktop.",
-    "switchFailed": "Could not switch to the console. Make sure ConexyAI Desktop is running and try again."
+    "switchFailed": "Could not switch to the console. Make sure ConexyAI Desktop is running and try again.",
+    "defaultWindow": "Open window",
+    "defaultConsole": "Open console",
+    "defaultHint": "What a plain conexy.exe launch opens",
+    "defaultSavedWindow": "A plain launch will open the visual window.",
+    "defaultSavedConsole": "A plain launch will open the console.",
+    "defaultFailed": "Could not change the launch mode. Make sure ConexyAI Desktop is running."
   }
 }

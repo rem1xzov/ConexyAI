@@ -42,6 +42,8 @@ import { PhoneSetupModal } from './components/PhoneSetupModal';
 import { VisualDesktopConsoleButton } from './components/VisualDesktopConsoleButton';
 // VISUAL_DESKTOP: пилюля режима доступа в композере окна («Запись в рабочей области» / «Полный доступ»).
 import { AccessModeChip } from './components/ComposerAccessMode';
+// VISUAL_DESKTOP: переключатель «что открывать при запуске» прямо в шапке окна.
+import { DesktopDefaultMenu } from './components/DesktopDefaultMenu';
 import { Sidebar } from './components/Sidebar';
 import { ChatFeed } from './components/ChatFeed';
 // SHARE_PUBLIC: публичная страница чата открывается по #/shared/<token> без входа в аккаунт.
@@ -106,7 +108,7 @@ import { DeviceTargetBar } from './components/DeviceTargetBar';
 import { WorkspaceChip, WorkspaceSection } from './components/WorkspacePicker';
 import { DeviceTurnContext, type DeviceTurnActions } from './components/DeviceTurnExtras';
 import { useDeviceStatus } from './hooks/useDeviceStatus';
-import { addWorkspace, cancelQueuedTask, runQueuedTaskInSandbox, setDeviceFullControl, type DeviceStatus } from './api/deviceApi';
+import { addWorkspace, cancelQueuedTask, runQueuedTaskInSandbox, setDesktopDefault, setDeviceFullControl, type DeviceStatus } from './api/deviceApi';
 import {
   readDeviceProject,
   readExecutionTarget,
@@ -2094,7 +2096,7 @@ export default function App() {
       // Новый клиент ответит событием; старый сервер/клиент — таймаут, чтобы состояние не зависло.
       workspaceAddTimerRef.current = window.setTimeout(
         () => resolve({ cancelled: false, error: '__timeout__' }),
-        25_000,
+        10_000,
       );
     });
     if (workspaceAddTimerRef.current) {
@@ -2138,6 +2140,22 @@ export default function App() {
       showToast(t('device.accessFailed'));
     } finally {
       setPendingFullControl(null);
+    }
+  }
+  // VISUAL_DESKTOP: что открывать при обычном запуске conexy — окно или консоль. Значение хранится
+  // на ПК; сервер запоминает его в подключении устройства и возвращает в /device/status.
+  const visualDefault = device.status?.visualDefault === true;
+  async function handleDesktopDefaultChange(visual: boolean) {
+    try {
+      await setDesktopDefault(visual);
+      showToast(t(visual ? 'visualDesktop.defaultSavedWindow' : 'visualDesktop.defaultSavedConsole'));
+      for (let attempt = 0; attempt < 6; attempt++) {
+        await new Promise((resolve) => window.setTimeout(resolve, 350));
+        const next = await device.refresh();
+        if (next?.visualDefault === visual) break;
+      }
+    } catch {
+      showToast(t('visualDesktop.defaultFailed'));
     }
   }
   type OfflineChoice = Exclude<DeviceOfflinePolicy, 'fail'> | null;
@@ -3859,7 +3877,16 @@ export default function App() {
                   )}
                   {chatActions}
                   {/* VISUAL_DESKTOP: возврат в терминал — в шапке, то есть виден без прокрутки. */}
-                  {visualDesktop && <VisualDesktopConsoleButton onToast={showToast} />}
+                  {visualDesktop && (
+                      <>
+                        <DesktopDefaultMenu
+                          visualDefault={visualDefault}
+                          onChange={(visual) => void handleDesktopDefaultChange(visual)}
+                          disabled={!device.status?.online}
+                        />
+                        <VisualDesktopConsoleButton onToast={showToast} />
+                      </>
+                    )}
                 </div>
               </div>
             )}
@@ -3893,7 +3920,16 @@ export default function App() {
                 {!uiPreferences.hideUsageRing && <UsageIndicator usage={usage} />}
                 {chatActions}
                 {/* VISUAL_DESKTOP: возврат в терминал — в шапке, то есть виден без прокрутки. */}
-                {visualDesktop && <VisualDesktopConsoleButton onToast={showToast} />}
+                {visualDesktop && (
+                      <>
+                        <DesktopDefaultMenu
+                          visualDefault={visualDefault}
+                          onChange={(visual) => void handleDesktopDefaultChange(visual)}
+                          disabled={!device.status?.online}
+                        />
+                        <VisualDesktopConsoleButton onToast={showToast} />
+                      </>
+                    )}
               </div>
             )}
             {/* INCOGNITO_CHAT / LOGO_SWEEP / CHAT_ACTIONS: desktop chat header (chat and students —
@@ -3906,7 +3942,16 @@ export default function App() {
                   {incognitoControl}
                   {chatActions}
                   {/* VISUAL_DESKTOP: возврат в терминал — в шапке, то есть виден без прокрутки. */}
-                  {visualDesktop && <VisualDesktopConsoleButton onToast={showToast} />}
+                  {visualDesktop && (
+                      <>
+                        <DesktopDefaultMenu
+                          visualDefault={visualDefault}
+                          onChange={(visual) => void handleDesktopDefaultChange(visual)}
+                          disabled={!device.status?.online}
+                        />
+                        <VisualDesktopConsoleButton onToast={showToast} />
+                      </>
+                    )}
                 </div>
               </div>
             )}

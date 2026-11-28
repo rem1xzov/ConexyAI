@@ -96,6 +96,8 @@ export interface DeviceStatus {
   queued: DeviceQueuedTask[];
   // VISUAL_DESKTOP: включён ли полный доступ к ПК (пилюля режима в композере окна).
   fullControl: boolean;
+  // VISUAL_DESKTOP: что клиент открывает при обычном запуске (true — визуальное окно).
+  visualDefault: boolean;
 }
 
 export async function getDeviceStatus(): Promise<DeviceStatus> {
@@ -108,12 +110,17 @@ export async function getDeviceStatus(): Promise<DeviceStatus> {
     projects: Array.isArray(data?.projects) ? data.projects : [],
     queued: Array.isArray(data?.queued) ? data.queued : [],
     fullControl: Boolean(data?.fullControl),
+    visualDefault: Boolean(data?.visualDefault),
   };
 }
 
 /** Runs a task that is waiting for the PC in the server sandbox instead. */
 // VISUAL_DESKTOP: переключение режима доступа из композера окна («Запись в рабочей области» / «Полный доступ»).
 // Сервер передаёт событие клиенту на ПК; клиент сохраняет настройку и перерегистрируется.
+// VISUAL_DESKTOP: выбор режима запуска клиента по умолчанию из окна (окно или консоль).
+export async function setDesktopDefault(visual: boolean): Promise<void> {
+  await http.post('/device/desktop-default', { visual });
+}
 export async function setDeviceFullControl(fullControl: boolean): Promise<void> {
   await http.post('/device/control', { fullControl });
 }

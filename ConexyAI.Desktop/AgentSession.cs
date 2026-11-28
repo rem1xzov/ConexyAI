@@ -190,6 +190,23 @@ public sealed class AgentSession : IAsyncDisposable
                 try { await RegisterAsync(); }
                 catch (Exception ex) when (ex is not OperationCanceledException) { }
             });
+        // VISUAL_DESKTOP: «открывать консоль/окно по умолчанию» из визуального окна.
+        _hub.On<JsonElement>("SetDesktopDefault", payload =>
+        {
+            var visual = payload.ValueKind == JsonValueKind.Object
+                         && payload.TryGetProperty("visual", out var value)
+                         && value.ValueKind == JsonValueKind.True;
+            ClientConfig.SaveVisualDefault(visual);
+            _ = Task.Run(async () =>
+            {
+                try { await RegisterAsync(); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { }
+            });
+            Ui.Info(visual
+                ? "  ◦ по умолчанию будет открываться визуальный десктоп"
+                : "  ◦ по умолчанию будет открываться консоль");
+            return Task.CompletedTask;
+        });
             Ui.Info(full
                 ? "  ◦ полный доступ к ПК включён из визуального десктопа (как /control on)"
                 : "  ◦ доступ к ПК: запись в рабочей области с подтверждениями");
@@ -245,6 +262,15 @@ public sealed class AgentSession : IAsyncDisposable
         catch (Microsoft.AspNetCore.SignalR.HubException)
         {
             // Старый сервер без этого флага — агент будет спрашивать подтверждения.
+        }
+        // VISUAL_DESKTOP: сообщаем серверу и веб-окну выбранный режим запуска (окно или консоль).
+        try
+        {
+            await _hub.InvokeAsync("RegisterDesktopDefault", ClientConfig.LoadVisualDefault());
+        }
+        catch (Microsoft.AspNetCore.SignalR.HubException)
+        {
+            // Старый сервер без этого метода.
         }
         try
         {
@@ -684,10 +710,12 @@ public sealed class AgentSession : IAsyncDisposable
     {
         const string script =
             "Add-Type -AssemblyName System.Windows.Forms; " +
+            "$owner = New-Object System.Windows.Forms.Form; $owner.TopMost = $true; $owner.ShowInTaskbar = $false; " +
+            "$owner.WindowState = 'Minimized'; $owner.Show(); " +
             "$d = New-Object System.Windows.Forms.FolderBrowserDialog; " +
             "$d.Description = 'Выберите рабочую область ConexyAI'; " +
             "$d.UseDescriptionForTitle = $true; $d.ShowNewFolderButton = $true; " +
-            "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }";
+            "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }; $owner.Close()";
         var start = new System.Diagnostics.ProcessStartInfo
         {
             FileName = "powershell.exe",

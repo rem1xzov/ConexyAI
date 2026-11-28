@@ -38,7 +38,8 @@ if (isVisualDesktopPath(window.location.pathname)) {
   document.title = VISUAL_DESKTOP_TITLE;
   // VISUAL_DESKTOP: атрибут включает «плотную» тему окна (без стеклянных размытий и цветных
   // пятен) — визуально как референс DeepSeek Harness; обычный сайт и приложение его не видят.
-  // Тема включается в App только для вкладки агента; здесь помечаем само окно.
+  // Тема включается в App только для вкладки агента; здесь помечаем само окно (общие правила окна).
+  document.documentElement.dataset.visualDesktopWindow = 'true';
 }
 
 // GLOBAL_ERROR_BOUNDARY: добавлено 2026-09-23

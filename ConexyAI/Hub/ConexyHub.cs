@@ -263,6 +263,10 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     /// <summary>Включён ли на этом ПК режим полного доступа к экрану и клавиатуре.</summary>
     public Task<bool> RegisterDeviceControl(bool fullControl) =>
         Task.FromResult(_devices.SetFullControl(CallerId(), Context.ConnectionId, fullControl));
+
+    // VISUAL_DESKTOP: выбранный режим запуска клиента по умолчанию (true — визуальное окно).
+    public Task<bool> RegisterDesktopDefault(bool visualDefault) =>
+        Task.FromResult(_devices.SetVisualDefault(CallerId(), Context.ConnectionId, visualDefault));
     // VISUAL_DESKTOP: клиент на ПК сообщает результат «+ Добавить рабочее пространство…» —
     // добавлено, отменено в диалоге или ошибка. Веб-окно получает событие и сразу снимает
     // состояние «Добавляю…», не дожидаясь таймаута.
