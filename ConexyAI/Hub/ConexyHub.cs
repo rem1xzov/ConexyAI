@@ -263,6 +263,13 @@ public class ConexyHub : Microsoft.AspNetCore.SignalR.Hub
     /// <summary>Включён ли на этом ПК режим полного доступа к экрану и клавиатуре.</summary>
     public Task<bool> RegisterDeviceControl(bool fullControl) =>
         Task.FromResult(_devices.SetFullControl(CallerId(), Context.ConnectionId, fullControl));
+    // VISUAL_DESKTOP: клиент на ПК сообщает результат «+ Добавить рабочее пространство…» —
+    // добавлено, отменено в диалоге или ошибка. Веб-окно получает событие и сразу снимает
+    // состояние «Добавляю…», не дожидаясь таймаута.
+    /// <summary>Результат добавления рабочей области: проект, отмена или ошибка.</summary>
+    public Task WorkspaceAddResult(string? projectId, string? projectName, bool cancelled, string? error) =>
+        Clients.User(CallerId().ToString()).SendAsync(
+            "OnWorkspaceAddResult", new { projectId, projectName, cancelled, error }, Context.ConnectionAborted);
 
     // ---- WEB_DEVICE: добавлено 2026-10-18 — запуск из веба «на моём ПК» ----
 

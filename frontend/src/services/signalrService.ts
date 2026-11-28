@@ -1,6 +1,6 @@
 import * as signalR from '@microsoft/signalr';
 import { recoverFromUnauthorized } from '../api/client';
-import type { AgentCursorPayload, AgentStatusPayload, AgentTeamPayload, BuildProblemsPayload, DeviceDiffPayload, DeviceQuestionPayload, FileCreatedPayload, PendingActionPayload, SearchStatusPayload, SignalrCallbacks, StopGenerationResult, SupportMessagePayload, TaskCompletedPayload, TerminalOutputPayload, TodoUpdatePayload, ToolActionEvent } from '../types/signalr';
+import type { AgentCursorPayload, AgentStatusPayload, AgentTeamPayload, BuildProblemsPayload, DeviceDiffPayload, WorkspaceAddResultPayload, DeviceQuestionPayload, FileCreatedPayload, PendingActionPayload, SearchStatusPayload, SignalrCallbacks, StopGenerationResult, SupportMessagePayload, TaskCompletedPayload, TerminalOutputPayload, TodoUpdatePayload, ToolActionEvent } from '../types/signalr';
 
 // MULTI_TERMINAL: добавлено 2026-10-05 — вывод терминала адресуется конкретному терминалу чата.
 const MAIN_TERMINAL = 'main';
@@ -515,6 +515,8 @@ class SignalrService {
     // WEB_DEVICE: добавлено 2026-10-18
     this.connection.on('OnDeviceQuestion', (payload: DeviceQuestionPayload, scopeId?: string) => this.callbacks.onDeviceQuestion?.(payload, scopeId));
     this.connection.on('OnDeviceDiff', (payload: DeviceDiffPayload, scopeId?: string) => this.callbacks.onDeviceDiff?.(payload, scopeId));
+    // VISUAL_DESKTOP: результат добавления рабочей области (успех/отмена/ошибка).
+    this.connection.on('OnWorkspaceAddResult', (payload: WorkspaceAddResultPayload) => this.callbacks.onWorkspaceAddResult?.(payload));
     // PHONE_AGENT: инструмент телефона. Разбор и ответ — в services/phoneAgent.ts.
     this.connection.on('PhoneTool', (payload: unknown) => this.phoneToolHandlers.forEach((h) => h(payload)));
     // SUPPORT: добавлено 2026-09-19

@@ -120,7 +120,7 @@ import { getStoredTheme, setTheme, type Theme } from './theme';
 import { setLanguage } from './i18n';
 import type { ChatSummary, ConexyModel, ConexyRequest, ConexyResponse, DeviceOfflinePolicy, LimitExceededInfo, ReasoningEffort, SendOutcome, ShareToAdminRequest, SubscriptionUsage, TaskAttachment } from './types/api';
 import type { ChatMessage, ChatSession, ChatSessionKind, AgentStep, TurnBlock, AgentAction, TeamAgent } from './types/chat';
-import type { PendingActionPayload, SignalrCallbacks } from './types/signalr';
+import type { PendingActionPayload, SignalrCallbacks, WorkspaceAddResultPayload } from './types/signalr';
 // ATTACHMENTS_IN_BUBBLE: добавлено 2026-09-21
 import { attachmentsFromMessage, toMessageAttachment } from './utils/attachments';
 // INTERLEAVED_STREAM: добавлено 2026-09-24
@@ -1611,6 +1611,7 @@ export default function App() {
       onDeviceDiff: (payload, scopeId) => ev().onDeviceDiff?.(payload, scopeId),
       onReconnected: () => ev().onReconnected?.(),
       onJoinForbidden: (id) => ev().onJoinForbidden?.(id),
+      onWorkspaceAddResult: (payload) => workspaceAddResolverRef.current?.(payload),
     });
 
     return () => {
@@ -2009,6 +2010,17 @@ export default function App() {
   // зависят и выбор «где выполнять» (ниже), и кнопка возврата в терминал в шапке. Путь меняется
   // только вместе со страницей (роутинг живёт в хэше), поэтому читаем его за рендер.
   const visualDesktop = isVisualDesktopPath(window.location.pathname);
+  // VISUAL_DESKTOP: «плотный» тёмный стиль и специальный композер — только для вкладки агента.
+  // Чат и ученики в окне выглядят как обычный сайт (как просил пользователь).
+  const visualDesktopAgent = visualDesktop && isAgent;
+  useEffect(() => {
+    if (!visualDesktop) return;
+    const root = document.documentElement;
+    root.dataset.visualDesktop = visualDesktopAgent ? 'true' : 'false';
+    return () => {
+      delete root.dataset.visualDesktop;
+    };
+  }, [visualDesktop, visualDesktopAgent]);
 
   // WEB_DEVICE: добавлено 2026-10-18 — «Песочница / Мой ПК»: где выполняются инструменты Coder/Cowork.
   // VISUAL_DESKTOP: в окне десктопа выбора нет — агент всегда работает на ПК пользователя.
@@ -2049,31 +2061,27 @@ export default function App() {
   // появляется только в GET /device/status, поэтому после запроса опрашиваем статус ~60 с и, когда
   // список вырос, сразу переключаемся на новую папку и сообщаем об успехе.
   const [addingWorkspace, setAddingWorkspace] = useState(false);
-  const workspacePollRef = useRef<number | null>(null);
-  const workspaceAddAttemptRef = useRef(0);
+  // VISUAL_DESKTOP: клиент на ПК присылает результат диалога выбора папки (OnWorkspaceAddResult),
+  // поэтому «Добавляю…» снимается сразу и при отмене, и при ошибке, а не висит до таймаута.
+  const workspaceAddResolverRef = useRef<((payload: WorkspaceAddResultPayload) => void) | null>(null);
+  const workspaceAddTimerRef = useRef<number | null>(null);
 
   useEffect(
     () => () => {
-      if (workspacePollRef.current) window.clearTimeout(workspacePollRef.current);
+      workspaceAddResolverRef.current = null;
+      if (workspaceAddTimerRef.current) window.clearTimeout(workspaceAddTimerRef.current);
     },
     [],
   );
 
   async function handleAddWorkspace() {
-    // Действие имеет смысл только в визуальном десктопе: в обычном вебе ПК может быть не настроен,
-    // а пункт меню там и не показывается. Повторный клик во время запроса игнорируем.
-    if (!visualDesktop || addingWorkspace) return;
-    const attempt = ++workspaceAddAttemptRef.current;
-    const before = device.status?.projects ?? [];
-    const beforeIds = new Set(before.map((p) => p.id));
-
+    // Действие имеет смысл только в окне визуального десктопа на вкладке агента.
+    if (!visualDesktopAgent || addingWorkspace) return;
     setAddingWorkspace(true);
     try {
       await addWorkspace();
     } catch (e) {
       setAddingWorkspace(false);
-      // Бэкенд отвечает 404 { error: 'DESKTOP_OFFLINE' }, когда ПК не подключён: это понятная
-      // причина, а не поломка — показываем отдельный текст.
       const body = (e as { response?: { data?: unknown } } | null)?.response?.data;
       const code = body && typeof body === 'object' ? (body as { error?: unknown }).error : undefined;
       showToast(code === 'DESKTOP_OFFLINE' ? t('device.workspaceDesktopOffline') : t('device.workspaceAddFailed'));
@@ -2081,48 +2089,55 @@ export default function App() {
     }
 
     showToast(t('device.workspaceDialogOpened'));
-    const deadline = Date.now() + 60_000;
+    const result = await new Promise<WorkspaceAddResultPayload>((resolve) => {
+      workspaceAddResolverRef.current = resolve;
+      // Новый клиент ответит событием; старый сервер/клиент — таймаут, чтобы состояние не зависло.
+      workspaceAddTimerRef.current = window.setTimeout(
+        () => resolve({ cancelled: false, error: '__timeout__' }),
+        25_000,
+      );
+    });
+    if (workspaceAddTimerRef.current) {
+      window.clearTimeout(workspaceAddTimerRef.current);
+      workspaceAddTimerRef.current = null;
+    }
+    workspaceAddResolverRef.current = null;
+    setAddingWorkspace(false);
 
-    const poll = async () => {
-      // Пользователь мог закрыть меню и нажать «Добавить» ещё раз — старый опрос должен замолчать.
-      if (attempt !== workspaceAddAttemptRef.current) return;
-      const next = await device.refresh();
-      if (attempt !== workspaceAddAttemptRef.current) return;
-      const projects = next?.projects ?? [];
-      const added = projects.find((p) => !beforeIds.has(p.id));
-      if (added || projects.length > before.length) {
-        const newId = added?.id ?? projects[projects.length - 1]?.id;
-        if (newId) changeDeviceProject(newId);
-        setAddingWorkspace(false);
-        showToast(t('device.workspaceAdded'));
-        return;
-      }
-      if (Date.now() >= deadline) {
-        setAddingWorkspace(false);
-        // 60 с прошло, а папка так и не появилась: диалог могли отменить или клиент не успел.
-        showToast(t('device.workspaceAddFailed'));
-        return;
-      }
-      workspacePollRef.current = window.setTimeout(() => {
-        void poll();
-      }, 2000);
-    };
+    if (result.cancelled) {
+      showToast(t('device.workspaceAddCancelled'));
+      return;
+    }
+    if (result.error) {
+      showToast(result.error === '__timeout__' ? t('device.workspaceAddFailed') : result.error);
+      return;
+    }
 
-    workspacePollRef.current = window.setTimeout(() => {
-      void poll();
-    }, 2000);
+    const projects = (await device.refresh())?.projects ?? [];
+    if (result.projectId) changeDeviceProject(result.projectId);
+    else if (projects.length > 0) changeDeviceProject(projects[projects.length - 1].id);
+    showToast(t('device.workspaceAdded'));
   }
 
   // VISUAL_DESKTOP: переключение режима доступа из композера окна. Значение хранится на ПК и
-  // приходит в /device/status (fullControl); после смены обновляем статус и показываем тост.
-  const fullControl = device.status?.fullControl === true;
+  // приходит в /device/status (fullControl). Переключаем пилюлю сразу (оптимистично), а статус
+  // подтягиваем опросом, потому что клиент на ПК перерегистрируется асинхронно.
+  const [pendingFullControl, setPendingFullControl] = useState<boolean | null>(null);
+  const fullControl = pendingFullControl ?? device.status?.fullControl === true;
   async function handleAccessModeChange(full: boolean) {
+    setPendingFullControl(full);
     try {
       await setDeviceFullControl(full);
-      await device.refresh();
       showToast(t(full ? 'device.accessSwitchedFull' : 'device.accessSwitchedWrite'));
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
+        const next = await device.refresh();
+        if ((next?.fullControl === true) === full) break;
+      }
     } catch {
       showToast(t('device.accessFailed'));
+    } finally {
+      setPendingFullControl(null);
     }
   }
   type OfflineChoice = Exclude<DeviceOfflinePolicy, 'fail'> | null;
@@ -3688,7 +3703,7 @@ export default function App() {
   // VISUAL_DESKTOP: компактный чип рабочей области рядом с кнопкой модели в композере — папку видно
   // и можно сменить, не открывая меню моделей. Только окно `/desktop`; в вебе и приложении чипа нет.
   const workspaceChip =
-    visualDesktop && deviceTargetVisible ? (
+    visualDesktopAgent && deviceTargetVisible ? (
       <WorkspaceChip
         status={device.status}
         projectId={deviceProjectId}
@@ -4025,7 +4040,7 @@ export default function App() {
                     executionOnDevice={executionOnDevice}
                     // VISUAL_DESKTOP: только окно десктопа показывает чип рабочей области.
                     workspaceChip={workspaceChip}
-                    visualDesktop={visualDesktop}
+                    visualDesktop={visualDesktopAgent}
                     accessChip={
                       <AccessModeChip
                         fullControl={fullControl}

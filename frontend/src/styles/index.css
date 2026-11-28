@@ -14912,3 +14912,78 @@ html[data-visual-desktop='true'] .inputbar--visual .send-btn {
   grid-area: send;
   justify-self: end;
 }
+/* VISUAL_DESKTOP: без «мутного стекла» — убираем все backdrop-фильтры и декоративные слои в окне
+   агента. Чат и ученики этот блок не задевают: атрибут включается только на вкладке агента. */
+html[data-visual-desktop='true'] *,
+html[data-visual-desktop='true'] *::before,
+html[data-visual-desktop='true'] *::after {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+html[data-visual-desktop='true'] body::before,
+html[data-visual-desktop='true'] body::after {
+  display: none !important;
+}
+html[data-visual-desktop='true'] .glass-aura,
+html[data-visual-desktop='true'] .cursor-trail,
+html[data-visual-desktop='true'] .incognito-aura {
+  display: none !important;
+}
+html[data-visual-desktop='true'] body,
+html[data-visual-desktop='true'] .app,
+html[data-visual-desktop='true'] .main {
+  background: #0a0a0b !important;
+}
+html[data-visual-desktop='true'] .chat-header,
+html[data-visual-desktop='true'] .sidebar,
+html[data-visual-desktop='true'] .chats__menu,
+html[data-visual-desktop='true'] .settings-modal,
+html[data-visual-desktop='true'] .dialog,
+html[data-visual-desktop='true'] .bottom-sheet-panel,
+html[data-visual-desktop='true'] .sheet-attach__card,
+html[data-visual-desktop='true'] .modelpicker__sheet {
+  background-color: #111113 !important;
+}
+html[data-visual-desktop='true'] .bottom-sheet-backdrop {
+  background: rgba(0, 0, 0, 0.7) !important;
+}
+
+/* Микрофон и отправка — аккуратные круглые кнопки как в референсе, без «странного» глифа. */
+html[data-visual-desktop='true'] .inputbar--visual .mic-btn {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #1a1a1c;
+  color: #c9c9cf;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+html[data-visual-desktop='true'] .inputbar--visual .mic-btn:hover {
+  background: #232326;
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+html[data-visual-desktop='true'] .inputbar--visual .mic-btn svg {
+  width: 18px;
+  height: 18px;
+}
+html[data-visual-desktop='true'] .inputbar--visual .send-btn {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: #1a0d14;
+}
+html[data-visual-desktop='true'] .inputbar--visual .send-btn:disabled {
+  opacity: 0.55;
+}
+html[data-visual-desktop='true'] .inputbar--visual .send-btn svg {
+  width: 18px;
+  height: 18px;
+}

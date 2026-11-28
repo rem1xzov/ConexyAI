@@ -614,45 +614,71 @@ public sealed class AgentSession : IAsyncDisposable
     {
         if (!OperatingSystem.IsWindows())
             return;
+
+        string? projectId = null;
+        string? projectName = null;
+        string? error = null;
+        var cancelled = false;
         try
         {
             var picked = await Task.Run(PickWorkspaceFolder);
             if (string.IsNullOrWhiteSpace(picked))
-                return;
-
-            var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(picked.Trim().Trim('"')));
-            if (!Directory.Exists(path))
             {
-                Ui.Error("Выбранная папка не найдена.");
-                return;
+                cancelled = true;
             }
-            if (Workspace.WhyUnsafe(path) is { } unsafeWorkspace)
+            else
             {
-                Ui.Error($"Папка не подходит: {unsafeWorkspace}. Выберите папку проекта.");
-                return;
-            }
+                var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(picked.Trim().Trim('"')));
+                if (!Directory.Exists(path))
+                {
+                    error = "Выбранная папка не найдена.";
+                }
+                else if (Workspace.WhyUnsafe(path) is { } unsafeWorkspace)
+                {
+                    error = $"Папка не подходит: {unsafeWorkspace}. Выберите папку проекта.";
+                }
+                else
+                {
+                    var store = ProjectStore.Load();
+                    var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+                    var project = store.Projects.FirstOrDefault(p => p.Path.Equals(path, cmp));
+                    if (project is null)
+                    {
+                        var name = Path.GetFileName(path);
+                        if (string.IsNullOrWhiteSpace(name))
+                            name = path;
+                        project = new DeviceProject { Id = Guid.NewGuid().ToString(), Name = name, Path = path };
+                        store.Projects.Add(project);
+                        store.Save();
+                        Ui.Info("  ◦ добавлена рабочая область: " + path);
+                    }
 
-            var store = ProjectStore.Load();
-            var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-            if (store.Projects.FirstOrDefault(p => p.Path.Equals(path, cmp)) is null)
-            {
-                var name = Path.GetFileName(path);
-                if (string.IsNullOrWhiteSpace(name))
-                    name = path;
-                store.Projects.Add(new DeviceProject { Id = Guid.NewGuid().ToString(), Name = name, Path = path });
-                store.Save();
-                Ui.Info("  ◦ добавлена рабочая область: " + path);
+                    projectId = project.Id;
+                    projectName = project.Name;
+                    _device.ReloadProjects();
+                    await RegisterAsync();
+                }
             }
-
-            _device.ReloadProjects();
-            await RegisterAsync();
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
-            Ui.Error("Не удалось добавить рабочую область: " + ex.Message);
+            error = "Не удалось добавить рабочую область: " + ex.Message;
+        }
+
+        if (error is not null)
+            Ui.Error(error);
+
+        // Веб-окно должно сразу узнать, чем закончился диалог (в том числе отменой), иначе у него
+        // навсегда остаётся «Добавляю…».
+        try
+        {
+            await _hub.InvokeAsync("WorkspaceAddResult", projectId, projectName, cancelled, error);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Старый сервер без метода — не повод ронять клиент; веб отвалится по таймауту.
         }
     }
-
     /// <summary>Нативный диалог выбора папки Windows (через PowerShell, чтобы не тащить WinForms в TFM).</summary>
     private static string? PickWorkspaceFolder()
     {

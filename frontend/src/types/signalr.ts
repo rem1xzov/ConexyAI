@@ -175,6 +175,16 @@ export interface SignalrCallbacks {
   // WEB_DEVICE: добавлено 2026-10-18
   onDeviceQuestion?: (payload: DeviceQuestionPayload, scopeId?: string) => void;
   onDeviceDiff?: (payload: DeviceDiffPayload, scopeId?: string) => void;
+  // VISUAL_DESKTOP: результат добавления рабочей области с ПК (добавлено/отменено/ошибка).
+  onWorkspaceAddResult?: (payload: WorkspaceAddResultPayload) => void;
+}
+
+// VISUAL_DESKTOP: клиент на ПК закрыл диалог выбора папки — веб снимает «Добавляю…».
+export interface WorkspaceAddResultPayload {
+  projectId?: string | null;
+  projectName?: string | null;
+  cancelled: boolean;
+  error?: string | null;
 }
 
 // WEB_DEVICE: добавлено 2026-10-18 — вопрос агента, заданный с ПК, отвечается из веба.

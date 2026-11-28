@@ -1426,6 +1426,7 @@
     "workspaceDialogOpened": "Choose a folder in the window that opened on your PC…",
     "workspaceAdded": "Workspace added",
     "workspaceAddFailed": "Could not add the workspace. Please try again.",
+    "workspaceAddCancelled": "Workspace adding was cancelled.",
     "workspaceDesktopOffline": "Your PC is offline — the folder picker could not be opened. Start ConexyAI Desktop and try again.",
     "setUp": "Connect a PC →",
     "waiting": "Waiting for your PC to connect",
